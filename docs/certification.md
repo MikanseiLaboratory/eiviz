@@ -1,0 +1,47 @@
+# 認定と試験
+
+## プロファイル
+
+| ID | 内容 | 状態 |
+| --- | --- | --- |
+| PROFILE-1080P5994 | 1920×1080p SDR BT.709 8-bit、60000/1001、48 kHz | baseline。必須 |
+| PROFILE-2160P5994 | 3840×2160p SDR | 後続 |
+| PROFILE-HDR10 | PQ / HLG、10-bit | 後続 |
+| PROFILE-INTERLACE | 1080i59.94 field cadence | 後続 |
+
+未認定 profile のコード経路があっても、release では capability 表示に留めます。
+
+## 暫定性能予算（1080p59.94）
+
+フレーム周期は正確に `1001/60000` 秒（約 16.683 ms）。
+
+| 項目 | P99 目標 |
+| --- | --- |
+| command latch | ≤ 0.25 ms |
+| source select + CPU prep | ≤ 0.75 ms |
+| GPU critical path | ≤ 6 ms |
+| egress | ≤ 2.5 ms |
+| safety margin | ≥ 2 ms |
+| audio callback @ 128 samples / 48 kHz | ≤ 0.53 ms |
+| lock 後 A/V | ±1 ms P99、最大 ±5 ms |
+
+実機で未達なら黙って緩和せず ADR で予算を改訂します。
+
+## 試験レイヤ
+
+1. Unit / property: 有理数、reducer、DAG、audio routing、migration
+2. Virtual-clock integration: TAKE、overlay、follow、queue overflow、replay
+3. GPU: adapter がある環境のみ。無ければ CPU compositor で合同試験
+4. HIL: DeckLink / ASIO / NDI / OMT / Stream Deck は private runner
+5. Soak: 24 h gate、release 72 h
+6. Fault: GPU lost、disk full、NIC down、SDK 切断
+
+## CI
+
+- PR: fmt、clippy `-D warnings`、workspace test（default features）
+- Nightly: Windows / Linux / macOS
+- HIL: self-hosted。SDK 再配布を CI に置かない
+
+## トレーサビリティ
+
+各要件 ID に test 名、HIL scenario、OS、実測、既知制限を紐付けます。Phase 完了は証跡が揃った時点です。

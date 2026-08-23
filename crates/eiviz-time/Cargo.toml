@@ -1,0 +1,11 @@
+[package]
+name = "eiviz-time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Rational media time, clocks, and cadence helpers for eiviz"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

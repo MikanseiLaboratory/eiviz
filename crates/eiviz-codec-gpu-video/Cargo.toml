@@ -1,0 +1,13 @@
+[package]
+name = "eiviz-codec-gpu-video"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eiviz-media.workspace = true
+
+[features]
+default = []
+gpu-video = []

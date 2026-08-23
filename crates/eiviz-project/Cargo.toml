@@ -1,0 +1,16 @@
+[package]
+name = "eiviz-project"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Project persistence, migration, and portable .eiviz packages"
+
+[dependencies]
+eiviz-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zip.workspace = true

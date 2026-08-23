@@ -1,0 +1,14 @@
+[package]
+name = "eiviz-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Media contracts, bounded queues, and capability types"
+
+[dependencies]
+eiviz-core.workspace = true
+eiviz-time.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true

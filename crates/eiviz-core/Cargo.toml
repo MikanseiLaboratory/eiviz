@@ -1,0 +1,13 @@
+[package]
+name = "eiviz-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Domain model for eiviz projects, mixing units, scenes, and audio"
+
+[dependencies]
+eiviz-time.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.idea/
+.vscode/
+*.swp
+.DS_Store
+/dist
+/artifacts
+*.pdb
+*.ilk
+capture/
+*.eiviz.bak
+.env
+.direnv

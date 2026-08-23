@@ -1,0 +1,20 @@
+[package]
+name = "eiviz-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CPU reference compositor and optional wgpu path"
+
+[dependencies]
+eiviz-core.workspace = true
+eiviz-media.workspace = true
+eiviz-time.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+
+[features]
+default = []
+wgpu-backend = ["dep:wgpu", "dep:pollster"]

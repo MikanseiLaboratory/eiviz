@@ -1,0 +1,280 @@
+use crate::audio::AudioMatrix;
+use crate::graph::MixingGraph;
+use crate::ids::*;
+use crate::input::{DeviceBinding, Input};
+use crate::mixing::MixingUnit;
+use crate::output::{Multiview, Output};
+use crate::scene::Scene;
+use crate::{DomainError, Result};
+use eiviz_time::FrameRate;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+pub const SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VideoFormat {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: FrameRate,
+    pub color: ColorSpace,
+    pub interlaced: bool,
+    pub bit_depth: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorSpace {
+    Bt709Sdr,
+    Bt2020Pq,
+    Bt2020Hlg,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioFormat {
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub schema_version: u32,
+    pub id: ProjectId,
+    pub name: String,
+    pub video: VideoFormat,
+    pub audio: AudioFormat,
+    pub inputs: BTreeMap<InputId, Input>,
+    pub scenes: BTreeMap<SceneId, Scene>,
+    pub mixing_units: BTreeMap<MixingUnitId, MixingUnit>,
+    pub outputs: BTreeMap<OutputId, Output>,
+    pub multiviews: BTreeMap<MultiviewId, Multiview>,
+    pub audio_matrix: AudioMatrix,
+    pub device_bindings: BTreeMap<DeviceBindingId, DeviceBinding>,
+    pub assets: BTreeMap<AssetId, AssetRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AssetRef {
+    pub id: AssetId,
+    pub original_name: String,
+    pub sha256_hex: String,
+    pub relative_path: String,
+    pub missing: bool,
+}
+
+impl VideoFormat {
+    pub fn hd_5994() -> Self {
+        Self {
+            width: 1920,
+            height: 1080,
+            frame_rate: eiviz_time::NTSC_5994,
+            color: ColorSpace::Bt709Sdr,
+            interlaced: false,
+            bit_depth: 8,
+        }
+    }
+}
+
+impl Default for AudioFormat {
+    fn default() -> Self {
+        Self {
+            sample_rate: 48000,
+            channels: 2,
+        }
+    }
+}
+
+impl Project {
+    pub fn new(name: impl Into<String>) -> Self {
+        let mut project = Self {
+            schema_version: SCHEMA_VERSION,
+            id: ProjectId::new(),
+            name: name.into(),
+            video: VideoFormat::hd_5994(),
+            audio: AudioFormat::default(),
+            inputs: BTreeMap::new(),
+            scenes: BTreeMap::new(),
+            mixing_units: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            multiviews: BTreeMap::new(),
+            audio_matrix: AudioMatrix::default(),
+            device_bindings: BTreeMap::new(),
+            assets: BTreeMap::new(),
+        };
+        let unit = MixingUnit::new("Mix 1");
+        let output = Output {
+            id: OutputId::new(),
+            name: "Program Window".into(),
+            owner: unit.id,
+            kind: crate::OutputKind::ProgramWindow,
+            enabled: true,
+        };
+        let mut unit = unit;
+        unit.outputs.push(output.id);
+        project.outputs.insert(output.id, output);
+        project.mixing_units.insert(unit.id, unit);
+        project
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version > SCHEMA_VERSION {
+            return Err(DomainError::msg(format!(
+                "unsupported schema {}",
+                self.schema_version
+            )));
+        }
+        for scene in self.scenes.values() {
+            for item in &scene.items {
+                if !self.inputs.contains_key(&item.input) {
+                    return Err(DomainError::InvalidRef(format!(
+                        "scene item {} -> input {}",
+                        item.id, item.input
+                    )));
+                }
+            }
+        }
+        for unit in self.mixing_units.values() {
+            if let Some(s) = unit.program.scene {
+                if !self.scenes.contains_key(&s) {
+                    return Err(DomainError::InvalidRef("program scene".into()));
+                }
+            }
+            if let Some(s) = unit.preview.scene {
+                if !self.scenes.contains_key(&s) {
+                    return Err(DomainError::InvalidRef("preview scene".into()));
+                }
+            }
+            for overlay in &unit.overlays {
+                if let Some(s) = overlay.scene {
+                    if !self.scenes.contains_key(&s) {
+                        return Err(DomainError::InvalidRef("overlay scene".into()));
+                    }
+                }
+            }
+            for oid in &unit.outputs {
+                match self.outputs.get(oid) {
+                    None => return Err(DomainError::UnknownId(oid.to_string())),
+                    Some(o) if o.owner != unit.id => {
+                        return Err(DomainError::msg("output owner mismatch"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        MixingGraph::assert_acyclic(self)?;
+        Ok(())
+    }
+
+    pub fn insert_input(&mut self, input: Input) -> Result<()> {
+        if self.inputs.contains_key(&input.id) {
+            return Err(DomainError::DuplicateId(input.id.to_string()));
+        }
+        self.inputs.insert(input.id, input);
+        self.validate()
+    }
+
+    pub fn insert_scene(&mut self, scene: Scene) -> Result<()> {
+        if self.scenes.contains_key(&scene.id) {
+            return Err(DomainError::DuplicateId(scene.id.to_string()));
+        }
+        self.scenes.insert(scene.id, scene);
+        self.validate()
+    }
+
+    pub fn mixing_unit_mut(&mut self, id: MixingUnitId) -> Result<&mut MixingUnit> {
+        self.mixing_units
+            .get_mut(&id)
+            .ok_or_else(|| DomainError::UnknownId(id.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Transform2D;
+    use crate::input::{Input, InputSource};
+    use crate::scene::{Scene, SceneItem};
+
+    #[test]
+    fn default_project_validates() {
+        let p = Project::new("demo");
+        p.validate().unwrap();
+        assert_eq!(p.video.frame_rate, eiviz_time::NTSC_5994);
+    }
+
+    #[test]
+    fn rejects_unknown_scene_item_input() {
+        let mut p = Project::new("demo");
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "s".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: InputId::new(),
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        assert!(p.insert_scene(scene).is_err());
+    }
+
+    #[test]
+    fn cycle_is_rejected() {
+        let mut p = Project::new("demo");
+        let a_id = *p.mixing_units.keys().next().unwrap();
+        let b = MixingUnit::new("Mix 2");
+        let b_id = b.id;
+        p.mixing_units.insert(b_id, b.clone());
+
+        let feed_a = Input {
+            id: InputId::new(),
+            name: "feedA".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::MixFeed {
+                unit: a_id,
+                tap: crate::MixTap::Program,
+            },
+        };
+        let feed_b = Input {
+            id: InputId::new(),
+            name: "feedB".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::MixFeed {
+                unit: b_id,
+                tap: crate::MixTap::Program,
+            },
+        };
+        let scene_a = Scene {
+            id: SceneId::new(),
+            name: "sa".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: feed_b.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let scene_b = Scene {
+            id: SceneId::new(),
+            name: "sb".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: feed_a.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        p.inputs.insert(feed_a.id, feed_a);
+        p.inputs.insert(feed_b.id, feed_b);
+        p.scenes.insert(scene_a.id, scene_a.clone());
+        p.scenes.insert(scene_b.id, scene_b.clone());
+        p.mixing_units.get_mut(&a_id).unwrap().program.scene = Some(scene_a.id);
+        p.mixing_units.get_mut(&b_id).unwrap().program.scene = Some(scene_b.id);
+        assert_eq!(p.validate(), Err(DomainError::Cycle));
+        let _ = b;
+    }
+}

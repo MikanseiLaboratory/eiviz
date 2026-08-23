@@ -1,0 +1,13 @@
+[package]
+name = "eiviz-io-ndi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eiviz-media.workspace = true
+
+[features]
+default = []
+ndi-sdk = []

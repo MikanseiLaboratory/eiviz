@@ -1,0 +1,15 @@
+[package]
+name = "eiviz-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eiviz-command.workspace = true
+eiviz-core.workspace = true
+eiviz-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tiny_http.workspace = true

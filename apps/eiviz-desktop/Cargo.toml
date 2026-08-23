@@ -1,0 +1,23 @@
+[package]
+name = "eiviz-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "eiviz native GUI"
+default-run = "eiviz-desktop"
+
+[dependencies]
+eiviz-command.workspace = true
+eiviz-control.workspace = true
+eiviz-core.workspace = true
+eiviz-engine.workspace = true
+eiviz-io-audio.workspace = true
+eiviz-io-decklink.workspace = true
+eiviz-io-ndi.workspace = true
+eiviz-io-omt.workspace = true
+eiviz-codec-gpu-video.workspace = true
+eframe.workspace = true
+egui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

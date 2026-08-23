@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/eiviz-desktop",
+    "crates/eiviz-core",
+    "crates/eiviz-time",
+    "crates/eiviz-command",
+    "crates/eiviz-project",
+    "crates/eiviz-media",
+    "crates/eiviz-runtime",
+    "crates/eiviz-gpu",
+    "crates/eiviz-engine",
+    "crates/eiviz-control",
+    "crates/eiviz-io-file",
+    "crates/eiviz-io-ndi",
+    "crates/eiviz-io-omt",
+    "crates/eiviz-io-decklink",
+    "crates/eiviz-io-audio",
+    "crates/eiviz-io-stream",
+    "crates/eiviz-codec-gpu-video",
+    "crates/eiviz-codec-software",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/mikanseilaboratory/eiviz"
+authors = ["eiviz contributors"]
+description = "Cross-platform GPU vision mixer"
+
+[workspace.dependencies]
+eiviz-core = { path = "crates/eiviz-core" }
+eiviz-time = { path = "crates/eiviz-time" }
+eiviz-command = { path = "crates/eiviz-command" }
+eiviz-project = { path = "crates/eiviz-project" }
+eiviz-media = { path = "crates/eiviz-media" }
+eiviz-runtime = { path = "crates/eiviz-runtime" }
+eiviz-gpu = { path = "crates/eiviz-gpu" }
+eiviz-engine = { path = "crates/eiviz-engine" }
+eiviz-control = { path = "crates/eiviz-control" }
+eiviz-io-file = { path = "crates/eiviz-io-file" }
+eiviz-io-ndi = { path = "crates/eiviz-io-ndi" }
+eiviz-io-omt = { path = "crates/eiviz-io-omt" }
+eiviz-io-decklink = { path = "crates/eiviz-io-decklink" }
+eiviz-io-audio = { path = "crates/eiviz-io-audio" }
+eiviz-io-stream = { path = "crates/eiviz-io-stream" }
+eiviz-codec-gpu-video = { path = "crates/eiviz-codec-gpu-video" }
+eiviz-codec-software = { path = "crates/eiviz-codec-software" }
+
+anyhow = "1.0.99"
+bytemuck = { version = "1.23.2", features = ["derive"] }
+bytes = "1.10.1"
+crossbeam-channel = "0.5.15"
+eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui = "0.32.3"
+glam = { version = "0.30.5", features = ["serde"] }
+hex = "0.4.3"
+hound = "3.5.1"
+image = { version = "0.25.6", default-features = false, features = ["png", "jpeg"] }
+parking_lot = "0.12.4"
+pollster = "0.4.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+sha2 = "0.10.9"
+thiserror = "2.0.16"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
+wgpu = { version = "24.0.5", default-features = true }
+zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
+tiny_http = "0.12.0"
+midir = "0.10.1"
+cpal = "0.16.0"
+base64 = "0.22.1"
+crc32fast = "1.5.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

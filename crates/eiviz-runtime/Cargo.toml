@@ -1,0 +1,16 @@
+[package]
+name = "eiviz-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic scheduler, audio matrix, and I/O registry"
+
+[dependencies]
+eiviz-core.workspace = true
+eiviz-gpu.workspace = true
+eiviz-media.workspace = true
+eiviz-time.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
