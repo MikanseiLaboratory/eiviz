@@ -20,6 +20,15 @@ fn main() {
         )
     });
     let include_dir = include.parent().expect("DeckLinkAPI.h has a parent");
+    println!("cargo:rerun-if-changed={}", include.display());
+    let version = include_dir.join("DeckLinkAPIVersion.h");
+    if !version.is_file() {
+        panic!(
+            "DeckLinkAPIVersion.h was not found next to {}",
+            include.display()
+        );
+    }
+    println!("cargo:rerun-if-changed={}", version.display());
 
     let mut shim = cc::Build::new();
     shim.cpp(true)
@@ -44,6 +53,7 @@ fn main() {
                     root.display()
                 )
             });
+            println!("cargo:rerun-if-changed={}", dispatch.display());
             cc::Build::new()
                 .cpp(true)
                 .std("c++17")
@@ -65,6 +75,7 @@ fn main() {
                     root.display()
                 )
             });
+            println!("cargo:rerun-if-changed={}", interfaces.display());
             cc::Build::new()
                 .warnings(false)
                 .include(include_dir)

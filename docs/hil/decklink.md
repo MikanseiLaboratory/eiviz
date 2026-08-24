@@ -65,3 +65,9 @@ The native feature must additionally be compiled on each shipping platform
 against SDK 16. Interop, SDI electrical behavior, completion timing, reference
 lock, and soak scenarios remain pending until every `DL-HIL-*` row has attached
 hardware evidence.
+
+On 2026-08-24, the current Linux agent passed all SDK-free checks below.
+`cargo check -p eiviz-desktop --features decklink` then stopped in the DeckLink
+build script because `DECKLINK_SDK_DIR` was not set and no SDK was installed.
+The C++ shim has an SDK-major compile-time guard, but neither that native build
+nor any `DL-HIL-*` scenario is claimed as executed on this host.

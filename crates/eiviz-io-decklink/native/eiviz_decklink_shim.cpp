@@ -1,6 +1,12 @@
 #include "eiviz_decklink_shim.h"
 
 #include <DeckLinkAPI.h>
+#include <DeckLinkAPIVersion.h>
+
+#if !defined(BLACKMAGIC_DECKLINK_API_VERSION) || \
+    ((BLACKMAGIC_DECKLINK_API_VERSION >> 24) != 16)
+#error "eiviz DeckLink support requires Desktop Video SDK major version 16"
+#endif
 
 #include <algorithm>
 #include <atomic>
