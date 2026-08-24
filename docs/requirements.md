@@ -53,7 +53,12 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 ### R05 GPU / Media
 - R05.1 物理 GPU あたり wgpu Device/Queue の単一所有者
 - R05.2 live thread は検証済み immutable RenderPlan のみ読む
-- R05.3 Program を最優先。Preview/Multiview は負荷時に refresh/resolution を落とせるが Program の format/cadence は暗黙変更しない
+- R05.3 Program を最優先。Preview/Multiview の負荷制御は Project に
+  `Disabled` または deadline/GPU threshold、hysteresis、cadence divisor、
+  resolution tier を明示して admission する。Program dependency の Preview は
+  auxiliary 扱いせず full profile で描画する。全 tier 消費後も過負荷なら
+  degraded/admission diagnostic とし、Program の format/cadence/backend を
+  変更しない
 - R05.4 pipeline は activation 前に prewarm する
 - R05.5 device lost 時は `missing_media` に従い slate / last-good / fail を cadence どおり適用し、再生成後に frame boundary で復帰する。CPU compositor へは落とさない
 - R05.6 compositor backend（`CpuReference` / `Wgpu`）は Project の明示フィールド。Runtime と不一致、または選択 backend が利用不能ならエラー。暗黙切替禁止（INV-10）

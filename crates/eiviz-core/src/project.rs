@@ -10,7 +10,7 @@ use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +29,76 @@ pub enum MissingMediaPolicy {
     Slate,
     LastGood,
     Fail,
+}
+
+/// Persisted admission policy for auxiliary video work. Program is never a
+/// target of this policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuxiliaryLoadSheddingPolicy {
+    /// Render every admitted Preview and Multiview at the Program cadence and
+    /// resolution. Timing pressure is diagnosed but never changes rendering.
+    #[default]
+    Disabled,
+    /// Escalate through the explicitly configured auxiliary quality tiers.
+    Thresholds(AuxiliaryLoadSheddingThresholds),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuxiliaryLoadSheddingThresholds {
+    /// A frame at or below this deadline slack is overloaded.
+    pub overload_slack_nanos: i64,
+    /// A frame at or above this deadline slack is eligible for recovery.
+    pub recover_slack_nanos: i64,
+    /// Optional per-frame GPU time threshold. `None` disables GPU-time
+    /// admission feedback without disabling deadline feedback.
+    pub gpu_overload_nanos: Option<u64>,
+    /// Healthy GPU time paired with `gpu_overload_nanos`.
+    pub gpu_recover_nanos: Option<u64>,
+    pub escalation_frames: u32,
+    pub recovery_frames: u32,
+    /// Ordered least-to-most restrictive. Nominal full quality is implicit.
+    pub tiers: Vec<AuxiliaryQualityTier>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuxiliaryQualityTier {
+    pub preview_cadence_divisor: u32,
+    pub preview_resolution_divisor: u32,
+    pub multiview_cadence_divisor: u32,
+    pub multiview_resolution_divisor: u32,
+}
+
+impl AuxiliaryLoadSheddingPolicy {
+    pub fn broadcast_default() -> Self {
+        Self::Thresholds(AuxiliaryLoadSheddingThresholds {
+            overload_slack_nanos: 1_000_000,
+            recover_slack_nanos: 3_000_000,
+            gpu_overload_nanos: Some(6_000_000),
+            gpu_recover_nanos: Some(4_000_000),
+            escalation_frames: 3,
+            recovery_frames: 120,
+            tiers: vec![
+                AuxiliaryQualityTier {
+                    preview_cadence_divisor: 2,
+                    preview_resolution_divisor: 1,
+                    multiview_cadence_divisor: 2,
+                    multiview_resolution_divisor: 1,
+                },
+                AuxiliaryQualityTier {
+                    preview_cadence_divisor: 2,
+                    preview_resolution_divisor: 2,
+                    multiview_cadence_divisor: 3,
+                    multiview_resolution_divisor: 2,
+                },
+                AuxiliaryQualityTier {
+                    preview_cadence_divisor: 4,
+                    preview_resolution_divisor: 4,
+                    multiview_cadence_divisor: 6,
+                    multiview_resolution_divisor: 4,
+                },
+            ],
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,6 +145,8 @@ pub struct Project {
     pub compositor: CompositorBackend,
     #[serde(default)]
     pub missing_media: MissingMediaPolicy,
+    #[serde(default)]
+    pub auxiliary_load_shedding: AuxiliaryLoadSheddingPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +199,7 @@ impl Project {
             assets: BTreeMap::new(),
             compositor: CompositorBackend::CpuReference,
             missing_media: MissingMediaPolicy::Slate,
+            auxiliary_load_shedding: AuxiliaryLoadSheddingPolicy::Disabled,
         };
         let unit = MixingUnit::new("Mix 1");
         let output = Output {
@@ -156,6 +229,7 @@ impl Project {
                 "audio sample rate and channel count must be non-zero",
             ));
         }
+        self.validate_auxiliary_load_shedding()?;
         if let AudioResamplingPolicy::Asrc { profile } = self.audio.resampling
             && (profile.target_latency_ms == 0
                 || profile.max_buffer_ms <= profile.target_latency_ms
@@ -361,6 +435,75 @@ impl Project {
         self.mixing_units
             .get_mut(&id)
             .ok_or_else(|| DomainError::UnknownId(id.to_string()))
+    }
+
+    fn validate_auxiliary_load_shedding(&self) -> Result<()> {
+        let AuxiliaryLoadSheddingPolicy::Thresholds(policy) = &self.auxiliary_load_shedding else {
+            return Ok(());
+        };
+        if policy.overload_slack_nanos >= policy.recover_slack_nanos {
+            return Err(DomainError::msg(
+                "auxiliary shedding recovery slack must exceed overload slack",
+            ));
+        }
+        if policy.escalation_frames == 0 || policy.recovery_frames == 0 {
+            return Err(DomainError::msg(
+                "auxiliary shedding hysteresis frame counts must be non-zero",
+            ));
+        }
+        match (policy.gpu_overload_nanos, policy.gpu_recover_nanos) {
+            (None, None) => {}
+            (Some(overload), Some(recover)) if overload > recover => {}
+            _ => {
+                return Err(DomainError::msg(
+                    "auxiliary shedding GPU thresholds must be paired and overload must exceed recovery",
+                ));
+            }
+        }
+        if policy.tiers.is_empty() {
+            return Err(DomainError::msg(
+                "auxiliary shedding requires at least one quality tier",
+            ));
+        }
+        let mut previous = AuxiliaryQualityTier {
+            preview_cadence_divisor: 1,
+            preview_resolution_divisor: 1,
+            multiview_cadence_divisor: 1,
+            multiview_resolution_divisor: 1,
+        };
+        for tier in &policy.tiers {
+            let values = [
+                tier.preview_cadence_divisor,
+                tier.preview_resolution_divisor,
+                tier.multiview_cadence_divisor,
+                tier.multiview_resolution_divisor,
+            ];
+            if values.contains(&0) {
+                return Err(DomainError::msg(
+                    "auxiliary shedding divisors must be non-zero",
+                ));
+            }
+            let monotonic = tier.preview_cadence_divisor >= previous.preview_cadence_divisor
+                && tier.preview_resolution_divisor >= previous.preview_resolution_divisor
+                && tier.multiview_cadence_divisor >= previous.multiview_cadence_divisor
+                && tier.multiview_resolution_divisor >= previous.multiview_resolution_divisor;
+            if !monotonic || *tier == previous {
+                return Err(DomainError::msg(
+                    "auxiliary shedding tiers must become strictly more restrictive",
+                ));
+            }
+            if self.video.width / tier.preview_resolution_divisor == 0
+                || self.video.height / tier.preview_resolution_divisor == 0
+                || self.video.width / tier.multiview_resolution_divisor == 0
+                || self.video.height / tier.multiview_resolution_divisor == 0
+            {
+                return Err(DomainError::msg(
+                    "auxiliary shedding resolution divisor exceeds the video format",
+                ));
+            }
+            previous = *tier;
+        }
+        Ok(())
     }
 }
 
@@ -641,16 +784,35 @@ mod tests {
     }
 
     #[test]
-    fn compositor_missing_media_and_audio_policy_default_on_old_json() {
+    fn compositor_missing_media_audio_and_shedding_default_on_old_json() {
         let p = Project::new("demo");
         let mut v = serde_json::to_value(&p).unwrap();
         v.as_object_mut().unwrap().remove("compositor");
         v.as_object_mut().unwrap().remove("missing_media");
+        v.as_object_mut().unwrap().remove("auxiliary_load_shedding");
         v["audio"].as_object_mut().unwrap().remove("resampling");
         let loaded: Project = serde_json::from_value(v).unwrap();
         assert_eq!(loaded.compositor, CompositorBackend::CpuReference);
         assert_eq!(loaded.missing_media, MissingMediaPolicy::Slate);
+        assert_eq!(
+            loaded.auxiliary_load_shedding,
+            AuxiliaryLoadSheddingPolicy::Disabled
+        );
         assert_eq!(loaded.audio.resampling, AudioResamplingPolicy::ExactRate);
+    }
+
+    #[test]
+    fn auxiliary_shedding_policy_validates_hysteresis_and_ordered_tiers() {
+        let mut project = Project::new("shedding");
+        project.auxiliary_load_shedding = AuxiliaryLoadSheddingPolicy::broadcast_default();
+        project.validate().unwrap();
+
+        let AuxiliaryLoadSheddingPolicy::Thresholds(policy) = &mut project.auxiliary_load_shedding
+        else {
+            unreachable!();
+        };
+        policy.recover_slack_nanos = policy.overload_slack_nanos;
+        assert!(project.validate().is_err());
     }
 
     #[test]

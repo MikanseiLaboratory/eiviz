@@ -18,6 +18,10 @@ hardware certification.
 - Desktop Program/Preview/Multiview use egui-wgpu native texture registration
   on eframe's Device/Queue. `gpu_readbacks` counts explicit staging copies still
   required by `VideoFrame` consumers.
+- Synthetic deadline/GPU samples deterministically prove auxiliary tier
+  escalation, `Exhausted`, hysteretic recovery, and unchanged Program
+  frame ID/PTS/dimensions/pixels. These tests do not replace hardware timing
+  evidence.
 
 ## Required scenarios
 
@@ -30,6 +34,7 @@ hardware certification.
 | GPU-HIL-05 | GUI stress | Program cadence unaffected by editor/preview load |
 | GPU-HIL-06 | Maximum admitted graph | VRAM/copy count/queue measurements |
 | GPU-HIL-07 | 24 h compositor soak | zero internal Program drop/repeat |
+| GPU-HIL-08 | Admission-controlled overload | inject GPU/GUI pressure across every configured tier; capture state transitions, Preview/Multiview decimation/drop/high-water counters, explicit `Exhausted` diagnostic, and bit-identical full-profile Program capture versus the no-pressure reference |
 
 ## Explicit profile
 
@@ -52,5 +57,5 @@ ADR-0011's version/device unification and native texture path are implemented.
 The media graph still materializes `VideoFrame` for CPU-frame sinks and
 mixfeed/multiview construction; every such GPU staging copy is counted.
 Device loss is reported and GPU operations stop, but automatic recreation is
-not implemented because eframe owns the injected device. GPU-HIL-01..07 remain
+not implemented because eframe owns the injected device. GPU-HIL-01..08 remain
 unexecuted, so this path is not Certified.

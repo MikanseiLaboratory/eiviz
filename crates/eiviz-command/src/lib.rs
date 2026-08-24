@@ -143,6 +143,9 @@ pub enum Command {
     AddMultiview {
         view: Multiview,
     },
+    SetAuxiliaryLoadShedding {
+        policy: eiviz_core::AuxiliaryLoadSheddingPolicy,
+    },
     SetAudioResampling {
         policy: eiviz_core::AudioResamplingPolicy,
     },
@@ -765,6 +768,9 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             {
                 u.multiviews.push(view.id);
             }
+        }
+        Command::SetAuxiliaryLoadShedding { policy } => {
+            project.auxiliary_load_shedding = policy.clone();
         }
         Command::SetAudioResampling { policy } => {
             project.audio.resampling = *policy;

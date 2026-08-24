@@ -6,6 +6,7 @@ use eiviz_core::{InputId, Playback};
 use eiviz_time::{ClockDomain, ClockObservation, FrameRate, MediaTime};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
@@ -160,6 +161,19 @@ pub struct BoundedSlot<T> {
     inner: Mutex<Option<T>>,
     name: &'static str,
     policy: QueuePolicy,
+    pushed: AtomicU64,
+    dropped: AtomicU64,
+    taken: AtomicU64,
+    high_water: AtomicUsize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueueDiagnostics {
+    pub depth: usize,
+    pub high_water: usize,
+    pub pushed: u64,
+    pub dropped: u64,
+    pub taken: u64,
 }
 
 impl<T> BoundedSlot<T> {
@@ -168,21 +182,39 @@ impl<T> BoundedSlot<T> {
             inner: Mutex::new(None),
             name,
             policy,
+            pushed: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            taken: AtomicU64::new(0),
+            high_water: AtomicUsize::new(0),
         }
     }
 
     pub fn push(&self, value: T) -> Result<()> {
         let mut g = self.inner.lock();
+        if g.is_some()
+            && matches!(
+                self.policy,
+                QueuePolicy::LatestWins | QueuePolicy::IndependentDrop
+            )
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
         match self.policy {
             QueuePolicy::LatestWins | QueuePolicy::IndependentDrop | QueuePolicy::ProgramHold => {
                 *g = Some(value);
+                self.pushed.fetch_add(1, Ordering::Relaxed);
+                self.high_water.fetch_max(1, Ordering::Relaxed);
                 Ok(())
             }
         }
     }
 
     pub fn take(&self) -> Option<T> {
-        self.inner.lock().take()
+        let value = self.inner.lock().take();
+        if value.is_some() {
+            self.taken.fetch_add(1, Ordering::Relaxed);
+        }
+        value
     }
 
     pub fn peek_clone(&self) -> Option<T>
@@ -194,6 +226,16 @@ impl<T> BoundedSlot<T> {
 
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    pub fn diagnostics(&self) -> QueueDiagnostics {
+        QueueDiagnostics {
+            depth: usize::from(self.inner.lock().is_some()),
+            high_water: self.high_water.load(Ordering::Relaxed),
+            pushed: self.pushed.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            taken: self.taken.load(Ordering::Relaxed),
+        }
     }
 }
 

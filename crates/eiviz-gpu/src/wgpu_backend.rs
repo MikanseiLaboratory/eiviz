@@ -121,6 +121,7 @@ pub struct DeviceLossReport {
 pub struct WgpuDiagnostics {
     pub readbacks: u64,
     pub pass_nanos: u64,
+    pub pass_total_nanos: u64,
     pub pass_max_nanos: u64,
     pub readback_nanos: u64,
     pub readback_max_nanos: u64,
@@ -133,6 +134,7 @@ pub struct WgpuDiagnostics {
 struct SharedDiagnostics {
     readbacks: AtomicU64,
     pass_nanos: AtomicU64,
+    pass_total_nanos: AtomicU64,
     pass_max_nanos: AtomicU64,
     readback_nanos: AtomicU64,
     readback_max_nanos: AtomicU64,
@@ -339,6 +341,7 @@ impl WgpuCompositor {
         WgpuDiagnostics {
             readbacks: self.diagnostics.readbacks.load(Ordering::Relaxed),
             pass_nanos: self.diagnostics.pass_nanos.load(Ordering::Relaxed),
+            pass_total_nanos: self.diagnostics.pass_total_nanos.load(Ordering::Relaxed),
             pass_max_nanos: self.diagnostics.pass_max_nanos.load(Ordering::Relaxed),
             readback_nanos: self.diagnostics.readback_nanos.load(Ordering::Relaxed),
             readback_max_nanos: self.diagnostics.readback_max_nanos.load(Ordering::Relaxed),
@@ -484,6 +487,9 @@ impl WgpuCompositor {
         self.diagnostics
             .pass_nanos
             .store(elapsed, Ordering::Relaxed);
+        self.diagnostics
+            .pass_total_nanos
+            .fetch_add(elapsed, Ordering::Relaxed);
         self.diagnostics
             .pass_max_nanos
             .fetch_max(elapsed, Ordering::Relaxed);

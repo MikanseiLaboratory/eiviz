@@ -1,9 +1,10 @@
 //! Virtual-clock media runtime. Command snapshots are applied at frame boundaries.
 
 use eiviz_core::{
-    AssetId, AudioBusId, AudioFollowPolicy, AudioMatrix, AudioResamplingPolicy, CompositorBackend,
-    InputId, InputSource, MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId,
-    MultiviewSource, Playback, Project, RouteMode, Transform2D, TransitionStyle,
+    AssetId, AudioBusId, AudioFollowPolicy, AudioMatrix, AudioResamplingPolicy,
+    AuxiliaryLoadSheddingPolicy, AuxiliaryQualityTier, CompositorBackend, InputId, InputSource,
+    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Playback,
+    Project, RouteMode, Transform2D, TransitionStyle,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{
@@ -16,7 +17,7 @@ use eiviz_time::{
     audio_frame_sample_span, monotonic_nanos,
 };
 use parking_lot::Mutex;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -68,6 +69,7 @@ pub struct RenderPlanSnapshot {
     order: Arc<[MixingUnitId]>,
     programs: HashMap<MixingUnitId, RenderPlan>,
     previews: HashMap<MixingUnitId, RenderPlan>,
+    program_required_previews: HashSet<MixingUnitId>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +113,7 @@ impl RuntimeSnapshot {
             channels: project.audio.channels,
             resampling: project.audio.resampling,
         };
+        let program_required_previews = program_required_previews(&project, &programs, &previews);
         Ok(Self {
             accepted_revision,
             applied_revision,
@@ -119,6 +122,7 @@ impl RuntimeSnapshot {
                 order: order.into(),
                 programs,
                 previews,
+                program_required_previews,
             },
             audio,
         })
@@ -135,19 +139,150 @@ impl RuntimeSnapshot {
     pub fn applied_revision(&self) -> u64 {
         self.applied_revision
     }
+
+    pub fn auxiliary_load_shedding_policy(&self) -> &AuxiliaryLoadSheddingPolicy {
+        &self.project.auxiliary_load_shedding
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AuxiliaryLoadSheddingState {
+    #[default]
+    Disabled,
+    Nominal,
+    Tier(usize),
+    Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimingFeedback {
+    pub deadline_slack_nanos: i64,
+    pub gpu_frame_nanos: u64,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct TickMetrics {
     pub frame: u64,
     pub dropped_preview: u64,
+    pub decimated_preview: u64,
+    pub dropped_multiview: u64,
+    pub decimated_multiview: u64,
+    pub preview_queue_high_water: usize,
+    pub multiview_queue_high_water: usize,
     pub program_drops: u64,
     pub program_repeats: u64,
     pub deadline_monotonic_nanos: u64,
     pub deadline_slack_nanos: i64,
     pub deadline_misses: u64,
     pub processing_nanos: u64,
+    pub gpu_frame_nanos: u64,
     pub timing_unlocked_sources: usize,
+    pub auxiliary_load_shedding_state: AuxiliaryLoadSheddingState,
+    pub auxiliary_admission_diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AuxiliaryLoadSheddingController {
+    policy: Option<AuxiliaryLoadSheddingPolicy>,
+    state: AuxiliaryLoadSheddingState,
+    overload_streak: u32,
+    recovery_streak: u32,
+}
+
+impl AuxiliaryLoadSheddingController {
+    fn synchronize(&mut self, policy: &AuxiliaryLoadSheddingPolicy) {
+        if self.policy.as_ref() == Some(policy) {
+            return;
+        }
+        self.policy = Some(policy.clone());
+        self.state = match policy {
+            AuxiliaryLoadSheddingPolicy::Disabled => AuxiliaryLoadSheddingState::Disabled,
+            AuxiliaryLoadSheddingPolicy::Thresholds(_) => AuxiliaryLoadSheddingState::Nominal,
+        };
+        self.overload_streak = 0;
+        self.recovery_streak = 0;
+    }
+
+    fn observe(&mut self, policy: &AuxiliaryLoadSheddingPolicy, feedback: TimingFeedback) {
+        self.synchronize(policy);
+        let AuxiliaryLoadSheddingPolicy::Thresholds(thresholds) = policy else {
+            return;
+        };
+        let gpu_overloaded = thresholds
+            .gpu_overload_nanos
+            .is_some_and(|threshold| feedback.gpu_frame_nanos >= threshold);
+        let overloaded =
+            feedback.deadline_slack_nanos <= thresholds.overload_slack_nanos || gpu_overloaded;
+        let gpu_healthy = thresholds
+            .gpu_recover_nanos
+            .is_none_or(|threshold| feedback.gpu_frame_nanos <= threshold);
+        let healthy =
+            feedback.deadline_slack_nanos >= thresholds.recover_slack_nanos && gpu_healthy;
+        if overloaded {
+            self.recovery_streak = 0;
+            self.overload_streak = self.overload_streak.saturating_add(1);
+            if self.overload_streak >= thresholds.escalation_frames {
+                self.escalate(thresholds.tiers.len());
+                self.overload_streak = 0;
+            }
+        } else if healthy {
+            self.overload_streak = 0;
+            self.recovery_streak = self.recovery_streak.saturating_add(1);
+            if self.recovery_streak >= thresholds.recovery_frames {
+                self.recover(thresholds.tiers.len());
+                self.recovery_streak = 0;
+            }
+        } else {
+            self.overload_streak = 0;
+            self.recovery_streak = 0;
+        }
+    }
+
+    fn escalate(&mut self, tier_count: usize) {
+        self.state = match self.state {
+            AuxiliaryLoadSheddingState::Disabled | AuxiliaryLoadSheddingState::Nominal => {
+                AuxiliaryLoadSheddingState::Tier(0)
+            }
+            AuxiliaryLoadSheddingState::Tier(index) if index + 1 < tier_count => {
+                AuxiliaryLoadSheddingState::Tier(index + 1)
+            }
+            AuxiliaryLoadSheddingState::Tier(_) | AuxiliaryLoadSheddingState::Exhausted => {
+                AuxiliaryLoadSheddingState::Exhausted
+            }
+        };
+    }
+
+    fn recover(&mut self, tier_count: usize) {
+        self.state = match self.state {
+            AuxiliaryLoadSheddingState::Exhausted => {
+                AuxiliaryLoadSheddingState::Tier(tier_count.saturating_sub(1))
+            }
+            AuxiliaryLoadSheddingState::Tier(0) => AuxiliaryLoadSheddingState::Nominal,
+            AuxiliaryLoadSheddingState::Tier(index) => AuxiliaryLoadSheddingState::Tier(index - 1),
+            state => state,
+        };
+    }
+
+    fn quality(&self, policy: &AuxiliaryLoadSheddingPolicy) -> AuxiliaryQualityTier {
+        const NOMINAL: AuxiliaryQualityTier = AuxiliaryQualityTier {
+            preview_cadence_divisor: 1,
+            preview_resolution_divisor: 1,
+            multiview_cadence_divisor: 1,
+            multiview_resolution_divisor: 1,
+        };
+        let AuxiliaryLoadSheddingPolicy::Thresholds(thresholds) = policy else {
+            return NOMINAL;
+        };
+        match self.state {
+            AuxiliaryLoadSheddingState::Tier(index) => {
+                thresholds.tiers.get(index).copied().unwrap_or(NOMINAL)
+            }
+            AuxiliaryLoadSheddingState::Exhausted => {
+                thresholds.tiers.last().copied().unwrap_or(NOMINAL)
+            }
+            AuxiliaryLoadSheddingState::Disabled | AuxiliaryLoadSheddingState::Nominal => NOMINAL,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,6 +356,8 @@ pub struct Runtime {
     pub peak_meters: HashMap<AudioBusId, f32>,
     active_snapshot: Option<Arc<RuntimeSnapshot>>,
     transitions: HashMap<MixingUnitId, TransitionRuntime>,
+    auxiliary_load_shedding: AuxiliaryLoadSheddingController,
+    pending_timing_feedback: Option<TimingFeedback>,
     #[cfg(feature = "wgpu-backend")]
     wgpu: ConfiguredWgpu,
     #[cfg(feature = "wgpu-backend")]
@@ -305,6 +442,8 @@ impl Runtime {
             peak_meters: HashMap::new(),
             active_snapshot: None,
             transitions: HashMap::new(),
+            auxiliary_load_shedding: AuxiliaryLoadSheddingController::default(),
+            pending_timing_feedback: None,
             #[cfg(feature = "wgpu-backend")]
             wgpu: _wgpu,
             #[cfg(feature = "wgpu-backend")]
@@ -425,6 +564,13 @@ impl Runtime {
         &self.clock
     }
 
+    /// Supplies scheduler/GPU timing for the next boundary. Production uses
+    /// the prior completed frame; deterministic tests and external schedulers
+    /// can replace that sample without sleeping.
+    pub fn set_next_timing_feedback(&mut self, feedback: TimingFeedback) {
+        self.pending_timing_feedback = Some(feedback);
+    }
+
     pub fn program_slot(&mut self, unit: MixingUnitId) -> Arc<BoundedSlot<VideoFrame>> {
         self.program_slots
             .entry(unit)
@@ -527,6 +673,8 @@ impl Runtime {
                 snapshot.audio.sample_rate, self.sample_rate
             )));
         }
+        self.auxiliary_load_shedding
+            .synchronize(snapshot.auxiliary_load_shedding_policy());
         if let Some(previous) = &self.active_snapshot {
             if previous.audio.resampling != snapshot.audio.resampling {
                 self.input_asrc.clear();
@@ -579,6 +727,7 @@ impl Runtime {
 
     pub fn tick_active(&mut self) -> Result<TickResult> {
         let started_nanos = monotonic_nanos();
+        let gpu_started_nanos = self.gpu_pass_total_nanos();
         let span = tracing::info_span!(
             "runtime_tick",
             frame_id = self.frame,
@@ -590,6 +739,20 @@ impl Runtime {
             .clone()
             .ok_or_else(|| RuntimeError::Other("no active runtime snapshot".into()))?;
         let project = snapshot.project();
+        if let Some(feedback) = self.pending_timing_feedback.take() {
+            self.auxiliary_load_shedding
+                .observe(snapshot.auxiliary_load_shedding_policy(), feedback);
+        }
+        let auxiliary_quality = self
+            .auxiliary_load_shedding
+            .quality(snapshot.auxiliary_load_shedding_policy());
+        self.metrics.auxiliary_load_shedding_state = self.auxiliary_load_shedding.state;
+        self.metrics.auxiliary_admission_diagnostic =
+            (self.auxiliary_load_shedding.state == AuxiliaryLoadSheddingState::Exhausted).then(
+                || {
+                    "degraded: timing overload exceeds all admitted Preview/Multiview shedding tiers; Program remains full profile".into()
+                },
+            );
         let pts = MediaTime::from_frame_index(self.frame, project.video.frame_rate)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         self.clock.seek_frame(self.frame, project.video.frame_rate);
@@ -629,19 +792,44 @@ impl Runtime {
                 .previews
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
-            let pv = self.composite_plan(pv_plan, &sources, pts)?;
-            #[cfg(feature = "wgpu-backend")]
-            self.capture_preview_texture(unit.id);
             self.program_slot(unit.id)
                 .push(pg.clone())
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
-            let _ = self.preview_slot(unit.id).push(pv.clone());
             self.last_program.insert(unit.id, pg.clone());
-            self.last_preview.insert(unit.id, pv.clone());
             programs.insert(unit.id, pg);
+            let program_required = snapshot.render.program_required_previews.contains(&unit_id);
+            let preview_due = program_required
+                || self.last_preview.get(&unit_id).is_none()
+                || self.frame % u64::from(auxiliary_quality.preview_cadence_divisor) == 0;
+            let pv = if preview_due {
+                let plan = if program_required {
+                    pv_plan.clone()
+                } else {
+                    scaled_render_plan(pv_plan, auxiliary_quality.preview_resolution_divisor)
+                };
+                let frame = self.composite_plan(&plan, &sources, pts)?;
+                #[cfg(feature = "wgpu-backend")]
+                self.capture_preview_texture(unit.id);
+                let _ = self.preview_slot(unit.id).push(frame.clone());
+                self.last_preview.insert(unit.id, frame.clone());
+                frame
+            } else {
+                self.metrics.decimated_preview = self.metrics.decimated_preview.saturating_add(1);
+                self.last_preview
+                    .get(&unit_id)
+                    .cloned()
+                    .expect("a non-due Preview has a last frame")
+            };
             previews.insert(unit.id, pv);
         }
-        let multiviews = self.render_multiviews(project, &sources, &programs, &previews, pts)?;
+        let multiviews = self.render_multiviews(
+            project,
+            &sources,
+            &programs,
+            &previews,
+            pts,
+            auxiliary_quality,
+        )?;
         let (sample_index, sample_count) =
             audio_frame_sample_span(self.frame, self.sample_rate, project.video.frame_rate)
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
@@ -662,6 +850,9 @@ impl Runtime {
                 .and_then(|next_pts| self.schedule_deadline(next_pts))?;
         let completed_nanos = monotonic_nanos();
         self.metrics.processing_nanos = completed_nanos.saturating_sub(started_nanos);
+        self.metrics.gpu_frame_nanos = self
+            .gpu_pass_total_nanos()
+            .saturating_sub(gpu_started_nanos);
         self.metrics.deadline_slack_nanos = i64::try_from(completion_deadline).unwrap_or(i64::MAX)
             - i64::try_from(completed_nanos).unwrap_or(i64::MAX);
         if self.metrics.deadline_slack_nanos < 0 {
@@ -675,15 +866,26 @@ impl Runtime {
                     && timing.island.state() != ClockLockState::Locked
             })
             .count();
+        self.update_auxiliary_queue_metrics();
+        self.pending_timing_feedback = Some(TimingFeedback {
+            deadline_slack_nanos: self.metrics.deadline_slack_nanos,
+            gpu_frame_nanos: self.metrics.gpu_frame_nanos,
+        });
         tracing::info!(
             frame_id = self.frame,
             deadline_monotonic_nanos,
             completion_deadline_monotonic_nanos = completion_deadline,
             deadline_slack_nanos = self.metrics.deadline_slack_nanos,
             processing_nanos = self.metrics.processing_nanos,
+            gpu_frame_nanos = self.metrics.gpu_frame_nanos,
             deadline_misses = self.metrics.deadline_misses,
             program_drops = self.metrics.program_drops,
             program_repeats = self.metrics.program_repeats,
+            auxiliary_load_shedding_state = ?self.metrics.auxiliary_load_shedding_state,
+            dropped_preview = self.metrics.dropped_preview,
+            decimated_preview = self.metrics.decimated_preview,
+            dropped_multiview = self.metrics.dropped_multiview,
+            decimated_multiview = self.metrics.decimated_multiview,
             "runtime frame completed"
         );
         self.frame += 1;
@@ -721,6 +923,43 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn gpu_pass_total_nanos(&self) -> u64 {
+        self.wgpu
+            .as_ref()
+            .map_or(0, |gpu| gpu.diagnostics().pass_total_nanos)
+    }
+
+    #[cfg(not(feature = "wgpu-backend"))]
+    fn gpu_pass_total_nanos(&self) -> u64 {
+        0
+    }
+
+    fn update_auxiliary_queue_metrics(&mut self) {
+        self.metrics.dropped_preview = self
+            .preview_slots
+            .values()
+            .map(|slot| slot.diagnostics().dropped)
+            .sum();
+        self.metrics.preview_queue_high_water = self
+            .preview_slots
+            .values()
+            .map(|slot| slot.diagnostics().high_water)
+            .max()
+            .unwrap_or(0);
+        self.metrics.dropped_multiview = self
+            .multiview_slots
+            .values()
+            .map(|slot| slot.diagnostics().dropped)
+            .sum();
+        self.metrics.multiview_queue_high_water = self
+            .multiview_slots
+            .values()
+            .map(|slot| slot.diagnostics().high_water)
+            .max()
+            .unwrap_or(0);
     }
 
     fn mix_transition(
@@ -955,9 +1194,24 @@ impl Runtime {
         programs: &HashMap<MixingUnitId, VideoFrame>,
         previews: &HashMap<MixingUnitId, VideoFrame>,
         pts: MediaTime,
+        auxiliary_quality: AuxiliaryQualityTier,
     ) -> Result<HashMap<MultiviewId, VideoFrame>> {
         let mut rendered = HashMap::new();
         for view in project.multiviews.values() {
+            let due = self.last_multiview.get(&view.id).is_none()
+                || self.frame % u64::from(auxiliary_quality.multiview_cadence_divisor) == 0;
+            if !due {
+                self.metrics.decimated_multiview =
+                    self.metrics.decimated_multiview.saturating_add(1);
+                rendered.insert(
+                    view.id,
+                    self.last_multiview
+                        .get(&view.id)
+                        .cloned()
+                        .expect("a non-due Multiview has a last frame"),
+                );
+                continue;
+            }
             let mut sources = input_sources.clone();
             let mut layers = Vec::with_capacity(view.tiles.len());
             let mut synthetic = u128::MAX;
@@ -1001,8 +1255,14 @@ impl Runtime {
                 });
             }
             let plan = RenderPlan {
-                width: project.video.width,
-                height: project.video.height,
+                width: scaled_dimension(
+                    project.video.width,
+                    auxiliary_quality.multiview_resolution_divisor,
+                ),
+                height: scaled_dimension(
+                    project.video.height,
+                    auxiliary_quality.multiview_resolution_divisor,
+                ),
                 layers,
             };
             let frame = self.composite_plan(&plan, &sources, pts)?;
@@ -1356,6 +1616,55 @@ impl Runtime {
             meters.insert(bus.id, peak);
         }
         Ok((mixed, meters))
+    }
+}
+
+fn program_required_previews(
+    project: &Project,
+    programs: &HashMap<MixingUnitId, RenderPlan>,
+    previews: &HashMap<MixingUnitId, RenderPlan>,
+) -> HashSet<MixingUnitId> {
+    let mut required = HashSet::new();
+    let mut pending = programs
+        .keys()
+        .copied()
+        .map(|unit| (unit, MixTap::Program))
+        .collect::<Vec<_>>();
+    let mut visited = HashSet::new();
+    while let Some((unit, tap)) = pending.pop() {
+        if !visited.insert((unit, tap == MixTap::Preview)) {
+            continue;
+        }
+        if tap == MixTap::Preview {
+            required.insert(unit);
+        }
+        let plan = match tap {
+            MixTap::Program => programs.get(&unit),
+            MixTap::Preview => previews.get(&unit),
+        };
+        let Some(plan) = plan else {
+            continue;
+        };
+        for layer in &plan.layers {
+            if let Some(InputSource::MixFeed { unit, tap }) =
+                project.inputs.get(&layer.input).map(|input| &input.source)
+            {
+                pending.push((*unit, *tap));
+            }
+        }
+    }
+    required
+}
+
+fn scaled_dimension(value: u32, divisor: u32) -> u32 {
+    (value / divisor.max(1)).max(1)
+}
+
+fn scaled_render_plan(plan: &RenderPlan, divisor: u32) -> RenderPlan {
+    RenderPlan {
+        width: scaled_dimension(plan.width, divisor),
+        height: scaled_dimension(plan.height, divisor),
+        layers: plan.layers.clone(),
     }
 }
 
@@ -1957,5 +2266,134 @@ mod tests {
             rt.last_multiview_frame(view.id).unwrap().pixel(1500, 100),
             [0, 0, 255, 255]
         );
+    }
+
+    fn synthetic_shedding_policy() -> AuxiliaryLoadSheddingPolicy {
+        AuxiliaryLoadSheddingPolicy::Thresholds(eiviz_core::AuxiliaryLoadSheddingThresholds {
+            overload_slack_nanos: 1_000_000,
+            recover_slack_nanos: 3_000_000,
+            gpu_overload_nanos: Some(6_000_000),
+            gpu_recover_nanos: Some(4_000_000),
+            escalation_frames: 2,
+            recovery_frames: 3,
+            tiers: vec![
+                AuxiliaryQualityTier {
+                    preview_cadence_divisor: 2,
+                    preview_resolution_divisor: 2,
+                    multiview_cadence_divisor: 2,
+                    multiview_resolution_divisor: 2,
+                },
+                AuxiliaryQualityTier {
+                    preview_cadence_divisor: 4,
+                    preview_resolution_divisor: 4,
+                    multiview_cadence_divisor: 4,
+                    multiview_resolution_divisor: 4,
+                },
+            ],
+        })
+    }
+
+    #[test]
+    fn synthetic_timing_escalates_and_recovers_with_hysteresis() {
+        let policy = synthetic_shedding_policy();
+        let mut controller = AuxiliaryLoadSheddingController::default();
+        let overloaded = TimingFeedback {
+            deadline_slack_nanos: 0,
+            gpu_frame_nanos: 7_000_000,
+        };
+        let healthy = TimingFeedback {
+            deadline_slack_nanos: 4_000_000,
+            gpu_frame_nanos: 3_000_000,
+        };
+
+        controller.observe(&policy, overloaded);
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Nominal);
+        controller.observe(&policy, overloaded);
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Tier(0));
+        controller.observe(&policy, overloaded);
+        controller.observe(&policy, overloaded);
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Tier(1));
+        controller.observe(&policy, overloaded);
+        controller.observe(&policy, overloaded);
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Exhausted);
+
+        for _ in 0..2 {
+            controller.observe(&policy, healthy);
+        }
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Exhausted);
+        controller.observe(&policy, healthy);
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Tier(1));
+        for _ in 0..6 {
+            controller.observe(&policy, healthy);
+        }
+        assert_eq!(controller.state, AuxiliaryLoadSheddingState::Nominal);
+    }
+
+    #[test]
+    fn auxiliary_shedding_never_changes_program_frames() {
+        let (mut shed_project, _, scene, unit) = setup();
+        shed_project.video.width = 64;
+        shed_project.video.height = 36;
+        shed_project
+            .mixing_units
+            .get_mut(&unit)
+            .unwrap()
+            .program
+            .scene = Some(scene);
+        let view = Multiview {
+            id: MultiviewId::new(),
+            name: "shed-test".into(),
+            owner: unit,
+            columns: 1,
+            rows: 1,
+            tiles: vec![MultiviewTile {
+                column: 0,
+                row: 0,
+                source: MultiviewSource::Program(unit),
+            }],
+        };
+        shed_project.multiviews.insert(view.id, view.clone());
+        shed_project
+            .mixing_units
+            .get_mut(&unit)
+            .unwrap()
+            .multiviews
+            .push(view.id);
+        shed_project.auxiliary_load_shedding = synthetic_shedding_policy();
+        let mut full_project = shed_project.clone();
+        full_project.auxiliary_load_shedding = AuxiliaryLoadSheddingPolicy::Disabled;
+        shed_project.validate().unwrap();
+        full_project.validate().unwrap();
+
+        let mut full = Runtime::new(48_000);
+        let mut shed = Runtime::new(48_000);
+        for _ in 0..12 {
+            shed.set_next_timing_feedback(TimingFeedback {
+                deadline_slack_nanos: 0,
+                gpu_frame_nanos: 7_000_000,
+            });
+            let expected = full.tick(&full_project).unwrap();
+            let actual = shed.tick(&shed_project).unwrap();
+            let expected_program = &expected.programs[&unit];
+            let actual_program = &actual.programs[&unit];
+            assert_eq!(actual_program.id, expected_program.id);
+            assert_eq!(actual_program.pts, expected_program.pts);
+            assert_eq!(actual_program.width, shed_project.video.width);
+            assert_eq!(actual_program.height, shed_project.video.height);
+            assert_eq!(actual_program.data, expected_program.data);
+        }
+        assert_eq!(
+            shed.metrics.auxiliary_load_shedding_state,
+            AuxiliaryLoadSheddingState::Exhausted
+        );
+        assert!(shed.metrics.auxiliary_admission_diagnostic.is_some());
+        assert!(shed.metrics.decimated_preview > 0);
+        assert!(shed.metrics.decimated_multiview > 0);
+        assert!(shed.metrics.dropped_preview > 0);
+        assert!(shed.metrics.dropped_multiview > 0);
+        assert_eq!(shed.metrics.preview_queue_high_water, 1);
+        assert_eq!(shed.metrics.multiview_queue_high_water, 1);
+        assert_eq!(shed.metrics.program_drops, 0);
+        assert_eq!(shed.metrics.program_repeats, 0);
     }
 }

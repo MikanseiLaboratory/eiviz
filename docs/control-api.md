@@ -58,6 +58,12 @@ the due batch. `effective_time=null` and times earlier than the current media
 position target the next logical frame/audio boundary. Future commands remain
 pending, and commands targeting one boundary apply in acceptance order.
 
+`SetAuxiliaryLoadShedding` persists either `"Disabled"` or a fully specified
+`{"Thresholds":{...}}` policy. Threshold admission validates deadline/GPU
+hysteresis and ordered Preview/Multiview cadence/resolution divisors. Invalid
+or less-restrictive tier order is rejected with 422; no command can use this
+policy to alter Program format/cadence or compositor backend.
+
 ## TCP JSON-lines
 
 Send one `ApiRequest` per newline. The maximum frame is 1 MiB. A configured

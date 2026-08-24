@@ -55,7 +55,10 @@ OMT の具体的な未実施シナリオは [hil/omt.md](hil/omt.md) を参照�
 
 GPU の未実施シナリオは [hil/gpu.md](hil/gpu.md) を参照してください。
 ADR-0011 の desktop 単一Device/Queue統合は実装済みです。ただし
-`GPU-HIL-01..07`（特に device recreation と soak）が未実施のため、Phase 2 は未完了です。
+`GPU-HIL-01..08`（特に device recreation、admission-controlled overload、
+soak）が未実施のため、Phase 2 は未完了です。R05.3 の synthetic timing test は
+state machine と Program invariant の automated evidence ですが、実 GPU の
+deadline/GPU timing HIL を代替しません。
 
 `TIME-HIL-01..08` は実機未実施です。Desktop に lock、rate ppb、
 offset/residual、reset/wrap、video/audio skew、A/V drift の metrics は

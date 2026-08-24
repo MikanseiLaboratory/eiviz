@@ -107,13 +107,23 @@ Output adapter は `OutputId` で Engine の sink registry へ登録します。
 `enabled=false` と削除済みOutputは送信しません。全sinkへprimary unitを
 一律送信する経路は使用しません。
 
-- Program: drop しない。間に合わなければ last-good を cadence どおり繰り返す
-- Preview/Multiview: latest-wins
+- Program: load shedding の対象にしない。Project の full format/cadence で毎 boundary 描画する
+- Preview/Multiview: latest-wins。上書き drop と queue high-water を計測する
 - Recorder/Network: 独立。満杯時は自分だけ Degraded
 
 ## GPU
 
 RenderPlan は due output から逆算した demand-driven DAG です。submit は GPU executor の単一箇所に限ります。ゼロコピーは `GpuInterop` に隔離し、既定経路は staging copy です。`Project.compositor` が `Wgpu` のとき CPU 合成へ落とさない。`CpuReference` は CI / 参照用の明示 profile です。
+
+`Project.auxiliary_load_shedding` は既定 `Disabled` です。有効時は前 frame の
+deadline slack と GPU frame time を immutable `RuntimeSnapshot` の threshold
+へ入力し、連続 frame 数の hysteresis で ordered quality tier を一段ずつ
+escalate/recover します。tier は Preview/Multiview ごとの cadence divisor と
+resolution divisor だけを変更します。Program から参照される Preview mixfeed は
+依存 closure を取って critical path に残すため、auxiliary policy が Program の
+pixel、format、PTS、cadence を変える経路はありません。最後の tier でも過負荷が
+継続すれば state は `Exhausted` となり、Program を続行したまま明示的な
+degraded/admission diagnostic を出します。
 
 ## 失敗ドメイン
 

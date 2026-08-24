@@ -44,6 +44,8 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     }
     // v3 persists the audio resampling policy. Serde defaults every older
     // project to ExactRate; migration never opts a project into ASRC.
+    // v4 persists auxiliary load shedding. Its serde default is Disabled, so
+    // migration never silently authorizes Preview/Multiview degradation.
     project.schema_version = SCHEMA_VERSION;
     project.validate()?;
     Ok(project)
@@ -383,6 +385,23 @@ mod tests {
         assert_eq!(
             migrated.audio.resampling,
             eiviz_core::AudioResamplingPolicy::ExactRate
+        );
+    }
+
+    #[test]
+    fn v3_migration_disables_auxiliary_load_shedding() {
+        let project = Project::new("legacy shedding");
+        let mut json = serde_json::to_value(project).unwrap();
+        json["schema_version"] = serde_json::json!(3);
+        json.as_object_mut()
+            .unwrap()
+            .remove("auxiliary_load_shedding");
+        let loaded: Project = serde_json::from_value(json).unwrap();
+        let migrated = migrate(loaded).unwrap();
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            migrated.auxiliary_load_shedding,
+            eiviz_core::AuxiliaryLoadSheddingPolicy::Disabled
         );
     }
 

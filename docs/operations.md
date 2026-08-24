@@ -4,7 +4,9 @@ R10 diagnostics use structured `tracing` spans/events at command admission and
 latch, runtime frame boundaries, GPU pass/readback, audio and I/O delivery, and
 distribution queues. The engine metrics and flight recorder expose:
 
-- deadline slack/misses and Program drop/repeat counters;
+- deadline slack/misses, per-frame GPU timing, and Program drop/repeat counters;
+- auxiliary load-shedding state/admission diagnostic, Preview/Multiview
+  decimation and latest-wins overwrite counters, and queue high-water marks;
 - source video/audio skew and A/V drift;
 - GPU pass/readback last and maximum duration plus device loss;
 - command/distribution queue depth and high-water marks;
@@ -34,6 +36,13 @@ Capability reports distinguish compiled, currently available, and active
 states. Hardware and interoperability entries remain `hil_pending` until
 physical evidence exists; capability export is not HIL evidence and never
 activates a fallback.
+
+Desktop exposes the persisted auxiliary admission policy under
+**Preview / Multiview admission**. `Disabled` means no automatic quality
+change. Threshold mode validates ordered tiers and hysteresis before command
+admission. `Exhausted` is an operator-visible degraded condition: all permitted
+auxiliary shedding has been consumed. It does not authorize a Program
+format/cadence change, CPU compositor, or backend switch.
 
 Generate release SBOM evidence with:
 

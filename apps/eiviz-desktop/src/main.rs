@@ -1,9 +1,10 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, CompositorBackend, DistributionProfile,
-    H264EncoderProfile, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
-    MultiviewTile, Output, OutputId, OutputKind, Project, ReconnectProfile, Scene, SceneId,
-    SceneItem, SceneItemId, Transform2D, TransitionStyle, TransportProfile,
+    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AuxiliaryLoadSheddingPolicy,
+    CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId, InputSource,
+    Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, Project,
+    ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId, Transform2D, TransitionStyle,
+    TransportProfile,
 };
 #[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
 use eiviz_core::{AudioRoute, RouteMode};
@@ -1621,8 +1622,9 @@ impl eframe::App for DesktopApp {
             ui.label(self.engine.compositor_detail());
             let gpu_metrics = self.engine.metrics();
             ui.label(format!(
-                "GPU pass: {} ns (max {}); staging readback: {} ns (max {}, count {})",
+                "GPU pass: {} ns (frame {} ns, max {}); staging readback: {} ns (max {}, count {})",
                 gpu_metrics.gpu_pass_nanos,
+                gpu_metrics.gpu_frame_nanos,
                 gpu_metrics.gpu_pass_max_nanos,
                 gpu_metrics.gpu_readback_nanos,
                 gpu_metrics.gpu_readback_max_nanos,
@@ -1635,6 +1637,129 @@ impl eframe::App for DesktopApp {
                 gpu_metrics.program_drops,
                 gpu_metrics.program_repeats,
             ));
+            ui.label(format!(
+                "Auxiliary: {}; Preview drop={} decimated={} queue-high={}; Multiview drop={} decimated={} queue-high={}",
+                gpu_metrics.auxiliary_load_shedding_state,
+                gpu_metrics.dropped_preview,
+                gpu_metrics.decimated_preview,
+                gpu_metrics.preview_queue_high_water,
+                gpu_metrics.dropped_multiview,
+                gpu_metrics.decimated_multiview,
+                gpu_metrics.multiview_queue_high_water,
+            ));
+            if let Some(diagnostic) = &gpu_metrics.auxiliary_admission_diagnostic {
+                ui.colored_label(egui::Color32::RED, diagnostic);
+            }
+            ui.separator();
+            ui.heading("Preview / Multiview admission");
+            let mut shedding = project.auxiliary_load_shedding.clone();
+            let mut enabled = matches!(
+                shedding,
+                AuxiliaryLoadSheddingPolicy::Thresholds(_)
+            );
+            let mut shedding_changed = ui
+                .checkbox(&mut enabled, "Enable explicit auxiliary shedding")
+                .changed();
+            if shedding_changed {
+                shedding = if enabled {
+                    AuxiliaryLoadSheddingPolicy::broadcast_default()
+                } else {
+                    AuxiliaryLoadSheddingPolicy::Disabled
+                };
+            }
+            if let AuxiliaryLoadSheddingPolicy::Thresholds(policy) = &mut shedding {
+                ui.label("Deadline feedback (ns)");
+                ui.horizontal(|ui| {
+                    ui.label("overload ≤");
+                    shedding_changed |= ui
+                        .add(egui::DragValue::new(&mut policy.overload_slack_nanos))
+                        .changed();
+                    ui.label("recover ≥");
+                    shedding_changed |= ui
+                        .add(egui::DragValue::new(&mut policy.recover_slack_nanos))
+                        .changed();
+                });
+                let mut gpu_feedback = policy.gpu_overload_nanos.is_some();
+                if ui
+                    .checkbox(&mut gpu_feedback, "Use GPU frame timing")
+                    .changed()
+                {
+                    shedding_changed = true;
+                    if gpu_feedback {
+                        policy.gpu_overload_nanos = Some(6_000_000);
+                        policy.gpu_recover_nanos = Some(4_000_000);
+                    } else {
+                        policy.gpu_overload_nanos = None;
+                        policy.gpu_recover_nanos = None;
+                    }
+                }
+                if let (Some(overload), Some(recover)) = (
+                    &mut policy.gpu_overload_nanos,
+                    &mut policy.gpu_recover_nanos,
+                ) {
+                    ui.horizontal(|ui| {
+                        ui.label("GPU overload ≥");
+                        shedding_changed |= ui.add(egui::DragValue::new(overload)).changed();
+                        ui.label("recover ≤");
+                        shedding_changed |= ui.add(egui::DragValue::new(recover)).changed();
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.label("escalate frames");
+                    shedding_changed |= ui
+                        .add(egui::DragValue::new(&mut policy.escalation_frames).range(1..=10_000))
+                        .changed();
+                    ui.label("recover frames");
+                    shedding_changed |= ui
+                        .add(egui::DragValue::new(&mut policy.recovery_frames).range(1..=100_000))
+                        .changed();
+                });
+                for (index, tier) in policy.tiers.iter_mut().enumerate() {
+                    ui.label(format!("Tier {}", index + 1));
+                    ui.horizontal(|ui| {
+                        ui.label("PRV cadence /");
+                        shedding_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut tier.preview_cadence_divisor)
+                                    .range(1..=64),
+                            )
+                            .changed();
+                        ui.label("resolution /");
+                        shedding_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut tier.preview_resolution_divisor)
+                                    .range(1..=64),
+                            )
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("MV cadence /");
+                        shedding_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut tier.multiview_cadence_divisor)
+                                    .range(1..=64),
+                            )
+                            .changed();
+                        ui.label("resolution /");
+                        shedding_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut tier.multiview_resolution_divisor)
+                                    .range(1..=64),
+                            )
+                            .changed();
+                    });
+                }
+            }
+            if shedding_changed {
+                match self
+                    .engine
+                    .submit_payload(Command::SetAuxiliaryLoadShedding { policy: shedding })
+                {
+                    Ok(_) => self.status = "Auxiliary admission policy staged".into(),
+                    Err(error) => self.status = format!("Auxiliary admission policy: {error}"),
+                }
+            }
+            ui.label("Program profile/cadence and compositor backend are never changed by this policy.");
             if let Some(error) = &gpu_metrics.last_persistence_error {
                 ui.colored_label(
                     egui::Color32::RED,

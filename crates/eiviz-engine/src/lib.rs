@@ -90,12 +90,21 @@ pub struct EngineMetrics {
     pub gpu_pass_max_nanos: u64,
     pub gpu_readback_nanos: u64,
     pub gpu_readback_max_nanos: u64,
+    pub gpu_frame_nanos: u64,
     pub gpu_device_loss: Option<String>,
     pub gpu_automatic_recovery: bool,
     pub deadline_slack_nanos: i64,
     pub deadline_misses: u64,
     pub program_drops: u64,
     pub program_repeats: u64,
+    pub auxiliary_load_shedding_state: String,
+    pub auxiliary_admission_diagnostic: Option<String>,
+    pub dropped_preview: u64,
+    pub decimated_preview: u64,
+    pub dropped_multiview: u64,
+    pub decimated_multiview: u64,
+    pub preview_queue_high_water: usize,
+    pub multiview_queue_high_water: usize,
     pub persistence_errors: u64,
     pub last_persistence_error: Option<String>,
 }
@@ -601,6 +610,7 @@ impl Engine {
             gpu_readback_max_nanos: gpu.as_ref().map_or(0, |value| value.readback_max_nanos),
             #[cfg(not(feature = "wgpu-backend"))]
             gpu_readback_max_nanos: 0,
+            gpu_frame_nanos: g.runtime.metrics.gpu_frame_nanos,
             #[cfg(feature = "wgpu-backend")]
             gpu_device_loss: gpu
                 .as_ref()
@@ -616,6 +626,21 @@ impl Engine {
             deadline_misses: g.runtime.metrics.deadline_misses,
             program_drops: g.runtime.metrics.program_drops,
             program_repeats: g.runtime.metrics.program_repeats,
+            auxiliary_load_shedding_state: format!(
+                "{:?}",
+                g.runtime.metrics.auxiliary_load_shedding_state
+            ),
+            auxiliary_admission_diagnostic: g
+                .runtime
+                .metrics
+                .auxiliary_admission_diagnostic
+                .clone(),
+            dropped_preview: g.runtime.metrics.dropped_preview,
+            decimated_preview: g.runtime.metrics.decimated_preview,
+            dropped_multiview: g.runtime.metrics.dropped_multiview,
+            decimated_multiview: g.runtime.metrics.decimated_multiview,
+            preview_queue_high_water: g.runtime.metrics.preview_queue_high_water,
+            multiview_queue_high_water: g.runtime.metrics.multiview_queue_high_water,
             persistence_errors: g.persistence_errors,
             last_persistence_error: g.last_persistence_error.clone(),
         }
@@ -1066,7 +1091,7 @@ impl Engine {
         let failed_outputs = g.runtime.failed_outputs().len() as u64;
         let event = DiagnosticEvent::new(
             eiviz_time::monotonic_nanos(),
-            if timing.deadline_slack_nanos < 0 {
+            if timing.deadline_slack_nanos < 0 || timing.auxiliary_admission_diagnostic.is_some() {
                 DiagnosticLevel::Warn
             } else {
                 DiagnosticLevel::Info
@@ -1082,6 +1107,20 @@ impl Engine {
         .field("program_drops", timing.program_drops)
         .field("program_repeats", timing.program_repeats)
         .field("dropped_preview", timing.dropped_preview)
+        .field("decimated_preview", timing.decimated_preview)
+        .field("dropped_multiview", timing.dropped_multiview)
+        .field("decimated_multiview", timing.decimated_multiview)
+        .field(
+            "auxiliary_load_shedding_state",
+            format!("{:?}", timing.auxiliary_load_shedding_state),
+        )
+        .field(
+            "auxiliary_admission_diagnostic",
+            timing
+                .auxiliary_admission_diagnostic
+                .clone()
+                .map_or(serde_json::Value::Null, Into::into),
+        )
         .field("failed_outputs", failed_outputs);
         g.flight.record(event);
         tracing::info!(
@@ -1090,6 +1129,12 @@ impl Engine {
             deadline_misses = timing.deadline_misses,
             program_drops = timing.program_drops,
             program_repeats = timing.program_repeats,
+            auxiliary_load_shedding_state = ?timing.auxiliary_load_shedding_state,
+            dropped_preview = timing.dropped_preview,
+            decimated_preview = timing.decimated_preview,
+            dropped_multiview = timing.dropped_multiview,
+            decimated_multiview = timing.decimated_multiview,
+            auxiliary_admission_diagnostic = timing.auxiliary_admission_diagnostic,
             failed_outputs,
             "frame completed"
         );
