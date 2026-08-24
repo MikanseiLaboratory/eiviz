@@ -8,3 +8,4 @@ rust-version.workspace = true
 [dependencies]
 eiviz-media.workspace = true
 eiviz-time.workspace = true
+thiserror.workspace = true

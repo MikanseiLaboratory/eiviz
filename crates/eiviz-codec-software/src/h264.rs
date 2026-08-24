@@ -1,6 +1,103 @@
 use crate::bitstream::{BitWriter, annexb};
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AvccError {
+    #[error("AVCC NAL length size must be 1, 2, or 4")]
+    InvalidLengthSize,
+    #[error("AVCC sample has a truncated NAL length")]
+    TruncatedLength,
+    #[error("AVCC NAL length is zero")]
+    ZeroLength,
+    #[error("AVCC NAL payload is truncated")]
+    TruncatedNal,
+    #[error("Annex-B output exceeds configured limit {0}")]
+    OutputLimit(usize),
+    #[error("AVC configuration has no {0}")]
+    MissingParameterSet(&'static str),
+}
+
+const ANNEX_B_START_CODE: [u8; 4] = [0, 0, 0, 1];
+
+/// Convert length-prefixed MP4 sample NALs to Annex-B with strict bounds.
+pub fn avcc_sample_to_annexb(
+    sample: &[u8],
+    length_size: usize,
+    max_output: usize,
+) -> Result<Vec<u8>, AvccError> {
+    if !matches!(length_size, 1 | 2 | 4) {
+        return Err(AvccError::InvalidLengthSize);
+    }
+    let mut cursor = 0usize;
+    let mut output = Vec::new();
+    while cursor < sample.len() {
+        let length_end = cursor
+            .checked_add(length_size)
+            .ok_or(AvccError::TruncatedLength)?;
+        let length_bytes = sample
+            .get(cursor..length_end)
+            .ok_or(AvccError::TruncatedLength)?;
+        let mut length = 0usize;
+        for byte in length_bytes {
+            length = length
+                .checked_mul(256)
+                .and_then(|value| value.checked_add(*byte as usize))
+                .ok_or(AvccError::OutputLimit(max_output))?;
+        }
+        if length == 0 {
+            return Err(AvccError::ZeroLength);
+        }
+        let nal_end = length_end
+            .checked_add(length)
+            .ok_or(AvccError::TruncatedNal)?;
+        let nal = sample
+            .get(length_end..nal_end)
+            .ok_or(AvccError::TruncatedNal)?;
+        append_annexb_nal(&mut output, nal, max_output)?;
+        cursor = nal_end;
+    }
+    Ok(output)
+}
+
+/// Build the decoder reset preamble from out-of-band avcC SPS/PPS NALs.
+pub fn avcc_parameter_sets_to_annexb(
+    sequence_parameter_sets: &[Vec<u8>],
+    picture_parameter_sets: &[Vec<u8>],
+    max_output: usize,
+) -> Result<Vec<u8>, AvccError> {
+    if sequence_parameter_sets.is_empty() {
+        return Err(AvccError::MissingParameterSet("SPS"));
+    }
+    if picture_parameter_sets.is_empty() {
+        return Err(AvccError::MissingParameterSet("PPS"));
+    }
+    let mut output = Vec::new();
+    for nal in sequence_parameter_sets
+        .iter()
+        .chain(picture_parameter_sets.iter())
+    {
+        if nal.is_empty() {
+            return Err(AvccError::ZeroLength);
+        }
+        append_annexb_nal(&mut output, nal, max_output)?;
+    }
+    Ok(output)
+}
+
+fn append_annexb_nal(output: &mut Vec<u8>, nal: &[u8], max_output: usize) -> Result<(), AvccError> {
+    let required = output
+        .len()
+        .checked_add(ANNEX_B_START_CODE.len())
+        .and_then(|value| value.checked_add(nal.len()))
+        .ok_or(AvccError::OutputLimit(max_output))?;
+    if required > max_output {
+        return Err(AvccError::OutputLimit(max_output));
+    }
+    output.extend_from_slice(&ANNEX_B_START_CODE);
+    output.extend_from_slice(nal);
+    Ok(())
+}
+
 /// Baseline IDR with I_PCM macroblocks. Valid (uncompressed) H.264.
 pub fn encode_idr(frame: &VideoFrame) -> EncodedAccessUnit {
     let mb_w = frame.width.div_ceil(16);

@@ -8,7 +8,10 @@ use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
 pub use flv::{flv_avc_nalu, flv_avc_sequence_header, flv_header};
 pub use fmp4::FragmentedMp4;
-pub use h264::{encode_idr, extract_sps_pps, split_annexb};
+pub use h264::{
+    AvccError, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb, encode_idr, extract_sps_pps,
+    split_annexb,
+};
 pub use mpegts::{pat, pes_video, pmt};
 
 /// Legacy private AU used when a caller needs a non-H.264 dump.
@@ -61,5 +64,37 @@ mod tests {
         let ts = pat();
         assert_eq!(ts[0], 0x47);
         assert_eq!(ts.len(), 188);
+    }
+
+    #[test]
+    fn checked_avcc_conversion_rejects_malformed_samples() {
+        let sample = [
+            0, 0, 0, 2, 0x65, 0xaa, // IDR
+            0, 0, 0, 3, 0x41, 0xbb, 0xcc, // non-IDR
+        ];
+        let annexb = avcc_sample_to_annexb(&sample, 4, 64).unwrap();
+        assert_eq!(
+            annexb,
+            vec![0, 0, 0, 1, 0x65, 0xaa, 0, 0, 0, 1, 0x41, 0xbb, 0xcc]
+        );
+        assert_eq!(
+            avcc_sample_to_annexb(&[0, 0, 0, 0], 4, 64),
+            Err(AvccError::ZeroLength)
+        );
+        assert_eq!(
+            avcc_sample_to_annexb(&[0, 0, 0, 4, 0x65], 4, 64),
+            Err(AvccError::TruncatedNal)
+        );
+        assert_eq!(
+            avcc_sample_to_annexb(&sample, 4, 8),
+            Err(AvccError::OutputLimit(8))
+        );
+    }
+
+    #[test]
+    fn avcc_parameter_sets_are_injected_on_decoder_reset() {
+        let preamble =
+            avcc_parameter_sets_to_annexb(&[vec![0x67, 1]], &[vec![0x68, 2]], 32).unwrap();
+        assert_eq!(preamble, vec![0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2]);
     }
 }
