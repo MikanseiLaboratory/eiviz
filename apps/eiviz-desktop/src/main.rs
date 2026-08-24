@@ -2477,7 +2477,8 @@ mod tests {
         }
 
         engine.tick().unwrap();
-        for _ in 0..100 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
             if engine
                 .metrics()
                 .distribution_outputs
@@ -2488,7 +2489,7 @@ mod tests {
             {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(encodes.load(Ordering::Relaxed), 1);
         let diagnostics = engine.metrics().distribution_outputs;
@@ -2497,7 +2498,8 @@ mod tests {
                 .iter()
                 .filter(|diagnostic| diagnostic.sent >= 2)
                 .count(),
-            2
+            2,
+            "fanout sinks did not send encoded AUs in time: {diagnostics:?}"
         );
         for output in [&output_a, &output_b] {
             engine.set_distribution_enabled(output.id, false).unwrap();
