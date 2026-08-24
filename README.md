@@ -14,7 +14,12 @@ all pass:
 - Explicit CpuReference compositor + virtual-clock runtime (`eiviz-gpu`, `eiviz-runtime`, `eiviz-engine`). `Wgpu` is a separate project backend, never a silent fallback.
 - The optional Wgpu backend now executes RGBA layer transform/crop/rotation,
   alpha composition, transition mixing, and staging readback on a hardware GPU.
-  GPU HIL and device-loss recovery remain pending.
+  Activated snapshots prewarm bounded reusable source/output/readback pools;
+  steady-state rendering cannot create an unprepared resident GPU resource.
+  Device loss explicitly degrades Engine, never selects CpuReference, and only
+  accepts a re-prewarmed replacement compositor at a frame boundary. Desktop
+  requires restart because eframe 0.32 cannot recreate RenderState in place.
+  Physical GPU/device-loss HIL remains pending.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
 - Desktop starts authenticated-capable HTTP (`127.0.0.1:8090`), TCP JSON-lines
   (`:8091`), and WebSocket (`:8092`) Query/Command APIs. Versioned envelopes,

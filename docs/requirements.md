@@ -64,13 +64,21 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
   degraded/admission diagnostic とし、Program の format/cadence/backend を
   変更しない
 - R05.4 pipeline は activation 前に prewarm する
-- R05.5 device lost 時は `missing_media` に従い slate / last-good / fail を cadence どおり適用し、再生成後に frame boundary で復帰する。CPU compositor へは落とさない
-- R05.6 compositor backend（`CpuReference` / `Wgpu`）は Project の明示フィールド。Runtime と不一致、または選択 backend が利用不能ならエラー。暗黙切替禁止（INV-10）
-- R05.7 frame は pixel format（RGBA/BGRA/NV12/P010/P216/RGBA16F）、
+- R05.5 snapshot activation 前に pipeline と source/output/readback resource を
+  bounded pool へ全て prewarm する。pool は format/dimensions で再利用し、resident
+  byte/resource 上限と決定論的 idle eviction を持つ。steady-state frame で resident
+  GPU resource を生成しない
+- R05.6 device lost 時は compositor callback → Runtime/Engine の明示 `Degraded`
+  handshake で frame 実行を停止する。GUI owner が新しい Device/Queue/compositor を
+  注入できる場合だけ snapshot を再 prewarm して frame boundary で復帰し、API が
+  無い framework は restart/reinjection required と表示する。CpuReference へは
+  切り替えない
+- R05.7 compositor backend（`CpuReference` / `Wgpu`）は Project の明示フィールド。Runtime と不一致、または選択 backend が利用不能ならエラー。暗黙切替禁止（INV-10）
+- R05.8 frame は pixel format（RGBA/BGRA/NV12/P010/P216/RGBA16F）、
   matrix、range、transfer、field kind を保持する。異なる color profile は
   `Exact` で拒否し、Project が明示した `Gpu` policy のときだけ WGSL
   conversion を行う。HDR→SDR はさらに明示 tone-map policy を要求する
-- R05.8 RenderPlan は working format/color/field order と conservative VRAM
+- R05.9 RenderPlan は working format/color/field order と conservative VRAM
   estimate を保持する。adapter texture dimension/format feature と Engine
   VRAM budget は activation 前に検証し、非対応 profile を hard reject する
 

@@ -1884,6 +1884,9 @@ mod tests {
         compositor
             .prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 0)
             .unwrap();
+        let first = compositor.diagnostics().pool;
+        assert_eq!(first.resident_resources, 3);
+        assert_eq!(first.resident_bytes, 6_144);
         compositor
             .prewarm_snapshot(&[empty_plan(32, 32)], 32, 32, 0)
             .unwrap();
@@ -1904,6 +1907,18 @@ mod tests {
             Err(WgpuError::PoolLimit { .. })
         ));
         assert_eq!(compositor.diagnostics().pool.allocations, 0);
+    }
+
+    #[test]
+    fn frame_never_allocates_an_unprepared_resource() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        let error = compositor
+            .composite_texture(&empty_plan(16, 16), &HashMap::new(), MediaTime::ZERO, 1)
+            .unwrap_err();
+        assert!(matches!(error, WgpuError::UnpreparedResource(_)));
+        let pool = compositor.diagnostics().pool;
+        assert_eq!(pool.allocations, 0);
+        assert_eq!(pool.acquisition_misses, 1);
     }
 
     #[test]

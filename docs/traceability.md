@@ -8,7 +8,7 @@
 | R02 | eiviz-core::project::tests<br>CERT-MAX-ADMITTED-GRAPH |  | not_applicable | target/certification/evidence.json |
 | R03 | eiviz-core::graph::tests<br>CERT-MAX-ADMITTED-GRAPH |  | not_applicable | target/certification/evidence.json |
 | R04 | CERT-TIMING-SOAK<br>eiviz-time::tests | TIME-HIL-01..08 | pending | target/certification/evidence.json<br>target/certification/hil/timing |
-| R05 | CERT-MAX-ADMITTED-GRAPH<br>eiviz-runtime::tests | GPU-HIL-01..08 | pending | target/certification/evidence.json<br>target/certification/hil/gpu |
+| R05 | CERT-MAX-ADMITTED-GRAPH<br>eiviz-runtime::tests<br>eiviz-gpu pool/device lifecycle tests | GPU-HIL-01..08 | pending | target/certification/evidence.json<br>target/certification/hil/gpu |
 | R06 | CERT-TIMING-SOAK<br>eiviz-media::asrc::tests | AUDIO-HIL | pending | target/certification/evidence.json<br>target/certification/hil/audio |
 | R07 | CERT-FAULT-NIC-OUTAGE<br>adapter contract tests | NDI-HIL<br>OMT-HIL-01..10<br>DECKLINK-HIL | pending | target/certification/evidence.json<br>target/certification/hil/io |
 | R08 | CERT-FAULT-SINK<br>CERT-FAULT-DISK-FULL<br>CERT-FAULT-NIC-OUTAGE | DIST-HIL | pending | target/certification/evidence.json<br>target/certification/hil/distribution |

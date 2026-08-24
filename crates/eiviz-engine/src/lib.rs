@@ -675,14 +675,7 @@ impl Engine {
     /// GUI-owned render state in place.
     pub fn require_gpu_restart(&self, reason: impl Into<String>) {
         let mut inner = self.inner.lock();
-        if matches!(
-            inner.gpu_lifecycle,
-            GpuLifecycleState::Degraded { .. } | GpuLifecycleState::RecoveryPending
-        ) {
-            inner.gpu_lifecycle = GpuLifecycleState::RestartRequired {
-                reason: reason.into(),
-            };
-        }
+        require_restart_transition(&mut inner.gpu_lifecycle, reason.into());
     }
 
     /// Queue a newly GUI-owned compositor. It is never installed here; the
@@ -1693,9 +1686,7 @@ fn observe_gpu_lifecycle(inner: &mut Inner) -> Result<()> {
                 inner.gpu_lifecycle,
                 GpuLifecycleState::Active | GpuLifecycleState::RecoveryPending
             ) {
-                inner.gpu_lifecycle = GpuLifecycleState::Degraded {
-                    reason: reason.clone(),
-                };
+                device_loss_transition(&mut inner.gpu_lifecycle, reason.clone());
                 inner.flight.record(
                     DiagnosticEvent::new(
                         eiviz_time::monotonic_nanos(),
@@ -1719,6 +1710,24 @@ fn observe_gpu_lifecycle(inner: &mut Inner) -> Result<()> {
         GpuLifecycleState::NotApplicable
         | GpuLifecycleState::Active
         | GpuLifecycleState::RecoveryPending => Ok(()),
+    }
+}
+
+fn device_loss_transition(state: &mut GpuLifecycleState, reason: String) {
+    if matches!(
+        state,
+        GpuLifecycleState::Active | GpuLifecycleState::RecoveryPending
+    ) {
+        *state = GpuLifecycleState::Degraded { reason };
+    }
+}
+
+fn require_restart_transition(state: &mut GpuLifecycleState, reason: String) {
+    if matches!(
+        state,
+        GpuLifecycleState::Degraded { .. } | GpuLifecycleState::RecoveryPending
+    ) {
+        *state = GpuLifecycleState::RestartRequired { reason };
     }
 }
 
@@ -2236,6 +2245,17 @@ fn record_operational_sample(inner: &mut Inner) {
             .field("readbacks", gpu.readbacks)
             .field("readback_nanos", gpu.readback_nanos)
             .field("readback_max_nanos", gpu.readback_max_nanos)
+            .field("pool_resident_bytes", gpu.pool.resident_bytes)
+            .field(
+                "pool_resident_resources",
+                gpu.pool.resident_resources as u64,
+            )
+            .field("pool_idle_resources", gpu.pool.idle_resources as u64)
+            .field("pool_allocations", gpu.pool.allocations)
+            .field("pool_reuses", gpu.pool.reuses)
+            .field("pool_evictions", gpu.pool.evictions)
+            .field("pool_acquisition_misses", gpu.pool.acquisition_misses)
+            .field("prewarm_generations", gpu.pool.prewarm_generations)
             .field(
                 "device_loss",
                 gpu.device_loss
@@ -3348,5 +3368,37 @@ mod tests {
         assert_eq!(diagnostics.pending_commands, 1);
         assert_eq!(diagnostics.pending_capacity, 1);
         assert_eq!(engine.staged_state_hash(), staged_hash);
+    }
+
+    #[test]
+    fn gpu_loss_handshake_requires_same_backend_recovery_or_restart() {
+        let mut state = GpuLifecycleState::Active;
+        device_loss_transition(&mut state, "mock injected loss".into());
+        assert_eq!(
+            state,
+            GpuLifecycleState::Degraded {
+                reason: "mock injected loss".into()
+            }
+        );
+        require_restart_transition(&mut state, "framework cannot recreate render state".into());
+        assert_eq!(
+            state,
+            GpuLifecycleState::RestartRequired {
+                reason: "framework cannot recreate render state".into()
+            }
+        );
+        device_loss_transition(&mut state, "second callback".into());
+        assert!(matches!(state, GpuLifecycleState::RestartRequired { .. }));
+
+        let engine = Engine::new("explicit CPU profile");
+        engine.require_gpu_restart("must not affect CpuReference");
+        assert_eq!(
+            engine.gpu_lifecycle_state(),
+            GpuLifecycleState::NotApplicable
+        );
+        assert_eq!(
+            engine.snapshot().compositor,
+            eiviz_core::CompositorBackend::CpuReference
+        );
     }
 }

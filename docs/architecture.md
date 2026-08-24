@@ -125,6 +125,23 @@ pixel、format、PTS、cadence を変える経路はありません。最後の 
 継続すれば state は `Exhausted` となり、Program を続行したまま明示的な
 degraded/admission diagnostic を出します。
 
+`RuntimeSnapshot` は active pointer を交換する前に、全 Program/Preview/
+Multiview quality tier の pipeline と source/output/readback resource requirement
+を Wgpu compositor へ渡します。resource pool は purpose・working format・width・
+height を key にし、resident byte/resource 数を hard limit します。idle resource
+は返却 sequence、次に key の順で決定論的に eviction します。render/readback は
+prewarm 済み lease の取得だけを許し、未準備 key は frame 中に生成せず hard error
+にします。command encoder/command buffer は submission 用の一時 command object
+であり、resident texture/buffer/bind-group/pipeline allocation には数えません。
+
+GUI では eframe が Device/Queue owner です。device-lost callback を compositor
+diagnostic に latch し、Runtime と Engine は `Degraded` へ遷移して Wgpu frame を
+停止します。新しい GUI-owned compositor は Engine に queue され、次の media
+boundary で active snapshot を再 prewarm できた場合だけ swap します。
+`eframe 0.32` は実行中の `RenderState` 再生成 API を公開しないため、Desktop は
+明示 `restart-required` と終了操作を表示します。いずれの経路も
+`Project.compositor` を `CpuReference` へ変更しません。
+
 ## 失敗ドメイン
 
-source、Program、各 Output、audio、control、recording は独立した状態機械です。一つの sink の失敗で engine 全体を止めません。
+source、Program、各 Output、audio、control、recording は独立した状態機械です。一つの sink の失敗で engine 全体を止めません。Wgpu device loss は Program compositor 自体の failure domain なので Engine 全体の GPU media boundary を明示 Degraded にしますが、control/persistence は利用可能なままにし、backend を暗黙変更しません。

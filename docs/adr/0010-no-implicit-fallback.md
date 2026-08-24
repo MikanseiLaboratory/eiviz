@@ -13,6 +13,10 @@
    - 合成は `Project.compositor`（`CpuReference` または `Wgpu`）。Runtime の backend と不一致ならエラー。
    - `Wgpu` で feature 未有効、hardware adapter なし、CPU-type adapter、blit 未実装のいずれでも **CPU `composite` を呼ばない**。
    - wgpu `force_fallback_adapter` は使わない。
+   - Wgpu device loss は Engine を明示 `Degraded` にする。GUI owner が作成した
+     replacement compositor は active snapshot の resource prewarm 成功後、次の
+     frame boundary だけで再注入する。framework に device 再生成 API が無ければ
+     restart required とし、CpuReference へ切り替えない。
 2. **欠落 asset / live device は `Project.missing_media` だけが決める。**
    - `Slate` / `LastGood` / `Fail`。偽のカメラフィードや赤キャンバスへの暗黙置換は禁止。
    - `LastGood` で事前フレームが無いときは `Fail` と同じくエラー。Slate へ落とさない。
