@@ -5,6 +5,7 @@ pub use asrc::{AsrcDiagnostics, AsrcError, StreamingAsrc};
 use eiviz_core::{InputId, Playback};
 use eiviz_time::{ClockDomain, ClockObservation, FrameRate, MediaTime};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -246,6 +247,75 @@ pub struct Capability {
     pub detail: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputTally {
+    pub preview: bool,
+    pub program: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceMetadata {
+    pub input: InputId,
+    pub protocol: &'static str,
+    pub timestamp: MediaTime,
+    pub payload: Arc<str>,
+    /// Stable, adapter-produced classification of the protocol payload.
+    pub categories: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceControlDiagnostics {
+    pub reconnects: u64,
+    pub discontinuities: u64,
+    pub metadata_received: u64,
+    pub metadata_dropped: u64,
+    pub tally_updates: u64,
+}
+
+/// A lock-protected bounded FIFO for low-rate control metadata.
+#[derive(Debug)]
+pub struct BoundedMetadataQueue {
+    capacity: usize,
+    entries: Mutex<VecDeque<SourceMetadata>>,
+    dropped: AtomicU64,
+}
+
+impl BoundedMetadataQueue {
+    pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "metadata queue capacity must be non-zero");
+        Self {
+            capacity,
+            entries: Mutex::new(VecDeque::with_capacity(capacity)),
+            dropped: AtomicU64::new(0),
+        }
+    }
+
+    pub fn push(&self, metadata: SourceMetadata) {
+        let mut entries = self.entries.lock();
+        if entries.len() == self.capacity {
+            entries.pop_front();
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        entries.push_back(metadata);
+    }
+
+    pub fn drain(&self) -> Vec<SourceMetadata> {
+        self.entries.lock().drain(..).collect()
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.lock().is_empty()
+    }
+}
+
 pub trait MediaSource: Send + Sync {
     fn id(&self) -> InputId;
     fn pull_video(&self, pts: MediaTime, rate: FrameRate) -> Result<Option<VideoFrame>>;
@@ -255,6 +325,24 @@ pub trait MediaSource: Send + Sync {
     fn update_playback(&self, _playback: &Playback) {}
 
     fn audio_diagnostics(&self) -> Option<AudioIoDiagnostics> {
+        None
+    }
+
+    fn supports_tally(&self) -> bool {
+        false
+    }
+
+    fn set_tally(&self, _tally: InputTally) -> Result<()> {
+        Err(MediaError::Unsupported(
+            "source adapter does not expose receiver tally".into(),
+        ))
+    }
+
+    fn poll_metadata(&self) -> Result<Vec<SourceMetadata>> {
+        Ok(Vec::new())
+    }
+
+    fn control_diagnostics(&self) -> Option<SourceControlDiagnostics> {
         None
     }
 }
@@ -294,4 +382,38 @@ pub struct AudioIoDiagnostics {
     pub last_device_nanos: u64,
     pub last_error: Option<String>,
     pub asrc: Option<AsrcDiagnostics>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eiviz_time::Rational;
+
+    fn metadata(input: InputId, value: &str) -> SourceMetadata {
+        SourceMetadata {
+            input,
+            protocol: "test",
+            timestamp: MediaTime::new(0, Rational::new(1, 1).unwrap()),
+            payload: Arc::<str>::from(value),
+            categories: vec!["test".into()],
+        }
+    }
+
+    #[test]
+    fn bounded_metadata_queue_drops_oldest() {
+        let input = InputId::new();
+        let queue = BoundedMetadataQueue::new(2);
+        queue.push(metadata(input, "one"));
+        queue.push(metadata(input, "two"));
+        queue.push(metadata(input, "three"));
+
+        let payloads = queue
+            .drain()
+            .into_iter()
+            .map(|item| item.payload.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(payloads, ["two", "three"]);
+        assert_eq!(queue.dropped(), 1);
+        assert!(queue.is_empty());
+    }
 }

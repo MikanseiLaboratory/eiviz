@@ -5,7 +5,10 @@
 
 mod native;
 
-pub use native::{OmtError, OmtSink, OmtSource, discover_sources};
+pub use native::{
+    OmtColorProfile, OmtError, OmtOutputConfig, OmtOutputPixelFormat, OmtSink, OmtSource,
+    discover_sources,
+};
 
 use eiviz_media::Capability;
 

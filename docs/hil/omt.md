@@ -42,9 +42,17 @@ interop pass.
 - Upstream `openmediatransport-rs`/`vmx-rs` protocol and codec test suites via pinned revisions
 - OMT video/audio receive stamps adapter capture with process monotonic and
   Runtime exposes bounded mapper lock and A/V drift metrics
+- Bounded metadata receive queues classify OMT control/application payloads and
+  surface them through Engine/Desktop diagnostics
+- Engine derives receiver preview/program tally from visible SceneItems on the
+  latched Preview and Program buses, including TAKE boundaries
+- Deterministic BGRA channel-layout and explicit BT.601/BT.709 limited-range
+  UYVY conversion tests
+- Adapter reconnect counters and first-recovered-frame discontinuity accounting
 
-UYVY, tally/metadata surfacing, reconnect behavior, and reference-tool
-interoperability remain HIL gaps rather than automated evidence.
+Reference-tool color, tally/metadata wire interoperability, real sender restart,
+and long-run behavior remain HIL gaps. The deterministic tests do not establish
+that an external OMT endpoint accepts either packed output path.
 
 These tests do not satisfy any `OMT-HIL-*` scenario.
 

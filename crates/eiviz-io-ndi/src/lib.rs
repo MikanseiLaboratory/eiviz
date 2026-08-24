@@ -4,18 +4,79 @@
 //! deliberately no simulator or alternate protocol path in this crate.
 
 #[cfg(any(feature = "ndi", test))]
+use eiviz_media::{PixelFormat, VideoFrame};
+#[cfg(any(feature = "ndi", test))]
 use eiviz_time::{MediaTime, Rational};
 #[cfg(any(feature = "ndi", test))]
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 #[cfg(feature = "ndi")]
 mod native;
 
 #[cfg(feature = "ndi")]
-pub use native::{NdiConfig, NdiError, NdiSink, NdiSource, NdiSourceInfo, discover_sources, probe};
+pub use native::{NdiError, NdiSink, NdiSource, NdiSourceInfo, discover_sources, probe};
 
 /// NDI timestamps and timecodes are signed 100 ns ticks.
 pub const NDI_TICKS_PER_SECOND: i64 = 10_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NdiColorProfile {
+    Bt709Limited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NdiOutputPixelFormat {
+    Rgba,
+    Nv12,
+}
+
+#[derive(Clone, Debug)]
+pub struct NdiConfig {
+    pub video_queue_capacity: usize,
+    pub audio_queue_capacity: usize,
+    pub metadata_queue_capacity: usize,
+    pub output_queue_capacity: usize,
+    pub capture_poll: Duration,
+    pub output_pixel_format: NdiOutputPixelFormat,
+    /// Required when output conversion crosses between RGB and YUV.
+    pub output_color_profile: Option<NdiColorProfile>,
+}
+
+impl Default for NdiConfig {
+    fn default() -> Self {
+        Self {
+            video_queue_capacity: 2,
+            audio_queue_capacity: 8,
+            metadata_queue_capacity: 60,
+            output_queue_capacity: 8,
+            capture_poll: Duration::from_millis(10),
+            output_pixel_format: NdiOutputPixelFormat::Rgba,
+            output_color_profile: None,
+        }
+    }
+}
+
+impl NdiConfig {
+    pub(crate) fn validation_error(&self) -> Option<&'static str> {
+        if self.video_queue_capacity == 0
+            || self.audio_queue_capacity == 0
+            || self.metadata_queue_capacity == 0
+            || self.output_queue_capacity == 0
+        {
+            return Some("queue capacities must be greater than zero");
+        }
+        if self.capture_poll.is_zero() {
+            return Some("capture poll interval must be greater than zero");
+        }
+        if self.output_pixel_format == NdiOutputPixelFormat::Nv12
+            && self.output_color_profile.is_none()
+        {
+            return Some("NV12 output requires an explicit color profile");
+        }
+        None
+    }
+}
 
 #[cfg(any(feature = "ndi", test))]
 fn ndi_ticks_to_media_time(ticks: i64) -> MediaTime {
@@ -69,9 +130,85 @@ fn push_latest<T>(
     }
 }
 
+#[cfg(any(feature = "ndi", test))]
+fn frame_to_nv12(frame: &VideoFrame, profile: NdiColorProfile) -> Result<Vec<u8>, String> {
+    if frame.width % 2 != 0 || frame.height % 2 != 0 {
+        return Err("NV12 output requires even width and height".into());
+    }
+    if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {
+        return Err("NV12 output conversion accepts only RGBA8 or BGRA8 input".into());
+    }
+    let required = frame.width as usize * frame.height as usize * 4;
+    if frame.data.len() < required {
+        return Err(format!(
+            "truncated {:?} frame: {} bytes, expected {required}",
+            frame.format,
+            frame.data.len()
+        ));
+    }
+
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let mut nv12 = vec![0_u8; width * height * 3 / 2];
+    for y in 0..height {
+        for x in 0..width {
+            let rgb = packed_rgb(frame, x, y);
+            nv12[y * width + x] = rgb_to_bt709_limited(rgb, profile).0;
+        }
+    }
+    let uv_start = width * height;
+    for y in (0..height).step_by(2) {
+        for x in (0..width).step_by(2) {
+            let mut u = 0_u16;
+            let mut v = 0_u16;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let (_, sample_u, sample_v) =
+                        rgb_to_bt709_limited(packed_rgb(frame, x + dx, y + dy), profile);
+                    u += u16::from(sample_u);
+                    v += u16::from(sample_v);
+                }
+            }
+            let offset = uv_start + (y / 2) * width + x;
+            nv12[offset] = ((u + 2) / 4) as u8;
+            nv12[offset + 1] = ((v + 2) / 4) as u8;
+        }
+    }
+    Ok(nv12)
+}
+
+#[cfg(any(feature = "ndi", test))]
+fn packed_rgb(frame: &VideoFrame, x: usize, y: usize) -> [u8; 3] {
+    let offset = (y * frame.width as usize + x) * 4;
+    let pixel = &frame.data[offset..offset + 4];
+    match frame.format {
+        PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
+        PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
+        PixelFormat::Nv12 => unreachable!("validated packed RGB input"),
+    }
+}
+
+#[cfg(any(feature = "ndi", test))]
+fn rgb_to_bt709_limited(rgb: [u8; 3], profile: NdiColorProfile) -> (u8, u8, u8) {
+    match profile {
+        NdiColorProfile::Bt709Limited => {
+            let [r, g, b] = rgb.map(i32::from);
+            let y = ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+            let u = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
+            let v = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
+            (
+                y.clamp(16, 235) as u8,
+                u.clamp(16, 240) as u8,
+                v.clamp(16, 240) as u8,
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eiviz_media::VideoFrame;
     use eiviz_time::{MediaTime, NTSC_5994};
     use std::sync::atomic::AtomicU64;
 
@@ -104,5 +241,41 @@ mod tests {
         push_latest(&tx, &rx, 2, &dropped);
         assert_eq!(rx.try_recv().unwrap(), 2);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn nv12_selection_requires_explicit_color_profile() {
+        let config = NdiConfig {
+            output_pixel_format: NdiOutputPixelFormat::Nv12,
+            ..NdiConfig::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("NV12 output requires an explicit color profile")
+        );
+    }
+
+    #[test]
+    fn bt709_nv12_conversion_has_expected_black_and_white_range() {
+        let mut data = Vec::new();
+        for _ in 0..2 {
+            data.extend_from_slice(&[0, 0, 0, 255]);
+            data.extend_from_slice(&[255, 255, 255, 255]);
+        }
+        let frame = VideoFrame {
+            id: 1,
+            source: None,
+            pts: MediaTime::ZERO,
+            capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
+            width: 2,
+            height: 2,
+            format: PixelFormat::Rgba8,
+            data: data.into(),
+            discontinuity: false,
+        };
+        let converted = frame_to_nv12(&frame, NdiColorProfile::Bt709Limited).unwrap();
+        assert_eq!(&converted[..4], &[16, 235, 16, 235]);
+        assert_eq!(converted.len(), 6);
     }
 }

@@ -1,19 +1,21 @@
 use crate::{
-    media_time_to_ndi_ticks, ndi_ticks_to_media_time, ndi_ticks_to_sample_index, push_latest,
-    sample_index_to_ndi_ticks,
+    NdiConfig, NdiOutputPixelFormat, frame_to_nv12, media_time_to_ndi_ticks,
+    ndi_ticks_to_media_time, ndi_ticks_to_sample_index, push_latest, sample_index_to_ndi_ticks,
 };
 use crossbeam_channel::{Receiver as QueueReceiver, Sender as QueueSender, TrySendError, bounded};
 use eiviz_core::InputId;
 use eiviz_media::{
-    AdapterHealth, AudioBuffer, Capability, MediaError, MediaSink, MediaSource,
-    PixelFormat as EivizPixelFormat, VideoFrame as EivizVideoFrame,
+    AdapterHealth, AudioBuffer, BoundedMetadataQueue, Capability, InputTally, MediaError,
+    MediaSink, MediaSource, PixelFormat as EivizPixelFormat, SourceControlDiagnostics,
+    SourceMetadata, VideoFrame as EivizVideoFrame,
 };
 use eiviz_time::{
     ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, monotonic_nanos,
 };
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
-    ReceiverColorFormat, ReceiverOptions, ScanType, Sender, SenderOptions, Source, VideoFrame,
+    AudioFrame, Finder, FinderOptions, LineStrideOrSize, MetadataFrame, NDI, PixelFormat, Receiver,
+    ReceiverColorFormat, ReceiverOptions, ScanType, Sender, SenderOptions, Source, Tally,
+    VideoFrame,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -36,44 +38,6 @@ pub enum NdiError {
     InvalidFrame(String),
     #[error("failed to spawn NDI worker: {0}")]
     Spawn(#[from] std::io::Error),
-}
-
-#[derive(Clone, Debug)]
-pub struct NdiConfig {
-    pub video_queue_capacity: usize,
-    pub audio_queue_capacity: usize,
-    pub output_queue_capacity: usize,
-    pub capture_poll: Duration,
-}
-
-impl Default for NdiConfig {
-    fn default() -> Self {
-        Self {
-            video_queue_capacity: 2,
-            audio_queue_capacity: 8,
-            output_queue_capacity: 8,
-            capture_poll: Duration::from_millis(10),
-        }
-    }
-}
-
-impl NdiConfig {
-    fn validate(&self) -> Result<(), NdiError> {
-        if self.video_queue_capacity == 0
-            || self.audio_queue_capacity == 0
-            || self.output_queue_capacity == 0
-        {
-            return Err(NdiError::InvalidConfiguration(
-                "queue capacities must be greater than zero".into(),
-            ));
-        }
-        if self.capture_poll.is_zero() {
-            return Err(NdiError::InvalidConfiguration(
-                "capture poll interval must be greater than zero".into(),
-            ));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -128,6 +92,7 @@ pub struct NdiSource {
     name: String,
     video_rx: QueueReceiver<EivizVideoFrame>,
     audio_rx: QueueReceiver<AudioBuffer>,
+    metadata: Arc<BoundedMetadataQueue>,
     last_video: Mutex<Option<EivizVideoFrame>>,
     video_active: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -135,6 +100,9 @@ pub struct NdiSource {
     last_error: Arc<Mutex<Option<String>>>,
     dropped_video: Arc<AtomicU64>,
     dropped_audio: Arc<AtomicU64>,
+    reconnects: Arc<AtomicU64>,
+    discontinuities: Arc<AtomicU64>,
+    metadata_received: Arc<AtomicU64>,
     workers: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -144,7 +112,7 @@ impl NdiSource {
         source: &NdiSourceInfo,
         config: NdiConfig,
     ) -> Result<Self, NdiError> {
-        config.validate()?;
+        validate_config(&config)?;
         let ndi = NDI::new()?;
         let options = ReceiverOptions::builder(source.sdk_source.clone())
             .color(ReceiverColorFormat::RGBX_RGBA)
@@ -156,12 +124,17 @@ impl NdiSource {
         let video_drop_rx = video_rx.clone();
         let (audio_tx, audio_rx) = bounded(config.audio_queue_capacity);
         let audio_drop_rx = audio_rx.clone();
+        let metadata = Arc::new(BoundedMetadataQueue::new(config.metadata_queue_capacity));
         let video_active = Arc::new(AtomicBool::new(false));
+        let reconnect_pending = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let health = Arc::new(AtomicU8::new(HEALTH_DEGRADED));
         let last_error = Arc::new(Mutex::new(None));
         let dropped_video = Arc::new(AtomicU64::new(0));
         let dropped_audio = Arc::new(AtomicU64::new(0));
+        let reconnects = Arc::new(AtomicU64::new(0));
+        let discontinuities = Arc::new(AtomicU64::new(0));
+        let metadata_received = Arc::new(AtomicU64::new(0));
 
         let video_worker = {
             let receiver = receiver.clone();
@@ -170,12 +143,16 @@ impl NdiSource {
             let last_error = last_error.clone();
             let dropped = dropped_video.clone();
             let video_active = video_active.clone();
+            let reconnect_pending = reconnect_pending.clone();
+            let reconnects = reconnects.clone();
+            let discontinuities = discontinuities.clone();
             let poll = config.capture_poll;
             thread::Builder::new()
                 .name(format!("ndi-video-{}", id))
                 .spawn(move || {
                     let mut sequence = 0_u64;
                     let mut previous_timestamp = None;
+                    let mut received_frame = false;
                     while !stop.load(Ordering::Acquire) {
                         match receiver.video().try_capture(poll) {
                             Ok(Some(frame)) => {
@@ -183,14 +160,24 @@ impl NdiSource {
                                     frame_timestamp(frame.timestamp(), frame.timecode());
                                 match receive_video(id, sequence, frame) {
                                     Ok(mut converted) => {
-                                        converted.discontinuity =
-                                            previous_timestamp.is_some_and(|old| timestamp <= old);
+                                        let reconnected = received_frame
+                                            && reconnect_pending.swap(false, Ordering::AcqRel);
+                                        converted.discontinuity = reconnected
+                                            || previous_timestamp
+                                                .is_some_and(|old| timestamp <= old);
                                         if let Some(observation) =
                                             converted.clock_observation.as_mut()
                                         {
                                             observation.discontinuity = converted.discontinuity;
                                         }
+                                        if reconnected {
+                                            reconnects.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                        if converted.discontinuity {
+                                            discontinuities.fetch_add(1, Ordering::Relaxed);
+                                        }
                                         previous_timestamp = Some(timestamp);
+                                        received_frame = true;
                                         sequence = sequence.saturating_add(1);
                                         push_latest(&video_tx, &video_drop_rx, converted, &dropped);
                                         video_active.store(true, Ordering::Release);
@@ -207,11 +194,17 @@ impl NdiSource {
                             Ok(None) => {
                                 if !receiver.is_connected() {
                                     video_active.store(false, Ordering::Release);
+                                    if received_frame {
+                                        reconnect_pending.store(true, Ordering::Release);
+                                    }
                                     health.store(HEALTH_DEGRADED, Ordering::Release);
                                 }
                             }
                             Err(error) => {
                                 video_active.store(false, Ordering::Release);
+                                if received_frame {
+                                    reconnect_pending.store(true, Ordering::Release);
+                                }
                                 health.store(HEALTH_DEGRADED, Ordering::Release);
                                 *last_error.lock() = Some(error.to_string());
                             }
@@ -221,18 +214,31 @@ impl NdiSource {
         };
 
         let audio_worker_result = {
+            let receiver = receiver.clone();
             let stop = stop.clone();
             let health = health.clone();
             let last_error = last_error.clone();
             let dropped = dropped_audio.clone();
+            let discontinuities = discontinuities.clone();
             let poll = config.capture_poll;
             thread::Builder::new()
                 .name(format!("ndi-audio-{}", id))
                 .spawn(move || {
+                    let mut previous_sample_index = None;
+                    let mut disconnected_since_frame = false;
                     while !stop.load(Ordering::Acquire) {
                         match receiver.audio().try_capture(poll) {
                             Ok(Some(frame)) => match receive_audio(frame) {
-                                Ok(converted) => {
+                                Ok(mut converted) => {
+                                    converted.discontinuity = disconnected_since_frame
+                                        || previous_sample_index.is_some_and(|previous| {
+                                            converted.sample_index <= previous
+                                        });
+                                    if converted.discontinuity {
+                                        discontinuities.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    previous_sample_index = Some(converted.sample_index);
+                                    disconnected_since_frame = false;
                                     push_latest(&audio_tx, &audio_drop_rx, converted, &dropped);
                                     health.store(HEALTH_RUNNING, Ordering::Release);
                                     *last_error.lock() = None;
@@ -244,10 +250,16 @@ impl NdiSource {
                             },
                             Ok(None) => {
                                 if !receiver.is_connected() {
+                                    if previous_sample_index.is_some() {
+                                        disconnected_since_frame = true;
+                                    }
                                     health.store(HEALTH_DEGRADED, Ordering::Release);
                                 }
                             }
                             Err(error) => {
+                                if previous_sample_index.is_some() {
+                                    disconnected_since_frame = true;
+                                }
                                 health.store(HEALTH_DEGRADED, Ordering::Release);
                                 *last_error.lock() = Some(error.to_string());
                             }
@@ -264,11 +276,54 @@ impl NdiSource {
             }
         };
 
+        let metadata_worker_result = {
+            let receiver = receiver.clone();
+            let stop = stop.clone();
+            let health = health.clone();
+            let last_error = last_error.clone();
+            let metadata = metadata.clone();
+            let metadata_received = metadata_received.clone();
+            let poll = config.capture_poll;
+            thread::Builder::new()
+                .name(format!("ndi-metadata-{}", id))
+                .spawn(move || {
+                    while !stop.load(Ordering::Acquire) {
+                        match receiver.metadata().try_capture(poll) {
+                            Ok(Some(frame)) => {
+                                metadata_received.fetch_add(1, Ordering::Relaxed);
+                                metadata.push(SourceMetadata {
+                                    input: id,
+                                    protocol: "ndi",
+                                    timestamp: ndi_ticks_to_media_time(frame.timecode()),
+                                    payload: std::sync::Arc::<str>::from(frame.data()),
+                                    categories: vec!["opaque".into()],
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                health.store(HEALTH_DEGRADED, Ordering::Release);
+                                *last_error.lock() = Some(error.to_string());
+                            }
+                        }
+                    }
+                })
+        };
+        let metadata_worker = match metadata_worker_result {
+            Ok(worker) => worker,
+            Err(error) => {
+                stop.store(true, Ordering::Release);
+                let _ = video_worker.join();
+                let _ = audio_worker.join();
+                return Err(NdiError::Spawn(error));
+            }
+        };
+
         Ok(Self {
             id,
             name: source.name.clone(),
             video_rx,
             audio_rx,
+            metadata,
             last_video: Mutex::new(None),
             video_active,
             stop,
@@ -276,7 +331,10 @@ impl NdiSource {
             last_error,
             dropped_video,
             dropped_audio,
-            workers: Mutex::new(vec![video_worker, audio_worker]),
+            reconnects,
+            discontinuities,
+            metadata_received,
+            workers: Mutex::new(vec![video_worker, audio_worker, metadata_worker]),
         })
     }
 
@@ -297,6 +355,10 @@ impl NdiSource {
             self.dropped_video.load(Ordering::Relaxed),
             self.dropped_audio.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn tally_support(&self) -> &'static str {
+        "unsupported: grafton-ndi 1.0.0 does not expose NDIlib_recv_set_tally"
     }
 }
 
@@ -331,6 +393,26 @@ impl MediaSource for NdiSource {
     ) -> eiviz_media::Result<Option<AudioBuffer>> {
         Ok(self.audio_rx.try_recv().ok())
     }
+
+    fn set_tally(&self, _tally: InputTally) -> eiviz_media::Result<()> {
+        Err(MediaError::Unsupported(
+            "grafton-ndi 1.0.0 does not expose receiver set_tally".into(),
+        ))
+    }
+
+    fn poll_metadata(&self) -> eiviz_media::Result<Vec<SourceMetadata>> {
+        Ok(self.metadata.drain())
+    }
+
+    fn control_diagnostics(&self) -> Option<SourceControlDiagnostics> {
+        Some(SourceControlDiagnostics {
+            reconnects: self.reconnects.load(Ordering::Relaxed),
+            discontinuities: self.discontinuities.load(Ordering::Relaxed),
+            metadata_received: self.metadata_received.load(Ordering::Relaxed),
+            metadata_dropped: self.metadata.dropped(),
+            tally_updates: 0,
+        })
+    }
 }
 
 impl Drop for NdiSource {
@@ -345,6 +427,10 @@ impl Drop for NdiSource {
 enum OutputFrame {
     Video(EivizVideoFrame),
     Audio(AudioBuffer),
+    Metadata {
+        timestamp: MediaTime,
+        payload: String,
+    },
 }
 
 pub struct NdiSink {
@@ -353,6 +439,7 @@ pub struct NdiSink {
     stop: Arc<AtomicBool>,
     health: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
+    remote_tally: Arc<Mutex<Option<InputTally>>>,
     dropped: Arc<AtomicU64>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -363,7 +450,7 @@ impl NdiSink {
         frame_rate: FrameRate,
         config: NdiConfig,
     ) -> Result<Self, NdiError> {
-        config.validate()?;
+        validate_config(&config)?;
         let name = name.into();
         if name.trim().is_empty() {
             return Err(NdiError::InvalidConfiguration(
@@ -380,22 +467,37 @@ impl NdiSink {
         let stop = Arc::new(AtomicBool::new(false));
         let health = Arc::new(AtomicU8::new(HEALTH_RUNNING));
         let last_error = Arc::new(Mutex::new(None));
+        let remote_tally = Arc::new(Mutex::new(None));
         let dropped = Arc::new(AtomicU64::new(0));
         let worker = {
             let stop = stop.clone();
             let health = health.clone();
             let last_error = last_error.clone();
+            let remote_tally = remote_tally.clone();
+            let output_pixel_format = config.output_pixel_format;
+            let output_color_profile = config.output_color_profile;
             thread::Builder::new()
                 .name(format!("ndi-output-{name}"))
                 .spawn(move || {
                     while !stop.load(Ordering::Acquire) || !rx.is_empty() {
                         let Ok(frame) = rx.recv_timeout(Duration::from_millis(10)) else {
+                            update_sender_tally(&sender, &remote_tally, &last_error);
                             continue;
                         };
                         let result = match frame {
-                            OutputFrame::Video(frame) => send_video(&sender, &frame, frame_rate),
+                            OutputFrame::Video(frame) => send_video(
+                                &sender,
+                                &frame,
+                                frame_rate,
+                                output_pixel_format,
+                                output_color_profile,
+                            ),
                             OutputFrame::Audio(audio) => send_audio(&sender, &audio),
+                            OutputFrame::Metadata { timestamp, payload } => {
+                                send_metadata(&sender, timestamp, &payload)
+                            }
                         };
+                        update_sender_tally(&sender, &remote_tally, &last_error);
                         match result {
                             Ok(()) => {
                                 health.store(HEALTH_RUNNING, Ordering::Release);
@@ -415,6 +517,7 @@ impl NdiSink {
             stop,
             health,
             last_error,
+            remote_tally,
             dropped,
             worker: Mutex::new(Some(worker)),
         })
@@ -430,6 +533,21 @@ impl NdiSink {
 
     pub fn dropped_frames(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn receiver_tally(&self) -> Option<InputTally> {
+        *self.remote_tally.lock()
+    }
+
+    pub fn send_metadata(
+        &self,
+        timestamp: MediaTime,
+        payload: impl Into<String>,
+    ) -> eiviz_media::Result<()> {
+        self.enqueue(OutputFrame::Metadata {
+            timestamp,
+            payload: payload.into(),
+        })
     }
 
     fn enqueue(&self, frame: OutputFrame) -> eiviz_media::Result<()> {
@@ -599,15 +717,46 @@ fn send_video(
     sender: &Sender,
     frame: &EivizVideoFrame,
     frame_rate: FrameRate,
+    output_pixel_format: NdiOutputPixelFormat,
+    output_color_profile: Option<crate::NdiColorProfile>,
 ) -> Result<(), NdiError> {
     let width = i32::try_from(frame.width)
         .map_err(|_| NdiError::InvalidFrame("video width exceeds NDI range".into()))?;
     let height = i32::try_from(frame.height)
         .map_err(|_| NdiError::InvalidFrame("video height exceeds NDI range".into()))?;
     let timestamp = media_time_to_ndi_ticks(frame.pts);
+    let (pixel_format, data) = match output_pixel_format {
+        NdiOutputPixelFormat::Rgba => (
+            PixelFormat::RGBA,
+            match frame.format {
+                EivizPixelFormat::Rgba8 => frame.data.to_vec(),
+                EivizPixelFormat::Bgra8 => frame
+                    .data
+                    .chunks_exact(4)
+                    .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+                    .collect(),
+                EivizPixelFormat::Nv12 => {
+                    return Err(NdiError::InvalidFrame(
+                        "NV12 input cannot be implicitly interpreted as RGBA output".into(),
+                    ));
+                }
+            },
+        ),
+        NdiOutputPixelFormat::Nv12 => {
+            let profile = output_color_profile.ok_or_else(|| {
+                NdiError::InvalidConfiguration(
+                    "NV12 output requires an explicit color profile".into(),
+                )
+            })?;
+            (
+                PixelFormat::NV12,
+                frame_to_nv12(frame, profile).map_err(NdiError::InvalidFrame)?,
+            )
+        }
+    };
     let mut ndi_frame = VideoFrame::builder()
         .resolution(width, height)
-        .pixel_format(PixelFormat::RGBA)
+        .pixel_format(pixel_format)
         .frame_rate(
             i32::try_from(frame_rate.numerator())
                 .map_err(|_| NdiError::InvalidFrame("frame rate numerator exceeds i32".into()))?,
@@ -619,19 +768,6 @@ fn send_video(
         .timecode(timestamp)
         .timestamp(timestamp)
         .build()?;
-    let data = match frame.format {
-        EivizPixelFormat::Rgba8 => frame.data.to_vec(),
-        EivizPixelFormat::Bgra8 => frame
-            .data
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
-            .collect(),
-        EivizPixelFormat::Nv12 => {
-            return Err(NdiError::InvalidFrame(
-                "NV12 output conversion is not implemented".into(),
-            ));
-        }
-    };
     ndi_frame.replace_data(data)?;
     sender.send_video(&ndi_frame);
     Ok(())
@@ -676,6 +812,41 @@ fn send_audio(sender: &Sender, audio: &AudioBuffer) -> Result<(), NdiError> {
     Ok(())
 }
 
+fn send_metadata(sender: &Sender, timestamp: MediaTime, payload: &str) -> Result<(), NdiError> {
+    let frame = MetadataFrame::with_data(payload, media_time_to_ndi_ticks(timestamp))?;
+    sender.send_metadata(&frame)?;
+    Ok(())
+}
+
+fn update_sender_tally(
+    sender: &Sender,
+    remote_tally: &Mutex<Option<InputTally>>,
+    last_error: &Mutex<Option<String>>,
+) {
+    match sender.tally(Duration::ZERO) {
+        Ok(Some(Tally {
+            on_program,
+            on_preview,
+        })) => {
+            *remote_tally.lock() = Some(InputTally {
+                preview: on_preview,
+                program: on_program,
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            *last_error.lock() = Some(format!("NDI sender tally query failed: {error}"));
+        }
+    }
+}
+
+fn validate_config(config: &NdiConfig) -> Result<(), NdiError> {
+    if let Some(error) = config.validation_error() {
+        return Err(NdiError::InvalidConfiguration(error.into()));
+    }
+    Ok(())
+}
+
 fn health_from_atomic(health: &AtomicU8) -> AdapterHealth {
     match health.load(Ordering::Acquire) {
         HEALTH_RUNNING => AdapterHealth::Running,
@@ -702,7 +873,7 @@ mod tests {
             ..NdiConfig::default()
         };
         assert!(matches!(
-            config.validate(),
+            validate_config(&config),
             Err(NdiError::InvalidConfiguration(_))
         ));
     }

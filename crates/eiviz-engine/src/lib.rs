@@ -9,10 +9,13 @@ use eiviz_command::{
 use eiviz_core::CompositorBackend;
 use eiviz_core::{
     AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
-    MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
+    MixingGraph, MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
 };
 use eiviz_io_stream::{EncodedFanout, EncoderCapabilities, SinkDiagnostics};
-use eiviz_media::{AudioIoDiagnostics, AudioSink, MediaSink, MediaSource, VideoFrame};
+use eiviz_media::{
+    AudioIoDiagnostics, AudioSink, InputTally, MediaSink, MediaSource, SourceControlDiagnostics,
+    SourceMetadata, VideoFrame,
+};
 use eiviz_operations::{
     CapabilityEntry, CapabilityReport, CrashReport, DiagnosticEvent, DiagnosticLevel,
     EvidenceState, FlightRecorder,
@@ -26,7 +29,7 @@ use eiviz_runtime::{Runtime, RuntimeSnapshot, TickResult};
 pub use eiviz_runtime::{SourceClockPolicy, UnlockedBehavior};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -51,6 +54,16 @@ pub enum EngineError {
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+const SOURCE_METADATA_CAPACITY: usize = 256;
+
+#[derive(Clone, Debug)]
+pub struct EngineSourceControlDiagnostics {
+    pub input: InputId,
+    pub tally: InputTally,
+    pub adapter: Option<SourceControlDiagnostics>,
+    pub last_error: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct AdmissionBudget {
@@ -205,6 +218,11 @@ struct Inner {
     flight: FlightRecorder,
     sinks: HashMap<OutputId, Arc<dyn MediaSink>>,
     audio_sinks: HashMap<OutputId, Arc<dyn AudioSink>>,
+    source_controls: HashMap<InputId, Arc<dyn MediaSource>>,
+    source_tallies: HashMap<InputId, InputTally>,
+    source_control_errors: HashMap<InputId, String>,
+    source_metadata: VecDeque<SourceMetadata>,
+    source_metadata_dropped: u64,
     encoder_factory: Option<Arc<dyn ProgramEncoderFactory>>,
     encoder_capabilities: EncoderCapabilities,
     encoder_sessions: HashMap<EncodingProfileKey, EncodingSession>,
@@ -328,6 +346,11 @@ impl Engine {
                 flight: FlightRecorder::default(),
                 sinks: HashMap::new(),
                 audio_sinks: HashMap::new(),
+                source_controls: HashMap::new(),
+                source_tallies: HashMap::new(),
+                source_control_errors: HashMap::new(),
+                source_metadata: VecDeque::with_capacity(SOURCE_METADATA_CAPACITY),
+                source_metadata_dropped: 0,
                 encoder_factory: None,
                 encoder_capabilities: EncoderCapabilities::default(),
                 encoder_sessions: HashMap::new(),
@@ -464,11 +487,42 @@ impl Engine {
     }
 
     pub fn attach_source(&self, source: Arc<dyn MediaSource>, policy: SourceClockPolicy) {
-        self.inner.lock().runtime.attach_source(source, policy);
+        let mut inner = self.inner.lock();
+        inner.source_controls.insert(source.id(), source.clone());
+        inner.runtime.attach_source(source, policy);
     }
 
     pub fn detach_source(&self, id: eiviz_core::InputId) {
-        self.inner.lock().runtime.detach_source(id);
+        let mut inner = self.inner.lock();
+        inner.runtime.detach_source(id);
+        inner.source_controls.remove(&id);
+        inner.source_tallies.remove(&id);
+        inner.source_control_errors.remove(&id);
+        inner
+            .source_metadata
+            .retain(|metadata| metadata.input != id);
+    }
+
+    pub fn source_metadata(&self) -> Vec<SourceMetadata> {
+        self.inner.lock().source_metadata.iter().cloned().collect()
+    }
+
+    pub fn source_metadata_dropped(&self) -> u64 {
+        self.inner.lock().source_metadata_dropped
+    }
+
+    pub fn source_control_diagnostics(&self) -> Vec<EngineSourceControlDiagnostics> {
+        let inner = self.inner.lock();
+        inner
+            .source_controls
+            .iter()
+            .map(|(input, source)| EngineSourceControlDiagnostics {
+                input: *input,
+                tally: inner.source_tallies.get(input).copied().unwrap_or_default(),
+                adapter: source.control_diagnostics(),
+                last_error: inner.source_control_errors.get(input).cloned(),
+            })
+            .collect()
     }
 
     pub fn client(&self) -> ClientId {
@@ -988,6 +1042,7 @@ impl Engine {
                 record_persistence_error(&mut g, "journal.write", error.to_string());
             }
         }
+        service_source_controls(&mut g);
         let result = g.runtime.tick_active()?;
         let audio = result.audio.clone();
         let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
@@ -1257,6 +1312,11 @@ impl Engine {
         inner.flight.clear();
         inner.sinks.clear();
         inner.audio_sinks.clear();
+        inner.source_controls.clear();
+        inner.source_tallies.clear();
+        inner.source_control_errors.clear();
+        inner.source_metadata.clear();
+        inner.source_metadata_dropped = 0;
         inner.distribution_bindings.clear();
         inner.encoder_sessions.clear();
         Ok(())
@@ -1311,6 +1371,60 @@ impl Engine {
             return Err(EngineError::Admission("pixel budget".into()));
         }
         Ok(())
+    }
+}
+
+fn service_source_controls(inner: &mut Inner) {
+    let updates = inner
+        .source_controls
+        .iter()
+        .map(|(input, source)| {
+            let tally = InputTally {
+                preview: inner.project.mixing_units.keys().any(|unit| {
+                    MixingGraph::input_visible_on_preview(&inner.project, *unit, *input)
+                }),
+                program: inner.project.mixing_units.keys().any(|unit| {
+                    MixingGraph::input_visible_on_program(&inner.project, *unit, *input)
+                }),
+            };
+            (*input, source.clone(), tally)
+        })
+        .collect::<Vec<_>>();
+
+    for (input, source, tally) in updates {
+        if source.supports_tally() && inner.source_tallies.get(&input) != Some(&tally) {
+            match source.set_tally(tally) {
+                Ok(()) => {
+                    inner.source_tallies.insert(input, tally);
+                    inner.source_control_errors.remove(&input);
+                }
+                Err(error) => {
+                    inner
+                        .source_control_errors
+                        .insert(input, format!("tally update failed: {error}"));
+                }
+            }
+        } else {
+            inner.source_tallies.insert(input, tally);
+        }
+
+        match source.poll_metadata() {
+            Ok(metadata) => {
+                for item in metadata {
+                    if inner.source_metadata.len() == SOURCE_METADATA_CAPACITY {
+                        inner.source_metadata.pop_front();
+                        inner.source_metadata_dropped =
+                            inner.source_metadata_dropped.saturating_add(1);
+                    }
+                    inner.source_metadata.push_back(item);
+                }
+            }
+            Err(error) => {
+                inner
+                    .source_control_errors
+                    .insert(input, format!("metadata receive failed: {error}"));
+            }
+        }
     }
 }
 
@@ -1925,6 +2039,12 @@ mod tests {
         audio: AudioBuffer,
     }
 
+    struct ControlSource {
+        inner: ConstantSource,
+        tallies: Mutex<Vec<InputTally>>,
+        metadata: Mutex<Vec<SourceMetadata>>,
+    }
+
     impl MediaSource for ConstantSource {
         fn id(&self) -> InputId {
             self.id
@@ -1944,6 +2064,41 @@ mod tests {
             _frames: usize,
         ) -> eiviz_media::Result<Option<AudioBuffer>> {
             Ok(Some(self.audio.clone()))
+        }
+    }
+
+    impl MediaSource for ControlSource {
+        fn id(&self) -> InputId {
+            self.inner.id()
+        }
+
+        fn pull_video(
+            &self,
+            pts: eiviz_time::MediaTime,
+            rate: eiviz_time::FrameRate,
+        ) -> eiviz_media::Result<Option<VideoFrame>> {
+            self.inner.pull_video(pts, rate)
+        }
+
+        fn pull_audio(
+            &self,
+            sample_index: u64,
+            frames: usize,
+        ) -> eiviz_media::Result<Option<AudioBuffer>> {
+            self.inner.pull_audio(sample_index, frames)
+        }
+
+        fn supports_tally(&self) -> bool {
+            true
+        }
+
+        fn set_tally(&self, tally: InputTally) -> eiviz_media::Result<()> {
+            self.tallies.lock().push(tally);
+            Ok(())
+        }
+
+        fn poll_metadata(&self) -> eiviz_media::Result<Vec<SourceMetadata>> {
+            Ok(self.metadata.lock().drain(..).collect())
         }
     }
 
@@ -2038,6 +2193,98 @@ mod tests {
         );
         assert_eq!(loaded.state_hash(), engine.state_hash());
         assert!(!engine.flight_log().is_empty());
+    }
+
+    #[test]
+    fn source_tally_and_metadata_follow_latched_take_visibility() {
+        let engine = Engine::new("source controls");
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "camera".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://camera:6400".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "camera".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_transaction(vec![
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddInput {
+                        input: input.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddScene {
+                        scene: scene.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::SetPreview {
+                        unit,
+                        scene: Some(scene.id),
+                    },
+                ),
+            ])
+            .unwrap();
+        let source = Arc::new(ControlSource {
+            inner: ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(1, eiviz_time::MediaTime::ZERO, 2, 2, [1, 2, 3, 255]),
+                audio: AudioBuffer::silence(0, 48_000, 2, 800),
+            },
+            tallies: Mutex::new(Vec::new()),
+            metadata: Mutex::new(vec![SourceMetadata {
+                input: input.id,
+                protocol: "omt",
+                timestamp: eiviz_time::MediaTime::ZERO,
+                payload: Arc::<str>::from("<OMTInfo />"),
+                categories: vec!["sender-info".into()],
+            }]),
+        });
+        engine.attach_source(source.clone(), SourceClockPolicy::ScheduleTime);
+
+        engine.tick().unwrap();
+        assert_eq!(
+            source.tallies.lock().as_slice(),
+            &[InputTally {
+                preview: true,
+                program: false,
+            }]
+        );
+        assert_eq!(engine.source_metadata()[0].categories, ["sender-info"]);
+
+        engine
+            .submit_payload(Command::Take {
+                unit,
+                swap: false,
+                style: TransitionStyle::Cut,
+                duration_frames: 0,
+            })
+            .unwrap();
+        engine.tick().unwrap();
+        assert_eq!(
+            source.tallies.lock().last(),
+            Some(&InputTally {
+                preview: true,
+                program: true,
+            })
+        );
     }
 
     #[test]

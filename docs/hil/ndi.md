@@ -39,12 +39,15 @@ bundled, keep them application-local and include
 | NDI-HIL-07 | Sender restart/NIC loss | Explicit degraded state, configured missing-media policy, and recovery are observed |
 | NDI-HIL-08 | Loss/jitter/bandwidth | Bounded memory, no deadlock, and measured drop/recovery counters |
 | NDI-HIL-09 | 24 h bidirectional run | SourceMedia→Monotonic remains locked; no unbounded growth; cadence, xrun, drop, reset, drift, and A/V skew meet baseline gates |
+| NDI-HIL-10 | Explicit NV12 BT.709 output | Reference receiver reports NV12 and the decoded limited-range chart matches; non-BT.709 or unselected conversion is rejected |
 
 ## Current automated evidence
 
 - Exact integer conversion between `MediaTime` and NDI 100 ns ticks
 - Absolute audio sample-index/timestamp conversion
 - Bounded latest-wins capture queue behavior in the native-feature test module
+- SDK-independent bounded metadata queue and explicit BT.709 limited-range
+  RGBA/BGRA-to-NV12 conversion tests
 - Engine routes each `OutputId` from its owning Mixing Unit to its registered
   nonblocking `MediaSink`
 - Runtime applies only the configured missing-media policy when a source has no
@@ -52,6 +55,16 @@ bundled, keep them application-local and include
 - NDI video/audio receive stamps adapter capture with process monotonic;
   Runtime uses the explicit bounded/Fail policy and exports lock and A/V drift
   metrics
+- The feature adapter receives metadata into a bounded queue and can enqueue
+  metadata for `Sender::send_metadata`; sender-side consumer tally is surfaced
+  in Desktop diagnostics
+
+`grafton-ndi` 1.0.0 does not expose `NDIlib_recv_set_tally`. Therefore eiviz
+does not claim to transmit Program/Preview tally from an NDI input in this
+revision and does not substitute metadata or another protocol for that SDK
+operation. The Desktop reports this limitation explicitly. NV12 is selectable
+only with an explicit `Bt709Limited` output profile; all implicit NV12/RGBA
+interpretation and unknown-color conversion paths return hard errors.
 
 These checks do not satisfy any `NDI-HIL-*` scenario. The native-feature tests
 also remain unexecuted until an NDI SDK/runtime host is available. On

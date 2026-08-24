@@ -115,8 +115,10 @@ struct DesktopApp {
     recording_path: String,
     omt_address: String,
     omt_output_name: String,
+    omt_output_uyvy: bool,
     omt_discovered: Vec<String>,
     omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
+    omt_outputs: Vec<(OutputId, Arc<eiviz_io_omt::OmtSink>)>,
     #[cfg(feature = "decklink")]
     decklink_devices: Vec<eiviz_io_decklink::DeviceInfo>,
     #[cfg(feature = "decklink")]
@@ -139,6 +141,8 @@ struct DesktopApp {
     ndi_outputs: Vec<(OutputId, Arc<eiviz_io_ndi::NdiSink>)>,
     #[cfg(feature = "ndi")]
     ndi_output_name: String,
+    #[cfg(feature = "ndi")]
+    ndi_output_nv12: bool,
     #[cfg(feature = "ndi")]
     ndi_capability: eiviz_media::Capability,
     #[cfg(feature = "audio-cpal")]
@@ -300,8 +304,10 @@ impl DesktopApp {
             recording_path: "recording.mp4".into(),
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
             omt_output_name: "eiviz Program".into(),
+            omt_output_uyvy: false,
             omt_discovered: Vec::new(),
             omt_connections: Vec::new(),
+            omt_outputs: Vec::new(),
             #[cfg(feature = "decklink")]
             decklink_devices: Vec::new(),
             #[cfg(feature = "decklink")]
@@ -324,6 +330,8 @@ impl DesktopApp {
             ndi_outputs: Vec::new(),
             #[cfg(feature = "ndi")]
             ndi_output_name: "eiviz Program".into(),
+            #[cfg(feature = "ndi")]
+            ndi_output_nv12: false,
             #[cfg(feature = "ndi")]
             ndi_capability: eiviz_io_ndi::probe(),
             #[cfg(feature = "audio-cpal")]
@@ -797,11 +805,17 @@ impl DesktopApp {
     fn start_ndi_output(&mut self, owner: eiviz_core::MixingUnitId) {
         let name = self.ndi_output_name.trim().to_owned();
         let project = self.engine.snapshot();
-        let sink = match eiviz_io_ndi::NdiSink::create(
-            &name,
-            project.video.frame_rate,
-            eiviz_io_ndi::NdiConfig::default(),
-        ) {
+        let mut config = eiviz_io_ndi::NdiConfig::default();
+        if self.ndi_output_nv12 {
+            if project.video.color != eiviz_core::ColorSpace::Bt709Sdr {
+                self.status =
+                    "NDI NV12 output requires an explicit Bt709Sdr project color profile".into();
+                return;
+            }
+            config.output_pixel_format = eiviz_io_ndi::NdiOutputPixelFormat::Nv12;
+            config.output_color_profile = Some(eiviz_io_ndi::NdiColorProfile::Bt709Limited);
+        }
+        let sink = match eiviz_io_ndi::NdiSink::create(&name, project.video.frame_rate, config) {
             Ok(sink) => Arc::new(sink),
             Err(error) => {
                 self.status = format!("NDI output: {error}");
@@ -2305,10 +2319,39 @@ impl eframe::App for DesktopApp {
                 let detail = source
                     .last_error()
                     .unwrap_or_else(|| "no adapter error".into());
+                let control = eiviz_media::MediaSource::control_diagnostics(source.as_ref())
+                    .unwrap_or_default();
+                let input = eiviz_media::MediaSource::id(source.as_ref());
+                let tally = self
+                    .engine
+                    .source_control_diagnostics()
+                    .into_iter()
+                    .find(|diagnostics| diagnostics.input == input)
+                    .map(|diagnostics| diagnostics.tally)
+                    .unwrap_or_default();
                 ui.label(format!(
-                    "{}: {:?} ({detail})",
+                    "{}: {:?}; tally PRV={} PGM={}; reconnects={} discontinuities={}; metadata={} dropped={}; {detail}",
                     source.address(),
-                    source.health()
+                    source.health(),
+                    tally.preview,
+                    tally.program,
+                    control.reconnects,
+                    control.discontinuities,
+                    control.metadata_received,
+                    control.metadata_dropped,
+                ));
+            }
+            for metadata in self
+                .engine
+                .source_metadata()
+                .iter()
+                .filter(|metadata| metadata.protocol == "omt")
+                .rev()
+                .take(5)
+            {
+                ui.label(format!(
+                    "OMT metadata {:?}: {}",
+                    metadata.categories, metadata.payload
                 ));
             }
             ui.separator();
@@ -2442,14 +2485,35 @@ impl eframe::App for DesktopApp {
                         .last_error()
                         .unwrap_or_else(|| "no adapter error".into());
                     let (video_drops, audio_drops) = source.dropped_frames();
+                    let control = eiviz_media::MediaSource::control_diagnostics(source.as_ref())
+                        .unwrap_or_default();
                     ui.label(format!(
-                        "{}: {:?}, drops video={video_drops} audio={audio_drops} ({detail})",
+                        "{}: {:?}, drops video={video_drops} audio={audio_drops}; reconnects={} discontinuities={}; metadata={} dropped={}; {}; {detail}",
                         source.source_name(),
-                        source.health()
+                        source.health(),
+                        control.reconnects,
+                        control.discontinuities,
+                        control.metadata_received,
+                        control.metadata_dropped,
+                        source.tally_support(),
                     ));
+                }
+                for metadata in self
+                    .engine
+                    .source_metadata()
+                    .iter()
+                    .filter(|metadata| metadata.protocol == "ndi")
+                    .rev()
+                    .take(5)
+                {
+                    ui.label(format!("NDI metadata: {}", metadata.payload));
                 }
                 ui.label("Program output");
                 ui.text_edit_singleline(&mut self.ndi_output_name);
+                ui.checkbox(
+                    &mut self.ndi_output_nv12,
+                    "NV12 BT.709 limited output (otherwise RGBA)",
+                );
                 if ui.button("Start NDI Output").clicked() {
                     self.start_ndi_output(unit_id);
                 }
@@ -2470,10 +2534,11 @@ impl eframe::App for DesktopApp {
                             });
                         }
                         ui.label(format!(
-                            "{}: {:?}, drops={} ({detail})",
+                            "{}: {:?}, drops={}, receiver tally={:?} ({detail})",
                             eiviz_media::MediaSink::name(sink.as_ref()),
                             sink.health(),
-                            sink.dropped_frames()
+                            sink.dropped_frames(),
+                            sink.receiver_tally(),
                         ));
                         if ui.button("Stop NDI Output").clicked() {
                             stop_output = Some(*output_id);
@@ -2491,12 +2556,38 @@ impl eframe::App for DesktopApp {
             }
             #[cfg(not(feature = "ndi"))]
             ui.label("Build with `--features ndi` after installing the NDI 6 SDK/runtime.");
-            ui.label("Program output");
+            ui.label("OMT Program output");
             ui.text_edit_singleline(&mut self.omt_output_name);
+            ui.checkbox(&mut self.omt_output_uyvy, "UYVY 4:2:2 (otherwise BGRA)");
             if ui.button("Start OMT Output").clicked() {
                 let output_name = self.omt_output_name.trim().to_owned();
-                match eiviz_io_omt::OmtSink::create(&output_name, project.video.frame_rate) {
+                let color_profile = match project.video.color {
+                    eiviz_core::ColorSpace::Bt709Sdr => {
+                        Some(eiviz_io_omt::OmtColorProfile::Bt709Limited)
+                    }
+                    eiviz_core::ColorSpace::Bt2020Pq | eiviz_core::ColorSpace::Bt2020Hlg => None,
+                };
+                let Some(color_profile) = color_profile else {
+                    self.status =
+                        "OMT output supports only an explicit Bt709Sdr project profile".into();
+                    return;
+                };
+                let config = eiviz_io_omt::OmtOutputConfig {
+                    pixel_format: if self.omt_output_uyvy {
+                        eiviz_io_omt::OmtOutputPixelFormat::Uyvy
+                    } else {
+                        eiviz_io_omt::OmtOutputPixelFormat::Bgra
+                    },
+                    color_profile,
+                    send_queue_depth: 4,
+                };
+                match eiviz_io_omt::OmtSink::create(
+                    &output_name,
+                    project.video.frame_rate,
+                    config,
+                ) {
                     Ok(sink) => {
+                        let sink = Arc::new(sink);
                         let output = Output {
                             id: OutputId::new(),
                             name: output_name.clone(),
@@ -2511,8 +2602,9 @@ impl eframe::App for DesktopApp {
                             output: output.clone(),
                         }) {
                             Ok(_) => {
-                                match self.engine.attach_output_sink(output.id, Arc::new(sink)) {
+                                match self.engine.attach_output_sink(output.id, sink.clone()) {
                                     Ok(()) => {
+                                        self.omt_outputs.push((output.id, sink));
                                         self.status = format!("OMT output started: {output_name}");
                                     }
                                     Err(error) => {
