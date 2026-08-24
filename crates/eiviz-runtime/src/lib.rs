@@ -1,9 +1,9 @@
 //! Virtual-clock media runtime. Command snapshots are applied at frame boundaries.
 
 use eiviz_core::{
-    AssetId, AudioBusId, AudioFollowPolicy, CompositorBackend, InputId, InputSource,
+    AssetId, AudioBusId, AudioFollowPolicy, AudioMatrix, CompositorBackend, InputId, InputSource,
     MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Playback,
-    Project, RouteMode, Transform2D,
+    Project, RouteMode, Transform2D, TransitionStyle,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{
@@ -39,6 +39,78 @@ pub enum RuntimeError {
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
 
+#[derive(Clone, Debug)]
+pub struct RenderPlanSnapshot {
+    order: Arc<[MixingUnitId]>,
+    programs: HashMap<MixingUnitId, RenderPlan>,
+    previews: HashMap<MixingUnitId, RenderPlan>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioPlan {
+    matrix: AudioMatrix,
+    sample_rate: u32,
+    channels: u16,
+}
+
+/// Fully validated, immutable state consumed by a media boundary.
+#[derive(Clone, Debug)]
+pub struct RuntimeSnapshot {
+    accepted_revision: u64,
+    applied_revision: u64,
+    project: Arc<Project>,
+    render: RenderPlanSnapshot,
+    audio: AudioPlan,
+}
+
+impl RuntimeSnapshot {
+    pub fn compile(
+        project: Arc<Project>,
+        accepted_revision: u64,
+        applied_revision: u64,
+    ) -> Result<Self> {
+        project
+            .validate()
+            .map_err(|error| RuntimeError::Other(error.to_string()))?;
+        let order = MixingGraph::topological_order(&project)
+            .map_err(|error| RuntimeError::Other(error.to_string()))?;
+        let mut programs = HashMap::with_capacity(project.mixing_units.len());
+        let mut previews = HashMap::with_capacity(project.mixing_units.len());
+        for (id, unit) in &project.mixing_units {
+            programs.insert(*id, plan_program(&project, unit));
+            previews.insert(*id, plan_preview(&project, unit));
+        }
+        let audio = AudioPlan {
+            matrix: project.audio_matrix.clone(),
+            sample_rate: project.audio.sample_rate,
+            channels: project.audio.channels,
+        };
+        Ok(Self {
+            accepted_revision,
+            applied_revision,
+            project,
+            render: RenderPlanSnapshot {
+                order: order.into(),
+                programs,
+                previews,
+            },
+            audio,
+        })
+    }
+
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
+    pub fn accepted_revision(&self) -> u64 {
+        self.accepted_revision
+    }
+
+    pub fn applied_revision(&self) -> u64 {
+        self.applied_revision
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TickMetrics {
     pub frame: u64,
@@ -66,8 +138,17 @@ pub struct Runtime {
     sources: HashMap<InputId, Arc<dyn MediaSource>>,
     simulated: HashMap<InputId, VideoFrame>,
     pub peak_meters: HashMap<AudioBusId, f32>,
+    active_snapshot: Option<Arc<RuntimeSnapshot>>,
+    transitions: HashMap<MixingUnitId, TransitionRuntime>,
     #[cfg(feature = "wgpu-backend")]
     wgpu: Option<eiviz_gpu::WgpuCompositor>,
+}
+
+#[derive(Clone, Debug)]
+struct TransitionRuntime {
+    from: RenderPlan,
+    remaining_frames: u32,
+    duration_frames: u32,
 }
 
 impl Runtime {
@@ -109,6 +190,8 @@ impl Runtime {
             sources: HashMap::new(),
             simulated: HashMap::new(),
             peak_meters: HashMap::new(),
+            active_snapshot: None,
+            transitions: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
             wgpu,
         })
@@ -220,42 +303,111 @@ impl Runtime {
             .collect()
     }
 
-    pub fn tick(&mut self, project: &mut Project) -> Result<TickResult> {
-        MixingGraph::assert_acyclic(project).map_err(|e| RuntimeError::Other(e.to_string()))?;
+    /// Latches a precompiled snapshot. Transition progress remains runtime
+    /// state and never writes back into the Project.
+    pub fn activate_snapshot(&mut self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {
+        let project = snapshot.project();
         if project.compositor != self.backend {
             return Err(RuntimeError::BackendMismatch {
                 project: project.compositor,
                 runtime: self.backend,
             });
         }
-        let order = MixingGraph::topological_order(project)
-            .map_err(|e| RuntimeError::Other(e.to_string()))?;
+        if snapshot.audio.sample_rate != self.sample_rate {
+            return Err(RuntimeError::Other(format!(
+                "snapshot sample rate {} does not match runtime {}",
+                snapshot.audio.sample_rate, self.sample_rate
+            )));
+        }
+        if let Some(previous) = &self.active_snapshot {
+            for (unit_id, unit) in &project.mixing_units {
+                let old_program = previous
+                    .project
+                    .mixing_units
+                    .get(unit_id)
+                    .and_then(|old| old.program.scene);
+                if old_program == unit.program.scene {
+                    continue;
+                }
+                if unit.transition.style == TransitionStyle::Mix
+                    && unit.transition.duration_frames > 0
+                    && let Some(from) = previous.render.programs.get(unit_id)
+                {
+                    self.transitions.insert(
+                        *unit_id,
+                        TransitionRuntime {
+                            from: from.clone(),
+                            remaining_frames: unit.transition.duration_frames,
+                            duration_frames: unit.transition.duration_frames,
+                        },
+                    );
+                } else {
+                    self.transitions.remove(unit_id);
+                }
+            }
+            self.transitions
+                .retain(|unit, _| project.mixing_units.contains_key(unit));
+        }
+        self.active_snapshot = Some(snapshot);
+        Ok(())
+    }
+
+    /// Convenience entry point for model tests. Engine uses precompiled
+    /// snapshots and [`Self::tick_active`] directly.
+    pub fn tick(&mut self, project: &Project) -> Result<TickResult> {
+        let changed = self
+            .active_snapshot
+            .as_ref()
+            .is_none_or(|active| active.project() != project);
+        if changed {
+            let snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
+            self.activate_snapshot(snapshot)?;
+        }
+        self.tick_active()
+    }
+
+    pub fn tick_active(&mut self) -> Result<TickResult> {
+        let snapshot = self
+            .active_snapshot
+            .clone()
+            .ok_or_else(|| RuntimeError::Other("no active runtime snapshot".into()))?;
+        let project = snapshot.project();
         let pts = MediaTime::from_frame_index(self.frame, project.video.frame_rate)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         self.clock.seek_frame(self.frame, project.video.frame_rate);
         let mut sources = self.generate_sources(project, pts)?;
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
-        for unit_id in order {
-            let Some(mut unit) = project.mixing_units.get(&unit_id).cloned() else {
+        for unit_id in snapshot.render.order.iter().copied() {
+            let Some(unit) = project.mixing_units.get(&unit_id) else {
                 continue;
             };
-            if unit.transition.remaining_frames > 0 {
-                unit.tick_transition();
-                if let Some(live) = project.mixing_units.get_mut(&unit.id) {
-                    live.transition.remaining_frames = unit.transition.remaining_frames;
-                    live.program.scene = unit.program.scene;
+            fill_mixfeeds(project, &mut sources, &programs, &previews);
+            let pg_plan = snapshot
+                .render
+                .programs
+                .get(&unit_id)
+                .expect("compiled plan exists for every unit");
+            let mut pg = self.composite_plan(&pg_plan, &sources, pts)?;
+            if let Some(transition) = self.transitions.get(&unit_id).cloned() {
+                let from = self.composite_plan(&transition.from, &sources, pts)?;
+                let elapsed = transition
+                    .duration_frames
+                    .saturating_sub(transition.remaining_frames)
+                    .saturating_add(1);
+                let factor = elapsed as f32 / transition.duration_frames as f32;
+                pg = self.mix_transition(&from, &pg, factor.min(1.0), pts)?;
+                if transition.remaining_frames <= 1 {
+                    self.transitions.remove(&unit_id);
+                } else if let Some(live) = self.transitions.get_mut(&unit_id) {
+                    live.remaining_frames -= 1;
                 }
             }
-            fill_mixfeeds(project, &mut sources, &programs, &previews);
-            let pg_plan = plan_program(project, &unit);
-            let mut pg = self.composite_plan(&pg_plan, &sources, pts)?;
-            if unit.transition.remaining_frames > 0 {
-                let pv_plan = plan_preview(project, &unit);
-                let pv = self.composite_plan(&pv_plan, &sources, pts)?;
-                pg = self.mix_transition(&pv, &pg, unit.mix_factor(), pts)?;
-            }
-            let pv_plan = plan_preview(project, &unit);
+            let pv_plan = snapshot
+                .render
+                .previews
+                .get(&unit_id)
+                .expect("compiled plan exists for every unit");
             let pv = self.composite_plan(&pv_plan, &sources, pts)?;
             self.program_slot(unit.id)
                 .push(pg.clone())
@@ -272,6 +424,7 @@ impl Runtime {
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
         let (audio, meters) = self.mix_audio(
             project,
+            &snapshot.audio,
             sample_index,
             sample_count as usize,
             self.sample_rate,
@@ -563,15 +716,15 @@ impl Runtime {
     fn mix_audio(
         &mut self,
         project: &Project,
+        plan: &AudioPlan,
         sample_index: u64,
         frames: usize,
         sample_rate: u32,
     ) -> Result<(AudioBuffer, HashMap<AudioBusId, f32>)> {
-        let ch = project.audio.channels.max(1) as usize;
-        let mut mixed =
-            AudioBuffer::silence(sample_index, sample_rate, project.audio.channels, frames);
+        let ch = plan.channels.max(1) as usize;
+        let mut mixed = AudioBuffer::silence(sample_index, sample_rate, plan.channels, frames);
         let mut source_audio = HashMap::new();
-        for route in &project.audio_matrix.routes {
+        for route in &plan.matrix.routes {
             if source_audio.contains_key(&route.input) {
                 continue;
             }
@@ -601,7 +754,7 @@ impl Runtime {
                 source_audio.insert(route.input, buffer);
             }
         }
-        for route in &project.audio_matrix.routes {
+        for route in &plan.matrix.routes {
             let follow_active = match route.mode {
                 RouteMode::Manual => true,
                 RouteMode::Follow { unit } => {
@@ -620,9 +773,7 @@ impl Runtime {
                     }
                 }
             };
-            let gain = project
-                .audio_matrix
-                .effective_linear_gain(route, follow_active);
+            let gain = plan.matrix.effective_linear_gain(route, follow_active);
             if gain == 0.0 {
                 continue;
             }
@@ -673,7 +824,7 @@ impl Runtime {
             }
         }
         let mut meters = HashMap::new();
-        for bus in &project.audio_matrix.buses {
+        for bus in &plan.matrix.buses {
             let mut peak = 0.0f32;
             for plane in &mixed.planes {
                 for s in plane {
@@ -841,6 +992,25 @@ mod tests {
             "a route without an attached source must not invent a tone"
         );
         assert!(after.peak_meters.values().all(|m| *m < 1e-6));
+    }
+
+    #[test]
+    fn transition_progress_never_mutates_project_snapshot() {
+        let (mut project, _, scene, unit) = setup();
+        let mut runtime = Runtime::new(48_000);
+        runtime.tick(&project).unwrap();
+        {
+            let unit = project.mixing_units.get_mut(&unit).unwrap();
+            unit.transition.style = TransitionStyle::Mix;
+            unit.transition.duration_frames = 3;
+            unit.take(false);
+        }
+        let latched = project.clone();
+        for _ in 0..4 {
+            runtime.tick(&project).unwrap();
+            assert_eq!(project, latched);
+        }
+        assert_eq!(project.mixing_units[&unit].program.scene, Some(scene));
     }
 
     #[test]

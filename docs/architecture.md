@@ -46,7 +46,11 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 
 ## コマンド
 
-すべての状態変更は versioned `CommandEnvelope` です。sequencer だけが `Project` を mutate し、`revision` を進め、frame boundary で immutable snapshot を差し替えます。TAKE と record start/stop は coalesce しません。複数Command transactionはProjectとsequencerのcandidateを検証してから一括commitし、途中失敗時はrevision・idempotency・client sequenceも含めてrollbackします。
+すべての状態変更は versioned `CommandEnvelope` です。sequencer は command ID、client sequence、expected accepted revision を受付時に検証し、`effective_time`（未指定または過去なら次の logical boundary）と受付順で bounded pending queue を全順序化します。受付は即時に `revision`（accepted revision）を返しますが、active `Project` と `state_hash` は変わりません。`Engine::tick` が due batch を取り出し、検証・compile済みの `Project` / `RenderPlanSnapshot` / `AudioPlan` を Runtime 実行前に一括 latch して `applied_revision` を進めます。
+
+同じ effective time は受付順です。異なる effective time を一つの transaction に混在させず、transaction は一つの boundary で全件または0件を反映します。新規commandを時刻順へ挿入した結果、既にpendingの後続状態がinvalidになる場合も新規command全体を拒否し、revision・idempotency・client sequence・queueをrollbackします。TAKE と record start/stop は coalesce しません。Runtime は immutable snapshotだけを読み、transitionの残りframeはRuntime内部状態で進めてProjectへ書き戻しません。Audio FollowはTAKE後のProgramを映像と同じsnapshot generationから読むため、同一boundaryで切り替わります。
+
+`state_hash` はactive Projectだけのhashです。pendingを含む候補は `staged_state_hash` として別に診断します。pending depth/capacity、batchごとのeffective time/command ID/accepted revision、accepted/applied revision、保持中idempotency record数をstatus/metricsで公開します。
 
 Control API v1はHTTP query/command/transaction、TCP JSON-lines、
 WebSocket query/command/transaction/event subscriptionを提供します。全mutationは

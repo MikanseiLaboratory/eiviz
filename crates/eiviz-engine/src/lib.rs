@@ -2,7 +2,9 @@ use eiviz_codec_software::{
     DynamicEncoderFactory, EncoderDiagnostics, EncoderSessionRequest, ProgramEncoder,
     ProgramEncoderFactory,
 };
-use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
+use eiviz_command::{
+    Command, CommandAck, CommandEnvelope, Sequencer, SequencerDiagnostics, state_hash,
+};
 use eiviz_core::{
     AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
     MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
@@ -13,7 +15,7 @@ use eiviz_project::{
     append_journal, export_portable as export_project_portable,
     import_portable as import_project_portable, load, save_atomic, save_autosave, stage_asset,
 };
-use eiviz_runtime::{Runtime, TickResult};
+use eiviz_runtime::{Runtime, RuntimeSnapshot, TickResult};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -64,7 +66,9 @@ impl Default for AdmissionBudget {
 #[derive(Clone, Debug, Serialize)]
 pub struct FlightEvent {
     pub frame: u64,
+    /// Latest accepted revision at the event.
     pub revision: u64,
+    pub applied_revision: u64,
     pub hash: String,
     pub dropped_preview: u64,
     pub failed_outputs: Vec<String>,
@@ -73,9 +77,14 @@ pub struct FlightEvent {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct EngineMetrics {
+    /// Latest accepted command revision.
     pub revision: u64,
+    /// Number of commands latched at media boundaries.
+    pub applied_revision: u64,
     pub frame: u64,
     pub state_hash: String,
+    pub staged_state_hash: String,
+    pub commands: SequencerDiagnostics,
     pub failed_outputs: Vec<(String, String)>,
     pub peak_meters: Vec<(String, f32)>,
     pub audio_devices: Vec<EngineAudioDiagnostics>,
@@ -123,6 +132,7 @@ pub struct Engine {
 
 struct Inner {
     project: Project,
+    active_snapshot: Arc<RuntimeSnapshot>,
     sequencer: Sequencer,
     runtime: Runtime,
     client: ClientId,
@@ -162,12 +172,23 @@ impl Engine {
     }
 
     pub fn from_project(project: Project) -> Result<Self> {
+        Self::from_project_with_command_capacities(project, 4096, 16_384)
+    }
+
+    pub fn from_project_with_command_capacities(
+        project: Project,
+        pending_capacity: usize,
+        idempotency_capacity: usize,
+    ) -> Result<Self> {
         validate_enabled_distribution_outputs(&project)?;
-        let runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
+        let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
+        let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
+        runtime.activate_snapshot(active_snapshot.clone())?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 project,
-                sequencer: Sequencer::default(),
+                active_snapshot,
+                sequencer: Sequencer::with_capacities(pending_capacity, idempotency_capacity),
                 runtime,
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
@@ -209,7 +230,7 @@ impl Engine {
         openh264_binary: &Path,
         playback: Playback,
     ) -> Result<Input> {
-        if self.snapshot().video.color != eiviz_core::ColorSpace::Bt709Sdr {
+        if self.staged_snapshot().video.color != eiviz_core::ColorSpace::Bt709Sdr {
             return Err(EngineError::Admission(
                 "H.264 software decode currently requires explicit Bt709Sdr project profile".into(),
             ));
@@ -253,14 +274,28 @@ impl Engine {
 
     pub fn attach_sink(&self, sink: Arc<dyn MediaSink>) {
         let mut inner = self.inner.lock();
-        if let Some(output) = inner.project.outputs.keys().next().copied() {
+        let output = inner
+            .sequencer
+            .staged_project()
+            .unwrap_or(&inner.project)
+            .outputs
+            .keys()
+            .next()
+            .copied();
+        if let Some(output) = output {
             inner.sinks.insert(output, sink);
         }
     }
 
     pub fn attach_output_sink(&self, output: OutputId, sink: Arc<dyn MediaSink>) -> Result<()> {
         let mut inner = self.inner.lock();
-        if !inner.project.outputs.contains_key(&output) {
+        if !inner
+            .sequencer
+            .staged_project()
+            .unwrap_or(&inner.project)
+            .outputs
+            .contains_key(&output)
+        {
             return Err(EngineError::UnknownOutput(output));
         }
         inner.sinks.insert(output, sink);
@@ -273,7 +308,13 @@ impl Engine {
 
     pub fn attach_audio_output(&self, output: OutputId, sink: Arc<dyn AudioSink>) -> Result<()> {
         let mut inner = self.inner.lock();
-        let Some(configured) = inner.project.outputs.get(&output) else {
+        let Some(configured) = inner
+            .sequencer
+            .staged_project()
+            .unwrap_or(&inner.project)
+            .outputs
+            .get(&output)
+        else {
             return Err(EngineError::UnknownOutput(output));
         };
         if !matches!(configured.kind, OutputKind::AudioDevice { .. }) {
@@ -303,13 +344,31 @@ impl Engine {
         self.inner.lock().sequencer.revision()
     }
 
+    pub fn applied_revision(&self) -> u64 {
+        self.inner.lock().sequencer.applied_revision()
+    }
+
     pub fn snapshot(&self) -> Project {
         self.inner.lock().project.clone()
+    }
+
+    pub fn staged_snapshot(&self) -> Project {
+        let g = self.inner.lock();
+        g.sequencer.staged_project().unwrap_or(&g.project).clone()
     }
 
     pub fn state_hash(&self) -> String {
         let g = self.inner.lock();
         state_hash(&g.project)
+    }
+
+    pub fn staged_state_hash(&self) -> String {
+        let g = self.inner.lock();
+        state_hash(g.sequencer.staged_project().unwrap_or(&g.project))
+    }
+
+    pub fn command_diagnostics(&self) -> SequencerDiagnostics {
+        self.inner.lock().sequencer.diagnostics()
     }
 
     pub fn compositor_detail(&self) -> String {
@@ -322,8 +381,11 @@ impl Engine {
         audio_devices.extend(g.audio_sinks.values().map(|sink| sink.diagnostics()));
         EngineMetrics {
             revision: g.sequencer.revision(),
+            applied_revision: g.sequencer.applied_revision(),
             frame: g.runtime.frame(),
             state_hash: state_hash(&g.project),
+            staged_state_hash: state_hash(g.sequencer.staged_project().unwrap_or(&g.project)),
+            commands: g.sequencer.diagnostics(),
             failed_outputs: g.runtime.failed_outputs(),
             peak_meters: g
                 .runtime
@@ -429,7 +491,7 @@ impl Engine {
     }
 
     pub fn set_distribution_enabled(&self, output: OutputId, enabled: bool) -> Result<CommandAck> {
-        let snapshot = self.snapshot();
+        let snapshot = self.staged_snapshot();
         let configured = snapshot
             .outputs
             .get(&output)
@@ -453,67 +515,23 @@ impl Engine {
         if let Some(acknowledgement) = g.sequencer.existing_ack(&env)? {
             return Ok(acknowledgement);
         }
-        let activation = match &env.payload {
-            Command::SetOutputEnabled { id, enabled: true } => g
-                .project
-                .outputs
-                .get(id)
-                .filter(|output| output.distribution.is_some())
-                .cloned(),
-            Command::AddOutput { output } if output.enabled && output.distribution.is_some() => {
-                Some(output.clone())
-            }
-            _ => None,
-        };
-        let deactivate_after = match &env.payload {
-            Command::SetOutputEnabled { id, enabled: false }
-                if g.distribution_bindings.contains_key(id) =>
-            {
-                Some(*id)
-            }
-            Command::RemoveOutput { id } if g.distribution_bindings.contains_key(id) => Some(*id),
-            _ => None,
-        };
-        let activated_now = if let Some(output) = activation.as_ref() {
-            activate_distribution_output(&mut g, output)?
-        } else {
-            false
-        };
-        let playback_update = match &env.payload {
-            Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
-            _ => None,
-        };
-        if let Err(error) = Self::admit(&g, &env.payload) {
-            if activated_now && let Some(output) = activation.as_ref() {
-                deactivate_distribution_output(&mut g, output.id);
-            }
-            return Err(error);
-        }
-        let applied = {
-            let Inner {
-                sequencer, project, ..
-            } = &mut *g;
-            sequencer.apply(project, env)
-        };
-        let ack = match applied {
-            Ok(ack) => ack,
-            Err(error) => {
-                if activated_now && let Some(output) = activation.as_ref() {
-                    deactivate_distribution_output(&mut g, output.id);
-                }
-                return Err(error.into());
-            }
-        };
-        if let Some(output) = deactivate_after {
-            deactivate_distribution_output(&mut g, output);
-        }
+        let now = current_boundary_time(&g)?;
+        let mut candidate = g.sequencer.clone();
+        let ack = candidate.stage(&g.project, env, now)?;
+        let staged = candidate.staged_project().unwrap_or(&g.project);
+        Self::admit_project(&g, staged)?;
+        RuntimeSnapshot::compile(
+            Arc::new(staged.clone()),
+            candidate.revision(),
+            candidate.applied_revision(),
+        )?;
+        validate_distribution_admission(&g, staged)?;
+        g.sequencer = candidate;
         let hash = state_hash(&g.project);
-        if let Some((input, playback)) = playback_update {
-            g.runtime.update_source_playback(input, &playback);
-        }
         let ev = FlightEvent {
             frame: g.runtime.frame(),
             revision: ack.revision,
+            applied_revision: g.sequencer.applied_revision(),
             hash: hash.clone(),
             dropped_preview: g.runtime.metrics.dropped_preview,
             failed_outputs: g
@@ -522,61 +540,34 @@ impl Engine {
                 .into_iter()
                 .map(|(n, _)| n)
                 .collect(),
-            note: "command".into(),
+            note: "command accepted".into(),
         };
         push_flight(&mut g.flight, ev);
-        if let Some(path) = g.journal_path.clone() {
-            let _ = append_journal(&path, ack.revision, &hash);
-        }
         Ok(ack)
     }
 
     pub fn submit_transaction(&self, envelopes: Vec<CommandEnvelope>) -> Result<Vec<CommandAck>> {
         let mut g = self.inner.lock();
-        if envelopes.iter().any(|envelope| {
-            matches!(
-                &envelope.payload,
-                Command::SetOutputEnabled { id, .. } | Command::RemoveOutput { id }
-                    if g.project.outputs.get(id).is_some_and(|output| output.distribution.is_some())
-            ) || matches!(
-                &envelope.payload,
-                Command::AddOutput { output }
-                    if output.enabled && output.distribution.is_some()
-            )
-        }) {
-            return Err(EngineError::Admission(
-                "distribution start/stop/remove commands must be submitted individually so adapter lifecycle remains atomic".into(),
-            ));
-        }
-        for envelope in &envelopes {
-            if g.sequencer.existing_ack(envelope)?.is_none() {
-                Self::admit(&g, &envelope.payload)?;
-            }
-        }
-        let playback_updates = envelopes
-            .iter()
-            .filter_map(|envelope| match &envelope.payload {
-                Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let (acknowledgements, hash) = {
-            let Inner {
-                sequencer, project, ..
-            } = &mut *g;
-            let acknowledgements = sequencer.apply_transaction(project, envelopes)?;
-            let hash = state_hash(project);
-            (acknowledgements, hash)
-        };
-        for (input, playback) in playback_updates {
-            g.runtime.update_source_playback(input, &playback);
-        }
+        let now = current_boundary_time(&g)?;
+        let mut candidate = g.sequencer.clone();
+        let acknowledgements = candidate.stage_transaction(&g.project, envelopes, now)?;
+        let staged = candidate.staged_project().unwrap_or(&g.project);
+        Self::admit_project(&g, staged)?;
+        RuntimeSnapshot::compile(
+            Arc::new(staged.clone()),
+            candidate.revision(),
+            candidate.applied_revision(),
+        )?;
+        validate_distribution_admission(&g, staged)?;
+        g.sequencer = candidate;
+        let hash = state_hash(&g.project);
         let revision = acknowledgements
             .last()
             .map_or_else(|| g.sequencer.revision(), |ack| ack.revision);
         let event = FlightEvent {
             frame: g.runtime.frame(),
             revision,
+            applied_revision: g.sequencer.applied_revision(),
             hash: hash.clone(),
             dropped_preview: g.runtime.metrics.dropped_preview,
             failed_outputs: g
@@ -585,12 +576,9 @@ impl Engine {
                 .into_iter()
                 .map(|(name, _)| name)
                 .collect(),
-            note: format!("transaction:{}", acknowledgements.len()),
+            note: format!("transaction accepted:{}", acknowledgements.len()),
         };
         push_flight(&mut g.flight, event);
-        if let Some(path) = g.journal_path.clone() {
-            let _ = append_journal(&path, revision, &hash);
-        }
         Ok(acknowledgements)
     }
 
@@ -601,10 +589,49 @@ impl Engine {
 
     pub fn tick(&self) -> Result<TickResult> {
         let mut g = self.inner.lock();
-        let Inner {
-            runtime, project, ..
-        } = &mut *g;
-        let result = runtime.tick(project)?;
+        let boundary = current_boundary_time(&g)?;
+        let mut candidate_sequencer = g.sequencer.clone();
+        if let Some(latched) = candidate_sequencer.latch_due(boundary) {
+            let next_project = latched.project;
+            let accepted_revision = latched
+                .accepted_revisions
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(g.active_snapshot.accepted_revision())
+                .max(g.active_snapshot.accepted_revision());
+            let snapshot = Arc::new(RuntimeSnapshot::compile(
+                Arc::new(next_project.clone()),
+                accepted_revision,
+                latched.applied_revision,
+            )?);
+            reconcile_distribution_outputs(&mut g, &next_project)?;
+            update_source_playback_at_boundary(&g.runtime, &g.project, &next_project);
+            g.project = next_project;
+            g.active_snapshot = snapshot.clone();
+            g.sequencer = candidate_sequencer;
+            g.runtime.activate_snapshot(snapshot)?;
+            let hash = state_hash(&g.project);
+            let event = FlightEvent {
+                frame: g.runtime.frame(),
+                revision: g.sequencer.revision(),
+                applied_revision: g.sequencer.applied_revision(),
+                hash: hash.clone(),
+                dropped_preview: g.runtime.metrics.dropped_preview,
+                failed_outputs: g
+                    .runtime
+                    .failed_outputs()
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect(),
+                note: format!("applied:{}", latched.command_ids.len()),
+            };
+            push_flight(&mut g.flight, event);
+            if let Some(path) = g.journal_path.clone() {
+                let _ = append_journal(&path, latched.applied_revision, &hash);
+            }
+        }
+        let result = g.runtime.tick_active()?;
         let audio = result.audio.clone();
         let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
         let mut distribution_errors = Vec::new();
@@ -679,6 +706,7 @@ impl Engine {
         let ev = FlightEvent {
             frame: g.runtime.frame().saturating_sub(1),
             revision: g.sequencer.revision(),
+            applied_revision: g.sequencer.applied_revision(),
             hash: state_hash(&g.project),
             dropped_preview: g.runtime.metrics.dropped_preview,
             failed_outputs: g
@@ -743,14 +771,21 @@ impl Engine {
 
     fn replace_project(&self, project: Project, asset_root: Option<PathBuf>) -> Result<()> {
         validate_enabled_distribution_outputs(&project)?;
+        let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
         let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
         if let Some(root) = asset_root {
             runtime.set_asset_root(root);
         }
+        runtime.activate_snapshot(active_snapshot.clone())?;
         let mut inner = self.inner.lock();
         inner.project = project;
+        inner.active_snapshot = active_snapshot;
         inner.runtime = runtime;
-        inner.sequencer = Sequencer::default();
+        let command_limits = inner.sequencer.diagnostics();
+        inner.sequencer = Sequencer::with_capacities(
+            command_limits.pending_capacity,
+            command_limits.idempotency_capacity,
+        );
         inner.flight.clear();
         inner.sinks.clear();
         inner.audio_sinks.clear();
@@ -775,26 +810,107 @@ impl Engine {
         self.inner.lock().runtime.mark_output_failed(name, reason);
     }
 
-    fn admit(inner: &Inner, payload: &Command) -> Result<()> {
-        let p = &inner.project;
+    fn admit_project(inner: &Inner, p: &Project) -> Result<()> {
         let b = &inner.budget;
-        match payload {
-            Command::AddInput { .. } => {
-                if p.inputs.len() >= b.max_inputs {
-                    return Err(EngineError::Admission("input count".into()));
-                }
-                let bytes =
-                    (p.inputs.len() + 1) * p.video.width as usize * p.video.height as usize * 4;
-                if bytes > b.max_pixel_bytes {
-                    return Err(EngineError::Admission("pixel budget".into()));
-                }
-            }
-            Command::AddMixingUnit { .. } if p.mixing_units.len() >= b.max_units => {
-                return Err(EngineError::Admission("mixing unit count".into()));
-            }
-            _ => {}
+        if p.inputs.len() > b.max_inputs {
+            return Err(EngineError::Admission("input count".into()));
+        }
+        if p.mixing_units.len() > b.max_units {
+            return Err(EngineError::Admission("mixing unit count".into()));
+        }
+        let bytes = p
+            .inputs
+            .len()
+            .saturating_mul(p.video.width as usize)
+            .saturating_mul(p.video.height as usize)
+            .saturating_mul(4);
+        if bytes > b.max_pixel_bytes {
+            return Err(EngineError::Admission("pixel budget".into()));
         }
         Ok(())
+    }
+}
+
+fn current_boundary_time(inner: &Inner) -> Result<eiviz_time::MediaTime> {
+    eiviz_time::MediaTime::from_frame_index(inner.runtime.frame(), inner.project.video.frame_rate)
+        .map_err(|error| EngineError::Admission(format!("media boundary overflow: {error}")))
+}
+
+fn validate_distribution_admission(inner: &Inner, project: &Project) -> Result<()> {
+    for output in project
+        .outputs
+        .values()
+        .filter(|output| output.enabled && output.distribution.is_some())
+    {
+        let profile = output
+            .distribution
+            .as_ref()
+            .expect("distribution was filtered above");
+        if !inner.distribution_bindings.contains_key(&output.id) && inner.encoder_factory.is_none()
+        {
+            return Err(EngineError::Admission(
+                "no explicit distribution encoder factory/binary paths configured; I_PCM/PCM fallback is forbidden".into(),
+            ));
+        }
+        inner.encoder_capabilities.validate(profile)?;
+    }
+    Ok(())
+}
+
+fn reconcile_distribution_outputs(inner: &mut Inner, project: &Project) -> Result<()> {
+    let desired = project
+        .outputs
+        .values()
+        .filter(|output| output.enabled && output.distribution.is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    let desired_ids = desired
+        .iter()
+        .map(|output| output.id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut activated = Vec::new();
+    for output in &desired {
+        match activate_distribution_output(inner, output) {
+            Ok(true) => activated.push(output.id),
+            Ok(false) => {}
+            Err(error) => {
+                for output in activated {
+                    deactivate_distribution_output(inner, output);
+                }
+                return Err(error);
+            }
+        }
+    }
+    let removed = inner
+        .distribution_bindings
+        .keys()
+        .copied()
+        .filter(|output| !desired_ids.contains(output))
+        .collect::<Vec<_>>();
+    for output in removed {
+        deactivate_distribution_output(inner, output);
+    }
+    Ok(())
+}
+
+fn update_source_playback_at_boundary(runtime: &Runtime, old: &Project, new: &Project) {
+    for (id, input) in &new.inputs {
+        let InputSource::Video { playback, .. } = &input.source else {
+            continue;
+        };
+        let changed = old.inputs.get(id).is_none_or(|old_input| {
+            let InputSource::Video {
+                playback: old_playback,
+                ..
+            } = &old_input.source
+            else {
+                return true;
+            };
+            old_playback != playback
+        });
+        if changed {
+            runtime.update_source_playback(*id, playback);
+        }
     }
 }
 
@@ -1006,7 +1122,9 @@ mod tests {
         SceneItem, SceneItemId, Transform2D, TransitionStyle,
     };
     use eiviz_io_stream::FailingSink;
-    use eiviz_media::{EncodedAccessUnit, EncodedKind, EncodedStreamConfig};
+    use eiviz_media::{
+        AudioBuffer, EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaSource,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct MockEncoderFactory {
@@ -1099,6 +1217,34 @@ mod tests {
     struct PixelSink {
         name: String,
         pixels: Mutex<Vec<[u8; 4]>>,
+    }
+
+    struct ConstantSource {
+        id: InputId,
+        video: VideoFrame,
+        audio: AudioBuffer,
+    }
+
+    impl MediaSource for ConstantSource {
+        fn id(&self) -> InputId {
+            self.id
+        }
+
+        fn pull_video(
+            &self,
+            _pts: eiviz_time::MediaTime,
+            _rate: eiviz_time::FrameRate,
+        ) -> eiviz_media::Result<Option<VideoFrame>> {
+            Ok(Some(self.video.clone()))
+        }
+
+        fn pull_audio(
+            &self,
+            _sample_index: u64,
+            _frames: usize,
+        ) -> eiviz_media::Result<Option<AudioBuffer>> {
+            Ok(Some(self.audio.clone()))
+        }
     }
 
     impl PixelSink {
@@ -1303,7 +1449,7 @@ mod tests {
         let engine = Engine::new("asset project");
         let asset = engine.ingest_asset(&source, &asset_root).unwrap();
         assert_eq!(
-            engine.snapshot().assets[&asset.id].sha256_hex,
+            engine.staged_snapshot().assets[&asset.id].sha256_hex,
             asset.sha256_hex
         );
         let input = Input {
@@ -1466,6 +1612,7 @@ mod tests {
 
         engine.set_distribution_enabled(output_a.id, false).unwrap();
         engine.set_distribution_enabled(output_b.id, false).unwrap();
+        engine.tick().unwrap();
         assert!(
             engine
                 .metrics()
@@ -1513,7 +1660,8 @@ mod tests {
         engine
             .configure_distribution_output(output.clone())
             .unwrap();
-        assert!(!engine.snapshot().outputs[&output.id].enabled);
+        assert!(!engine.staged_snapshot().outputs[&output.id].enabled);
+        engine.tick().unwrap();
         let error = engine
             .set_distribution_enabled(output.id, true)
             .unwrap_err();
@@ -1530,5 +1678,252 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.state == "stopped")
         );
+    }
+
+    #[test]
+    fn future_command_is_not_applied_before_its_frame() {
+        let engine = Engine::new("active");
+        let before = engine.state_hash();
+        let mut envelope = CommandEnvelope::new(
+            engine.client(),
+            Command::SetName {
+                name: "future".into(),
+            },
+        );
+        envelope.effective_time = Some(
+            eiviz_time::MediaTime::from_frame_index(2, engine.snapshot().video.frame_rate).unwrap(),
+        );
+        let acknowledgement = engine.submit(envelope).unwrap();
+        assert_eq!(acknowledgement.applied_revision, None);
+        assert_eq!(engine.snapshot().name, "active");
+        assert_eq!(engine.state_hash(), before);
+        engine.tick().unwrap();
+        engine.tick().unwrap();
+        assert_eq!(engine.snapshot().name, "active");
+        assert_eq!(engine.applied_revision(), 0);
+        let due = engine.tick().unwrap();
+        assert_eq!(
+            due.pts.frame_index(engine.snapshot().video.frame_rate),
+            Ok(2)
+        );
+        assert_eq!(engine.snapshot().name, "future");
+        assert_eq!(engine.applied_revision(), 1);
+    }
+
+    #[test]
+    fn same_frame_commands_apply_in_acceptance_order() {
+        let engine = Engine::new("zero");
+        let due =
+            eiviz_time::MediaTime::from_frame_index(1, engine.snapshot().video.frame_rate).unwrap();
+        for name in ["first", "second"] {
+            let mut envelope =
+                CommandEnvelope::new(engine.client(), Command::SetName { name: name.into() });
+            envelope.effective_time = Some(due);
+            engine.submit(envelope).unwrap();
+        }
+        engine.tick().unwrap();
+        assert_eq!(engine.snapshot().name, "zero");
+        engine.tick().unwrap();
+        assert_eq!(engine.snapshot().name, "second");
+        assert_eq!(engine.applied_revision(), 2);
+    }
+
+    #[test]
+    fn take_and_audio_follow_latch_on_the_same_boundary() {
+        let engine = Engine::new("follow");
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "source".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://deterministic".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "live".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let bus = engine.snapshot().audio_matrix.buses[0].id;
+        engine
+            .submit_transaction(vec![
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddInput {
+                        input: input.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddScene {
+                        scene: scene.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::SetPreview {
+                        unit,
+                        scene: Some(scene.id),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::SetAudioRoute {
+                        route: eiviz_core::AudioRoute {
+                            input: input.id,
+                            bus,
+                            mode: eiviz_core::RouteMode::Follow { unit },
+                            gain_db: 0.0,
+                            muted: false,
+                            solo: false,
+                            delay_ms: 0.0,
+                            pan: 0.0,
+                        },
+                    },
+                ),
+            ])
+            .unwrap();
+        let mut audio = AudioBuffer::silence(0, 48_000, 2, 801);
+        audio.planes[0].fill(0.5);
+        audio.planes[1].fill(0.5);
+        engine.attach_source(Arc::new(ConstantSource {
+            id: input.id,
+            video: VideoFrame::rgba_solid(
+                0,
+                eiviz_time::MediaTime::ZERO,
+                16,
+                16,
+                [20, 40, 60, 255],
+            ),
+            audio,
+        }));
+        let setup = engine.tick().unwrap();
+        assert_eq!(setup.programs[&unit].pixel(0, 0), [0, 0, 0, 255]);
+        assert!(
+            setup.audio.planes[0]
+                .iter()
+                .all(|sample| sample.abs() < 1e-6)
+        );
+
+        let mut take = CommandEnvelope::new(
+            engine.client(),
+            Command::Take {
+                unit,
+                swap: false,
+                style: TransitionStyle::Cut,
+                duration_frames: 0,
+            },
+        );
+        take.effective_time = Some(
+            eiviz_time::MediaTime::from_frame_index(2, engine.snapshot().video.frame_rate).unwrap(),
+        );
+        engine.submit(take).unwrap();
+        let early = engine.tick().unwrap();
+        assert_eq!(early.programs[&unit].pixel(0, 0), [0, 0, 0, 255]);
+        assert!(
+            early.audio.planes[0]
+                .iter()
+                .all(|sample| sample.abs() < 1e-6)
+        );
+        let applied = engine.tick().unwrap();
+        assert_eq!(applied.programs[&unit].pixel(0, 0), [20, 40, 60, 255]);
+        assert!(applied.audio.planes[0].iter().any(|sample| *sample > 0.4));
+    }
+
+    #[test]
+    fn replay_produces_the_same_applied_state_hash() {
+        let base = Project::new("replay");
+        let first = Engine::from_project(base.clone()).unwrap();
+        let second = Engine::from_project(base).unwrap();
+        let client = ClientId::new();
+        let due =
+            eiviz_time::MediaTime::from_frame_index(2, first.snapshot().video.frame_rate).unwrap();
+        let mut commands = Vec::new();
+        for (sequence, name, effective_time) in [
+            (1, "now", None),
+            (2, "future", Some(due)),
+            (3, "same-frame-last", Some(due)),
+        ] {
+            let mut envelope = CommandEnvelope::new(client, Command::SetName { name: name.into() });
+            envelope.client_seq = sequence;
+            envelope.effective_time = effective_time;
+            commands.push(envelope);
+        }
+        for command in &commands {
+            first.submit(command.clone()).unwrap();
+            second.submit(command.clone()).unwrap();
+        }
+        for _ in 0..3 {
+            first.tick().unwrap();
+            second.tick().unwrap();
+        }
+        assert_eq!(first.state_hash(), second.state_hash());
+        assert_eq!(first.applied_revision(), second.applied_revision());
+        assert_eq!(first.snapshot().name, "same-frame-last");
+    }
+
+    #[test]
+    fn invalid_staged_transaction_rolls_back_every_sequencer_field() {
+        let engine = Engine::new("rollback");
+        let active_hash = engine.state_hash();
+        let staged_hash = engine.staged_state_hash();
+        let due = eiviz_time::MediaTime::from_frame_index(10, engine.snapshot().video.frame_rate)
+            .unwrap();
+        let mut rename = CommandEnvelope::new(
+            engine.client(),
+            Command::SetName {
+                name: "invalid".into(),
+            },
+        );
+        rename.effective_time = Some(due);
+        let mut remove = CommandEnvelope::new(
+            engine.client(),
+            Command::RemoveMixingUnit {
+                id: engine.primary_unit(),
+            },
+        );
+        remove.effective_time = Some(due);
+        assert!(engine.submit_transaction(vec![rename, remove]).is_err());
+        let diagnostics = engine.command_diagnostics();
+        assert_eq!(diagnostics.accepted_revision, 0);
+        assert_eq!(diagnostics.applied_revision, 0);
+        assert_eq!(diagnostics.pending_commands, 0);
+        assert_eq!(engine.state_hash(), active_hash);
+        assert_eq!(engine.staged_state_hash(), staged_hash);
+    }
+
+    #[test]
+    fn pending_command_queue_rejects_over_capacity_without_mutation() {
+        let engine =
+            Engine::from_project_with_command_capacities(Project::new("bounded"), 1, 2).unwrap();
+        let due = eiviz_time::MediaTime::from_frame_index(100, engine.snapshot().video.frame_rate)
+            .unwrap();
+        let mut first = CommandEnvelope::new(
+            engine.client(),
+            Command::SetName {
+                name: "queued".into(),
+            },
+        );
+        first.effective_time = Some(due);
+        engine.submit(first).unwrap();
+        let staged_hash = engine.staged_state_hash();
+        let mut second = CommandEnvelope::new(engine.client(), Command::Noop);
+        second.effective_time = Some(due);
+        assert!(matches!(
+            engine.submit(second),
+            Err(EngineError::Command(eiviz_command::CommandError::Busy))
+        ));
+        let diagnostics = engine.command_diagnostics();
+        assert_eq!(diagnostics.pending_commands, 1);
+        assert_eq!(diagnostics.pending_capacity, 1);
+        assert_eq!(engine.staged_state_hash(), staged_hash);
     }
 }

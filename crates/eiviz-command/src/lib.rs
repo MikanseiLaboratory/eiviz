@@ -9,6 +9,7 @@ use eiviz_core::{
 use eiviz_time::MediaTime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub const COMMAND_ENVELOPE_VERSION: u32 = 1;
 
@@ -32,6 +33,8 @@ pub enum CommandError {
     },
     #[error("transaction must contain at least one command")]
     EmptyTransaction,
+    #[error("all commands in a transaction must have the same effective media time")]
+    TransactionEffectiveTime,
     #[error("{0}")]
     Rejected(String),
 }
@@ -160,17 +163,67 @@ pub enum Command {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandAck {
     pub id: CommandId,
+    /// Monotonic admission order. Acceptance is immediate, but media state is
+    /// not changed until a frame boundary latches this command.
     pub revision: u64,
+    /// Monotonic effective-order revision, populated after boundary latching.
+    pub applied_revision: Option<u64>,
     pub duplicate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PendingCommandDiagnostic {
+    pub command_ids: Vec<CommandId>,
+    pub accepted_revisions: Vec<u64>,
+    pub effective_time: MediaTime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SequencerDiagnostics {
+    pub accepted_revision: u64,
+    pub applied_revision: u64,
+    pub pending_commands: usize,
+    pub pending_batches: usize,
+    pub pending_capacity: usize,
+    pub retained_idempotency_records: usize,
+    pub idempotency_capacity: usize,
+    pub pending: Vec<PendingCommandDiagnostic>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LatchedState {
+    pub project: Project,
+    pub command_ids: Vec<CommandId>,
+    pub accepted_revisions: Vec<u64>,
+    pub applied_revision: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CommandRecord {
+    accepted_revision: u64,
+    applied_revision: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledBatch {
+    effective_time: MediaTime,
+    order: u64,
+    envelopes: Vec<CommandEnvelope>,
+    project: Project,
 }
 
 #[derive(Clone, Debug)]
 pub struct Sequencer {
-    revision: u64,
-    applied: std::collections::HashMap<CommandId, u64>,
-    client_sequences: std::collections::HashMap<ClientId, u64>,
-    last_coalesce: std::collections::HashMap<String, CommandId>,
-    capacity: usize,
+    accepted_revision: u64,
+    applied_revision: u64,
+    records: HashMap<CommandId, CommandRecord>,
+    applied_order: VecDeque<CommandId>,
+    client_sequences: HashMap<ClientId, u64>,
+    pending: Vec<ScheduledBatch>,
+    pending_commands: usize,
+    pending_capacity: usize,
+    history_capacity: usize,
+    next_order: u64,
 }
 
 impl Default for Sequencer {
@@ -181,17 +234,64 @@ impl Default for Sequencer {
 
 impl Sequencer {
     pub fn new(capacity: usize) -> Self {
+        Self::with_capacities(capacity, capacity.saturating_mul(4).max(1))
+    }
+
+    pub fn with_capacities(pending_capacity: usize, history_capacity: usize) -> Self {
         Self {
-            revision: 0,
-            applied: std::collections::HashMap::new(),
-            client_sequences: std::collections::HashMap::new(),
-            last_coalesce: std::collections::HashMap::new(),
-            capacity,
+            accepted_revision: 0,
+            applied_revision: 0,
+            records: HashMap::new(),
+            applied_order: VecDeque::new(),
+            client_sequences: HashMap::new(),
+            pending: Vec::new(),
+            pending_commands: 0,
+            pending_capacity,
+            history_capacity: history_capacity.max(1),
+            next_order: 0,
         }
     }
 
+    /// Latest accepted revision. It can be ahead of [`Self::applied_revision`].
     pub fn revision(&self) -> u64 {
-        self.revision
+        self.accepted_revision
+    }
+
+    pub fn applied_revision(&self) -> u64 {
+        self.applied_revision
+    }
+
+    pub fn diagnostics(&self) -> SequencerDiagnostics {
+        SequencerDiagnostics {
+            accepted_revision: self.accepted_revision,
+            applied_revision: self.applied_revision,
+            pending_commands: self.pending_commands,
+            pending_batches: self.pending.len(),
+            pending_capacity: self.pending_capacity,
+            retained_idempotency_records: self.records.len(),
+            idempotency_capacity: self.history_capacity,
+            pending: self
+                .pending
+                .iter()
+                .map(|batch| PendingCommandDiagnostic {
+                    command_ids: batch.envelopes.iter().map(|envelope| envelope.id).collect(),
+                    accepted_revisions: batch
+                        .envelopes
+                        .iter()
+                        .filter_map(|envelope| {
+                            self.records
+                                .get(&envelope.id)
+                                .map(|record| record.accepted_revision)
+                        })
+                        .collect(),
+                    effective_time: batch.effective_time,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn staged_project(&self) -> Option<&Project> {
+        self.pending.last().map(|batch| &batch.project)
     }
 
     pub fn existing_ack(&self, envelope: &CommandEnvelope) -> Result<Option<CommandAck>> {
@@ -201,90 +301,269 @@ impl Sequencer {
                 actual: envelope.version,
             });
         }
-        Ok(self.applied.get(&envelope.id).map(|revision| CommandAck {
+        Ok(self.records.get(&envelope.id).map(|record| CommandAck {
             id: envelope.id,
-            revision: *revision,
+            revision: record.accepted_revision,
+            applied_revision: record.applied_revision,
             duplicate: true,
         }))
     }
 
+    /// Compatibility helper for non-realtime reducers. Engine code uses
+    /// [`Self::stage`] and [`Self::latch_due`] explicitly.
     pub fn apply(&mut self, project: &mut Project, env: CommandEnvelope) -> Result<CommandAck> {
-        if let Some(acknowledgement) = self.existing_ack(&env)? {
+        let id = env.id;
+        let acknowledgement = self.stage(project, env, MediaTime::ZERO)?;
+        if acknowledgement.duplicate {
             return Ok(acknowledgement);
         }
-        if self.applied.len() >= self.capacity && !self.applied.contains_key(&env.id) {
+        if let Some(latched) = self.latch_due(MediaTime::ZERO) {
+            *project = latched.project;
+        }
+        self.records
+            .get(&id)
+            .map(|record| CommandAck {
+                id,
+                revision: record.accepted_revision,
+                applied_revision: record.applied_revision,
+                duplicate: false,
+            })
+            .ok_or_else(|| CommandError::Rejected("command acknowledgement was lost".into()))
+    }
+
+    /// Stages a validated command without changing the active project.
+    pub fn stage(
+        &mut self,
+        active_project: &Project,
+        envelope: CommandEnvelope,
+        now: MediaTime,
+    ) -> Result<CommandAck> {
+        if let Some(acknowledgement) = self.existing_ack(&envelope)? {
+            return Ok(acknowledgement);
+        }
+        let mut acknowledgements = self.stage_transaction(active_project, vec![envelope], now)?;
+        Ok(acknowledgements.remove(0))
+    }
+
+    /// Stages all envelopes as one atomic boundary activation or stages none.
+    pub fn stage_transaction(
+        &mut self,
+        active_project: &Project,
+        envelopes: Vec<CommandEnvelope>,
+        now: MediaTime,
+    ) -> Result<Vec<CommandAck>> {
+        if envelopes.is_empty() {
+            return Err(CommandError::EmptyTransaction);
+        }
+        let mut seen = HashSet::with_capacity(envelopes.len());
+        if envelopes.iter().any(|envelope| !seen.insert(envelope.id)) {
+            return Err(CommandError::Rejected(
+                "transaction contains a duplicate command id".into(),
+            ));
+        }
+        let existing = envelopes
+            .iter()
+            .map(|envelope| self.existing_ack(envelope))
+            .collect::<Result<Vec<_>>>()?;
+        if existing.iter().all(Option::is_some) {
+            return Ok(existing.into_iter().flatten().collect());
+        }
+        if existing.iter().any(Option::is_some) {
+            return Err(CommandError::Rejected(
+                "transaction must be either entirely new or an exact replay".into(),
+            ));
+        }
+        if self.pending_commands.saturating_add(envelopes.len()) > self.pending_capacity {
             return Err(CommandError::Busy);
         }
-        if env.client_seq != 0
-            && let Some(last) = self.client_sequences.get(&env.client)
-            && env.client_seq <= *last
+        let effective_time = normalized_effective_time(&envelopes[0], now);
+        if envelopes
+            .iter()
+            .skip(1)
+            .any(|envelope| normalized_effective_time(envelope, now) != effective_time)
         {
-            return Err(CommandError::ClientSequence {
-                client: env.client,
-                last: *last,
-                actual: env.client_seq,
+            return Err(CommandError::TransactionEffectiveTime);
+        }
+
+        let mut candidate = self.clone();
+        let mut acknowledgements = Vec::with_capacity(envelopes.len());
+        for envelope in &envelopes {
+            candidate.validate_envelope(envelope)?;
+            candidate.accepted_revision = candidate.accepted_revision.saturating_add(1);
+            candidate.records.insert(
+                envelope.id,
+                CommandRecord {
+                    accepted_revision: candidate.accepted_revision,
+                    applied_revision: None,
+                },
+            );
+            if envelope.client_seq != 0 {
+                candidate
+                    .client_sequences
+                    .insert(envelope.client, envelope.client_seq);
+            }
+            acknowledgements.push(CommandAck {
+                id: envelope.id,
+                revision: candidate.accepted_revision,
+                applied_revision: None,
+                duplicate: false,
             });
         }
-        if let Some(expected) = env.expected_revision
-            && expected != self.revision
+        candidate.next_order = candidate.next_order.saturating_add(1);
+        candidate.pending.push(ScheduledBatch {
+            effective_time,
+            order: candidate.next_order,
+            envelopes,
+            project: active_project.clone(),
+        });
+        candidate.pending_commands = candidate
+            .pending_commands
+            .saturating_add(acknowledgements.len());
+        candidate.rebuild_pending(active_project)?;
+        *self = candidate;
+        Ok(acknowledgements)
+    }
+
+    /// Atomically removes and returns every batch due at this media boundary.
+    /// Commands with the same effective time retain acceptance order.
+    pub fn latch_due(&mut self, now: MediaTime) -> Option<LatchedState> {
+        let due_count = self
+            .pending
+            .iter()
+            .take_while(|batch| batch.effective_time <= now)
+            .count();
+        if due_count == 0 {
+            return None;
+        }
+        let due = self.pending.drain(..due_count).collect::<Vec<_>>();
+        let project = due.last().expect("due count is non-zero").project.clone();
+        let mut command_ids = Vec::new();
+        let mut accepted_revisions = Vec::new();
+        for batch in due {
+            for envelope in batch.envelopes {
+                self.applied_revision = self.applied_revision.saturating_add(1);
+                if let Some(record) = self.records.get_mut(&envelope.id) {
+                    record.applied_revision = Some(self.applied_revision);
+                    accepted_revisions.push(record.accepted_revision);
+                }
+                command_ids.push(envelope.id);
+                self.applied_order.push_back(envelope.id);
+            }
+        }
+        self.pending_commands = self.pending_commands.saturating_sub(command_ids.len());
+        self.trim_history();
+        Some(LatchedState {
+            project,
+            command_ids,
+            accepted_revisions,
+            applied_revision: self.applied_revision,
+        })
+    }
+
+    fn validate_envelope(&self, envelope: &CommandEnvelope) -> Result<()> {
+        if envelope.version != COMMAND_ENVELOPE_VERSION {
+            return Err(CommandError::UnsupportedVersion {
+                expected: COMMAND_ENVELOPE_VERSION,
+                actual: envelope.version,
+            });
+        }
+        if envelope.client_seq != 0
+            && let Some(last) = self.client_sequences.get(&envelope.client)
+            && envelope.client_seq <= *last
+        {
+            return Err(CommandError::ClientSequence {
+                client: envelope.client,
+                last: *last,
+                actual: envelope.client_seq,
+            });
+        }
+        if let Some(expected) = envelope.expected_revision
+            && expected != self.accepted_revision
         {
             return Err(CommandError::RevisionMismatch {
                 expected,
-                actual: self.revision,
+                actual: self.accepted_revision,
             });
         }
-        if let Some(key) = &env.coalesce_key {
-            if matches!(
-                env.payload,
+        if envelope.coalesce_key.is_some()
+            && matches!(
+                envelope.payload,
                 Command::Take { .. }
                     | Command::SetOutputEnabled { .. }
                     | Command::AddInput { .. }
                     | Command::AddAsset { .. }
                     | Command::RemoveInput { .. }
-            ) {
-                return Err(CommandError::Rejected(
-                    "this command must not be coalesced".into(),
-                ));
-            }
-            self.last_coalesce.insert(key.clone(), env.id);
-            let _ = self.last_coalesce.get(key);
+            )
+        {
+            return Err(CommandError::Rejected(
+                "this command must not be coalesced".into(),
+            ));
         }
-        let mut candidate = project.clone();
-        apply_payload(&mut candidate, &env.payload)?;
-        candidate.validate()?;
-        *project = candidate;
-        self.revision += 1;
-        self.applied.insert(env.id, self.revision);
-        if env.client_seq != 0 {
-            self.client_sequences.insert(env.client, env.client_seq);
-        }
-        Ok(CommandAck {
-            id: env.id,
-            revision: self.revision,
-            duplicate: false,
-        })
+        Ok(())
     }
 
-    /// Applies all envelopes or none. Individual command IDs retain their
-    /// revision and idempotency semantics after a successful transaction.
+    fn rebuild_pending(&mut self, active_project: &Project) -> Result<()> {
+        self.pending
+            .sort_by_key(|batch| (batch.effective_time, batch.order));
+        let mut candidate = active_project.clone();
+        for batch in &mut self.pending {
+            let mut transaction_candidate = candidate.clone();
+            for envelope in &batch.envelopes {
+                apply_payload(&mut transaction_candidate, &envelope.payload)?;
+            }
+            transaction_candidate.validate()?;
+            candidate = transaction_candidate;
+            batch.project = candidate.clone();
+        }
+        Ok(())
+    }
+
+    fn trim_history(&mut self) {
+        while self.applied_order.len() > self.history_capacity {
+            if let Some(id) = self.applied_order.pop_front()
+                && self
+                    .records
+                    .get(&id)
+                    .is_some_and(|record| record.applied_revision.is_some())
+            {
+                self.records.remove(&id);
+            }
+        }
+    }
+
+    /// Applies all envelopes immediately for reducer-only callers.
     pub fn apply_transaction(
         &mut self,
         project: &mut Project,
         envelopes: Vec<CommandEnvelope>,
     ) -> Result<Vec<CommandAck>> {
-        if envelopes.is_empty() {
-            return Err(CommandError::EmptyTransaction);
+        let ids = envelopes
+            .iter()
+            .map(|envelope| envelope.id)
+            .collect::<Vec<_>>();
+        let acknowledgements = self.stage_transaction(project, envelopes, MediaTime::ZERO)?;
+        if acknowledgements.iter().all(|ack| ack.duplicate) {
+            return Ok(acknowledgements);
         }
-        let mut candidate_project = project.clone();
-        let mut candidate_sequencer = self.clone();
-        let mut acknowledgements = Vec::with_capacity(envelopes.len());
-        for envelope in envelopes {
-            acknowledgements.push(candidate_sequencer.apply(&mut candidate_project, envelope)?);
+        if let Some(latched) = self.latch_due(MediaTime::ZERO) {
+            *project = latched.project;
         }
-        *project = candidate_project;
-        *self = candidate_sequencer;
-        Ok(acknowledgements)
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| {
+                self.records.get(&id).map(|record| CommandAck {
+                    id,
+                    revision: record.accepted_revision,
+                    applied_revision: record.applied_revision,
+                    duplicate: false,
+                })
+            })
+            .collect())
     }
+}
+
+fn normalized_effective_time(envelope: &CommandEnvelope, now: MediaTime) -> MediaTime {
+    envelope.effective_time.map_or(now, |time| time.max(now))
 }
 
 fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {

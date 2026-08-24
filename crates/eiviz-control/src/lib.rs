@@ -108,7 +108,9 @@ pub struct TransactionRequest {
 pub struct ApiResponse {
     pub version: u32,
     pub request_id: Option<String>,
+    /// Latest accepted command revision; accepted commands may still be pending.
     pub revision: u64,
+    pub applied_revision: u64,
     pub state_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -127,6 +129,7 @@ pub struct ControlEvent {
     pub version: u32,
     pub event: &'static str,
     pub revision: u64,
+    pub applied_revision: u64,
     pub state_hash: String,
     pub command_ids: Vec<String>,
 }
@@ -337,8 +340,9 @@ fn spawn_dispatcher(
             if let Ok(acknowledgements) = &result {
                 broker.publish(ControlEvent {
                     version: CONTROL_API_VERSION,
-                    event: "revision",
+                    event: "command_accepted",
                     revision: engine.revision(),
+                    applied_revision: engine.applied_revision(),
                     state_hash: engine.state_hash(),
                     command_ids: acknowledgements
                         .iter()
@@ -515,8 +519,11 @@ fn execute_query(engine: &Engine, query: Query) -> Result<Value, ApiError> {
     match query {
         Query::Status => Ok(json!({
             "healthy": true,
-            "revision": engine.revision(),
+            "accepted_revision": engine.revision(),
+            "applied_revision": engine.applied_revision(),
             "state_hash": engine.state_hash(),
+            "staged_state_hash": engine.staged_state_hash(),
+            "commands": engine.command_diagnostics(),
         })),
         Query::Project => serialize_value(engine.snapshot()),
         Query::Metrics => serialize_value(engine.metrics()),
@@ -536,6 +543,7 @@ fn success_response(engine: &Engine, request_id: Option<String>, result: Value) 
         version: CONTROL_API_VERSION,
         request_id,
         revision: engine.revision(),
+        applied_revision: engine.applied_revision(),
         state_hash: engine.state_hash(),
         result: Some(result),
         error: None,
@@ -547,6 +555,7 @@ fn error_response(engine: &Engine, request_id: Option<String>, error: ApiError) 
         version: CONTROL_API_VERSION,
         request_id,
         revision: engine.revision(),
+        applied_revision: engine.applied_revision(),
         state_hash: engine.state_hash(),
         result: None,
         error: Some(error),
@@ -1411,8 +1420,14 @@ mod tests {
         let second = http_request(ports.http, &request);
         assert!(first.contains("200 OK"), "{first}");
         assert!(second.contains("\"duplicate\":true"), "{second}");
-        assert_eq!(engine.snapshot().name, "http-renamed");
+        assert!(first.contains("\"applied_revision\":null"), "{first}");
+        assert_eq!(engine.snapshot().name, "control-http");
+        assert_eq!(engine.staged_snapshot().name, "http-renamed");
         assert_eq!(engine.revision(), 1);
+        assert_eq!(engine.applied_revision(), 0);
+        engine.tick().unwrap();
+        assert_eq!(engine.snapshot().name, "http-renamed");
+        assert_eq!(engine.applied_revision(), 1);
         stop.store(true, Ordering::Release);
     }
 
@@ -1512,7 +1527,8 @@ mod tests {
         let response = String::from_utf8_lossy(&bytes[..count]);
         assert!(response.contains("\"result\""), "{response}");
         assert!(!response.contains("\"error\""), "{response}");
-        assert_eq!(engine.snapshot().name, "tcp-renamed");
+        assert_eq!(engine.snapshot().name, "tcp");
+        assert_eq!(engine.staged_snapshot().name, "tcp-renamed");
         stop.store(true, Ordering::Release);
     }
 
@@ -1577,8 +1593,9 @@ mod tests {
             "{response}"
         );
         let event = websocket.read().unwrap().into_text().unwrap();
-        assert!(event.contains("\"event\":\"revision\""), "{event}");
-        assert_eq!(engine.snapshot().name, "ws-renamed");
+        assert!(event.contains("\"event\":\"command_accepted\""), "{event}");
+        assert_eq!(engine.snapshot().name, "websocket");
+        assert_eq!(engine.staged_snapshot().name, "ws-renamed");
         stop.store(true, Ordering::Release);
     }
 
@@ -1603,8 +1620,9 @@ mod tests {
         let events = broker.subscribe();
         let event = ControlEvent {
             version: CONTROL_API_VERSION,
-            event: "revision",
+            event: "command_accepted",
             revision: 1,
+            applied_revision: 0,
             state_hash: "hash".into(),
             command_ids: vec![],
         };

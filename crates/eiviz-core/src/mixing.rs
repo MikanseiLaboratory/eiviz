@@ -79,40 +79,20 @@ impl MixingUnit {
         }
     }
 
-    /// Atomically swap preview into program. Preview becomes empty unless `swap`.
+    /// Atomically latch preview into program. With `swap`, preview receives the
+    /// old program; otherwise it remains on the selected scene.
     pub fn take(&mut self, swap: bool) {
-        let prev = self.preview.scene;
-        if self.transition.style == TransitionStyle::Cut || self.transition.duration_frames == 0 {
-            if swap {
-                self.preview.scene = self.program.scene;
-            }
-            self.program.scene = prev;
-            self.transition.remaining_frames = 0;
+        let old_program = self.program.scene;
+        self.program.scene = self.preview.scene;
+        if swap {
+            self.preview.scene = old_program;
+        }
+        self.transition.remaining_frames = if self.transition.style == TransitionStyle::Mix
+            && self.transition.duration_frames > 0
+        {
+            self.transition.duration_frames
         } else {
-            self.transition.remaining_frames = self.transition.duration_frames;
-            if swap {
-                self.preview.scene = self.program.scene;
-            }
-            // Program stays until mix completes; runtime blends using remaining_frames.
-            // Store target on preview so the compiler can see both scenes.
-            self.preview.scene = prev;
-        }
-    }
-
-    pub fn tick_transition(&mut self) {
-        if self.transition.remaining_frames == 0 {
-            return;
-        }
-        self.transition.remaining_frames -= 1;
-        if self.transition.remaining_frames == 0 {
-            self.program.scene = self.preview.scene;
-        }
-    }
-
-    pub fn mix_factor(&self) -> f32 {
-        if self.transition.remaining_frames == 0 || self.transition.duration_frames == 0 {
-            return 1.0;
-        }
-        1.0 - (self.transition.remaining_frames as f32 / self.transition.duration_frames as f32)
+            0
+        };
     }
 }

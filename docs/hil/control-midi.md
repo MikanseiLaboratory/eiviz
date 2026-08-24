@@ -20,7 +20,8 @@ evidence. A simulated MIDI loopback alone does not satisfy AC-11.
 5. Submit a transaction whose second command is invalid. Confirm HTTP 400,
    unchanged revision, and unchanged state hash.
 6. Subscribe over WebSocket, submit a valid command, and record the correlated
-   response followed by a `revision` event.
+   accepted response followed by a `command_accepted` event. Confirm
+   `applied_revision` advances only after the media boundary tick.
 7. Repeat each query/command without credentials and record HTTP 401,
    WebSocket upgrade rejection, and a TCP `unauthorized` response.
 8. Exceed the configured request rate and command/event queue capacities.

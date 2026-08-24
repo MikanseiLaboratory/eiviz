@@ -9,7 +9,7 @@ vMix の Audio Follow と Bus/Matrix を輸入する。手動 mute と follow �
 
 ## Decision
 
-各 Input の route mode は `Manual` または `Follow { unit }`。優先順位は manual mute > solo 集合 > follow/manual gain。Follow は対象 Mixing Unit の Program（transition 中は Program と Preview の mix 係数）に Input が可視なら bus へ送る。切替は映像 TAKE と同じ snapshot generation。
+各 Input の route mode は `Manual` または `Follow { unit }`。優先順位は manual mute > solo 集合 > follow/manual gain。Follow はlatch済みimmutable AudioPlanと対象 Mixing Unit のProgramにInputが可視ならbusへ送る。TAKEは目標ProgramをProject snapshotへ原子的に確定し、映像transitionの進捗だけをRuntime内部で保持するため、Follow切替は映像TAKEと同じsnapshot generation / logical boundaryで確定する。
 
 ## Consequences
 

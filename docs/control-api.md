@@ -47,7 +47,16 @@ Submit an atomic batch:
 
 POST that object to `/v1/transaction`. An invalid command rolls back the whole
 batch, including revision, client-sequence, and idempotency records. Replaying a
-committed command ID returns `duplicate=true` and its original revision.
+retained command ID returns `duplicate=true`, its original accepted `revision`,
+and `applied_revision` when it has crossed a media boundary. Every envelope in
+a transaction must resolve to the same effective media time.
+
+Success acknowledges admission immediately; it does not claim that media state
+has already changed. `CommandAck.revision` is the accepted revision and
+`CommandAck.applied_revision` is `null` until `Engine::tick` atomically latches
+the due batch. `effective_time=null` and times earlier than the current media
+position target the next logical frame/audio boundary. Future commands remain
+pending, and commands targeting one boundary apply in acceptance order.
 
 ## TCP JSON-lines
 
@@ -59,8 +68,11 @@ token is included on every request:
 {"version":1,"request_id":"c-1","token":"TOKEN","type":"command","envelope":{"version":1,"id":"COMMAND_UUID","client":"CLIENT_UUID","client_seq":1,"expected_revision":null,"effective_time":null,"coalesce_key":null,"payload":"Noop"}}
 ```
 
-Responses are newline-delimited and contain the request ID, current revision,
-state hash, and exactly one of `result` or `error`.
+Responses are newline-delimited and contain the request ID, latest accepted
+`revision`, current `applied_revision`, active state hash, and exactly one of
+`result` or `error`. The active hash excludes pending commands. Status and
+metrics also expose `staged_state_hash` plus pending depth, capacity, effective
+times, command IDs, and accepted revisions.
 
 ## WebSocket
 
@@ -78,7 +90,7 @@ WebSocket additionally accepts:
 Successful subscription emits:
 
 ```json
-{"version":1,"event":"revision","revision":14,"state_hash":"...","command_ids":["..."]}
+{"version":1,"event":"command_accepted","revision":14,"applied_revision":12,"state_hash":"...","command_ids":["..."]}
 ```
 
 Event queues are bounded. A subscriber that fills its queue is disconnected
@@ -90,6 +102,12 @@ dropped.
 Revision/client-sequence conflicts use HTTP 409. Queue saturation/unavailability
 uses HTTP 503 with error code `busy`/`unavailable`; admission failures use 422.
 Rate excess uses HTTP 429 or a transport error response.
+
+The sequencer pending queue is bounded (4096 commands by default; the embedding
+Engine may configure it). Idempotency records use a separate bounded retention
+window (16384 applied IDs by default); external clients must also preserve
+strictly increasing non-zero `client_seq`, so a replay older than that window is
+rejected as stale rather than silently reordered.
 
 The services do not provide TLS. Non-loopback binds require a token and should
 still be isolated on a management network or placed behind a TLS reverse proxy.
