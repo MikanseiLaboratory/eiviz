@@ -531,6 +531,7 @@ impl WgpuCompositor {
             source: None,
             pts: frame.pts,
             capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
             width: frame.width,
             height: frame.height,
             format: PixelFormat::Rgba8,

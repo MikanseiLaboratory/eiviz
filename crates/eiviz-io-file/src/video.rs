@@ -1,7 +1,7 @@
 use eiviz_codec_software::{OpenH264Decoder, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb};
 use eiviz_core::{InputId, Playback};
 use eiviz_media::{MediaError, MediaSource, Result, VideoFrame};
-use eiviz_time::{ClockDomain, FrameRate, MediaTime, Rational};
+use eiviz_time::{ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, Rational};
 use shiguredo_mp4::{
     TrackKind,
     boxes::SampleEntry,
@@ -315,8 +315,16 @@ impl MediaSource for VideoFileSource {
             .saturating_sub(1)
             .min(self.index.samples.len().saturating_sub(1));
         let mut frame = self.decode_to(&mut state, target, step.discontinuity)?;
+        let source_pts = frame.pts;
         frame.pts = pts;
         frame.capture_domain = ClockDomain::SourceMedia;
+        frame.clock_observation = Some(ClockObservation {
+            source: ClockTimestamp::from_media(ClockDomain::SourceMedia, source_pts)
+                .map_err(|error| MediaError::Other(error.to_string()))?,
+            target: ClockTimestamp::from_media(ClockDomain::Virtual, pts)
+                .map_err(|error| MediaError::Other(error.to_string()))?,
+            discontinuity: step.discontinuity,
+        });
         frame.source = Some(self.id);
         frame.discontinuity = step.discontinuity;
         Ok(Some(frame))

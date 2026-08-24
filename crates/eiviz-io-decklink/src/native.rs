@@ -10,7 +10,9 @@ use eiviz_media::{
     AdapterHealth, AudioBuffer, Capability, MediaError, MediaSink, MediaSource, PixelFormat,
     VideoFrame,
 };
-use eiviz_time::{ClockDomain, FrameRate, MediaTime, NTSC_5994};
+use eiviz_time::{
+    ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, NTSC_5994, monotonic_nanos,
+};
 use parking_lot::Mutex;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -438,11 +440,19 @@ fn convert_capture_video(
     let mut previous = context.previous_video_time.lock();
     let discontinuity = previous.is_some_and(|old| pts <= old);
     *previous = Some(pts);
+    let clock_observation = ClockObservation {
+        source: ClockTimestamp::from_media(ClockDomain::DeckLinkStream, pts)
+            .map_err(|error| DeckLinkError::InvalidFrame(error.to_string()))?,
+        target: ClockTimestamp::nanoseconds(ClockDomain::Monotonic, monotonic_nanos())
+            .map_err(|error| DeckLinkError::InvalidFrame(error.to_string()))?,
+        discontinuity,
+    };
     Ok(VideoFrame {
         id: context.next_video_id.fetch_add(1, Ordering::Relaxed),
         source: Some(context.id),
         pts,
-        capture_domain: ClockDomain::SourceMedia,
+        capture_domain: ClockDomain::DeckLinkStream,
+        clock_observation: Some(clock_observation),
         width: frame.width,
         height: frame.height,
         format: PixelFormat::Rgba8,
@@ -476,16 +486,22 @@ fn convert_capture_audio(packet: &ffi::AudioPacket) -> Result<AudioBuffer, DeckL
             planes[channel].push(f32::from(*sample) / 32768.0);
         }
     }
+    let sample_index = decklink_audio_time_to_sample_index(
+        packet.packet_time,
+        packet.time_scale,
+        packet.sample_rate,
+    );
+    let capture_nanos = monotonic_nanos();
     Ok(AudioBuffer {
-        sample_index: decklink_audio_time_to_sample_index(
-            packet.packet_time,
-            packet.time_scale,
-            packet.sample_rate,
-        ),
+        sample_index,
         sample_rate: packet.sample_rate,
         channels,
         planes,
-        capture_timestamp: None,
+        capture_timestamp: Some(eiviz_media::AudioCaptureTimestamp {
+            device_sample_index: sample_index,
+            callback_nanos: capture_nanos,
+            capture_nanos,
+        }),
         discontinuity: false,
     })
 }

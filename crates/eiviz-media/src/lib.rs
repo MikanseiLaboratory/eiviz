@@ -3,7 +3,7 @@ mod asrc;
 pub use asrc::{AsrcDiagnostics, AsrcError, StreamingAsrc};
 
 use eiviz_core::{InputId, Playback};
-use eiviz_time::{ClockDomain, FrameRate, MediaTime};
+use eiviz_time::{ClockDomain, ClockObservation, FrameRate, MediaTime};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -34,6 +34,9 @@ pub struct VideoFrame {
     pub source: Option<InputId>,
     pub pts: MediaTime,
     pub capture_domain: ClockDomain,
+    /// Source timestamp correlated to process monotonic at adapter capture.
+    /// `None` is explicit: no cross-domain lock can be established from it.
+    pub clock_observation: Option<ClockObservation>,
     pub width: u32,
     pub height: u32,
     pub format: PixelFormat,
@@ -53,6 +56,7 @@ impl VideoFrame {
             source: None,
             pts,
             capture_domain: ClockDomain::Virtual,
+            clock_observation: None,
             width,
             height,
             format: PixelFormat::Rgba8,

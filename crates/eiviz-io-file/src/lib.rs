@@ -34,6 +34,7 @@ impl ImageSource {
             source: Some(self.id),
             pts,
             capture_domain: eiviz_time::ClockDomain::SourceMedia,
+            clock_observation: None,
             width: w,
             height: h,
             format: eiviz_media::PixelFormat::Rgba8,

@@ -10,7 +10,11 @@ use eiviz_media::{
     AsrcDiagnostics, AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy,
     StreamingAsrc, VideoFrame,
 };
-use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
+use eiviz_time::{
+    ClockDomain, ClockLockState, ClockMapper, ClockMapperConfig, ClockObservation, ClockTimestamp,
+    MediaTime, Rational, TimingIsland, TimingIslandDiagnostics, VirtualClock,
+    audio_frame_sample_span, monotonic_nanos,
+};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -39,6 +43,12 @@ pub enum RuntimeError {
     Gpu(String),
     #[error("missing media and policy is Fail: {0}")]
     MissingMedia(String),
+    #[error("source {input} clock is unlocked ({domain:?}) and policy is Fail")]
+    ClockUnlocked { input: InputId, domain: ClockDomain },
+    #[error(
+        "source {input} did not provide the timestamp correlation required by its clock policy"
+    )]
+    MissingClockObservation { input: InputId },
     #[error(
         "audio source {input} is {source_rate} Hz but project is {project_rate} Hz and policy is ExactRate"
     )]
@@ -132,10 +142,59 @@ pub struct TickMetrics {
     pub frame: u64,
     pub dropped_preview: u64,
     pub program_repeats: u64,
+    pub deadline_monotonic_nanos: u64,
+    pub timing_unlocked_sources: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnlockedBehavior {
+    Fail,
+    HoldLast,
+}
+
+/// Explicit policy selected when a source is attached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceClockPolicy {
+    /// Pull requests are authoritative. Intended for generated test/still sources.
+    ScheduleTime,
+    /// The first adapter correlation defines an exact, zero-drift relationship.
+    ExactCorrelation,
+    /// Estimate drift and offset; behavior before lock is selected explicitly.
+    Bounded {
+        config: ClockMapperConfig,
+        unlocked: UnlockedBehavior,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceTimingDiagnostics {
+    pub input: InputId,
+    pub policy: SourceClockPolicy,
+    pub state: ClockLockState,
+    pub video_skew_nanos: Option<i64>,
+    pub audio_skew_nanos: Option<i64>,
+    pub av_drift_nanos: Option<i64>,
+    pub island: TimingIslandDiagnostics,
+}
+
+#[derive(Debug)]
+struct SourceTiming {
+    policy: SourceClockPolicy,
+    island: TimingIsland,
+    video_skew_nanos: Option<i64>,
+    audio_skew_nanos: Option<i64>,
+}
+
+#[derive(Clone, Copy)]
+enum TimingKind {
+    Video,
+    Audio,
 }
 
 pub struct Runtime {
     clock: VirtualClock,
+    schedule_mapper: Option<ClockMapper>,
+    schedule_timebase: Option<Rational>,
     frame: u64,
     sample_rate: u32,
     backend: CompositorBackend,
@@ -153,6 +212,7 @@ pub struct Runtime {
     delay_lines: HashMap<(InputId, AudioBusId), Vec<VecDeque<f32>>>,
     input_asrc: HashMap<InputId, StreamingAsrc>,
     sources: HashMap<InputId, Arc<dyn MediaSource>>,
+    source_timing: HashMap<InputId, SourceTiming>,
     simulated: HashMap<InputId, VideoFrame>,
     pub peak_meters: HashMap<AudioBusId, f32>,
     active_snapshot: Option<Arc<RuntimeSnapshot>>,
@@ -217,6 +277,8 @@ impl Runtime {
     ) -> Result<Self> {
         Ok(Self {
             clock: VirtualClock::new(),
+            schedule_mapper: None,
+            schedule_timebase: None,
             frame: 0,
             sample_rate,
             backend,
@@ -234,6 +296,7 @@ impl Runtime {
             delay_lines: HashMap::new(),
             input_asrc: HashMap::new(),
             sources: HashMap::new(),
+            source_timing: HashMap::new(),
             simulated: HashMap::new(),
             peak_meters: HashMap::new(),
             active_snapshot: None,
@@ -281,12 +344,23 @@ impl Runtime {
         self.simulated.insert(id, frame);
     }
 
-    pub fn attach_source(&mut self, source: Arc<dyn MediaSource>) {
-        self.sources.insert(source.id(), source);
+    pub fn attach_source(&mut self, source: Arc<dyn MediaSource>, policy: SourceClockPolicy) {
+        let id = source.id();
+        self.sources.insert(id, source);
+        self.source_timing.insert(
+            id,
+            SourceTiming {
+                policy,
+                island: TimingIsland::new(ClockDomain::Monotonic),
+                video_skew_nanos: None,
+                audio_skew_nanos: None,
+            },
+        );
     }
 
     pub fn detach_source(&mut self, id: InputId) {
         self.sources.remove(&id);
+        self.source_timing.remove(&id);
         self.last_good_inputs.remove(&id);
         self.input_asrc.remove(&id);
     }
@@ -303,6 +377,30 @@ impl Runtime {
             .iter()
             .map(|(input, converter)| (*input, converter.diagnostics()))
             .collect()
+    }
+
+    pub fn source_timing_diagnostics(&self) -> Vec<SourceTimingDiagnostics> {
+        let mut diagnostics = self
+            .source_timing
+            .iter()
+            .map(|(input, timing)| SourceTimingDiagnostics {
+                input: *input,
+                policy: timing.policy,
+                state: match timing.policy {
+                    SourceClockPolicy::ScheduleTime => ClockLockState::Locked,
+                    _ => timing.island.state(),
+                },
+                video_skew_nanos: timing.video_skew_nanos,
+                audio_skew_nanos: timing.audio_skew_nanos,
+                av_drift_nanos: timing
+                    .video_skew_nanos
+                    .zip(timing.audio_skew_nanos)
+                    .map(|(video, audio)| audio.saturating_sub(video)),
+                island: timing.island.diagnostics(),
+            })
+            .collect::<Vec<_>>();
+        diagnostics.sort_by_key(|value| value.input.to_string());
+        diagnostics
     }
 
     pub fn update_source_playback(&self, id: InputId, playback: &Playback) {
@@ -484,7 +582,8 @@ impl Runtime {
         let pts = MediaTime::from_frame_index(self.frame, project.video.frame_rate)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         self.clock.seek_frame(self.frame, project.video.frame_rate);
-        let mut sources = self.generate_sources(project, pts)?;
+        let deadline_monotonic_nanos = self.schedule_deadline(pts)?;
+        let mut sources = self.generate_sources(project, pts, deadline_monotonic_nanos)?;
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
         for &unit_id in snapshot.render.order.iter() {
@@ -541,12 +640,23 @@ impl Runtime {
             sample_index,
             sample_count as usize,
             self.sample_rate,
+            deadline_monotonic_nanos,
         )?;
         self.peak_meters = meters.clone();
         self.metrics.frame = self.frame;
+        self.metrics.deadline_monotonic_nanos = deadline_monotonic_nanos;
+        self.metrics.timing_unlocked_sources = self
+            .source_timing
+            .values()
+            .filter(|timing| {
+                !matches!(timing.policy, SourceClockPolicy::ScheduleTime)
+                    && timing.island.state() != ClockLockState::Locked
+            })
+            .count();
         self.frame += 1;
         Ok(TickResult {
             pts,
+            deadline_monotonic_nanos,
             programs,
             previews,
             multiviews,
@@ -604,6 +714,201 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    fn schedule_deadline(&mut self, pts: MediaTime) -> Result<u64> {
+        let source = ClockTimestamp::from_media(ClockDomain::Virtual, pts)
+            .map_err(|error| RuntimeError::Other(error.to_string()))?;
+        if self.schedule_timebase != Some(pts.timebase()) {
+            let target = ClockTimestamp::nanoseconds(ClockDomain::Monotonic, monotonic_nanos())
+                .map_err(|error| RuntimeError::Other(error.to_string()))?;
+            self.schedule_mapper = Some(
+                ClockMapper::exact(source, target)
+                    .map_err(|error| RuntimeError::Other(error.to_string()))?,
+            );
+            self.schedule_timebase = Some(pts.timebase());
+        }
+        let deadline = self
+            .schedule_mapper
+            .as_ref()
+            .expect("schedule mapper initialized above")
+            .map(source)
+            .map_err(|error| RuntimeError::Other(error.to_string()))?;
+        u64::try_from(deadline.ticks).map_err(|_| RuntimeError::Other("negative deadline".into()))
+    }
+
+    fn normalize_observation(&self, observation: ClockObservation) -> Result<ClockObservation> {
+        let target = match observation.target.domain {
+            ClockDomain::Monotonic => observation.target,
+            ClockDomain::Virtual => self
+                .schedule_mapper
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Other("schedule clock is not initialized".into()))?
+                .map(observation.target)
+                .map_err(|error| RuntimeError::Other(error.to_string()))?,
+            domain => {
+                return Err(RuntimeError::Other(format!(
+                    "adapter correlation target must be Monotonic or Virtual, got {domain:?}"
+                )));
+            }
+        };
+        Ok(ClockObservation {
+            source: observation.source,
+            target,
+            discontinuity: observation.discontinuity,
+        })
+    }
+
+    fn observe_video_timing(
+        &mut self,
+        input: InputId,
+        frame: &VideoFrame,
+        deadline_monotonic_nanos: u64,
+    ) -> Result<bool> {
+        let observation = frame
+            .clock_observation
+            .map(|observation| self.normalize_observation(observation))
+            .transpose()?;
+        if observation.is_some_and(|value| value.source.domain != frame.capture_domain) {
+            return Err(RuntimeError::Other(format!(
+                "source {input} frame domain {:?} disagrees with timestamp domain {:?}",
+                frame.capture_domain,
+                observation.expect("checked Some above").source.domain
+            )));
+        }
+        self.observe_source_timing(
+            input,
+            observation,
+            deadline_monotonic_nanos,
+            TimingKind::Video,
+        )
+    }
+
+    fn observe_audio_timing(
+        &mut self,
+        input: InputId,
+        buffer: &AudioBuffer,
+        deadline_monotonic_nanos: u64,
+    ) -> Result<bool> {
+        let observation = buffer
+            .capture_timestamp
+            .map(|timestamp| -> Result<ClockObservation> {
+                Ok(ClockObservation {
+                    source: ClockTimestamp::new(
+                        ClockDomain::AudioSample,
+                        i64::try_from(timestamp.device_sample_index).map_err(|_| {
+                            RuntimeError::Other("audio sample clock overflow".into())
+                        })?,
+                        Rational::new(1, i64::from(buffer.sample_rate))
+                            .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                    )
+                    .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                    target: ClockTimestamp::nanoseconds(
+                        ClockDomain::Monotonic,
+                        timestamp.capture_nanos,
+                    )
+                    .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                    discontinuity: buffer.discontinuity,
+                })
+            })
+            .transpose()?;
+        self.observe_source_timing(
+            input,
+            observation,
+            deadline_monotonic_nanos,
+            TimingKind::Audio,
+        )
+    }
+
+    fn observe_source_timing(
+        &mut self,
+        input: InputId,
+        observation: Option<ClockObservation>,
+        deadline_monotonic_nanos: u64,
+        kind: TimingKind,
+    ) -> Result<bool> {
+        let timing = self
+            .source_timing
+            .get_mut(&input)
+            .ok_or_else(|| RuntimeError::Other(format!("source {input} has no clock policy")))?;
+        if matches!(timing.policy, SourceClockPolicy::ScheduleTime) {
+            match kind {
+                TimingKind::Video => timing.video_skew_nanos = Some(0),
+                TimingKind::Audio => timing.audio_skew_nanos = Some(0),
+            }
+            return Ok(true);
+        }
+        let Some(observation) = observation else {
+            return match timing.policy {
+                SourceClockPolicy::Bounded {
+                    unlocked: UnlockedBehavior::HoldLast,
+                    ..
+                } => Ok(false),
+                _ => Err(RuntimeError::MissingClockObservation { input }),
+            };
+        };
+
+        match timing.policy {
+            SourceClockPolicy::ScheduleTime => unreachable!("handled above"),
+            SourceClockPolicy::ExactCorrelation => {
+                if !timing.island.has_mapper(observation.source.domain) || observation.discontinuity
+                {
+                    timing
+                        .island
+                        .add_mapper(
+                            ClockMapper::exact(observation.source, observation.target)
+                                .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                        )
+                        .map_err(|error| RuntimeError::Other(error.to_string()))?;
+                }
+            }
+            SourceClockPolicy::Bounded { config, .. } => {
+                if !timing.island.has_mapper(observation.source.domain) {
+                    timing
+                        .island
+                        .add_mapper(
+                            ClockMapper::new(
+                                observation.source.domain,
+                                observation.source.timebase,
+                                ClockDomain::Monotonic,
+                                observation.target.timebase,
+                                config,
+                            )
+                            .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                        )
+                        .map_err(|error| RuntimeError::Other(error.to_string()))?;
+                }
+                timing
+                    .island
+                    .observe(observation)
+                    .map_err(|error| RuntimeError::Other(error.to_string()))?;
+            }
+        }
+
+        if timing.island.mapper_state(observation.source.domain) != ClockLockState::Locked {
+            return match timing.policy {
+                SourceClockPolicy::Bounded {
+                    unlocked: UnlockedBehavior::HoldLast,
+                    ..
+                } => Ok(false),
+                _ => Err(RuntimeError::ClockUnlocked {
+                    input,
+                    domain: observation.source.domain,
+                }),
+            };
+        }
+        let mapped = timing
+            .island
+            .map(observation.source, ClockDomain::Monotonic)
+            .map_err(|error| RuntimeError::Other(error.to_string()))?;
+        let skew = mapped
+            .ticks
+            .saturating_sub(i64::try_from(deadline_monotonic_nanos).unwrap_or(i64::MAX));
+        match kind {
+            TimingKind::Video => timing.video_skew_nanos = Some(skew),
+            TimingKind::Audio => timing.audio_skew_nanos = Some(skew),
+        }
+        Ok(true)
     }
 
     fn render_multiviews(
@@ -681,6 +986,7 @@ impl Runtime {
         &mut self,
         project: &Project,
         pts: MediaTime,
+        deadline_monotonic_nanos: u64,
     ) -> Result<HashMap<InputId, VideoFrame>> {
         let mut out = HashMap::new();
         let w = project.video.width.clamp(16, 1920);
@@ -692,10 +998,22 @@ impl Runtime {
                 out.insert(input.id, frame);
                 continue;
             }
-            if let Some(source) = self.sources.get(&input.id) {
+            if let Some(source) = self.sources.get(&input.id).cloned() {
                 match source.pull_video(pts, project.video.frame_rate) {
                     Ok(Some(mut frame)) => {
                         frame.source = Some(input.id);
+                        if !self.observe_video_timing(input.id, &frame, deadline_monotonic_nanos)? {
+                            let held = self.missing_frame(
+                                project,
+                                input.id,
+                                w,
+                                h,
+                                pts,
+                                "source clock acquiring",
+                            )?;
+                            out.insert(input.id, held);
+                            continue;
+                        }
                         self.last_good_inputs.insert(input.id, frame.clone());
                         out.insert(input.id, frame);
                         continue;
@@ -818,6 +1136,7 @@ impl Runtime {
             source: None,
             pts,
             capture_domain: ClockDomain::SourceMedia,
+            clock_observation: None,
             width,
             height,
             format: eiviz_media::PixelFormat::Rgba8,
@@ -835,6 +1154,7 @@ impl Runtime {
         sample_index: u64,
         frames: usize,
         sample_rate: u32,
+        deadline_monotonic_nanos: u64,
     ) -> Result<(AudioBuffer, HashMap<AudioBusId, f32>)> {
         let ch = plan.channels.max(1) as usize;
         let mut mixed = AudioBuffer::silence(sample_index, sample_rate, plan.channels, frames);
@@ -843,7 +1163,7 @@ impl Runtime {
             if source_audio.contains_key(&route.input) {
                 continue;
             }
-            let Some(source) = self.sources.get(&route.input) else {
+            let Some(source) = self.sources.get(&route.input).cloned() else {
                 if project
                     .inputs
                     .get(&route.input)
@@ -872,6 +1192,9 @@ impl Runtime {
                     ))
                 })?;
             if let Some(buffer) = buffer {
+                if !self.observe_audio_timing(route.input, &buffer, deadline_monotonic_nanos)? {
+                    continue;
+                }
                 if buffer.sample_rate != sample_rate {
                     let AudioResamplingPolicy::Asrc { profile } = plan.resampling else {
                         return Err(RuntimeError::AudioRateMismatch {
@@ -1002,6 +1325,7 @@ impl Runtime {
 #[derive(Clone, Debug)]
 pub struct TickResult {
     pub pts: MediaTime,
+    pub deadline_monotonic_nanos: u64,
     pub programs: HashMap<MixingUnitId, VideoFrame>,
     pub previews: HashMap<MixingUnitId, VideoFrame>,
     pub multiviews: HashMap<MultiviewId, VideoFrame>,
@@ -1061,6 +1385,7 @@ mod tests {
         Transform2D, TransitionStyle,
     };
     use eiviz_core::{InputId, SceneId, SceneItemId};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     struct RegisteredSource {
         id: InputId,
@@ -1087,6 +1412,48 @@ mod tests {
             _frames: usize,
         ) -> eiviz_media::Result<Option<AudioBuffer>> {
             Ok(Some(self.audio.clone()))
+        }
+    }
+
+    struct TimedSource {
+        id: InputId,
+        sequence: AtomicU64,
+        monotonic_base: u64,
+    }
+
+    impl MediaSource for TimedSource {
+        fn id(&self) -> InputId {
+            self.id
+        }
+
+        fn pull_video(
+            &self,
+            _pts: MediaTime,
+            _rate: eiviz_time::FrameRate,
+        ) -> eiviz_media::Result<Option<VideoFrame>> {
+            let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+            let source_pts =
+                MediaTime::new(sequence as i64, Rational::new(1, 1_000).expect("constant"));
+            let mut frame = VideoFrame::rgba_solid(sequence, source_pts, 16, 16, [1, 2, 3, 255]);
+            frame.capture_domain = ClockDomain::SourceMedia;
+            frame.clock_observation = Some(ClockObservation {
+                source: ClockTimestamp::from_media(ClockDomain::SourceMedia, source_pts).unwrap(),
+                target: ClockTimestamp::nanoseconds(
+                    ClockDomain::Monotonic,
+                    self.monotonic_base + sequence * 1_000_000,
+                )
+                .unwrap(),
+                discontinuity: false,
+            });
+            Ok(Some(frame))
+        }
+
+        fn pull_audio(
+            &self,
+            _sample_index: u64,
+            _frames: usize,
+        ) -> eiviz_media::Result<Option<AudioBuffer>> {
+            Ok(None)
         }
     }
 
@@ -1154,6 +1521,55 @@ mod tests {
             "a route without an attached source must not invent a tone"
         );
         assert!(after.peak_meters.values().all(|m| *m < 1e-6));
+    }
+
+    #[test]
+    fn mapped_source_hard_fails_until_bounded_clock_locks() {
+        let (mut project, input, scene, unit) = setup();
+        project.inputs.get_mut(&input).unwrap().source = InputSource::Omt {
+            url: "omt://clocked".into(),
+        };
+        project.mixing_units.get_mut(&unit).unwrap().program.scene = Some(scene);
+        let mut runtime = Runtime::new(48_000);
+        runtime.attach_source(
+            Arc::new(TimedSource {
+                id: input,
+                sequence: AtomicU64::new(0),
+                monotonic_base: monotonic_nanos(),
+            }),
+            SourceClockPolicy::Bounded {
+                config: ClockMapperConfig::default(),
+                unlocked: UnlockedBehavior::Fail,
+            },
+        );
+
+        for _ in 0..3 {
+            assert!(matches!(
+                runtime.tick(&project),
+                Err(RuntimeError::ClockUnlocked { .. })
+            ));
+        }
+        let tick = runtime.tick(&project).unwrap();
+        assert_eq!(tick.programs[&unit].pixel(8, 8), [1, 2, 3, 255]);
+        let diagnostics = runtime.source_timing_diagnostics();
+        assert_eq!(diagnostics[0].state, ClockLockState::Locked);
+        assert!(diagnostics[0].video_skew_nanos.is_some());
+    }
+
+    #[test]
+    fn exact_policy_rejects_a_source_without_correlation() {
+        let (project, input, _, _) = setup();
+        let source = RegisteredSource {
+            id: input,
+            video: VideoFrame::rgba_solid(1, MediaTime::ZERO, 2, 2, [0, 0, 0, 255]),
+            audio: AudioBuffer::silence(0, 48_000, 2, 801),
+        };
+        let mut runtime = Runtime::new(48_000);
+        runtime.attach_source(Arc::new(source), SourceClockPolicy::ExactCorrelation);
+        assert!(matches!(
+            runtime.tick(&project),
+            Err(RuntimeError::MissingClockObservation { input: value }) if value == input
+        ));
     }
 
     #[test]
@@ -1326,7 +1742,7 @@ mod tests {
             audio: AudioBuffer::silence(0, 44_100, 2, 736),
         };
         let mut runtime = Runtime::new(48_000);
-        runtime.attach_source(Arc::new(source));
+        runtime.attach_source(Arc::new(source), SourceClockPolicy::ScheduleTime);
         let error = runtime.tick(&project).unwrap_err();
         assert!(matches!(
             error,
@@ -1355,7 +1771,7 @@ mod tests {
             audio,
         };
         let mut runtime = Runtime::new(48_000);
-        runtime.attach_source(Arc::new(source));
+        runtime.attach_source(Arc::new(source), SourceClockPolicy::ScheduleTime);
         let tick = runtime.tick(&project).unwrap();
         assert_eq!(tick.audio.sample_rate, 48_000);
         assert_eq!(tick.audio.channels, 2);
@@ -1419,11 +1835,14 @@ mod tests {
         audio.planes[0].fill(0.5);
         audio.planes[1].fill(-0.25);
         let mut rt = Runtime::new(48_000);
-        rt.attach_source(Arc::new(RegisteredSource {
-            id: iid,
-            video,
-            audio,
-        }));
+        rt.attach_source(
+            Arc::new(RegisteredSource {
+                id: iid,
+                video,
+                audio,
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
         let tick = rt.tick(&p).unwrap();
         assert_eq!(tick.programs[&unit].pixel(8, 8), [7, 8, 9, 255]);
         assert!(tick.audio.planes[0].iter().any(|sample| *sample > 0.4));

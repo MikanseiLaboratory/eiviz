@@ -1,6 +1,8 @@
 use eiviz_core::InputId;
 use eiviz_media::{AdapterHealth, AudioBuffer, MediaError, MediaSink, MediaSource, VideoFrame};
-use eiviz_time::{ClockDomain, FrameRate, MediaTime, Rational};
+use eiviz_time::{
+    ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, Rational, monotonic_nanos,
+};
 use openmediatransport::{
     ColorSpace, Discovery, FrameType, MediaFrame, ReceiverConfig, ReceiverSession, Sender,
     SessionState, VideoFlags,
@@ -72,8 +74,15 @@ impl MediaSource for OmtSource {
         _rate: FrameRate,
     ) -> eiviz_media::Result<Option<VideoFrame>> {
         if let Some(frame) = self.session.lock().try_recv_video() {
-            let converted = convert_video(self.id, frame).map_err(MediaError::from)?;
-            *self.last_video.lock() = Some(converted.clone());
+            let mut converted = convert_video(self.id, frame).map_err(MediaError::from)?;
+            let mut last_video = self.last_video.lock();
+            converted.discontinuity = last_video
+                .as_ref()
+                .is_some_and(|previous| converted.pts <= previous.pts);
+            if let Some(observation) = converted.clock_observation.as_mut() {
+                observation.discontinuity = converted.discontinuity;
+            }
+            *last_video = Some(converted.clone());
             return Ok(Some(converted));
         }
         Ok(self.last_video.lock().clone())
@@ -111,14 +120,23 @@ fn convert_video(
             &frame.pixels[start..start + frame.width as usize * 4],
         ));
     }
+    let pts = MediaTime::new(
+        frame.timestamp,
+        Rational::new(1, OMT_TICKS_PER_SECOND).expect("constant"),
+    );
+    let clock_observation = ClockObservation {
+        source: ClockTimestamp::from_media(ClockDomain::SourceMedia, pts)
+            .map_err(|error| OmtError::InvalidFrame(error.to_string()))?,
+        target: ClockTimestamp::nanoseconds(ClockDomain::Monotonic, monotonic_nanos())
+            .map_err(|error| OmtError::InvalidFrame(error.to_string()))?,
+        discontinuity: false,
+    };
     Ok(VideoFrame {
         id: frame.timestamp.max(0) as u64,
         source: Some(id),
-        pts: MediaTime::new(
-            frame.timestamp,
-            Rational::new(1, OMT_TICKS_PER_SECOND).expect("constant"),
-        ),
+        pts,
         capture_domain: ClockDomain::SourceMedia,
+        clock_observation: Some(clock_observation),
         width: frame.width,
         height: frame.height,
         format: eiviz_media::PixelFormat::Rgba8,
@@ -147,13 +165,19 @@ fn convert_audio(frame: openmediatransport::DecodedAudioFrame) -> Result<AudioBu
             *sample = f32::from_le_bytes(bytes.try_into().expect("four bytes"));
         }
     }
+    let sample_index = (frame.timestamp.max(0) as u128 * frame.sample_rate as u128
+        / OMT_TICKS_PER_SECOND as u128) as u64;
+    let capture_nanos = monotonic_nanos();
     Ok(AudioBuffer {
-        sample_index: (frame.timestamp.max(0) as u128 * frame.sample_rate as u128
-            / OMT_TICKS_PER_SECOND as u128) as u64,
+        sample_index,
         sample_rate: frame.sample_rate as u32,
         channels: frame.channels as u16,
         planes,
-        capture_timestamp: None,
+        capture_timestamp: Some(eiviz_media::AudioCaptureTimestamp {
+            device_sample_index: sample_index,
+            callback_nanos: capture_nanos,
+            capture_nanos,
+        }),
         discontinuity: false,
     })
 }

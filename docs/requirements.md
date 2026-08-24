@@ -42,8 +42,13 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R04.1 フレームレートは有理数。59.94 は常に `60000/1001`
 - R04.2 `pts(n) = n * 1001 / 60000` 秒。丸めたフレーム時間の加算を禁止
 - R04.3 48 kHz 境界は `floor(n * 48000 * 1001 / 60000)`
-- R04.4 DeckLink/genlock、PTP、audio sample clock、OS monotonic は別 domain とし mapper で関連付ける
-- R04.5 UTC は deadline 計算に使わない
+- R04.4 SourceMedia（file/NDI/OMT）、DeckLink stream/genlock、PTP、audio
+  sample clock、OS monotonic は別 domain とし、整数 affine mapper と
+  Timing Island で関連付ける。mapper は drift/offset bound、lock state、
+  discontinuity/reset、counter wrap、診断を持つ
+- R04.5 UTC は timing domain に含めず deadline、offset、drift の計算に使わない
+- R04.6 source ごとに clock policy と unlocked 時の `Fail` / `HoldLast` を
+  明示し、timestamp 欠落や未 lock を同一 clock と暗黙解釈しない
 
 ### R05 GPU / Media
 - R05.1 物理 GPU あたり wgpu Device/Queue の単一所有者
@@ -114,3 +119,5 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - AC-09 認定負荷 24h で内部要因の Program drop/repeat と audio xrun が 0
 - AC-10 lock 後 A/V sync は暫定 P99 ±1 ms、最大 ±5 ms（実測で変更する場合は ADR）
 - AC-11 実I/Oは公式reference toolまたは別PCとの相互運用証跡が必要。stub、probe、同一processのsimulated loopbackだけでは合格にしない
+- AC-12 mapper の deterministic drift/jump/wrap/domain test と live adapter
+  ごとの monotonic correlation、lock/reset、A/V drift HIL 証跡が一致する

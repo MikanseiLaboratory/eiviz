@@ -38,7 +38,7 @@ bundled, keep them application-local and include
 | NDI-HIL-06 | Queue pressure | Slow output degrades only that Output; Program and other Outputs continue |
 | NDI-HIL-07 | Sender restart/NIC loss | Explicit degraded state, configured missing-media policy, and recovery are observed |
 | NDI-HIL-08 | Loss/jitter/bandwidth | Bounded memory, no deadlock, and measured drop/recovery counters |
-| NDI-HIL-09 | 24 h bidirectional run | No unbounded growth; cadence, xrun, drop, and A/V skew meet baseline gates |
+| NDI-HIL-09 | 24 h bidirectional run | SourceMedia→Monotonic remains locked; no unbounded growth; cadence, xrun, drop, reset, drift, and A/V skew meet baseline gates |
 
 ## Current automated evidence
 
@@ -49,6 +49,9 @@ bundled, keep them application-local and include
   nonblocking `MediaSink`
 - Runtime applies only the configured missing-media policy when a source has no
   frame
+- NDI video/audio receive stamps adapter capture with process monotonic;
+  Runtime uses the explicit bounded/Fail policy and exports lock and A/V drift
+  metrics
 
 These checks do not satisfy any `NDI-HIL-*` scenario. The native-feature tests
 also remain unexecuted until an NDI SDK/runtime host is available. On
@@ -56,3 +59,6 @@ also remain unexecuted until an NDI SDK/runtime host is available. On
 agent stopped in `grafton-ndi`'s build script because
 `/usr/share/NDI SDK for Linux/include/Processing.NDI.Lib.h` was not installed;
 no native adapter code or interoperability scenario was claimed as executed.
+
+The common `TIME-HIL-01`, `04..08` scenarios in [timing.md](timing.md) are
+required in addition to `NDI-HIL-*`.

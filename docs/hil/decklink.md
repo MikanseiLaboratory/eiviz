@@ -45,7 +45,7 @@ firmware, connector/profile configuration, reference format, OS, and commit.
 | DL-HIL-03 | 48 kHz capture audio | Channel order, levels, absolute sample index, and A/V phase match the generator |
 | DL-HIL-04 | Program routing | Captured input reaches Preview/Program; TAKE and follow-audio switch at the expected frame/sample boundary |
 | DL-HIL-05 | Scheduled playback | Analyzer receives continuous 1080p59.94 BGRA video and 48 kHz PCM with exact 1001/60000 scheduling |
-| DL-HIL-06 | Genlock | With reference connected, diagnostics report locked and analyzer shows stable phase; disconnect reports unlocked without blocking Engine |
+| DL-HIL-06 | Genlock | With reference connected, DeckLinkGenlock reports locked and analyzer shows stable phase; disconnect reports unlocked, selected `Fail` policy is visible, and no other clock is assumed |
 | DL-HIL-07 | Queue pressure | Capture remains latest-wins, output queue remains bounded, counters increase, and unrelated Outputs/Program continue |
 | DL-HIL-08 | Signal/driver loss | Explicit degraded/failed diagnostics, no fallback frames from this adapter, no deadlock, and controlled recovery after reconnect |
 | DL-HIL-09 | 24-hour duplex soak | No unbounded memory growth; no timestamp drift; late/drop/flushed and audio discontinuity counts meet the recorded gate |
@@ -60,11 +60,18 @@ Default SDK-free tests cover:
 - bounded latest-wins capture queue behavior;
 - persistent-ID binding safety and ambiguous logical-name rejection;
 - Engine routing of each Output from its owning Mixing Unit.
+- DeckLinkStream timestamps are correlated to process monotonic and use the
+  shared bounded mapper; deterministic drift/jump/wrap/domain tests are in
+  `eiviz-time`.
 
 The native feature must additionally be compiled on each shipping platform
 against SDK 16. Interop, SDI electrical behavior, completion timing, reference
 lock, and soak scenarios remain pending until every `DL-HIL-*` row has attached
 hardware evidence.
+
+The common `TIME-HIL-02`, `04..08` scenarios in [timing.md](timing.md) are
+also required. Desktop's reference-lock and mapper metrics are instrumentation,
+not evidence that genlock was physically established.
 
 On 2026-08-24, the current Linux agent passed all SDK-free checks below.
 `cargo check -p eiviz-desktop --features decklink` then stopped in the DeckLink

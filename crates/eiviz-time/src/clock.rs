@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -8,10 +9,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ClockDomain {
     Monotonic,
-    Utc,
-    VideoHardware,
+    DeckLinkStream,
+    DeckLinkGenlock,
     AudioSample,
     SourceMedia,
+    Ptp,
     Gpu,
     Virtual,
 }
@@ -29,14 +31,12 @@ pub trait Clock: Send + Sync {
 
 #[derive(Debug)]
 pub struct MonotonicClock {
-    origin: Instant,
+    _private: (),
 }
 
 impl MonotonicClock {
     pub fn new() -> Self {
-        Self {
-            origin: Instant::now(),
-        }
+        Self { _private: () }
     }
 }
 
@@ -54,9 +54,19 @@ impl Clock for MonotonicClock {
     fn now(&self) -> ClockInstant {
         ClockInstant {
             domain: ClockDomain::Monotonic,
-            nanos: self.origin.elapsed().as_nanos() as u64,
+            nanos: monotonic_nanos(),
         }
     }
+}
+
+/// Nanoseconds from one process-wide [`Instant`] origin.
+///
+/// This value is suitable for correlating adapter callbacks and scheduler
+/// deadlines inside this process. It is deliberately unrelated to UTC.
+pub fn monotonic_nanos() -> u64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let elapsed = ORIGIN.get_or_init(Instant::now).elapsed().as_nanos();
+    u64::try_from(elapsed).unwrap_or(u64::MAX)
 }
 
 /// Deterministic clock for tests and replay. Advance only via `advance_nanos`.

@@ -18,6 +18,7 @@ use eiviz_project::{
     import_portable as import_project_portable, load, save_atomic, save_autosave, stage_asset,
 };
 use eiviz_runtime::{Runtime, RuntimeSnapshot, TickResult};
+pub use eiviz_runtime::{SourceClockPolicy, UnlockedBehavior};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -91,10 +92,37 @@ pub struct EngineMetrics {
     pub peak_meters: Vec<(String, f32)>,
     pub audio_devices: Vec<EngineAudioDiagnostics>,
     pub audio_resamplers: Vec<EngineAsrcDiagnostics>,
+    pub timing_sources: Vec<EngineTimingDiagnostics>,
     pub distribution_outputs: Vec<DistributionOutputDiagnostics>,
     pub gpu_readbacks: u64,
     pub gpu_device_loss: Option<String>,
     pub gpu_automatic_recovery: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineTimingDiagnostics {
+    pub input: String,
+    pub policy: String,
+    pub state: String,
+    pub video_skew_nanos: Option<i64>,
+    pub audio_skew_nanos: Option<i64>,
+    pub av_drift_nanos: Option<i64>,
+    pub mappers: Vec<EngineClockMapperDiagnostics>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineClockMapperDiagnostics {
+    pub source_domain: String,
+    pub target_domain: String,
+    pub state: String,
+    pub rate_ppb: i64,
+    pub offset_ticks: i64,
+    pub residual_ticks: i64,
+    pub observations: u64,
+    pub duplicates: u64,
+    pub bounded_regressions: u64,
+    pub discontinuities: u64,
+    pub wraps: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -350,7 +378,7 @@ impl Engine {
             input: input.clone(),
         })?;
         self.set_asset_root(asset_root.to_path_buf());
-        self.attach_source(source);
+        self.attach_source(source, SourceClockPolicy::ExactCorrelation);
         Ok(input)
     }
 
@@ -421,8 +449,8 @@ impl Engine {
         self.inner.lock().audio_sinks.remove(&output);
     }
 
-    pub fn attach_source(&self, source: Arc<dyn MediaSource>) {
-        self.inner.lock().runtime.attach_source(source);
+    pub fn attach_source(&self, source: Arc<dyn MediaSource>, policy: SourceClockPolicy) {
+        self.inner.lock().runtime.attach_source(source, policy);
     }
 
     pub fn detach_source(&self, id: eiviz_core::InputId) {
@@ -512,6 +540,41 @@ impl Engine {
                 .map(EngineAudioDiagnostics::from)
                 .collect(),
             audio_resamplers,
+            timing_sources: g
+                .runtime
+                .source_timing_diagnostics()
+                .into_iter()
+                .map(|diagnostics| EngineTimingDiagnostics {
+                    input: g
+                        .project
+                        .inputs
+                        .get(&diagnostics.input)
+                        .map_or_else(|| diagnostics.input.to_string(), |input| input.name.clone()),
+                    policy: format!("{:?}", diagnostics.policy),
+                    state: format!("{:?}", diagnostics.state),
+                    video_skew_nanos: diagnostics.video_skew_nanos,
+                    audio_skew_nanos: diagnostics.audio_skew_nanos,
+                    av_drift_nanos: diagnostics.av_drift_nanos,
+                    mappers: diagnostics
+                        .island
+                        .mappers
+                        .into_iter()
+                        .map(|mapper| EngineClockMapperDiagnostics {
+                            source_domain: format!("{:?}", mapper.source_domain),
+                            target_domain: format!("{:?}", mapper.target_domain),
+                            state: format!("{:?}", mapper.state),
+                            rate_ppb: mapper.rate_ppb,
+                            offset_ticks: mapper.offset_ticks,
+                            residual_ticks: mapper.last_residual_ticks,
+                            observations: mapper.accepted_observations,
+                            duplicates: mapper.duplicate_observations,
+                            bounded_regressions: mapper.bounded_regressions,
+                            discontinuities: mapper.discontinuities,
+                            wraps: mapper.wraps,
+                        })
+                        .collect(),
+                })
+                .collect(),
             distribution_outputs: distribution_diagnostics(&g),
             #[cfg(feature = "wgpu-backend")]
             gpu_readbacks: gpu.as_ref().map_or(0, |value| value.readbacks),
@@ -2006,17 +2069,20 @@ mod tests {
         let mut audio = AudioBuffer::silence(0, 48_000, 2, 801);
         audio.planes[0].fill(0.5);
         audio.planes[1].fill(0.5);
-        engine.attach_source(Arc::new(ConstantSource {
-            id: input.id,
-            video: VideoFrame::rgba_solid(
-                0,
-                eiviz_time::MediaTime::ZERO,
-                16,
-                16,
-                [20, 40, 60, 255],
-            ),
-            audio,
-        }));
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(
+                    0,
+                    eiviz_time::MediaTime::ZERO,
+                    16,
+                    16,
+                    [20, 40, 60, 255],
+                ),
+                audio,
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
         let setup = engine.tick().unwrap();
         assert_eq!(setup.programs[&unit].pixel(0, 0), [0, 0, 0, 255]);
         assert!(

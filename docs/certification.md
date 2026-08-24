@@ -36,6 +36,10 @@
 5. Soak: 24 h gate、release 72 h
 6. Fault: GPU lost、disk full、NIC down、SDK 切断
 
+Clock/Timing の共通 HIL は [hil/timing.md](hil/timing.md) に定義します。
+unit test の affine/drift/jump/wrap/domain 結果だけでは、実 adapter の
+monotonic correlation、genlock、A/V skew gate を合格にしません。
+
 ## CI
 
 - PR: fmt、clippy `-D warnings`、workspace test（default features）
@@ -52,3 +56,7 @@ OMT の具体的な未実施シナリオは [hil/omt.md](hil/omt.md) を参照�
 GPU の未実施シナリオは [hil/gpu.md](hil/gpu.md) を参照してください。
 ADR-0011 の desktop 単一Device/Queue統合は実装済みです。ただし
 `GPU-HIL-01..07`（特に device recreation と soak）が未実施のため、Phase 2 は未完了です。
+
+`TIME-HIL-01..08` は実機未実施です。Desktop に lock、rate ppb、
+offset/residual、reset/wrap、video/audio skew、A/V drift の metrics は
+実装済みですが、AC-10 の合格証跡ではありません。

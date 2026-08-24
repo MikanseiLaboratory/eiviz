@@ -8,7 +8,9 @@ use eiviz_media::{
     AdapterHealth, AudioBuffer, Capability, MediaError, MediaSink, MediaSource,
     PixelFormat as EivizPixelFormat, VideoFrame as EivizVideoFrame,
 };
-use eiviz_time::{ClockDomain, FrameRate, MediaTime};
+use eiviz_time::{
+    ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, monotonic_nanos,
+};
 use grafton_ndi::{
     AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
     ReceiverColorFormat, ReceiverOptions, ScanType, Sender, SenderOptions, Source, VideoFrame,
@@ -183,6 +185,11 @@ impl NdiSource {
                                     Ok(mut converted) => {
                                         converted.discontinuity =
                                             previous_timestamp.is_some_and(|old| timestamp <= old);
+                                        if let Some(observation) =
+                                            converted.clock_observation.as_mut()
+                                        {
+                                            observation.discontinuity = converted.discontinuity;
+                                        }
                                         previous_timestamp = Some(timestamp);
                                         sequence = sequence.saturating_add(1);
                                         push_latest(&video_tx, &video_drop_rx, converted, &dropped);
@@ -525,11 +532,20 @@ fn receive_video(
         }
     }
     let timestamp = frame_timestamp(frame.timestamp(), frame.timecode());
+    let pts = ndi_ticks_to_media_time(timestamp);
+    let clock_observation = ClockObservation {
+        source: ClockTimestamp::from_media(ClockDomain::SourceMedia, pts)
+            .map_err(|error| NdiError::InvalidFrame(error.to_string()))?,
+        target: ClockTimestamp::nanoseconds(ClockDomain::Monotonic, monotonic_nanos())
+            .map_err(|error| NdiError::InvalidFrame(error.to_string()))?,
+        discontinuity: false,
+    };
     Ok(EivizVideoFrame {
         id: sequence,
         source: Some(source),
-        pts: ndi_ticks_to_media_time(timestamp),
+        pts,
         capture_domain: ClockDomain::SourceMedia,
+        clock_observation: Some(clock_observation),
         width,
         height,
         format: EivizPixelFormat::Rgba8,
@@ -563,12 +579,18 @@ fn receive_audio(frame: AudioFrame) -> Result<AudioBuffer, NdiError> {
         .map(<[f32]>::to_vec)
         .collect();
     let timestamp = frame_timestamp(frame.timestamp(), frame.timecode());
+    let sample_index = ndi_ticks_to_sample_index(timestamp, sample_rate);
+    let capture_nanos = monotonic_nanos();
     Ok(AudioBuffer {
-        sample_index: ndi_ticks_to_sample_index(timestamp, sample_rate),
+        sample_index,
         sample_rate,
         channels,
         planes,
-        capture_timestamp: None,
+        capture_timestamp: Some(eiviz_media::AudioCaptureTimestamp {
+            device_sample_index: sample_index,
+            callback_nanos: capture_nanos,
+            capture_nanos,
+        }),
         discontinuity: false,
     })
 }

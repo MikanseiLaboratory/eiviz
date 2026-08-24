@@ -201,6 +201,7 @@ impl OpenH264Decoder {
             source: Some(source),
             pts,
             capture_domain: ClockDomain::SourceMedia,
+            clock_observation: None,
             width,
             height,
             format: PixelFormat::Rgba8,

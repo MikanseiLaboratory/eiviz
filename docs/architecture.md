@@ -44,6 +44,24 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 
 内部時刻は `ticks + Rational timebase` です。59.94 の第 n フレームは `n * 1001 / 60000` 秒です。OS deadline は毎回フレーム番号から計算し、丸めた周期を加算しません。
 
+`ClockMapper` は SourceMedia（file / NDI / OMT）、DeckLinkStream、
+AudioSample、PTP を process-wide `Monotonic` reference へ整数 affine
+mapping します。offset/drift は有限 window の bounded regression/filter
+で更新し、counter wrap は設定された modulus で unwrap します。逆行、
+明示 discontinuity、閾値を超える jump は mapper を `Acquiring` へ reset
+します。`TimingIsland` は reference を介して domain 間を写像し、DeckLink
+genlock のような外部 lock signal も aggregate lock state に含めます。
+
+source 登録時の clock policy は必須です。生成/still は明示
+`ScheduleTime`、file は `ExactCorrelation`、live adapter は
+`Bounded { unlocked: Fail | HoldLast }` を選びます。Desktop の live
+adapter は `Fail` を選択し、lock 前または timestamp correlation 欠落時に
+同一 clock と仮定しません。adapter は source timestamp と capture 時の
+monotonic correlation を frame/audio contract へ格納します。Runtime は
+logical PTS を exact mapper で monotonic deadline に変換し、video/audio
+skew と A/V drift を source ごとに記録します。UTC は clock domain ではなく、
+deadline や mapper へ入力できません。
+
 ## コマンド
 
 すべての状態変更は versioned `CommandEnvelope` です。sequencer は command ID、client sequence、expected accepted revision を受付時に検証し、`effective_time`（未指定または過去なら次の logical boundary）と受付順で bounded pending queue を全順序化します。受付は即時に `revision`（accepted revision）を返しますが、active `Project` と `state_hash` は変わりません。`Engine::tick` が due batch を取り出し、検証・compile済みの `Project` / `RenderPlanSnapshot` / `AudioPlan` を Runtime 実行前に一括 latch して `applied_revision` を進めます。

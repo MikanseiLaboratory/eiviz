@@ -5,11 +5,16 @@
 
 mod clock;
 mod framerate;
+mod mapper;
 mod rational;
 mod timestamp;
 
-pub use clock::{Clock, ClockDomain, ClockInstant, MonotonicClock, VirtualClock};
+pub use clock::{Clock, ClockDomain, ClockInstant, MonotonicClock, VirtualClock, monotonic_nanos};
 pub use framerate::{FrameRate, NTSC_5994, PAL_50, RATE_24, RATE_25, RATE_30, RATE_60};
+pub use mapper::{
+    ClockLockState, ClockMapper, ClockMapperConfig, ClockMapperDiagnostics, ClockObservation,
+    ClockTimestamp, ObservationStatus, TimingIsland, TimingIslandDiagnostics,
+};
 pub use rational::{Rational, RationalError};
 pub use timestamp::{MediaTime, audio_frame_sample_span, audio_sample_index};
 
@@ -23,4 +28,24 @@ pub enum TimeError {
     Overflow,
     #[error("clock domain mismatch: {0:?} vs {1:?}")]
     DomainMismatch(ClockDomain, ClockDomain),
+    #[error("clock timebase mismatch")]
+    TimebaseMismatch,
+    #[error("clock timebase must be positive")]
+    InvalidTimebase,
+    #[error("source and target clock domains are both {0:?}")]
+    SameClockDomain(ClockDomain),
+    #[error("invalid clock mapper configuration")]
+    InvalidMapperConfig,
+    #[error("clock mapper {from_domain:?} -> {to_domain:?} is unlocked")]
+    ClockUnlocked {
+        from_domain: ClockDomain,
+        to_domain: ClockDomain,
+    },
+    #[error("clock mapper {from_domain:?} -> {to_domain:?} is missing")]
+    MapperMissing {
+        from_domain: ClockDomain,
+        to_domain: ClockDomain,
+    },
+    #[error("clock counter value is outside its configured modulus")]
+    CounterOutsideModulus,
 }

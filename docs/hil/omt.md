@@ -32,7 +32,7 @@ interop pass.
 | OMT-HIL-06 | Tally/metadata | Preview/program tally and metadata round trip |
 | OMT-HIL-07 | Sender restart | Explicit degraded state, reconnect, discontinuity marker |
 | OMT-HIL-08 | Loss/jitter/reorder | Bounded queues; Program policy honored; no deadlock |
-| OMT-HIL-09 | 24 h receive | Frame/audio counters and A/V skew within baseline gates |
+| OMT-HIL-09 | 24 h receive | SourceMedia→Monotonic remains locked; frame/audio counters, reset/drift, and A/V skew are within baseline gates |
 | OMT-HIL-10 | Program send | Reference receiver gets BGRA video and FPA1 audio with monotonic timestamp |
 
 ## Current automated evidence
@@ -40,8 +40,13 @@ interop pass.
 - Adapter capability and test-only loopback tests
 - Generic registered `MediaSource` → Program/Audio Matrix integration test
 - Upstream `openmediatransport-rs`/`vmx-rs` protocol and codec test suites via pinned revisions
+- OMT video/audio receive stamps adapter capture with process monotonic and
+  Runtime exposes bounded mapper lock and A/V drift metrics
 
 UYVY, tally/metadata surfacing, reconnect behavior, and reference-tool
 interoperability remain HIL gaps rather than automated evidence.
 
 These tests do not satisfy any `OMT-HIL-*` scenario.
+
+The common `TIME-HIL-01`, `04..08` scenarios in [timing.md](timing.md) are
+required in addition to `OMT-HIL-*`.

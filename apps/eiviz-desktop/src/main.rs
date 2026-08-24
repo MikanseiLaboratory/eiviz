@@ -421,7 +421,13 @@ impl DesktopApp {
                 return;
             }
         }
-        self.engine.attach_source(source.clone());
+        self.engine.attach_source(
+            source.clone(),
+            eiviz_engine::SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: eiviz_engine::UnlockedBehavior::Fail,
+            },
+        );
         self.decklink_sources.push(source);
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
@@ -537,7 +543,13 @@ impl DesktopApp {
             self.status = format!("OMT scene: {error}");
             return;
         }
-        self.engine.attach_source(source.clone());
+        self.engine.attach_source(
+            source.clone(),
+            eiviz_engine::SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: eiviz_engine::UnlockedBehavior::Fail,
+            },
+        );
         self.omt_connections.push(source);
         let unit = self.engine.primary_unit();
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
@@ -717,7 +729,13 @@ impl DesktopApp {
                 return;
             }
         }
-        self.engine.attach_source(source.clone());
+        self.engine.attach_source(
+            source.clone(),
+            eiviz_engine::SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: eiviz_engine::UnlockedBehavior::Fail,
+            },
+        );
         self.ndi_connections.push(source);
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
@@ -878,7 +896,13 @@ impl DesktopApp {
             self.status = format!("Audio input route: {error}");
             return;
         }
-        self.engine.attach_source(source.clone());
+        self.engine.attach_source(
+            source.clone(),
+            eiviz_engine::SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: eiviz_engine::UnlockedBehavior::Fail,
+            },
+        );
         let device_rate = source.stream_config().sample_rate;
         self.audio_inputs.push((input.id, source));
         self.status = format!(
@@ -1367,6 +1391,44 @@ impl eframe::App for DesktopApp {
                     ),
                 );
             }
+            ui.separator();
+            ui.heading("Clock / A/V timing");
+            if gpu_metrics.timing_sources.is_empty() {
+                ui.label("No attached source clocks");
+            }
+            for timing in &gpu_metrics.timing_sources {
+                let summary = format!(
+                    "{}: {} / {}; video={:?} ns audio={:?} ns A/V={:?} ns",
+                    timing.input,
+                    timing.policy,
+                    timing.state,
+                    timing.video_skew_nanos,
+                    timing.audio_skew_nanos,
+                    timing.av_drift_nanos,
+                );
+                if timing.state == "Locked" {
+                    ui.label(summary);
+                } else {
+                    ui.colored_label(egui::Color32::RED, summary);
+                }
+                for mapper in &timing.mappers {
+                    ui.label(format!(
+                        "  {}→{} {} drift={:+} ppb offset={} residual={} obs={} duplicate={} bounded={} reset={} wrap={}",
+                        mapper.source_domain,
+                        mapper.target_domain,
+                        mapper.state,
+                        mapper.rate_ppb,
+                        mapper.offset_ticks,
+                        mapper.residual_ticks,
+                        mapper.observations,
+                        mapper.duplicates,
+                        mapper.bounded_regressions,
+                        mapper.discontinuities,
+                        mapper.wraps,
+                    ));
+                }
+            }
+            ui.label("Clock deadlines use process monotonic only; UTC is not a timing domain.");
             ui.label(format!("missing-media {:?}", project.missing_media));
             ui.label(match self.control_ports {
                 Some(ports) => format!(
