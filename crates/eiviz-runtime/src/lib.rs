@@ -851,14 +851,18 @@ impl Runtime {
         match timing.policy {
             SourceClockPolicy::ScheduleTime => unreachable!("handled above"),
             SourceClockPolicy::ExactCorrelation => {
-                if !timing.island.has_mapper(observation.source.domain) || observation.discontinuity
-                {
+                if !timing.island.has_mapper(observation.source.domain) {
                     timing
                         .island
                         .add_mapper(
                             ClockMapper::exact(observation.source, observation.target)
                                 .map_err(|error| RuntimeError::Other(error.to_string()))?,
                         )
+                        .map_err(|error| RuntimeError::Other(error.to_string()))?;
+                } else if observation.discontinuity {
+                    timing
+                        .island
+                        .reanchor_exact(observation.source, observation.target)
                         .map_err(|error| RuntimeError::Other(error.to_string()))?;
                 }
             }

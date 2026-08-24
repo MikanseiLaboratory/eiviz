@@ -319,6 +319,31 @@ impl ClockMapper {
         self.discontinuities = self.discontinuities.saturating_add(1);
     }
 
+    /// Re-anchor an exact mapper while preserving reset diagnostics.
+    pub fn reanchor_exact(
+        &mut self,
+        source: ClockTimestamp,
+        target: ClockTimestamp,
+    ) -> Result<(), TimeError> {
+        self.check_timestamp(source, self.source_domain, self.source_timebase)?;
+        self.check_timestamp(target, self.target_domain, self.target_timebase)?;
+        self.anchor_source = i128::from(source.ticks);
+        self.anchor_target = i128::from(target.ticks);
+        self.offset_ticks = 0;
+        self.rate_ppb = 0;
+        self.observations.clear();
+        self.observations
+            .push_back((self.anchor_source, self.anchor_target));
+        self.previous_raw_source = Some(source.ticks);
+        self.previous_unwrapped_source = Some(self.anchor_source);
+        self.wrap_epoch = 0;
+        self.last_residual = 0;
+        self.accepted = self.accepted.saturating_add(1);
+        self.discontinuities = self.discontinuities.saturating_add(1);
+        self.state = ClockLockState::Locked;
+        Ok(())
+    }
+
     pub fn state(&self) -> ClockLockState {
         self.state
     }
@@ -588,6 +613,20 @@ impl TimingIsland {
             .map_or(ClockLockState::Unlocked, ClockMapper::state)
     }
 
+    pub fn reanchor_exact(
+        &mut self,
+        source: ClockTimestamp,
+        target: ClockTimestamp,
+    ) -> Result<(), TimeError> {
+        self.mappers
+            .get_mut(&source.domain)
+            .ok_or(TimeError::MapperMissing {
+                from_domain: source.domain,
+                to_domain: self.reference_domain,
+            })?
+            .reanchor_exact(source, target)
+    }
+
     pub fn observe(
         &mut self,
         observation: ClockObservation,
@@ -725,6 +764,30 @@ mod tests {
             .unwrap();
         assert_eq!(mapped.ticks, 6_000_000_000);
         assert_eq!(mapper.map_inverse(mapped).unwrap().ticks, 180_000);
+    }
+
+    #[test]
+    fn exact_reanchor_preserves_reset_diagnostics() {
+        let mut mapper = ClockMapper::exact(
+            point(ClockDomain::SourceMedia, 0, 1_000),
+            point(ClockDomain::Monotonic, 10_000, 1_000),
+        )
+        .unwrap();
+        mapper
+            .reanchor_exact(
+                point(ClockDomain::SourceMedia, 500, 1_000),
+                point(ClockDomain::Monotonic, 20_000, 1_000),
+            )
+            .unwrap();
+        assert_eq!(mapper.state(), ClockLockState::Locked);
+        assert_eq!(mapper.diagnostics().discontinuities, 1);
+        assert_eq!(
+            mapper
+                .map(point(ClockDomain::SourceMedia, 501, 1_000))
+                .unwrap()
+                .ticks,
+            20_001
+        );
     }
 
     #[test]
@@ -888,5 +951,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(audio.ticks, 96_000);
+        island.set_external_lock(ClockDomain::DeckLinkGenlock, false);
+        assert_eq!(island.state(), ClockLockState::Unlocked);
+        island.set_external_lock(ClockDomain::DeckLinkGenlock, true);
+        assert_eq!(island.state(), ClockLockState::Locked);
     }
 }
