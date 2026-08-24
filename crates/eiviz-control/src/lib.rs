@@ -81,7 +81,7 @@ pub enum Query {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ApiOperation {
     Query { query: Query },
-    Command { envelope: CommandEnvelope },
+    Command { envelope: Box<CommandEnvelope> },
     Transaction { envelopes: Vec<CommandEnvelope> },
     Subscribe,
 }
@@ -134,7 +134,7 @@ pub struct ControlEvent {
 #[derive(Debug)]
 enum DispatchTask {
     Command {
-        envelope: CommandEnvelope,
+        envelope: Box<CommandEnvelope>,
         reply: Sender<Result<Vec<CommandAck>, ApiError>>,
     },
     Transaction {
@@ -151,7 +151,13 @@ struct Dispatcher {
 impl Dispatcher {
     fn submit(&self, envelope: CommandEnvelope) -> Result<Vec<CommandAck>, ApiError> {
         let (reply, receive) = bounded(1);
-        self.enqueue(DispatchTask::Command { envelope, reply }, receive)
+        self.enqueue(
+            DispatchTask::Command {
+                envelope: Box::new(envelope),
+                reply,
+            },
+            receive,
+        )
     }
 
     fn transaction(&self, envelopes: Vec<CommandEnvelope>) -> Result<Vec<CommandAck>, ApiError> {
@@ -321,7 +327,7 @@ fn spawn_dispatcher(
             };
             let (result, reply) = match task {
                 DispatchTask::Command { envelope, reply } => {
-                    (engine.submit(envelope).map(|ack| vec![ack]), reply)
+                    (engine.submit(*envelope).map(|ack| vec![ack]), reply)
                 }
                 DispatchTask::Transaction { envelopes, reply } => {
                     (engine.submit_transaction(envelopes), reply)
@@ -669,7 +675,7 @@ fn serve_tcp(
             {
                 break;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
         buffer.extend_from_slice(&temporary[..count]);
         if buffer.len() as u64 > MAX_BODY_BYTES {
@@ -777,6 +783,7 @@ fn spawn_websocket_server(
     Ok(port)
 }
 
+#[allow(clippy::result_large_err)] // tungstenite's callback requires ErrorResponse by value.
 fn serve_websocket(
     engine: Arc<Engine>,
     dispatcher: Dispatcher,
@@ -948,8 +955,8 @@ fn execute_request(
     let result = match request.operation {
         ApiOperation::Query { query } => execute_query(engine, query),
         ApiOperation::Command { envelope } => {
-            validate_external_envelopes(std::slice::from_ref(&envelope))
-                .and_then(|()| dispatcher.submit(envelope))
+            validate_external_envelopes(std::slice::from_ref(envelope.as_ref()))
+                .and_then(|()| dispatcher.submit(*envelope))
                 .and_then(|mut values| serialize_value(values.remove(0)))
         }
         ApiOperation::Transaction { envelopes } => validate_external_envelopes(&envelopes)
@@ -1493,7 +1500,9 @@ mod tests {
             version: CONTROL_API_VERSION,
             request_id: "tcp-1".into(),
             token: Some("integration-secret".into()),
-            operation: ApiOperation::Command { envelope },
+            operation: ApiOperation::Command {
+                envelope: Box::new(envelope),
+            },
         };
         let mut stream = TcpStream::connect(("127.0.0.1", ports.tcp)).unwrap();
         writeln!(stream, "{}", serde_json::to_string(&request).unwrap()).unwrap();
@@ -1550,7 +1559,9 @@ mod tests {
             version: CONTROL_API_VERSION,
             request_id: "command-1".into(),
             token: None,
-            operation: ApiOperation::Command { envelope },
+            operation: ApiOperation::Command {
+                envelope: Box::new(envelope),
+            },
         };
         websocket
             .send(Message::Text(
@@ -1576,7 +1587,7 @@ mod tests {
         dispatcher
             .tx
             .send(DispatchTask::Command {
-                envelope: CommandEnvelope::new(ClientId::new(), Command::Noop),
+                envelope: Box::new(CommandEnvelope::new(ClientId::new(), Command::Noop)),
                 reply,
             })
             .unwrap();
