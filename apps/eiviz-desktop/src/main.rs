@@ -57,6 +57,7 @@ struct DesktopApp {
     image_path: String,
     video_path: String,
     openh264_path: String,
+    fdk_aac_path: String,
     portable_path: String,
     rtmp_url: String,
     srt_url: String,
@@ -183,6 +184,7 @@ impl DesktopApp {
             image_path: String::new(),
             video_path: String::new(),
             openh264_path: std::env::var("EIVIZ_OPENH264_PATH").unwrap_or_default(),
+            fdk_aac_path: std::env::var("EIVIZ_FDK_AAC_PATH").unwrap_or_default(),
             portable_path: "project.eiviz".into(),
             rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
             srt_url: "srt://127.0.0.1:9000".into(),
@@ -1000,7 +1002,7 @@ impl DesktopApp {
         match self.engine.configure_distribution_output(output) {
             Ok(_) => {
                 self.status = format!(
-                    "{transport_name} mapping saved stopped; start will hard-fail until explicit H.264/AAC encoders are available"
+                    "{transport_name} mapping saved stopped; Start requires explicit Cisco OpenH264 2.6.0 and license-reviewed FDK AAC binaries"
                 )
             }
             Err(error) => self.status = format!("{transport_name} mapping: {error}"),
@@ -1325,8 +1327,12 @@ impl eframe::App for DesktopApp {
             ui.separator();
             ui.heading("Distribution");
             ui.label(
-                "Explicit baseline: H.264 Annex-B + raw AAC-LC. Mappings are created stopped; unavailable encoders hard-fail on Start.",
+                "Explicit baseline: hash/version-verified Cisco OpenH264 2.6.0 + raw FDK AAC-LC. FDK's upstream license grants no patent rights; use only a reviewed binary. No fallback.",
             );
+            ui.label("Cisco OpenH264 2.6.0 dynamic binary");
+            ui.text_edit_singleline(&mut self.openh264_path);
+            ui.label("License-reviewed FDK AAC dynamic binary");
+            ui.text_edit_singleline(&mut self.fdk_aac_path);
             ui.label("RTMP H.264/AAC in FLV");
             ui.text_edit_singleline(&mut self.rtmp_url);
             if ui.button("Add stopped RTMP mapping").clicked() {
@@ -1354,13 +1360,42 @@ impl eframe::App for DesktopApp {
                     .find(|diagnostic| diagnostic.output_id == output.id.to_string());
                 ui.push_id(output.id, |ui| {
                     ui.label(format!(
-                        "{}: {} — {}",
+                        "{}: {} — {}; queue={}/{} high={} sent={} drop={} reconnect={}; AVC={} IDR={} AAC={} IDR-requests={}",
                         output.name,
                         diagnostic.map_or("unknown", |value| value.state.as_str()),
-                        diagnostic.map_or("no diagnostics", |value| value.detail.as_str())
+                        diagnostic.map_or("no diagnostics", |value| value.detail.as_str()),
+                        diagnostic.map_or(0, |value| value.queue_depth),
+                        output
+                            .distribution
+                            .as_ref()
+                            .map_or(0, |profile| profile.queue_capacity),
+                        diagnostic.map_or(0, |value| value.queue_high_water),
+                        diagnostic.map_or(0, |value| value.sent),
+                        diagnostic.map_or(0, |value| value.dropped),
+                        diagnostic.map_or(0, |value| value.reconnects),
+                        diagnostic.map_or(0, |value| value.video_frames),
+                        diagnostic.map_or(0, |value| value.keyframes),
+                        diagnostic.map_or(0, |value| value.audio_access_units),
+                        diagnostic.map_or(0, |value| value.idr_requests),
                     ));
                     ui.horizontal(|ui| {
                         if ui.button("Start").clicked() {
+                            let any_running = project.outputs.values().any(|candidate| {
+                                candidate.enabled && candidate.distribution.is_some()
+                            });
+                            if !any_running {
+                                let fdk_path = (!self.fdk_aac_path.trim().is_empty()).then(|| {
+                                    std::path::PathBuf::from(self.fdk_aac_path.trim())
+                                });
+                                if let Err(error) = self.engine.configure_distribution_binaries(
+                                    std::path::PathBuf::from(self.openh264_path.trim()),
+                                    fdk_path,
+                                ) {
+                                    self.status =
+                                        format!("encoder binary configuration: {error}");
+                                    return;
+                                }
+                            }
                             match self.engine.set_distribution_enabled(output.id, true) {
                                 Ok(_) => self.status = format!("{} started", output.name),
                                 Err(error) => {

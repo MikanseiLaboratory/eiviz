@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::bitstream::{BitWriter, annexb};
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
@@ -99,6 +100,7 @@ fn append_annexb_nal(output: &mut Vec<u8>, nal: &[u8], max_output: usize) -> Res
 }
 
 /// Baseline IDR with I_PCM macroblocks. Valid (uncompressed) H.264.
+#[cfg(test)]
 pub fn encode_idr(frame: &VideoFrame) -> EncodedAccessUnit {
     let mb_w = frame.width.div_ceil(16);
     let mb_h = frame.height.div_ceil(16);
@@ -214,6 +216,7 @@ pub fn split_annexb(buf: &[u8]) -> Vec<Vec<u8>> {
     nals
 }
 
+#[cfg(test)]
 fn sps(mb_w: u32, mb_h: u32, crop_r: u32, crop_b: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(66, 8);
@@ -242,6 +245,7 @@ fn sps(mb_w: u32, mb_h: u32, crop_r: u32, crop_b: u32) -> Vec<u8> {
     w.into_rbsp()
 }
 
+#[cfg(test)]
 fn pps() -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0);
@@ -262,6 +266,7 @@ fn pps() -> Vec<u8> {
     w.into_rbsp()
 }
 
+#[cfg(test)]
 fn idr_slice(yuv: &[u8], mb_w: u32, mb_h: u32, stride_y: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0);
@@ -299,6 +304,7 @@ fn idr_slice(yuv: &[u8], mb_w: u32, mb_h: u32, stride_y: u32) -> Vec<u8> {
     w.bytes
 }
 
+#[cfg(test)]
 fn rgba_to_yuv420(rgba: &[u8], w: u32, h: u32, pw: u32, ph: u32, out: &mut [u8]) {
     let y_size = (pw * ph) as usize;
     let c_size = (pw * ph / 4) as usize;

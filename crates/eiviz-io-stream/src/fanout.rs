@@ -210,6 +210,20 @@ impl EncodedFanout {
             .collect()
     }
 
+    /// True while at least one sink is waiting to establish/re-establish its
+    /// stream at a clean random-access point.
+    pub fn keyframe_required(&self) -> bool {
+        self.sinks
+            .lock()
+            .expect("fanout sinks")
+            .values()
+            .any(|queue| queue.diagnostics.recovery_required.load(Ordering::Acquire))
+    }
+
+    pub fn sink_count(&self) -> usize {
+        self.sinks.lock().expect("fanout sinks").len()
+    }
+
     pub fn remove_sink(&self, name: &str) {
         let queue = self.sinks.lock().expect("fanout sinks").remove(name);
         if let Some(mut queue) = queue {

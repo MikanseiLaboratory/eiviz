@@ -39,7 +39,7 @@ pub struct DistributionProfile {
     pub reconnect: ReconnectProfile,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum H264EncoderProfile {
     /// Cisco's separately installed OpenH264 2.6.0 binary. The in-tree I_PCM
     /// encoder is intentionally not a selectable product profile.
@@ -56,7 +56,7 @@ pub enum H264EncoderProfile {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AacEncoderProfile {
     /// FDK AAC is a separately reviewed build because its upstream license
     /// grants no patent rights.

@@ -71,17 +71,23 @@ under their applicable licenses; default builds compile no CPAL system backend.
 
 H.264 / AVC
 -----------
-The software encoder in `eiviz-codec-software` emits Baseline I_PCM access
-units for tests only. It is not selectable as a production recording or
-network profile. Product distributions that encode or decode AVC in the field
-may require MPEG-LA / Via LA patent licenses.
-The software decode profile dynamically loads an end-user-installed Cisco
-OpenH264 2.6.0 binary from an explicit path. It must not be bundled and must display
-"OpenH264 Video Codec provided by Cisco Systems, Inc." with Cisco's binary
-license. Compiling OpenH264 source does not receive Cisco's binary patent
-coverage and is not the selected profile.
-AAC encoding is not included in the default tree; PCM or a separately
-licensed encoder must be used until an AAC adapter is certified.
+The in-tree Baseline I_PCM encoder is compiled for tests only and is not
+selectable as a recording or network profile. Production software encode and
+decode dynamically load an end-user-installed Cisco OpenH264 2.6.0 binary from
+an explicit path after checking its SHA-256 against `openh264-sys2`'s Cisco
+binary allow-list and checking the runtime version. It must not be bundled and
+must display "OpenH264 Video Codec provided by Cisco Systems, Inc." with
+Cisco's binary license. Compiling OpenH264 source does not receive Cisco's
+binary patent coverage and is not the selected profile. Product distributions
+that encode or decode AVC may still require additional patent review.
+
+The AAC-LC adapter dynamically loads an explicitly selected FDK AAC shared
+library through the upstream encoder C ABI. No FDK binary or source is included
+in this repository. FDK AAC's bespoke upstream license grants no patent rights;
+operators and distributors must review that exact binary, its provenance, and
+all applicable patent/license obligations before enabling the profile. Missing
+or rejected FDK binaries are hard errors; PCM and test bytes are never used as
+AAC substitutes.
 
 RTMP / SRT
 ----------
@@ -102,4 +108,4 @@ GStreamer / FFmpeg
 Neither GStreamer nor FFmpeg is a dependency. If a future distribution enables
 those adapters, their LGPL/GPL obligations and each selected plugin's license
 apply to that build and must be documented in the shipping SBOM. FDK AAC is
-also not included: its upstream bespoke license grants no patent rights.
+not bundled: its upstream bespoke license grants no patent rights.

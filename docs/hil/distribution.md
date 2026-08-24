@@ -12,18 +12,33 @@ certify a production H.264/AAC encoder or real-server interoperability.
 | `rml_rtmp` 0.8.0 | MIT, pure Rust; upstream does not state an MSRV | Builds on 1.97 | In-tree RTMP session/framing |
 | `srt-tokio` 0.4.4 | Apache-2.0, pure safe Rust; upstream does not state an MSRV | Builds on 1.97 | In-tree SRT caller; interop HIL required |
 | GStreamer Rust 0.25.3 | bindings MIT/Apache-2.0, GStreamer LGPL-2.1+, plugin licenses vary; system packages required; MSRV 1.92 | Compatible, but not portable default CI | Not selected until encoder/plugin/SBOM policy is approved; any adapter must be feature-gated |
-| `fdk-aac` 0.8.0 | Rust wrapper MIT; bundled FDK AAC has a bespoke license and no patent grant | Toolchain-compatible candidate | Not selected; requires a separately reviewed distribution profile |
-| Cisco OpenH264 2.6.0 binary | Cisco binary license/patent terms | Decoder is dynamically loaded today | Encoder is not integrated; in-tree I_PCM remains test-only |
+| FDK AAC dynamic C ABI | FDK AAC bespoke license, no patent grant; binary provenance is operator-controlled | Adapter builds on Rust 1.97 without compiling FDK | Selected only for an explicitly provided, separately reviewed binary; absent binary hard-fails |
+| Cisco OpenH264 2.6.0 binary | Cisco binary license/patent terms | Encoder/decoder dynamically load the explicit path | Selected with `openh264-sys2` SHA-256 allow-list and runtime 2.6.0 verification; no source build |
 
 The Project profile names an encoder and transport. Missing capabilities are a
-hard error. PCM is never substituted for AAC and I_PCM is never presented as a
-production encoder.
+hard error. PCM/test bytes are never substituted for AAC and the I_PCM encoder
+is compiled only in tests.
+
+## Opt-in real encoder smoke test
+
+Default CI uses mock encoders to prove one encode per shared profile and shared
+`Arc<EncodedAccessUnit>` fanout. To exercise real dynamic binaries:
+
+```bash
+EIVIZ_OPENH264_HIL_BINARY=/absolute/path/to/cisco/libopenh264-2.6.0.so \
+EIVIZ_FDK_AAC_HIL_BINARY=/absolute/path/to/reviewed/libfdk-aac.so \
+cargo test -p eiviz-codec-software real_dynamic_encoder_hil -- --ignored
+```
+
+This checks dynamic loading, OpenH264 hash/version verification, SPS/PPS,
+AudioSpecificConfig, one AVC access unit, and one raw AAC-LC access unit. It is
+not legal approval, codec conformance, or transport interoperability evidence.
 
 ## Real RTMP
 
 1. Install a current MediaMTX or nginx-rtmp release on a separate machine.
-2. Provision an H.264 Annex-B encoder and raw AAC-LC encoder adapter that has
-   passed legal review; register their exact names in the distribution build.
+2. Provision Cisco's OpenH264 2.6.0 binary and an FDK AAC binary that has
+   passed the deployment's legal/provenance review; select both explicit paths.
 3. Configure `rtmp://HOST:1935/APP/KEY`, 1080p59.94 BT.709, 48 kHz stereo,
    8 Mbit/s AVC, 192 kbit/s AAC, and a 120-frame GOP.
 4. Confirm publish with the server log and probe the received stream with an

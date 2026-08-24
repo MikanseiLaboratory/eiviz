@@ -16,10 +16,13 @@ RTMP / SRT / MP4 が必要だが codec 特許と LGPL/GPL の組み合わせが�
 container は in-tree FLV / MPEG-TS / fragmented MP4 とする。
 
 Project は H.264 encoder、AAC encoder、transport、queue、reconnect を明示する。
-in-tree I_PCM は test-only で、AAC encoder は未実装であるため、現在の製品
-profile activation は hard error になる。PCM や別 codec への fallback はしない。
-GStreamer / FDK AAC は Rust 1.97 では build 可能な候補だが、system/plugin
-license、特許、配布形態の審査前には選択しない。
+最初の software encode profile は、明示 path の Cisco OpenH264 2.6.0 binary
+（`openh264-sys2` allow-list SHA-256 + runtime version 検証）と、明示 path の
+license-reviewed FDK AAC binary（AAC-LC/raw transport C ABI）を dynamic load
+する。どちらも同梱/source build せず、欠落時は hard error とする。in-tree
+I_PCM は `cfg(test)` のみで、PCM/test bytes/別 codec への fallback はしない。
+FDK upstream license は patent grant を含まないため、binary provenance、
+license、patent、配布形態を distribution ごとに別途法務確認する。
 
 ## Consequences
 

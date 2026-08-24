@@ -12,6 +12,7 @@
 | image | 0.25.6 | PNG/JPEG 入力 |
 | shiguredo_mp4 | 2026.4.0 exact | MP4/fMP4 demux、Apache-2.0 |
 | openh264-sys2 | 0.9.8 exact | `libloading`のみ。Cisco 2.6.0外部binary、source build禁止 |
+| libloading | 0.9.x | 明示pathのlicense-reviewed FDK AAC C ABI dynamic adapter。FDK source/binary非同梱、patent grantなし |
 | yuv | 0.8.17 exact | 固定profileのlimited-range BT.709 I420→RGBA変換。MP4 color metadata検証は未認定 |
 | zip | 4.3.x | portable `.eiviz` |
 | tiny_http / tungstenite | 0.12.0 / 0.30.0 | authenticated HTTP + WebSocket control API |

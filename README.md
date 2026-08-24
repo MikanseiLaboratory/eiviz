@@ -53,10 +53,12 @@ all pass:
   H.264/AAC access-unit allocation fans out to independent bounded fMP4, RTMP
   FLV, and SRT MPEG-TS workers with reconnect-at-IDR and fMP4 tail recovery.
   `rml_rtmp` and `srt-tokio` local protocol peers are covered in default CI.
-  There is currently **no production H.264 encoder or AAC encoder** in-tree:
-  the I_PCM path is test-only, output mappings start stopped, and activation
-  hard-fails instead of substituting PCM or another codec. Real-server/loss/
-  24-hour HIL remains pending.
+  Product activation dynamically loads an explicitly selected Cisco OpenH264
+  2.6.0 binary (allow-listed SHA-256 plus runtime version check) and an
+  explicitly selected, license-reviewed FDK AAC binary for raw AAC-LC. Neither
+  binary is bundled or built from source. Missing/rejected binaries hard-fail;
+  I_PCM, PCM, test bytes, and alternate codecs are never substituted.
+  Real-server/loss/24-hour HIL remains pending.
 - Capability stub only for gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
@@ -78,6 +80,12 @@ EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
 
 # Optional initial value for the desktop's explicit binary-path field.
 EIVIZ_OPENH264_PATH=/absolute/path/to/libopenh264-2.6.0-linux64.8.so \
+  cargo run -p eiviz-desktop
+
+# Distribution additionally requires an operator-provided FDK AAC shared
+# library whose license/patent profile has been reviewed for that deployment.
+EIVIZ_OPENH264_PATH=/absolute/path/to/cisco/libopenh264-2.6.0.so \
+EIVIZ_FDK_AAC_PATH=/absolute/path/to/libfdk-aac.so \
   cargo run -p eiviz-desktop
 
 # Explicit NDI profile. NDI 6 SDK headers and runtime must already be installed.

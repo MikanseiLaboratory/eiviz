@@ -1,8 +1,13 @@
+use eiviz_codec_software::{
+    DynamicEncoderFactory, EncoderDiagnostics, EncoderSessionRequest, ProgramEncoder,
+    ProgramEncoderFactory,
+};
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
 use eiviz_core::{
-    AssetRef, ClientId, Input, InputId, InputSource, MixingUnitId, MultiviewId, OutputId,
-    OutputKind, Playback, Project,
+    AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
+    MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
 };
+use eiviz_io_stream::{EncodedFanout, EncoderCapabilities, SinkDiagnostics};
 use eiviz_media::{AudioIoDiagnostics, AudioSink, MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{
     append_journal, export_portable as export_project_portable,
@@ -84,6 +89,16 @@ pub struct DistributionOutputDiagnostics {
     pub enabled: bool,
     pub state: String,
     pub detail: String,
+    pub queue_depth: usize,
+    pub queue_high_water: usize,
+    pub enqueued: u64,
+    pub sent: u64,
+    pub dropped: u64,
+    pub reconnects: u64,
+    pub video_frames: u64,
+    pub keyframes: u64,
+    pub audio_access_units: u64,
+    pub idr_requests: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -115,8 +130,30 @@ struct Inner {
     flight: VecDeque<FlightEvent>,
     sinks: HashMap<OutputId, Arc<dyn MediaSink>>,
     audio_sinks: HashMap<OutputId, Arc<dyn AudioSink>>,
+    encoder_factory: Option<Arc<dyn ProgramEncoderFactory>>,
+    encoder_capabilities: EncoderCapabilities,
+    encoder_sessions: HashMap<EncodingProfileKey, EncodingSession>,
+    distribution_bindings: HashMap<OutputId, DistributionBinding>,
     autosave_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EncodingProfileKey {
+    owner: MixingUnitId,
+    video: H264EncoderProfile,
+    audio: AacEncoderProfile,
+}
+
+struct EncodingSession {
+    encoder: Box<dyn ProgramEncoder>,
+    fanout: EncodedFanout,
+    last_error: Option<String>,
+}
+
+struct DistributionBinding {
+    profile: EncodingProfileKey,
+    sink_name: String,
 }
 
 impl Engine {
@@ -137,6 +174,10 @@ impl Engine {
                 flight: VecDeque::with_capacity(FLIGHT_CAP),
                 sinks: HashMap::new(),
                 audio_sinks: HashMap::new(),
+                encoder_factory: None,
+                encoder_capabilities: EncoderCapabilities::default(),
+                encoder_sessions: HashMap::new(),
+                distribution_bindings: HashMap::new(),
                 autosave_path: None,
                 journal_path: None,
             }),
@@ -294,12 +335,73 @@ impl Engine {
                 .into_iter()
                 .map(EngineAudioDiagnostics::from)
                 .collect(),
-            distribution_outputs: distribution_diagnostics(&g.project),
+            distribution_outputs: distribution_diagnostics(&g),
         }
     }
 
     pub fn distribution_capabilities(&self) -> Vec<eiviz_media::Capability> {
-        eiviz_io_stream::capabilities()
+        let g = self.inner.lock();
+        let mut capabilities = eiviz_io_stream::capabilities();
+        let description = g.encoder_factory.as_ref().map_or_else(
+            || "no explicit dynamic encoder binaries configured".into(),
+            |factory| factory.description(),
+        );
+        capabilities.push(eiviz_media::Capability {
+            id: "distribution-cisco-openh264-2.6".into(),
+            available: g.encoder_capabilities.cisco_openh264_26,
+            detail: description.clone(),
+        });
+        capabilities.push(eiviz_media::Capability {
+            id: "distribution-fdk-aac-lc".into(),
+            available: g.encoder_capabilities.fdk_aac_lc,
+            detail: description,
+        });
+        capabilities
+    }
+
+    /// Select explicit operator-provided dynamic binaries. OpenH264 is
+    /// hash/version verified when a session starts. FDK is loaded only through
+    /// its AAC-LC raw access-unit ABI; absence is a hard failure.
+    pub fn configure_distribution_binaries(
+        &self,
+        openh264_binary: impl Into<PathBuf>,
+        fdk_aac_binary: Option<PathBuf>,
+    ) -> Result<()> {
+        let mut g = self.inner.lock();
+        if !g.encoder_sessions.is_empty() {
+            return Err(EngineError::Admission(
+                "stop all distribution outputs before changing encoder binaries".into(),
+            ));
+        }
+        let fdk_configured = fdk_aac_binary.is_some();
+        g.encoder_factory = Some(Arc::new(DynamicEncoderFactory::new(
+            openh264_binary,
+            fdk_aac_binary,
+        )));
+        g.encoder_capabilities = EncoderCapabilities {
+            cisco_openh264_26: true,
+            fdk_aac_lc: fdk_configured,
+            ..Default::default()
+        };
+        Ok(())
+    }
+
+    /// Explicit adapter injection point for licensed external encoders and
+    /// deterministic mocks. Replacing a live factory is rejected.
+    pub fn install_distribution_encoder_factory(
+        &self,
+        factory: Arc<dyn ProgramEncoderFactory>,
+        capabilities: EncoderCapabilities,
+    ) -> Result<()> {
+        let mut g = self.inner.lock();
+        if !g.encoder_sessions.is_empty() {
+            return Err(EngineError::Admission(
+                "stop all distribution outputs before changing encoder adapters".into(),
+            ));
+        }
+        g.encoder_factory = Some(factory);
+        g.encoder_capabilities = capabilities;
+        Ok(())
     }
 
     /// Persist an explicit output mapping in the stopped state. Starting it is
@@ -327,13 +429,10 @@ impl Engine {
             .outputs
             .get(&output)
             .ok_or(EngineError::UnknownOutput(output))?;
-        let profile = configured
+        configured
             .distribution
             .as_ref()
             .ok_or(EngineError::NotDistributionOutput(output))?;
-        if enabled {
-            eiviz_io_stream::EncoderCapabilities::default().validate(profile)?;
-        }
         self.submit_payload(Command::SetOutputEnabled {
             id: output,
             enabled,
@@ -349,19 +448,61 @@ impl Engine {
         if let Some(acknowledgement) = g.sequencer.existing_ack(&env)? {
             return Ok(acknowledgement);
         }
+        let activation = match &env.payload {
+            Command::SetOutputEnabled { id, enabled: true } => g
+                .project
+                .outputs
+                .get(id)
+                .filter(|output| output.distribution.is_some())
+                .cloned(),
+            Command::AddOutput { output } if output.enabled && output.distribution.is_some() => {
+                Some(output.clone())
+            }
+            _ => None,
+        };
+        let deactivate_after = match &env.payload {
+            Command::SetOutputEnabled { id, enabled: false }
+                if g.distribution_bindings.contains_key(id) =>
+            {
+                Some(*id)
+            }
+            Command::RemoveOutput { id } if g.distribution_bindings.contains_key(id) => Some(*id),
+            _ => None,
+        };
+        let activated_now = if let Some(output) = activation.as_ref() {
+            activate_distribution_output(&mut g, output)?
+        } else {
+            false
+        };
         let playback_update = match &env.payload {
             Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
             _ => None,
         };
-        Self::admit(&g, &env.payload)?;
-        let (ack, hash) = {
+        if let Err(error) = Self::admit(&g, &env.payload) {
+            if activated_now && let Some(output) = activation.as_ref() {
+                deactivate_distribution_output(&mut g, output.id);
+            }
+            return Err(error);
+        }
+        let applied = {
             let Inner {
                 sequencer, project, ..
             } = &mut *g;
-            let ack = sequencer.apply(project, env)?;
-            let hash = state_hash(project);
-            (ack, hash)
+            sequencer.apply(project, env)
         };
+        let ack = match applied {
+            Ok(ack) => ack,
+            Err(error) => {
+                if activated_now && let Some(output) = activation.as_ref() {
+                    deactivate_distribution_output(&mut g, output.id);
+                }
+                return Err(error.into());
+            }
+        };
+        if let Some(output) = deactivate_after {
+            deactivate_distribution_output(&mut g, output);
+        }
+        let hash = state_hash(&g.project);
         if let Some((input, playback)) = playback_update {
             g.runtime.update_source_playback(input, &playback);
         }
@@ -387,6 +528,21 @@ impl Engine {
 
     pub fn submit_transaction(&self, envelopes: Vec<CommandEnvelope>) -> Result<Vec<CommandAck>> {
         let mut g = self.inner.lock();
+        if envelopes.iter().any(|envelope| {
+            matches!(
+                &envelope.payload,
+                Command::SetOutputEnabled { id, .. } | Command::RemoveOutput { id }
+                    if g.project.outputs.get(id).is_some_and(|output| output.distribution.is_some())
+            ) || matches!(
+                &envelope.payload,
+                Command::AddOutput { output }
+                    if output.enabled && output.distribution.is_some()
+            )
+        }) {
+            return Err(EngineError::Admission(
+                "distribution start/stop/remove commands must be submitted individually so adapter lifecycle remains atomic".into(),
+            ));
+        }
         for envelope in &envelopes {
             if g.sequencer.existing_ack(envelope)?.is_none() {
                 Self::admit(&g, &envelope.payload)?;
@@ -445,6 +601,43 @@ impl Engine {
         } = &mut *g;
         let result = runtime.tick(project)?;
         let audio = result.audio.clone();
+        let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
+        let mut distribution_errors = Vec::new();
+        for profile in distribution_profiles {
+            let Some(video) = result.programs.get(&profile.owner) else {
+                continue;
+            };
+            let session = g
+                .encoder_sessions
+                .get_mut(&profile)
+                .expect("profile key came from encoder session map");
+            if session.fanout.keyframe_required()
+                && let Err(error) = session.encoder.request_idr()
+            {
+                let reason = error.to_string();
+                session.last_error = Some(reason.clone());
+                distribution_errors
+                    .push((format!("distribution encoder {}", profile.owner), reason));
+                continue;
+            }
+            match session.encoder.encode(video, &audio) {
+                Ok(access_units) => {
+                    session.last_error = None;
+                    for access_unit in access_units {
+                        session.fanout.publish(access_unit);
+                    }
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    session.last_error = Some(reason.clone());
+                    distribution_errors
+                        .push((format!("distribution encoder {}", profile.owner), reason));
+                }
+            }
+        }
+        for (name, reason) in distribution_errors {
+            g.runtime.mark_output_failed(&name, reason);
+        }
         let sinks = g.sinks.clone();
         for (output_id, sink) in sinks {
             let Some((enabled, owner)) = g
@@ -556,6 +749,8 @@ impl Engine {
         inner.flight.clear();
         inner.sinks.clear();
         inner.audio_sinks.clear();
+        inner.distribution_bindings.clear();
+        inner.encoder_sessions.clear();
         Ok(())
     }
 
@@ -598,6 +793,95 @@ impl Engine {
     }
 }
 
+fn encoding_profile_key(output: &Output) -> Result<EncodingProfileKey> {
+    let profile = output
+        .distribution
+        .as_ref()
+        .ok_or(EngineError::NotDistributionOutput(output.id))?;
+    Ok(EncodingProfileKey {
+        owner: output.owner,
+        video: profile.video.clone(),
+        audio: profile.audio.clone(),
+    })
+}
+
+fn activate_distribution_output(inner: &mut Inner, output: &Output) -> Result<bool> {
+    if inner.distribution_bindings.contains_key(&output.id) {
+        return Ok(false);
+    }
+    let key = encoding_profile_key(output)?;
+    let mut created_session = false;
+    if !inner.encoder_sessions.contains_key(&key) {
+        let factory = inner.encoder_factory.as_ref().ok_or_else(|| {
+            EngineError::Admission(
+                "no explicit distribution encoder factory/binary paths configured; I_PCM/PCM fallback is forbidden".into(),
+            )
+        })?;
+        inner
+            .encoder_capabilities
+            .validate(output.distribution.as_ref().expect("profile checked"))?;
+        let request = EncoderSessionRequest {
+            width: inner.project.video.width,
+            height: inner.project.video.height,
+            frame_rate: inner.project.video.frame_rate,
+            video: key.video.clone(),
+            audio: key.audio.clone(),
+        };
+        let encoder = factory.create(&request)?;
+        let fanout = EncodedFanout::new(encoder.stream_config().clone());
+        inner.encoder_sessions.insert(
+            key.clone(),
+            EncodingSession {
+                encoder,
+                fanout,
+                last_error: None,
+            },
+        );
+        created_session = true;
+    }
+    let session = inner
+        .encoder_sessions
+        .get(&key)
+        .expect("encoder session inserted above");
+    let sink_name = match eiviz_io_stream::attach_profiled_sink(
+        &session.fanout,
+        output,
+        &inner.encoder_capabilities,
+    ) {
+        Ok(name) => name,
+        Err(error) => {
+            if created_session {
+                inner.encoder_sessions.remove(&key);
+            }
+            return Err(error.into());
+        }
+    };
+    inner.distribution_bindings.insert(
+        output.id,
+        DistributionBinding {
+            profile: key,
+            sink_name,
+        },
+    );
+    Ok(true)
+}
+
+fn deactivate_distribution_output(inner: &mut Inner, output: OutputId) {
+    let Some(binding) = inner.distribution_bindings.remove(&output) else {
+        return;
+    };
+    if let Some(session) = inner.encoder_sessions.get(&binding.profile) {
+        session.fanout.remove_sink(&binding.sink_name);
+    }
+    let remove_session = inner
+        .encoder_sessions
+        .get(&binding.profile)
+        .is_some_and(|session| session.fanout.sink_count() == 0);
+    if remove_session {
+        inner.encoder_sessions.remove(&binding.profile);
+    }
+}
+
 fn validate_enabled_distribution_outputs(project: &Project) -> Result<()> {
     let capabilities = eiviz_io_stream::EncoderCapabilities::default();
     for output in project.outputs.values().filter(|output| output.enabled) {
@@ -608,34 +892,80 @@ fn validate_enabled_distribution_outputs(project: &Project) -> Result<()> {
     Ok(())
 }
 
-fn distribution_diagnostics(project: &Project) -> Vec<DistributionOutputDiagnostics> {
-    let capabilities = eiviz_io_stream::EncoderCapabilities::default();
-    project
+fn distribution_diagnostics(inner: &Inner) -> Vec<DistributionOutputDiagnostics> {
+    inner
+        .project
         .outputs
         .values()
         .filter_map(|output| {
             let profile = output.distribution.as_ref()?;
-            let capability = capabilities.validate(profile);
+            let capability = inner.encoder_capabilities.validate(profile);
+            let binding = inner.distribution_bindings.get(&output.id);
+            let session = binding.and_then(|binding| inner.encoder_sessions.get(&binding.profile));
+            let sink = binding.and_then(|binding| {
+                session.and_then(|session| {
+                    session
+                        .fanout
+                        .diagnostics()
+                        .into_iter()
+                        .find(|diagnostic| diagnostic.name == binding.sink_name)
+                })
+            });
+            let encoder = session
+                .map(|session| session.encoder.diagnostics())
+                .unwrap_or_default();
+            let state = if !output.enabled {
+                "stopped".into()
+            } else if let Some(sink) = &sink {
+                format!("{:?}", sink.state).to_lowercase()
+            } else {
+                "failed".into()
+            };
+            let detail = distribution_detail(capability.err(), session, sink.as_ref(), &encoder);
             Some(DistributionOutputDiagnostics {
                 output_id: output.id.to_string(),
                 name: output.name.clone(),
                 enabled: output.enabled,
-                state: if output.enabled {
-                    if capability.is_ok() {
-                        "configured".into()
-                    } else {
-                        "unsupported".into()
-                    }
-                } else {
-                    "stopped".into()
-                },
-                detail: capability.err().map_or_else(
-                    || "explicit encoder profile available".into(),
-                    |error| error.to_string(),
-                ),
+                state,
+                detail,
+                queue_depth: sink.as_ref().map_or(0, |value| value.queue_depth),
+                queue_high_water: sink.as_ref().map_or(0, |value| value.queue_high_water),
+                enqueued: sink.as_ref().map_or(0, |value| value.enqueued),
+                sent: sink.as_ref().map_or(0, |value| value.sent),
+                dropped: sink.as_ref().map_or(0, |value| value.dropped),
+                reconnects: sink.as_ref().map_or(0, |value| value.reconnects),
+                video_frames: encoder.video_frames,
+                keyframes: encoder.keyframes,
+                audio_access_units: encoder.audio_access_units,
+                idr_requests: encoder.idr_requests,
             })
         })
         .collect()
+}
+
+fn distribution_detail(
+    capability_error: Option<eiviz_media::MediaError>,
+    session: Option<&EncodingSession>,
+    sink: Option<&SinkDiagnostics>,
+    encoder: &EncoderDiagnostics,
+) -> String {
+    if let Some(error) = capability_error {
+        return error.to_string();
+    }
+    if let Some(error) = session.and_then(|session| session.last_error.as_deref()) {
+        return format!("encoder failed: {error}");
+    }
+    if let Some(error) = sink.and_then(|sink| sink.last_error.as_deref()) {
+        return format!(
+            "{} + {}; sink: {error}",
+            encoder.video_backend, encoder.audio_backend
+        );
+    }
+    if session.is_some() {
+        format!("{} + {}", encoder.video_backend, encoder.audio_backend)
+    } else {
+        "explicit encoder adapter configured; output stopped".into()
+    }
 }
 
 impl From<AudioIoDiagnostics> for EngineAudioDiagnostics {
@@ -671,6 +1001,95 @@ mod tests {
         SceneItem, SceneItemId, Transform2D, TransitionStyle,
     };
     use eiviz_io_stream::FailingSink;
+    use eiviz_media::{EncodedAccessUnit, EncodedKind, EncodedStreamConfig};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct MockEncoderFactory {
+        creates: Arc<AtomicU64>,
+        encodes: Arc<AtomicU64>,
+        idr_requests: Arc<AtomicU64>,
+    }
+
+    struct MockEncoder {
+        config: EncodedStreamConfig,
+        encodes: Arc<AtomicU64>,
+        idr_requests: Arc<AtomicU64>,
+    }
+
+    impl ProgramEncoderFactory for MockEncoderFactory {
+        fn create(
+            &self,
+            _request: &EncoderSessionRequest,
+        ) -> eiviz_media::Result<Box<dyn ProgramEncoder>> {
+            self.creates.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(MockEncoder {
+                config: EncodedStreamConfig {
+                    h264_sps: vec![0x67, 66, 0, 31].into(),
+                    h264_pps: vec![0x68, 0].into(),
+                    aac_audio_specific_config: vec![0x11, 0x90].into(),
+                    video_width: 1920,
+                    video_height: 1080,
+                    video_timescale: 60_000,
+                    video_sample_duration: 1001,
+                    audio_sample_rate: 48_000,
+                    audio_channels: 2,
+                },
+                encodes: self.encodes.clone(),
+                idr_requests: self.idr_requests.clone(),
+            }))
+        }
+
+        fn description(&self) -> String {
+            "deterministic mock encoder".into()
+        }
+    }
+
+    impl ProgramEncoder for MockEncoder {
+        fn stream_config(&self) -> &EncodedStreamConfig {
+            &self.config
+        }
+
+        fn encode(
+            &mut self,
+            video: &VideoFrame,
+            _audio: &eiviz_media::AudioBuffer,
+        ) -> eiviz_media::Result<Vec<Arc<EncodedAccessUnit>>> {
+            self.encodes.fetch_add(1, Ordering::Relaxed);
+            Ok(vec![
+                Arc::new(EncodedAccessUnit {
+                    pts: video.pts,
+                    dts: Some(video.pts),
+                    keyframe: true,
+                    bytes: vec![0, 0, 0, 1, 0x65, 1].into(),
+                    kind: EncodedKind::Avc,
+                }),
+                Arc::new(EncodedAccessUnit {
+                    pts: video.pts,
+                    dts: Some(video.pts),
+                    keyframe: false,
+                    bytes: vec![0x21, 0x10].into(),
+                    kind: EncodedKind::Aac,
+                }),
+            ])
+        }
+
+        fn request_idr(&mut self) -> eiviz_media::Result<()> {
+            self.idr_requests.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn diagnostics(&self) -> EncoderDiagnostics {
+            EncoderDiagnostics {
+                video_backend: "mock-avc".into(),
+                audio_backend: "mock-aac".into(),
+                video_frames: self.encodes.load(Ordering::Relaxed),
+                keyframes: self.encodes.load(Ordering::Relaxed),
+                audio_access_units: self.encodes.load(Ordering::Relaxed),
+                idr_requests: self.idr_requests.load(Ordering::Relaxed),
+                last_error: None,
+            }
+        }
+    }
 
     struct PixelSink {
         name: String,
@@ -964,6 +1383,92 @@ mod tests {
             Err(EngineError::Runtime(eiviz_runtime::RuntimeError::Gpu(_))) => {}
             Err(error) => panic!("unexpected Wgpu construction result: {error}"),
         }
+    }
+
+    #[test]
+    fn engine_encodes_once_for_two_sinks_with_one_shared_profile() {
+        let engine = Engine::new("shared distribution");
+        let creates = Arc::new(AtomicU64::new(0));
+        let encodes = Arc::new(AtomicU64::new(0));
+        let idr_requests = Arc::new(AtomicU64::new(0));
+        engine
+            .install_distribution_encoder_factory(
+                Arc::new(MockEncoderFactory {
+                    creates: creates.clone(),
+                    encodes: encodes.clone(),
+                    idr_requests: idr_requests.clone(),
+                }),
+                EncoderCapabilities::dynamic_openh264_fdk(),
+            )
+            .unwrap();
+        let root =
+            std::env::temp_dir().join(format!("eiviz-engine-shared-encode-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let profile = |path: PathBuf| Output {
+            id: OutputId::new(),
+            name: format!("record {}", path.display()),
+            owner: engine.primary_unit(),
+            kind: OutputKind::Mp4 {
+                path: path.display().to_string(),
+            },
+            enabled: false,
+            distribution: Some(eiviz_core::DistributionProfile {
+                video: H264EncoderProfile::CiscoOpenH26426 {
+                    bitrate_bps: 8_000_000,
+                    keyframe_interval_frames: 120,
+                    level_idc: 42,
+                },
+                audio: AacEncoderProfile::FdkAacLc {
+                    bitrate_bps: 192_000,
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                transport: eiviz_core::TransportProfile::FragmentedMp4 {
+                    recover_incomplete_tail: true,
+                },
+                queue_capacity: 8,
+                reconnect: eiviz_core::ReconnectProfile {
+                    initial_delay_ms: 1,
+                    max_delay_ms: 2,
+                    max_attempts: 1,
+                },
+            }),
+        };
+        let output_a = profile(root.join("a.mp4"));
+        let output_b = profile(root.join("b.mp4"));
+        engine
+            .configure_distribution_output(output_a.clone())
+            .unwrap();
+        engine
+            .configure_distribution_output(output_b.clone())
+            .unwrap();
+        engine.set_distribution_enabled(output_a.id, true).unwrap();
+        engine.set_distribution_enabled(output_b.id, true).unwrap();
+
+        engine.tick().unwrap();
+
+        assert_eq!(creates.load(Ordering::Relaxed), 1);
+        assert_eq!(encodes.load(Ordering::Relaxed), 1);
+        assert_eq!(idr_requests.load(Ordering::Relaxed), 1);
+        let diagnostics = engine.metrics().distribution_outputs;
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.enabled && diagnostic.video_frames == 1)
+                .count(),
+            2
+        );
+
+        engine.set_distribution_enabled(output_a.id, false).unwrap();
+        engine.set_distribution_enabled(output_b.id, false).unwrap();
+        assert!(
+            engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .all(|diagnostic| diagnostic.state == "stopped")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

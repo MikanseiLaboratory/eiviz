@@ -25,18 +25,29 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EncoderCapabilities {
+    pub cisco_openh264_26: bool,
+    pub fdk_aac_lc: bool,
     pub h264_annexb_adapters: BTreeSet<String>,
     pub raw_aac_lc_adapters: BTreeSet<String>,
 }
 
 impl EncoderCapabilities {
+    pub fn dynamic_openh264_fdk() -> Self {
+        Self {
+            cisco_openh264_26: true,
+            fdk_aac_lc: true,
+            ..Default::default()
+        }
+    }
+
     pub fn validate(&self, profile: &DistributionProfile) -> Result<()> {
         match &profile.video {
-            H264EncoderProfile::CiscoOpenH26426 { .. } => {
+            H264EncoderProfile::CiscoOpenH26426 { .. } if !self.cisco_openh264_26 => {
                 return Err(MediaError::Unsupported(
-                    "Cisco OpenH264 2.6.0 decode is integrated, but its production encoder is not; the I_PCM test encoder is not a substitute".into(),
+                    "Cisco OpenH264 2.6.0 dynamic encoder is not registered; the I_PCM test encoder is not a substitute".into(),
                 ));
             }
+            H264EncoderProfile::CiscoOpenH26426 { .. } => {}
             H264EncoderProfile::ExternalAnnexB { adapter, .. }
                 if !self.h264_annexb_adapters.contains(adapter) =>
             {
@@ -47,11 +58,12 @@ impl EncoderCapabilities {
             H264EncoderProfile::ExternalAnnexB { .. } => {}
         }
         match &profile.audio {
-            AacEncoderProfile::FdkAacLc { .. } => {
+            AacEncoderProfile::FdkAacLc { .. } if !self.fdk_aac_lc => {
                 return Err(MediaError::Unsupported(
-                    "FDK AAC is not compiled; its upstream license has no patent grant and requires a separately reviewed distribution profile".into(),
+                    "FDK AAC-LC dynamic adapter is not registered; an explicit license-reviewed binary is required and PCM/test bytes are not substituted".into(),
                 ));
             }
+            AacEncoderProfile::FdkAacLc { .. } => {}
             AacEncoderProfile::ExternalRawAacLc { adapter, .. }
                 if !self.raw_aac_lc_adapters.contains(adapter) =>
             {
@@ -170,12 +182,17 @@ pub fn attach_profiled_sink(
     fanout: &EncodedFanout,
     output: &Output,
     encoders: &EncoderCapabilities,
-) -> Result<()> {
+) -> Result<String> {
     let profile = output.distribution.as_ref().ok_or_else(|| {
         MediaError::Unsupported("distribution output has no explicit profile".into())
     })?;
     encoders.validate(profile)?;
     let sink = sink_for_output(output)?;
+    let sink_name = format!("{}:{}", output.id, sink.name());
+    let sink = Box::new(OutputSink {
+        name: sink_name.clone(),
+        inner: sink,
+    });
     fanout.add_sink(
         sink,
         profile.queue_capacity,
@@ -184,7 +201,31 @@ pub fn attach_profiled_sink(
             max_delay: Duration::from_millis(profile.reconnect.max_delay_ms),
             max_attempts: profile.reconnect.max_attempts,
         },
-    )
+    )?;
+    Ok(sink_name)
+}
+
+struct OutputSink {
+    name: String,
+    inner: Box<dyn EncodedSink>,
+}
+
+impl EncodedSink for OutputSink {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn connect(&mut self, config: &eiviz_media::EncodedStreamConfig) -> Result<()> {
+        self.inner.connect(config)
+    }
+
+    fn send(&mut self, access_unit: &Arc<eiviz_media::EncodedAccessUnit>) -> Result<()> {
+        self.inner.send(access_unit)
+    }
+
+    fn disconnect(&mut self) {
+        self.inner.disconnect();
+    }
 }
 
 /// Test adapters can register exact names without making them implicit
@@ -194,6 +235,8 @@ pub fn registered_capabilities(
     aac: impl IntoIterator<Item = String>,
 ) -> Arc<EncoderCapabilities> {
     Arc::new(EncoderCapabilities {
+        cisco_openh264_26: false,
+        fdk_aac_lc: false,
         h264_annexb_adapters: h264.into_iter().collect(),
         raw_aac_lc_adapters: aac.into_iter().collect(),
     })

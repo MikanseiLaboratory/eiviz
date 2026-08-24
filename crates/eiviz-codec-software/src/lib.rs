@@ -1,4 +1,6 @@
+#[cfg(test)]
 mod bitstream;
+mod encoder;
 mod flv;
 mod fmp4;
 mod h264;
@@ -7,14 +9,19 @@ mod openh264;
 
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
+pub use encoder::{
+    DynamicEncoderFactory, EncoderDiagnostics, EncoderSessionRequest, ProgramEncoder,
+    ProgramEncoderFactory,
+};
 pub use flv::{
     aac_raw_payload, aac_sequence_header_payload, avc_nalu_payload, avc_sequence_header_payload,
     flv_aac_raw, flv_aac_sequence_header, flv_avc_nalu, flv_avc_sequence_header, flv_header,
 };
 pub use fmp4::FragmentedMp4;
+#[cfg(test)]
+pub use h264::encode_idr;
 pub use h264::{
-    AvccError, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb, encode_idr, extract_sps_pps,
-    split_annexb,
+    AvccError, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb, extract_sps_pps, split_annexb,
 };
 pub use mpegts::{AUDIO_PID, PMT_PID, VIDEO_PID, media_time_90k, pat, pes_aac, pes_video, pmt};
 pub use openh264::{OpenH264Decoder, OpenH264Error};

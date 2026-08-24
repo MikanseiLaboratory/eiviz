@@ -429,7 +429,10 @@ mod tests {
     fn run_mock_server(listener: TcpListener, result: mpsc::Sender<(u64, u64)>) {
         let (mut stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            // Keep the mock peer's read deadline comfortably above the
+            // publisher's connect timeout. On macOS, equal deadlines can race
+            // and surface EAGAIN before the session command is scheduled.
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut handshake = Handshake::new(PeerType::Server);
         let mut buffer = [0u8; 16 * 1024];

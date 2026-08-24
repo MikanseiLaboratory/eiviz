@@ -9,6 +9,7 @@ rust-version.workspace = true
 eiviz-core.workspace = true
 eiviz-media.workspace = true
 eiviz-time.workspace = true
+libloading = "0.9.0"
 openh264-sys2 = { version = "=0.9.8", default-features = false, features = ["libloading"] }
 thiserror.workspace = true
 yuv = "=0.8.17"
