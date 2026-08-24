@@ -66,6 +66,10 @@ mod tests {
         assert!(mp4.bytes.windows(4).any(|w| w == b"moof"));
         let flv = flv_header();
         assert_eq!(&flv[..3], b"FLV");
+        assert_eq!(flv[4], 0x05);
+        let sequence = avc_sequence_header_payload(&sps, &pps);
+        assert_eq!(&sequence[..5], &[0x17, 0, 0, 0, 0]);
+        assert_eq!(sequence[6], sps[1]);
         let ts = pat();
         assert_eq!(ts[0], 0x47);
         assert_eq!(ts.len(), 188);

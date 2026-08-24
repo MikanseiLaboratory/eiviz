@@ -863,6 +863,7 @@ impl DesktopApp {
                 TransportProfile::SrtCallerMpegTs {
                     latency_ms: 120,
                     stream_id: None,
+                    connect_timeout_ms: 5_000,
                 },
             ),
             "mp4" => (
@@ -871,7 +872,6 @@ impl DesktopApp {
                     path: self.recording_path.trim().to_owned(),
                 },
                 TransportProfile::FragmentedMp4 {
-                    segment_duration_ms: 2_000,
                     recover_incomplete_tail: true,
                 },
             ),

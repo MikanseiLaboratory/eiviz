@@ -69,7 +69,11 @@ impl EncodedSink for SrtMpegTsPublisher {
     }
 
     fn connect(&mut self, config: &EncodedStreamConfig) -> Result<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        // srt-tokio owns background UDP/retransmit tasks. A dedicated runtime
+        // worker keeps those tasks alive between access units; this entire
+        // adapter is already isolated behind its bounded fanout queue.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_io()
             .enable_time()
             .build()
@@ -177,7 +181,8 @@ mod tests {
         drop(reservation);
         let (result_tx, result_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
                 .enable_io()
                 .enable_time()
                 .build()
@@ -198,7 +203,10 @@ mod tests {
                 .iter()
                 .all(|pid| pids.contains(pid))
                 {
-                    let (_, bytes) = socket.next().await.unwrap().unwrap();
+                    let next = tokio::time::timeout(Duration::from_secs(2), socket.next()).await;
+                    let Ok(Some(Ok((_, bytes)))) = next else {
+                        panic!("SRT receive failed: {next:?}");
+                    };
                     for packet in bytes.chunks_exact(188) {
                         assert_eq!(packet[0], 0x47);
                         pids.insert((((packet[1] & 0x1f) as u16) << 8) | packet[2] as u16);
@@ -236,8 +244,14 @@ mod tests {
             }))
             .unwrap();
         let pids = result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert!(pids.contains(&eiviz_codec_software::VIDEO_PID));
-        assert!(pids.contains(&eiviz_codec_software::AUDIO_PID));
+        assert!(
+            pids.contains(&eiviz_codec_software::VIDEO_PID),
+            "received PIDs: {pids:?}"
+        );
+        assert!(
+            pids.contains(&eiviz_codec_software::AUDIO_PID),
+            "received PIDs: {pids:?}"
+        );
         publisher.disconnect();
         server.join().unwrap();
     }

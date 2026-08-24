@@ -347,7 +347,7 @@ impl Project {
 }
 
 fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<()> {
-    use crate::{AacEncoderProfile, OutputKind, TransportProfile};
+    use crate::{AacEncoderProfile, H264EncoderProfile, OutputKind, TransportProfile};
 
     let expected_transport = match &output.kind {
         OutputKind::Rtmp { url } => {
@@ -397,18 +397,58 @@ fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<
             "invalid reconnect delay range for distribution output",
         ));
     }
-    let (sample_rate, channels) = match &profile.audio {
+    let (video_bitrate, keyframe_interval, adapter) = match &profile.video {
+        H264EncoderProfile::CiscoOpenH26426 {
+            bitrate_bps,
+            keyframe_interval_frames,
+            ..
+        } => (*bitrate_bps, *keyframe_interval_frames, None),
+        H264EncoderProfile::ExternalAnnexB {
+            adapter,
+            bitrate_bps,
+            keyframe_interval_frames,
+        } => (
+            *bitrate_bps,
+            *keyframe_interval_frames,
+            Some(adapter.as_str()),
+        ),
+    };
+    if video_bitrate == 0 || keyframe_interval == 0 {
+        return Err(DomainError::msg(
+            "distribution H.264 bitrate and keyframe interval must be non-zero",
+        ));
+    }
+    if adapter.is_some_and(|adapter| adapter.trim().is_empty()) {
+        return Err(DomainError::msg(
+            "external H.264 encoder adapter name must not be empty",
+        ));
+    }
+    let (audio_bitrate, sample_rate, channels) = match &profile.audio {
         AacEncoderProfile::FdkAacLc {
+            bitrate_bps,
             sample_rate,
             channels,
             ..
         }
         | AacEncoderProfile::ExternalRawAacLc {
+            bitrate_bps,
             sample_rate,
             channels,
             ..
-        } => (*sample_rate, *channels),
+        } => (*bitrate_bps, *sample_rate, *channels),
     };
+    if let AacEncoderProfile::ExternalRawAacLc { adapter, .. } = &profile.audio
+        && adapter.trim().is_empty()
+    {
+        return Err(DomainError::msg(
+            "external AAC encoder adapter name must not be empty",
+        ));
+    }
+    if audio_bitrate == 0 {
+        return Err(DomainError::msg(
+            "distribution AAC bitrate must be non-zero",
+        ));
+    }
     if sample_rate != audio.sample_rate || channels != audio.channels {
         return Err(DomainError::msg(format!(
             "distribution AAC profile {sample_rate} Hz/{channels} ch does not match project {} Hz/{} ch",
@@ -433,6 +473,26 @@ fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<
             "output {} transport profile does not match its output kind",
             output.id
         )));
+    }
+    match &profile.transport {
+        TransportProfile::RtmpPublish {
+            chunk_size,
+            connect_timeout_ms,
+        } if !(128..=65_536).contains(chunk_size) || *connect_timeout_ms == 0 => {
+            return Err(DomainError::msg(
+                "RTMP chunk size must be 128..=65536 and timeout must be non-zero",
+            ));
+        }
+        TransportProfile::SrtCallerMpegTs {
+            latency_ms,
+            connect_timeout_ms,
+            ..
+        } if *latency_ms == 0 || *connect_timeout_ms == 0 => {
+            return Err(DomainError::msg(
+                "SRT latency and connect timeout must be non-zero",
+            ));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -651,6 +711,7 @@ mod tests {
                 transport: crate::TransportProfile::SrtCallerMpegTs {
                     latency_ms: 120,
                     stream_id: None,
+                    connect_timeout_ms: 5_000,
                 },
                 queue_capacity: 128,
                 reconnect: crate::ReconnectProfile {

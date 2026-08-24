@@ -248,4 +248,34 @@ mod tests {
         let j = fs::read_to_string(&journal).unwrap();
         assert!(j.contains("abc"));
     }
+
+    #[test]
+    fn v1_migration_never_invents_distribution_profiles() {
+        let mut plain = Project::new("legacy");
+        plain.schema_version = 1;
+        assert_eq!(migrate(plain).unwrap().schema_version, SCHEMA_VERSION);
+
+        let mut distribution = Project::new("legacy distribution");
+        distribution.schema_version = 1;
+        let owner = *distribution.mixing_units.keys().next().unwrap();
+        let output = eiviz_core::Output {
+            id: eiviz_core::OutputId::new(),
+            name: "legacy RTMP".into(),
+            owner,
+            kind: eiviz_core::OutputKind::Rtmp {
+                url: "rtmp://127.0.0.1/live/key".into(),
+            },
+            enabled: false,
+            distribution: None,
+        };
+        distribution.outputs.insert(output.id, output.clone());
+        distribution
+            .mixing_units
+            .get_mut(&owner)
+            .unwrap()
+            .outputs
+            .push(output.id);
+        let error = migrate(distribution).unwrap_err();
+        assert!(error.to_string().contains("requires an explicit codec"));
+    }
 }

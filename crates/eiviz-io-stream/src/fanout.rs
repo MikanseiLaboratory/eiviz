@@ -55,6 +55,7 @@ struct SharedDiagnostics {
     reconnects: AtomicU64,
     last_error: Mutex<Option<String>>,
     recovery_required: AtomicBool,
+    recovery_generation: AtomicU64,
 }
 
 impl SharedDiagnostics {
@@ -81,8 +82,13 @@ impl SharedDiagnostics {
     }
 }
 
+struct QueuedAccessUnit {
+    generation: u64,
+    access_unit: Arc<EncodedAccessUnit>,
+}
+
 struct SinkQueue {
-    sender: Sender<Arc<EncodedAccessUnit>>,
+    sender: Sender<QueuedAccessUnit>,
     diagnostics: Arc<SharedDiagnostics>,
     thread: Option<JoinHandle<()>>,
 }
@@ -131,6 +137,7 @@ impl EncodedFanout {
             reconnects: AtomicU64::new(0),
             last_error: Mutex::new(None),
             recovery_required: AtomicBool::new(true),
+            recovery_generation: AtomicU64::new(0),
         });
         let worker_diagnostics = diagnostics.clone();
         let config = self.config.clone();
@@ -153,7 +160,14 @@ impl EncodedFanout {
     pub fn publish(&self, access_unit: Arc<EncodedAccessUnit>) {
         let sinks = self.sinks.lock().expect("fanout sinks");
         for queue in sinks.values() {
-            match queue.sender.try_send(access_unit.clone()) {
+            let generation = queue
+                .diagnostics
+                .recovery_generation
+                .load(Ordering::Acquire);
+            match queue.sender.try_send(QueuedAccessUnit {
+                generation,
+                access_unit: access_unit.clone(),
+            }) {
                 Ok(()) => {
                     queue.diagnostics.enqueued.fetch_add(1, Ordering::Relaxed);
                     let depth = queue.sender.len();
@@ -168,6 +182,10 @@ impl EncodedFanout {
                 }
                 Err(TrySendError::Full(_)) => {
                     queue.diagnostics.dropped.fetch_add(1, Ordering::Relaxed);
+                    queue
+                        .diagnostics
+                        .recovery_generation
+                        .fetch_add(1, Ordering::AcqRel);
                     queue
                         .diagnostics
                         .recovery_required
@@ -216,18 +234,22 @@ impl Drop for EncodedFanout {
 
 fn run_worker(
     mut sink: Box<dyn EncodedSink>,
-    receiver: Receiver<Arc<EncodedAccessUnit>>,
+    receiver: Receiver<QueuedAccessUnit>,
     config: EncodedStreamConfig,
     recovery: WorkerRecovery,
     diagnostics: Arc<SharedDiagnostics>,
 ) {
     let mut connected = false;
-    while let Ok(access_unit) = receiver.recv() {
+    while let Ok(queued) = receiver.recv() {
+        let access_unit = queued.access_unit;
         diagnostics
             .queue_depth
             .store(receiver.len(), Ordering::Relaxed);
         let recovering = diagnostics.recovery_required.load(Ordering::Acquire);
-        if recovering && !is_video_keyframe(&access_unit) {
+        let required_generation = diagnostics.recovery_generation.load(Ordering::Acquire);
+        if recovering
+            && (queued.generation < required_generation || !is_video_keyframe(&access_unit))
+        {
             diagnostics.dropped.fetch_add(1, Ordering::Relaxed);
             diagnostics.set_state(SinkState::WaitingForKeyframe);
             continue;
@@ -249,6 +271,10 @@ fn run_worker(
         if let Err(error) = sink.send(&access_unit) {
             diagnostics.set_error(error.to_string());
             diagnostics.set_state(SinkState::WaitingForKeyframe);
+            diagnostics.reconnects.fetch_add(1, Ordering::Relaxed);
+            diagnostics
+                .recovery_generation
+                .fetch_add(1, Ordering::AcqRel);
             diagnostics.recovery_required.store(true, Ordering::Release);
             sink.disconnect();
             connected = false;

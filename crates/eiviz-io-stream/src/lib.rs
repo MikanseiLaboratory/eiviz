@@ -104,29 +104,31 @@ pub fn sink_for_output(output: &Output) -> Result<Box<dyn EncodedSink>> {
         (
             OutputKind::Rtmp { url },
             TransportProfile::RtmpPublish {
-                connect_timeout_ms, ..
+                chunk_size,
+                connect_timeout_ms,
             },
         ) => Ok(Box::new(RtmpPublisher::new(
             url,
             Duration::from_millis(*connect_timeout_ms),
+            *chunk_size,
         )?)),
         (
             OutputKind::Srt { url },
             TransportProfile::SrtCallerMpegTs {
                 latency_ms,
                 stream_id,
+                connect_timeout_ms,
             },
         ) => Ok(Box::new(SrtMpegTsPublisher::new(
             url,
             stream_id.clone(),
             Duration::from_millis((*latency_ms).into()),
-            Duration::from_secs(5),
+            Duration::from_millis(*connect_timeout_ms),
         )?)),
         (
             OutputKind::Mp4 { path },
             TransportProfile::FragmentedMp4 {
                 recover_incomplete_tail,
-                ..
             },
         ) => Ok(Box::new(FragmentedMp4Sink::new(
             path.into(),

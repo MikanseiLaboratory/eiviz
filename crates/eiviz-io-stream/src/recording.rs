@@ -54,6 +54,7 @@ impl EncodedSink for FragmentedMp4Sink {
         }
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&self.path)

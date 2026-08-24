@@ -13,6 +13,6 @@ rml_rtmp = "=0.8.0"
 bytes = "1.12.1"
 futures = "0.3.34"
 srt-tokio = "=0.4.4"
-tokio = { version = "1.53.1", features = ["rt", "net", "time"] }
+tokio = { version = "1.53.1", features = ["rt", "net", "time", "rt-multi-thread"] }
 crossbeam-channel.workspace = true
 eiviz-core.workspace = true

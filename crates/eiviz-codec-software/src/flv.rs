@@ -2,19 +2,22 @@ use crate::h264;
 use eiviz_media::EncodedAccessUnit;
 
 pub fn flv_header() -> Vec<u8> {
-    let mut v = b"FLV\x01\x01".to_vec();
+    let mut v = b"FLV\x01\x05".to_vec();
     v.extend_from_slice(&9u32.to_be_bytes());
     v.extend_from_slice(&0u32.to_be_bytes());
     v
 }
 
 pub fn flv_avc_sequence_header(sps: &[u8], pps: &[u8]) -> Vec<u8> {
-    video_tag(0, true, 0, &avc_sequence_header_payload(sps, pps))
+    video_tag_payload(0, avc_sequence_header_payload(sps, pps))
 }
 
 /// RTMP video-message payload for an AVC sequence header.
 pub fn avc_sequence_header_payload(sps: &[u8], pps: &[u8]) -> Vec<u8> {
-    let mut avcc = vec![1, 66, 0, 31, 0xff, 0xe1];
+    let profile = sps.get(1).copied().unwrap_or(66);
+    let compatibility = sps.get(2).copied().unwrap_or(0);
+    let level = sps.get(3).copied().unwrap_or(31);
+    let mut avcc = vec![1, profile, compatibility, level, 0xff, 0xe1];
     avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
     avcc.extend_from_slice(sps);
     avcc.push(1);
@@ -71,24 +74,6 @@ pub fn flv_aac_sequence_header(audio_specific_config: &[u8]) -> Vec<u8> {
 
 pub fn flv_aac_raw(au: &EncodedAccessUnit, timestamp_ms: u32) -> Vec<u8> {
     audio_tag(timestamp_ms, &aac_raw_payload(au))
-}
-
-fn video_tag(dts_ms: u32, key: bool, avc_packet_type: u8, data: &[u8]) -> Vec<u8> {
-    let mut body = Vec::new();
-    body.push(if key { 0x17 } else { 0x27 });
-    body.push(avc_packet_type);
-    body.extend_from_slice(&[0, 0, 0]);
-    body.extend_from_slice(data);
-    let mut tag = Vec::new();
-    tag.push(9);
-    tag.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
-    tag.extend_from_slice(&dts_ms.to_be_bytes()[1..]);
-    tag.push(0);
-    tag.extend_from_slice(&[0, 0, 0]);
-    tag.extend_from_slice(&body);
-    let prev = (tag.len() as u32).to_be_bytes();
-    tag.extend_from_slice(&prev);
-    tag
 }
 
 fn video_tag_payload(dts_ms: u32, body: Vec<u8>) -> Vec<u8> {

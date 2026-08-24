@@ -52,6 +52,7 @@ impl RtmpEndpoint {
 pub struct RtmpPublisher {
     endpoint: RtmpEndpoint,
     connect_timeout: Duration,
+    chunk_size: u32,
     name: String,
     connection: Option<RtmpConnection>,
 }
@@ -62,12 +63,18 @@ struct RtmpConnection {
 }
 
 impl RtmpPublisher {
-    pub fn new(url: &str, connect_timeout: Duration) -> Result<Self> {
+    pub fn new(url: &str, connect_timeout: Duration, chunk_size: u32) -> Result<Self> {
+        if !(128..=65_536).contains(&chunk_size) {
+            return Err(MediaError::Unsupported(
+                "RTMP chunk size must be in 128..=65536".into(),
+            ));
+        }
         let endpoint = RtmpEndpoint::parse(url)?;
         let name = format!("RTMP {}:{}/{}", endpoint.host, endpoint.port, endpoint.app);
         Ok(Self {
             endpoint,
             connect_timeout,
+            chunk_size,
             name,
             connection: None,
         })
@@ -80,7 +87,8 @@ impl EncodedSink for RtmpPublisher {
     }
 
     fn connect(&mut self, config: &EncodedStreamConfig) -> Result<()> {
-        let mut connection = RtmpConnection::connect(&self.endpoint, self.connect_timeout)?;
+        let mut connection =
+            RtmpConnection::connect(&self.endpoint, self.connect_timeout, self.chunk_size)?;
         connection.publish_headers(config)?;
         self.connection = Some(connection);
         Ok(())
@@ -122,7 +130,7 @@ impl EncodedSink for RtmpPublisher {
 }
 
 impl RtmpConnection {
-    fn connect(endpoint: &RtmpEndpoint, timeout: Duration) -> Result<Self> {
+    fn connect(endpoint: &RtmpEndpoint, timeout: Duration, chunk_size: u32) -> Result<Self> {
         let address = format!("{}:{}", endpoint.host, endpoint.port);
         let addresses = address
             .to_socket_addrs()
@@ -153,6 +161,7 @@ impl RtmpConnection {
 
         let mut session_config = ClientSessionConfig::new();
         session_config.tc_url = Some(endpoint.tc_url());
+        session_config.chunk_size = chunk_size;
         let (mut session, initial) = ClientSession::new(session_config)
             .map_err(|error| MediaError::Disconnected(error.to_string()))?;
         write_client_results(&mut stream, initial)?;
@@ -385,6 +394,7 @@ mod tests {
         let mut publisher = RtmpPublisher::new(
             &format!("rtmp://127.0.0.1:{port}/live/key"),
             Duration::from_secs(2),
+            4096,
         )
         .unwrap();
         let config = test_config();

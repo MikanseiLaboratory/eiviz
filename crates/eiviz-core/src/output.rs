@@ -83,9 +83,9 @@ pub enum TransportProfile {
     SrtCallerMpegTs {
         latency_ms: u32,
         stream_id: Option<String>,
+        connect_timeout_ms: u64,
     },
     FragmentedMp4 {
-        segment_duration_ms: u32,
         recover_incomplete_tail: bool,
     },
 }

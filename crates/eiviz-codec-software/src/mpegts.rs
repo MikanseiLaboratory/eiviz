@@ -124,7 +124,7 @@ fn adts_header(
 }
 
 fn pes(stream_id: u8, pts: u64, payload: &[u8]) -> Vec<u8> {
-    let pes_length = payload.len().checked_add(8).unwrap_or(usize::MAX);
+    let pes_length = payload.len().saturating_add(8);
     let encoded_length = u16::try_from(pes_length).unwrap_or(0);
     let mut packet = vec![0x00, 0x00, 0x01, stream_id];
     packet.extend_from_slice(&encoded_length.to_be_bytes());
