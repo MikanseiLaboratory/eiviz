@@ -97,6 +97,12 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R11.1 Windows x64 を必須 gate
 - R11.2 非対応の optional I/O / codec feature はプロセス起動を止めず capability として表示する。選択済み compositor / encode / audio backend が利用不能なときはその Project を実行せず、他 backend へ黙って乗り換えない
 - R11.3 配布物は NDI / DeckLink / ASIO / codec のライセンス表示を含む
+- R11.4 Windows x64 MSIX、macOS arm64 pkg、Ubuntu 24.04 x64 deb は固定 native
+  feature profile、SBOM、third-party notice、payload hash manifest を持つ。通常 CI
+  は unsigned と明示し、署名・notarization は key がある手動 release workflow
+  だけで行う
+- R11.5 installer upgrade は user project/config を暗黙変更しない。migration は
+  backup と明示出力を要求し、rollback は hash 検証と復元前 rescue snapshot を持つ
 
 ## 不変条件
 

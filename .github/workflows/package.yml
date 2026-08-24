@@ -1,0 +1,110 @@
+name: unsigned-packages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/src -Dwarnings
+
+jobs:
+  package:
+    name: ${{ matrix.target }} unsigned package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x86_64
+            rust_target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: target/x86_64-pc-windows-msvc/release/eiviz-desktop.exe
+            migrator: target/x86_64-pc-windows-msvc/release/eiviz-project-migrate.exe
+          - target: macos-aarch64
+            rust_target: aarch64-apple-darwin
+            os: macos-14
+            binary: target/aarch64-apple-darwin/release/eiviz-desktop
+            migrator: target/aarch64-apple-darwin/release/eiviz-project-migrate
+          - target: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            binary: target/x86_64-unknown-linux-gnu/release/eiviz-desktop
+            migrator: target/x86_64-unknown-linux-gnu/release/eiviz-project-migrate
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.rust_target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: package-${{ matrix.target }}
+      - name: Install Linux native build and package dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev libasound2-dev libudev-dev libx11-dev \
+            libxrandr-dev libxi-dev libxcursor-dev libxkbcommon-dev libwayland-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev
+      - name: Locate Windows SDK package tool
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $tool) { throw "makeappx.exe was not found" }
+          $tool.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Resolve reproducible source epoch and native feature profile
+        id: profile
+        shell: bash
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+          target = "${{ matrix.target }}"
+          profile = json.loads(Path("packaging/release.json").read_text())["targets"][target]
+          print("features=" + ",".join(profile["features"]))
+          PY
+      - name: Generate legal and SBOM evidence
+        run: |
+          python3 scripts/generate-third-party-notices.py
+          python3 scripts/generate-sbom.py
+      - name: Build desktop native profile
+        run: cargo build --locked --release --target ${{ matrix.rust_target }} -p eiviz-desktop --features "${{ steps.profile.outputs.features }}"
+      - name: Build explicit project migration utility
+        run: cargo build --locked --release --target ${{ matrix.rust_target }} -p eiviz-project --bin eiviz-project-migrate
+      - name: Build unsigned native package
+        run: >-
+          python3 scripts/build-package.py
+          --target ${{ matrix.target }}
+          --binary "${{ matrix.binary }}"
+          --project-migrator "${{ matrix.migrator }}"
+      - name: Smoke-test package contents and manifest
+        shell: bash
+        run: |
+          artifact="$(python3 -c 'from pathlib import Path; print(next(path for path in Path("target/packages").iterdir() if path.suffix in {".msix", ".pkg", ".deb"}))')"
+          test -n "$artifact"
+          python3 scripts/validate-package.py --target "${{ matrix.target }}" --artifact "$artifact"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eiviz-${{ matrix.target }}-unsigned
+          path: target/packages/*
+          if-no-files-found: error
+          retention-days: 14
+
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - name: Packaging manifest and rollback tests
+        run: python3 packaging/tests/test_packaging.py

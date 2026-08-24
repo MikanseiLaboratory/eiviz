@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "product": {
+    "name": "eiviz",
+    "display_name": "eiviz",
+    "identifier": "com.mikanseilaboratory.eiviz",
+    "publisher": "Mikansei Laboratory",
+    "binary": "eiviz-desktop"
+  },
+  "data_migration": {
+    "schema_version": 1,
+    "strategy": "backup-before-explicit-migration",
+    "project_migration": "in-memory-until-explicit-save"
+  },
+  "targets": {
+    "windows-x86_64": {
+      "rust_target": "x86_64-pc-windows-msvc",
+      "runner": "windows-latest",
+      "format": "msix",
+      "features": [
+        "wgpu-backend",
+        "audio-cpal",
+        "midi"
+      ],
+      "support": "first-class"
+    },
+    "macos-aarch64": {
+      "rust_target": "aarch64-apple-darwin",
+      "runner": "macos-14",
+      "format": "pkg",
+      "features": [
+        "wgpu-backend",
+        "audio-cpal",
+        "midi"
+      ],
+      "minimum_system_version": "13.0",
+      "support": "capability-profile"
+    },
+    "linux-x86_64": {
+      "rust_target": "x86_64-unknown-linux-gnu",
+      "runner": "ubuntu-24.04",
+      "format": "deb",
+      "features": [
+        "wgpu-backend",
+        "audio-cpal",
+        "midi"
+      ],
+      "support": "ubuntu-24.04"
+    }
+  },
+  "forbidden_bundle_globs": [
+    "*ndi*.dll",
+    "*ndi*.dylib",
+    "*ndi*.so",
+    "*decklink*",
+    "*asio*",
+    "*openh264*",
+    "*fdk*aac*",
+    "*avcodec*",
+    "*avformat*"
+  ],
+  "required_payloads": [
+    "LICENSE",
+    "NOTICE",
+    "THIRD-PARTY-NOTICES.txt",
+    "eiviz.spdx.json",
+    "eiviz.cyclonedx.json",
+    "payload-manifest.json",
+    "eiviz-data-migration.py"
+  ],
+  "signing": {
+    "unsigned_ci": true,
+    "workflow": ".github/workflows/release-sign.yml",
+    "windows": "Authenticode MSIX",
+    "macos": "Developer ID Application, Developer ID Installer, Apple notarization",
+    "linux": "detached OpenPGP signature over artifact and checksum manifest"
+  }
+}

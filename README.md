@@ -65,6 +65,9 @@ all pass:
   Real-server/loss/24-hour HIL remains pending.
 - Persisted, truth-preserving capability reports and CI-generated SPDX 2.3 /
   CycloneDX 1.5 SBOM artifacts
+- Unsigned MSIX (Windows x64), pkg (macOS arm64), and deb (Ubuntu 24.04 x64)
+  packaging smoke profiles. Release signing/notarization is a separate
+  secret-gated workflow; no signed release is claimed without those keys.
 - Structured operational spans/metrics, a bounded 45-second redacted flight
   recorder, and crash reports containing recent diagnostics plus project hash
 - Portable `.eiviz` packages, crash-safe JSON save, and explicit Desktop
@@ -77,7 +80,9 @@ the [audio HIL procedure](docs/hil/audio.md), and the
 [file-media HIL procedure](docs/hil/file-media.md), and the
 [distribution HIL procedure](docs/hil/distribution.md). Operational export,
 recovery semantics, and SBOM generation are documented in
-[operations](docs/operations.md).
+[operations](docs/operations.md). Native package profiles, upgrade rollback,
+SDK exclusions, and signing verification are documented in
+[release packaging](docs/packaging.md).
 
 ## Build
 
@@ -145,6 +150,8 @@ for wire formats.
 
 Windows x64 is the first-class target. Linux/macOS compile the same core.
 MSRV is 1.97; the repo `rust-toolchain.toml` pins the CI/dev toolchain.
+Release packages use explicit `wgpu-backend,audio-cpal,midi` profiles and never
+bundle NDI, DeckLink, ASIO, OpenH264, or FDK AAC implicitly.
 
 ## Layout
 

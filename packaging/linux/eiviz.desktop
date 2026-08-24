@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=eiviz
+Comment=Cross-platform GPU vision mixer
+Exec=eiviz
+Icon=eiviz
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=true
