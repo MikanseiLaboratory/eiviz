@@ -1,6 +1,8 @@
 #[cfg(test)]
 use crate::bitstream::{BitWriter, annexb};
-use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
+use eiviz_media::EncodedAccessUnit;
+#[cfg(test)]
+use eiviz_media::{EncodedKind, VideoFrame};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AvccError {

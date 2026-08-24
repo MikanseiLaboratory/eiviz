@@ -212,7 +212,7 @@ impl ProgramEncoder for DynamicProgramEncoder {
         video: &VideoFrame,
         audio: &AudioBuffer,
     ) -> Result<Vec<Arc<EncodedAccessUnit>>> {
-        let result = (|| {
+        let result: Result<Vec<Arc<EncodedAccessUnit>>> = (|| {
             let video = Arc::new(self.video.encode(video)?);
             self.diagnostics.video_frames = self.diagnostics.video_frames.saturating_add(1);
             if video.keyframe {
@@ -442,7 +442,7 @@ impl OpenH264Encoder {
         rgba_to_i420_bt709_limited(frame, &mut self.i420)?;
         let y_len = (self.width * self.height) as usize;
         let uv_len = y_len / 4;
-        let mut picture = SSourcePicture {
+        let picture = SSourcePicture {
             iColorFormat: videoFormatI420,
             iStride: [self.width as c_int, (self.width / 2) as c_int, 0, 0],
             pData: [
