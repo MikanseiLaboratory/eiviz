@@ -190,21 +190,21 @@ impl Project {
             }
         }
         for unit in self.mixing_units.values() {
-            if let Some(s) = unit.program.scene {
-                if !self.scenes.contains_key(&s) {
-                    return Err(DomainError::InvalidRef("program scene".into()));
-                }
+            if let Some(s) = unit.program.scene
+                && !self.scenes.contains_key(&s)
+            {
+                return Err(DomainError::InvalidRef("program scene".into()));
             }
-            if let Some(s) = unit.preview.scene {
-                if !self.scenes.contains_key(&s) {
-                    return Err(DomainError::InvalidRef("preview scene".into()));
-                }
+            if let Some(s) = unit.preview.scene
+                && !self.scenes.contains_key(&s)
+            {
+                return Err(DomainError::InvalidRef("preview scene".into()));
             }
             for overlay in &unit.overlays {
-                if let Some(s) = overlay.scene {
-                    if !self.scenes.contains_key(&s) {
-                        return Err(DomainError::InvalidRef("overlay scene".into()));
-                    }
+                if let Some(s) = overlay.scene
+                    && !self.scenes.contains_key(&s)
+                {
+                    return Err(DomainError::InvalidRef("overlay scene".into()));
                 }
             }
             for oid in &unit.outputs {

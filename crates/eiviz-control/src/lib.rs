@@ -138,12 +138,12 @@ fn handle(
         let parsed: Result<WireCommand, _> = serde_json::from_str(body);
         match parsed {
             Ok(wire) => {
-                if let Some(need) = &cfg.require_token {
-                    if wire.token.as_deref() != Some(need.as_str()) {
-                        return Response::from_string("unauthorized")
-                            .with_status_code(401)
-                            .with_header(cors);
-                    }
+                if let Some(need) = &cfg.require_token
+                    && wire.token.as_deref() != Some(need.as_str())
+                {
+                    return Response::from_string("unauthorized")
+                        .with_status_code(401)
+                        .with_header(cors);
                 }
                 match engine.submit(CommandEnvelope::new(engine.client(), wire.command)) {
                     Ok(ack) => {

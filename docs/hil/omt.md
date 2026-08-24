@@ -3,21 +3,13 @@
 Status: **not yet executed**. Passing unit tests or loading `libomt` is not an
 interop pass.
 
-## Supported native library
+## Implementation
 
-- Official Open Media Transport `libomt` C ABI
-- Verified header/API target: `v1.0.0.16`
-- Official release asset SHA-256:
-  `c70e67f7e2a7ed5b4c389d99af62796a8c9c7be23c8debfae3fd8020c1dc66b9`
+- Pure Rust `MikanseiLaboratory/openmediatransport-rs`
+- Pure Rust `vmx-rs` VMX1 codec
 - License: MIT
+- No libomt/native-library path and no runtime fallback
 
-Official binary releases currently contain Windows x64/arm64 and macOS
-libraries. Linux must build `libomt` from source; it is not silently replaced
-with a simulator.
-
-Set `EIVIZ_OMT_LIBRARY` to the exact **absolute** `libomt.dll`,
-`libomt.dylib`, or `libomt.so` path, or package libomt and libvmx beside the
-eiviz executable. Relative/system DLL lookup is intentionally rejected.
 `EIVIZ_OMT_SOURCE` may contain an OMT discovery name or
 `omt://hostname:port` to connect at desktop startup.
 

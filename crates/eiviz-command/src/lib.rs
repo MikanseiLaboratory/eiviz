@@ -186,13 +186,13 @@ impl Sequencer {
                 duplicate: true,
             });
         }
-        if let Some(expected) = env.expected_revision {
-            if expected != self.revision {
-                return Err(CommandError::RevisionMismatch {
-                    expected,
-                    actual: self.revision,
-                });
-            }
+        if let Some(expected) = env.expected_revision
+            && expected != self.revision
+        {
+            return Err(CommandError::RevisionMismatch {
+                expected,
+                actual: self.revision,
+            });
         }
         if let Some(key) = &env.coalesce_key {
             if matches!(
@@ -346,17 +346,17 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
         Command::AddOutput { output } => {
             let owner = output.owner;
             project.outputs.insert(output.id, output.clone());
-            if let Ok(u) = project.mixing_unit_mut(owner) {
-                if !u.outputs.contains(&output.id) {
-                    u.outputs.push(output.id);
-                }
+            if let Ok(u) = project.mixing_unit_mut(owner)
+                && !u.outputs.contains(&output.id)
+            {
+                u.outputs.push(output.id);
             }
         }
         Command::RemoveOutput { id } => {
-            if let Some(o) = project.outputs.remove(id) {
-                if let Ok(u) = project.mixing_unit_mut(o.owner) {
-                    u.outputs.retain(|x| x != id);
-                }
+            if let Some(o) = project.outputs.remove(id)
+                && let Ok(u) = project.mixing_unit_mut(o.owner)
+            {
+                u.outputs.retain(|x| x != id);
             }
         }
         Command::SetOutputEnabled { id, enabled } => {
@@ -367,10 +367,10 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
         Command::AddMultiview { view } => {
             let owner = view.owner;
             project.multiviews.insert(view.id, view.clone());
-            if let Ok(u) = project.mixing_unit_mut(owner) {
-                if !u.multiviews.contains(&view.id) {
-                    u.multiviews.push(view.id);
-                }
+            if let Ok(u) = project.mixing_unit_mut(owner)
+                && !u.multiviews.contains(&view.id)
+            {
+                u.multiviews.push(view.id);
             }
         }
         Command::SetAudioRoute { route } => {

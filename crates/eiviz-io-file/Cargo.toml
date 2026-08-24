@@ -12,5 +12,5 @@ eiviz-media.workspace = true
 eiviz-project.workspace = true
 eiviz-time.workspace = true
 image.workspace = true
-mp4io = "=0.1.2"
+shiguredo_mp4 = "=2026.4.0"
 thiserror.workspace = true

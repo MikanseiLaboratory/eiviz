@@ -314,6 +314,7 @@ fn bootstrap(engine: &Engine) {
 }
 
 impl eframe::App for DesktopApp {
+    #[allow(clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _ = self.engine.tick();
         let project = self.engine.snapshot();
@@ -615,6 +616,7 @@ fn show_frame(
 }
 
 impl DesktopApp {
+    #[allow(clippy::collapsible_if)]
     fn handle_preview_pointer(
         &mut self,
         ui: &egui::Ui,

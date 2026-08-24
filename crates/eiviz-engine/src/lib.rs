@@ -274,10 +274,10 @@ impl Engine {
             note: "tick".into(),
         };
         push_flight(&mut g.flight, ev);
-        if let Some(path) = g.autosave_path.clone() {
-            if g.runtime.frame() % 60 == 0 {
-                let _ = save_autosave(&g.project, &path);
-            }
+        if let Some(path) = g.autosave_path.clone()
+            && g.runtime.frame().is_multiple_of(60)
+        {
+            let _ = save_autosave(&g.project, &path);
         }
         Ok(result)
     }

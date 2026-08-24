@@ -49,16 +49,16 @@ fn plan_bus(
     include_overlays: bool,
 ) -> RenderPlan {
     let mut layers = Vec::new();
-    if let Some(id) = scene_id {
-        if let Some(scene) = project.scenes.get(&id) {
-            for item in scene.sorted_items() {
-                if item.transform.visible() {
-                    layers.push(Layer {
-                        input: item.input,
-                        transform: item.transform,
-                        opacity: item.transform.opacity,
-                    });
-                }
+    if let Some(id) = scene_id
+        && let Some(scene) = project.scenes.get(&id)
+    {
+        for item in scene.sorted_items() {
+            if item.transform.visible() {
+                layers.push(Layer {
+                    input: item.input,
+                    transform: item.transform,
+                    opacity: item.transform.opacity,
+                });
             }
         }
     }
@@ -69,16 +69,16 @@ fn plan_bus(
             if !overlay.enabled {
                 continue;
             }
-            if let Some(id) = overlay.scene {
-                if let Some(scene) = project.scenes.get(&id) {
-                    for item in scene.sorted_items() {
-                        if item.transform.visible() {
-                            layers.push(Layer {
-                                input: item.input,
-                                transform: item.transform,
-                                opacity: item.transform.opacity,
-                            });
-                        }
+            if let Some(id) = overlay.scene
+                && let Some(scene) = project.scenes.get(&id)
+            {
+                for item in scene.sorted_items() {
+                    if item.transform.visible() {
+                        layers.push(Layer {
+                            input: item.input,
+                            transform: item.transform,
+                            opacity: item.transform.opacity,
+                        });
                     }
                 }
             }

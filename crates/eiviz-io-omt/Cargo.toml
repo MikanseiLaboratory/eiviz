@@ -9,6 +9,6 @@ rust-version.workspace = true
 eiviz-core.workspace = true
 eiviz-media.workspace = true
 eiviz-time.workspace = true
-libloading.workspace = true
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", version = "0.1.0" }
 parking_lot.workspace = true
 thiserror.workspace = true

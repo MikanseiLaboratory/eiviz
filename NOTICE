@@ -14,11 +14,9 @@ license from Vizrt and compliance with the NDI SDK license agreement.
 
 OMT (Open Media Transport)
 --------------------------
-The OMT adapter implements the official libomt C ABI and loads libomt at
-runtime. libomt/libomtnet/libvmx are MIT-licensed by the Open Media Transport
-contributors. They are not vendored in the default build. Distributions that
-bundle them must include their MIT notice. The target ABI is official release
-v1.0.0.16.
+The OMT adapter uses MikanseiLaboratory/openmediatransport-rs and vmx-rs,
+pure-Rust independent community implementations licensed under MIT. It does
+not link or fall back to libomt.
 
 Blackmagic DeckLink / Desktop Video
 -----------------------------------

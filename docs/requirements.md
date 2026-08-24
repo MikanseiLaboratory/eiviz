@@ -60,7 +60,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R06.5 サンプルレート差は ASRC。callback 内 allocation / blocking / I/O 禁止
 
 ### R07 I/O
-- R07.1 NDI: grafton-ndi（feature）。OMT: 公式 `libomt` C ABIをruntime loadし、discovery/receive/send、BGRA/UYVY映像、FPA1音声、timestamp、tally/metadata、reconnectを実装する。ライブラリ欠落時にsimulatorへ切り替えない
+- R07.1 NDI: grafton-ndi（feature）。OMT: pure-Rust `openmediatransport-rs`でdiscovery/receive/send、VMX1映像、FPA1音声、timestamp、tally/metadata、reconnectを実装する。libomtやsimulatorへ切り替えない
 - R07.2 DeckLink: SDK 16 shim（feature）。Audio: CPAL。Windows は WASAPI 必須、ASIO はライセンス後
 - R07.3 SDK 未導入でも core は起動し、capability 不足を表示する
 - R07.4 各 source/sink は bounded queue。遅い sink が Program を止めない

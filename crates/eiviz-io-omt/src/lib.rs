@@ -1,27 +1,19 @@
 //! Open Media Transport adapter.
 //!
-//! Production capture uses the official MIT-licensed `libomt` C ABI loaded at
-//! runtime. Missing native libraries are reported as unavailable; they are
-//! never replaced by simulated frames.
+//! Production capture uses the pure-Rust `openmediatransport-rs` protocol stack.
+//! No native libomt fallback or simulated production path exists.
 
 mod native;
 
-pub use native::{OmtError, OmtSink, OmtSource, discover_sources, loaded_library};
+pub use native::{OmtError, OmtSink, OmtSource, discover_sources};
 
 use eiviz_media::Capability;
 
 pub fn probe() -> Capability {
-    match loaded_library() {
-        Ok(path) => Capability {
-            id: "omt".into(),
-            available: true,
-            detail: format!("official libomt C ABI loaded from {}", path.display()),
-        },
-        Err(error) => Capability {
-            id: "omt".into(),
-            available: false,
-            detail: error.to_string(),
-        },
+    Capability {
+        id: "omt".into(),
+        available: true,
+        detail: "pure Rust openmediatransport-rs + vmx-rs".into(),
     }
 }
 
