@@ -1,7 +1,5 @@
 use crate::fanout::EncodedSink;
-use eiviz_media::{
-    EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result,
-};
+use eiviz_media::{EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +19,7 @@ pub struct FragmentedMp4Sink {
     recover_incomplete_tail: bool,
     file: Option<File>,
     muxer: Option<eiviz_codec_software::FragmentedMp4>,
+    video_sample_duration: u32,
 }
 
 impl FragmentedMp4Sink {
@@ -31,6 +30,7 @@ impl FragmentedMp4Sink {
             recover_incomplete_tail,
             file: None,
             muxer: None,
+            video_sample_duration: 0,
         }
     }
 }
@@ -44,8 +44,13 @@ impl EncodedSink for FragmentedMp4Sink {
         if self.recover_incomplete_tail && self.path.exists() {
             recover_fragmented_mp4(&self.path)?;
         }
-        if let Some(parent) = self.path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|error| MediaError::Other(error.to_string()))?;
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| MediaError::Other(error.to_string()))?;
         }
         let mut file = OpenOptions::new()
             .create(true)
@@ -71,6 +76,7 @@ impl EncodedSink for FragmentedMp4Sink {
             .map_err(|error| MediaError::Other(error.to_string()))?;
         self.file = Some(file);
         self.muxer = Some(muxer);
+        self.video_sample_duration = config.video_sample_duration;
         Ok(())
     }
 
@@ -84,7 +90,7 @@ impl EncodedSink for FragmentedMp4Sink {
             .as_mut()
             .ok_or_else(|| MediaError::Disconnected(self.name.clone()))?;
         let duration = match access_unit.kind {
-            EncodedKind::Avc => muxer_config_video_duration(muxer),
+            EncodedKind::Avc => self.video_sample_duration,
             EncodedKind::Aac => 1024,
             EncodedKind::Pcm => {
                 return Err(MediaError::Unsupported(
@@ -109,12 +115,6 @@ impl EncodedSink for FragmentedMp4Sink {
         }
         self.muxer = None;
     }
-}
-
-// FragmentedMp4 stores this in trex; the production profile is currently
-// fixed at 60000/1001. The sink constructor validates the project mapping.
-fn muxer_config_video_duration(_muxer: &eiviz_codec_software::FragmentedMp4) -> u32 {
-    1001
 }
 
 pub fn recover_fragmented_mp4(path: &Path) -> Result<RecoveryReport> {
@@ -177,6 +177,7 @@ fn validate_fmp4_prefix(file: &mut File) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eiviz_time::MediaTime;
 
     #[test]
     fn recovery_truncates_only_incomplete_tail() {
@@ -193,6 +194,55 @@ mod tests {
         let report = recover_fragmented_mp4(&path).unwrap();
         assert_eq!(report.recovered_len, 12);
         assert_eq!(report.truncated_bytes, 11);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recording_contains_avc_aac_tracks_and_fragments() {
+        let path = std::env::temp_dir().join(format!("eiviz-fmp4-av-{}.mp4", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let config = EncodedStreamConfig {
+            h264_sps: vec![0x67, 66, 0, 31].into(),
+            h264_pps: vec![0x68, 0].into(),
+            aac_audio_specific_config: vec![0x11, 0x90].into(),
+            video_width: 1920,
+            video_height: 1080,
+            video_timescale: 60_000,
+            video_sample_duration: 1001,
+            audio_sample_rate: 48_000,
+            audio_channels: 2,
+        };
+        let mut sink = FragmentedMp4Sink::new(path.clone(), true);
+        sink.connect(&config).unwrap();
+        sink.send(&Arc::new(EncodedAccessUnit {
+            pts: MediaTime::ZERO,
+            dts: Some(MediaTime::ZERO),
+            keyframe: true,
+            bytes: vec![0, 0, 0, 1, 0x65, 1].into(),
+            kind: EncodedKind::Avc,
+        }))
+        .unwrap();
+        sink.send(&Arc::new(EncodedAccessUnit {
+            pts: MediaTime::ZERO,
+            dts: Some(MediaTime::ZERO),
+            keyframe: false,
+            bytes: vec![0x21, 0x10].into(),
+            kind: EncodedKind::Aac,
+        }))
+        .unwrap();
+        sink.disconnect();
+        let bytes = std::fs::read(&path).unwrap();
+        for box_type in [b"ftyp", b"moov", b"avc1", b"mp4a", b"moof", b"mdat"] {
+            assert!(
+                bytes.windows(4).any(|window| window == box_type),
+                "missing {}",
+                String::from_utf8_lossy(box_type)
+            );
+        }
+        assert_eq!(
+            bytes.windows(4).filter(|window| *window == b"moof").count(),
+            2
+        );
         let _ = std::fs::remove_file(path);
     }
 }

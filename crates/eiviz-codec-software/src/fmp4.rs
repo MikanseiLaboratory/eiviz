@@ -74,10 +74,7 @@ impl FragmentedMp4 {
             return;
         }
 
-        let decode_time = media_time_units(
-            access_unit.dts.unwrap_or(access_unit.pts),
-            timescale,
-        );
+        let decode_time = media_time_units(access_unit.dts.unwrap_or(access_unit.pts), timescale);
         let fragment = movie_fragment(
             self.sequence,
             track_id,
@@ -171,7 +168,11 @@ fn track(
     let mut hdlr = vec![0; 4];
     hdlr.extend_from_slice(if video { b"vide" } else { b"soun" });
     hdlr.extend_from_slice(&[0; 12]);
-    hdlr.extend_from_slice(if video { b"eiviz video\0" } else { b"eiviz audio\0" });
+    hdlr.extend_from_slice(if video {
+        b"eiviz video\0"
+    } else {
+        b"eiviz audio\0"
+    });
     mdia.extend_from_slice(&full(b"hdlr", 0, 0, &hdlr));
 
     let mut minf = if video {
@@ -215,10 +216,7 @@ fn video_sample_entry(config: &EncodedStreamConfig) -> Vec<u8> {
     avc1.extend_from_slice(&[0; 32]);
     avc1.extend_from_slice(&0x0018u16.to_be_bytes());
     avc1.extend_from_slice(&0xffffu16.to_be_bytes());
-    avc1.extend_from_slice(&bx(
-        b"avcC",
-        &avcc(&config.h264_sps, &config.h264_pps),
-    ));
+    avc1.extend_from_slice(&bx(b"avcC", &avcc(&config.h264_sps, &config.h264_pps)));
     bx(b"avc1", &avc1)
 }
 

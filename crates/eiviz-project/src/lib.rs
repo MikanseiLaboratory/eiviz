@@ -25,8 +25,22 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     if project.schema_version > SCHEMA_VERSION {
         return Err(ProjectError::FutureSchema(project.schema_version));
     }
-    // v0 (missing) -> v1 is a no-op besides stamping.
-    if project.schema_version == 0 {
+    // Distribution profiles became mandatory in v2. Never invent a codec or
+    // transport profile for a legacy streaming output.
+    if project.schema_version < 2 {
+        if let Some(output) = project.outputs.values().find(|output| {
+            matches!(
+                output.kind,
+                eiviz_core::OutputKind::Rtmp { .. }
+                    | eiviz_core::OutputKind::Srt { .. }
+                    | eiviz_core::OutputKind::Mp4 { .. }
+            ) && output.distribution.is_none()
+        }) {
+            return Err(ProjectError::Package(format!(
+                "legacy distribution output {} requires an explicit codec and transport profile",
+                output.id
+            )));
+        }
         project.schema_version = SCHEMA_VERSION;
     }
     project.validate()?;

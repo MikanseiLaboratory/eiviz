@@ -43,9 +43,8 @@ pub fn avc_nalu_payload(au: &EncodedAccessUnit) -> Vec<u8> {
         payload.extend_from_slice(&(nal.len() as u32).to_be_bytes());
         payload.extend_from_slice(&nal);
     }
-    let composition_ms = media_time_ms(au.pts).saturating_sub(media_time_ms(
-        au.dts.unwrap_or(au.pts),
-    ));
+    let composition_ms =
+        media_time_ms(au.pts).saturating_sub(media_time_ms(au.dts.unwrap_or(au.pts)));
     let composition = composition_ms.clamp(-8_388_608, 8_388_607) as i32;
     let bytes = composition.to_be_bytes();
     let mut body = vec![if au.keyframe { 0x17 } else { 0x27 }, 1];

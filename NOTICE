@@ -72,8 +72,9 @@ under their applicable licenses; default builds compile no CPAL system backend.
 H.264 / AVC
 -----------
 The software encoder in `eiviz-codec-software` emits Baseline I_PCM access
-units for tests and an explicitly selected software recording profile. Product distributions that encode
-or decode AVC in the field may require MPEG-LA / Via LA patent licenses.
+units for tests only. It is not selectable as a production recording or
+network profile. Product distributions that encode or decode AVC in the field
+may require MPEG-LA / Via LA patent licenses.
 The software decode profile dynamically loads an end-user-installed Cisco
 OpenH264 2.6.0 binary from an explicit path. It must not be bundled and must display
 "OpenH264 Video Codec provided by Cisco Systems, Inc." with Cisco's binary
@@ -81,6 +82,14 @@ license. Compiling OpenH264 source does not receive Cisco's binary patent
 coverage and is not the selected profile.
 AAC encoding is not included in the default tree; PCM or a separately
 licensed encoder must be used until an AAC adapter is certified.
+
+RTMP / SRT
+----------
+The distribution transport uses `rml_rtmp` 0.8.0 (MIT) and `srt-tokio` 0.4.4
+(Apache-2.0). Both are pure Rust. Local protocol tests do not establish
+interoperability certification; real-server and loss testing remains required.
+The SRT implementation is independent from Haivision's MPL-2.0 reference
+library and does not link `libsrt`.
 
 gpu-video
 ---------
@@ -90,6 +99,7 @@ so wgpu 24 (egui) and wgpu 29 (gpu-video) cannot collide.
 
 GStreamer / FFmpeg
 ------------------
-Neither GStreamer nor FFmpeg is a default dependency. If a distribution
-enables those adapters, their LGPL/GPL obligations apply to that build
-only and must be documented in the shipping SBOM.
+Neither GStreamer nor FFmpeg is a dependency. If a future distribution enables
+those adapters, their LGPL/GPL obligations and each selected plugin's license
+apply to that build and must be documented in the shipping SBOM. FDK AAC is
+also not included: its upstream bespoke license grants no patent rights.

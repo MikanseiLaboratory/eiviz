@@ -1,12 +1,9 @@
 use crate::fanout::EncodedSink;
 use bytes::Bytes;
-use eiviz_media::{
-    EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result,
-};
+use eiviz_media::{EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result};
 use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
 use rml_rtmp::sessions::{
-    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult,
-    PublishRequestType,
+    ClientSession, ClientSessionConfig, ClientSessionEvent, ClientSessionResult, PublishRequestType,
 };
 use rml_rtmp::time::RtmpTimestamp;
 use std::io::{ErrorKind, Read, Write};
@@ -24,9 +21,9 @@ pub struct RtmpEndpoint {
 
 impl RtmpEndpoint {
     pub fn parse(url: &str) -> Result<Self> {
-        let remainder = url.strip_prefix("rtmp://").ok_or_else(|| {
-            MediaError::Unsupported("RTMP URL must start with rtmp://".into())
-        })?;
+        let remainder = url
+            .strip_prefix("rtmp://")
+            .ok_or_else(|| MediaError::Unsupported("RTMP URL must start with rtmp://".into()))?;
         let (authority, path) = remainder.split_once('/').ok_or_else(|| {
             MediaError::Unsupported("RTMP URL must contain /app/stream-key".into())
         })?;
@@ -95,9 +92,8 @@ impl EncodedSink for RtmpPublisher {
             .as_mut()
             .ok_or_else(|| MediaError::Disconnected(self.name.clone()))?;
         connection.service_control_messages()?;
-        let timestamp = RtmpTimestamp::new(media_time_ms(
-            access_unit.dts.unwrap_or(access_unit.pts),
-        ));
+        let timestamp =
+            RtmpTimestamp::new(media_time_ms(access_unit.dts.unwrap_or(access_unit.pts)));
         let result = match access_unit.kind {
             EncodedKind::Avc => connection.session.publish_video_data(
                 Bytes::from(eiviz_codec_software::avc_nalu_payload(access_unit)),
@@ -200,10 +196,7 @@ impl RtmpConnection {
             }
             if connected && !publish_requested {
                 let request = session
-                    .request_publishing(
-                        endpoint.stream_key.clone(),
-                        PublishRequestType::Live,
-                    )
+                    .request_publishing(endpoint.stream_key.clone(), PublishRequestType::Live)
                     .map_err(|error| MediaError::Disconnected(error.to_string()))?;
                 write_client_result(&mut stream, request)?;
                 publish_requested = true;
@@ -330,8 +323,8 @@ fn write_client_result(stream: &mut TcpStream, result: ClientSessionResult) -> R
 
 fn media_time_ms(time: eiviz_time::MediaTime) -> u32 {
     let base = time.timebase();
-    let value = time.ticks() as i128 * base.numerator() as i128 * 1_000
-        / base.denominator() as i128;
+    let value =
+        time.ticks() as i128 * base.numerator() as i128 * 1_000 / base.denominator() as i128;
     value.max(0).min(u32::MAX as i128) as u32
 }
 
@@ -364,6 +357,13 @@ fn parse_authority(authority: &str, default_port: u16) -> Result<(String, u16)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eiviz_time::MediaTime;
+    use rml_rtmp::handshake::{Handshake, HandshakeProcessResult, PeerType};
+    use rml_rtmp::sessions::{
+        ServerSession, ServerSessionConfig, ServerSessionEvent, ServerSessionResult,
+    };
+    use std::net::TcpListener;
+    use std::sync::mpsc;
 
     #[test]
     fn endpoint_requires_explicit_app_and_key() {
@@ -373,5 +373,128 @@ mod tests {
         assert_eq!(endpoint.stream_key, "key");
         assert!(RtmpEndpoint::parse("http://example/live/key").is_err());
         assert!(RtmpEndpoint::parse("rtmp://example/live").is_err());
+    }
+
+    #[test]
+    fn local_server_receives_avc_and_aac_rtmp_messages() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (result_tx, result_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || run_mock_server(listener, result_tx));
+
+        let mut publisher = RtmpPublisher::new(
+            &format!("rtmp://127.0.0.1:{port}/live/key"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let config = test_config();
+        publisher.connect(&config).unwrap();
+        publisher
+            .send(&Arc::new(EncodedAccessUnit {
+                pts: MediaTime::ZERO,
+                dts: Some(MediaTime::ZERO),
+                keyframe: true,
+                bytes: vec![0, 0, 0, 1, 0x65, 1, 2].into(),
+                kind: EncodedKind::Avc,
+            }))
+            .unwrap();
+        publisher
+            .send(&Arc::new(EncodedAccessUnit {
+                pts: MediaTime::ZERO,
+                dts: Some(MediaTime::ZERO),
+                keyframe: false,
+                bytes: vec![0x21, 0x10].into(),
+                kind: EncodedKind::Aac,
+            }))
+            .unwrap();
+        publisher.disconnect();
+
+        let (video_messages, audio_messages) =
+            result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(video_messages, 2, "sequence header + AVC access unit");
+        assert_eq!(audio_messages, 2, "sequence header + AAC access unit");
+        server.join().unwrap();
+    }
+
+    fn run_mock_server(listener: TcpListener, result: mpsc::Sender<(u64, u64)>) {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut handshake = Handshake::new(PeerType::Server);
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            let response = handshake.process_bytes(&buffer[..count]).unwrap();
+            match response {
+                HandshakeProcessResult::InProgress { response_bytes } => {
+                    stream.write_all(&response_bytes).unwrap();
+                }
+                HandshakeProcessResult::Completed { response_bytes, .. } => {
+                    stream.write_all(&response_bytes).unwrap();
+                    break;
+                }
+            }
+        }
+
+        let (mut session, initial) = ServerSession::new(ServerSessionConfig::new()).unwrap();
+        write_server_results(&mut stream, &mut session, initial);
+        let mut video = 0;
+        let mut audio = 0;
+        while video < 2 || audio < 2 {
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            let results = session.handle_input(&buffer[..count]).unwrap();
+            for item in results {
+                match item {
+                    ServerSessionResult::OutboundResponse(packet) => {
+                        stream.write_all(&packet.bytes).unwrap();
+                    }
+                    ServerSessionResult::RaisedEvent(
+                        ServerSessionEvent::ConnectionRequested { request_id, .. }
+                        | ServerSessionEvent::PublishStreamRequested { request_id, .. },
+                    ) => {
+                        let accepted = session.accept_request(request_id).unwrap();
+                        write_server_results(&mut stream, &mut session, accepted);
+                    }
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::VideoDataReceived {
+                        ..
+                    }) => video += 1,
+                    ServerSessionResult::RaisedEvent(ServerSessionEvent::AudioDataReceived {
+                        ..
+                    }) => audio += 1,
+                    _ => {}
+                }
+            }
+        }
+        result.send((video, audio)).unwrap();
+    }
+
+    fn write_server_results(
+        stream: &mut TcpStream,
+        _session: &mut ServerSession,
+        results: Vec<ServerSessionResult>,
+    ) {
+        for result in results {
+            if let ServerSessionResult::OutboundResponse(packet) = result {
+                stream.write_all(&packet.bytes).unwrap();
+            }
+        }
+    }
+
+    fn test_config() -> EncodedStreamConfig {
+        EncodedStreamConfig {
+            h264_sps: vec![0x67, 66, 0, 31].into(),
+            h264_pps: vec![0x68, 0].into(),
+            aac_audio_specific_config: vec![0x11, 0x90].into(),
+            video_width: 1920,
+            video_height: 1080,
+            video_timescale: 60_000,
+            video_sample_duration: 1001,
+            audio_sample_rate: 48_000,
+            audio_channels: 2,
+        }
     }
 }

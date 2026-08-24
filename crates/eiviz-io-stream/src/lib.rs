@@ -9,9 +9,7 @@ mod recording;
 mod rtmp;
 mod srt;
 
-pub use fanout::{
-    EncodedFanout, EncodedSink, SinkDiagnostics, SinkState, WorkerRecovery,
-};
+pub use fanout::{EncodedFanout, EncodedSink, SinkDiagnostics, SinkState, WorkerRecovery};
 pub use recording::{FragmentedMp4Sink, RecoveryReport, recover_fragmented_mp4};
 pub use rtmp::{RtmpEndpoint, RtmpPublisher};
 pub use srt::SrtMpegTsPublisher;
@@ -72,9 +70,8 @@ pub fn capabilities() -> Vec<Capability> {
         Capability {
             id: "distribution-fanout-mux".into(),
             available: true,
-            detail:
-                "shared encoded-AU fanout, H.264/AAC FLV, MPEG-TS, and fragmented MP4 framing"
-                    .into(),
+            detail: "shared encoded-AU fanout, H.264/AAC FLV, MPEG-TS, and fragmented MP4 framing"
+                .into(),
         },
         Capability {
             id: "distribution-rtmp".into(),
@@ -107,8 +104,7 @@ pub fn sink_for_output(output: &Output) -> Result<Box<dyn EncodedSink>> {
         (
             OutputKind::Rtmp { url },
             TransportProfile::RtmpPublish {
-                connect_timeout_ms,
-                ..
+                connect_timeout_ms, ..
             },
         ) => Ok(Box::new(RtmpPublisher::new(
             url,

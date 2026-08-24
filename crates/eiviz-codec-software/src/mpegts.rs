@@ -7,7 +7,16 @@ pub const AUDIO_PID: u16 = 0x0101;
 
 pub fn pat() -> [u8; 188] {
     let mut section = vec![
-        0x00, 0xb0, 0x0d, 0x00, 0x01, 0xc1, 0x00, 0x00, 0x00, 0x01,
+        0x00,
+        0xb0,
+        0x0d,
+        0x00,
+        0x01,
+        0xc1,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
         0xe0 | ((PMT_PID >> 8) as u8 & 0x1f),
         PMT_PID as u8,
     ];
@@ -69,8 +78,8 @@ pub fn pes_aac(
 
 pub fn media_time_90k(time: eiviz_time::MediaTime) -> u64 {
     let base = time.timebase();
-    let value = time.ticks() as i128 * base.numerator() as i128 * 90_000
-        / base.denominator() as i128;
+    let value =
+        time.ticks() as i128 * base.numerator() as i128 * 90_000 / base.denominator() as i128;
     value.max(0).min(u64::MAX as i128) as u64
 }
 

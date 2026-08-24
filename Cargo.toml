@@ -67,7 +67,6 @@ uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
 wgpu = { version = "24.0.5", default-features = true }
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
 tiny_http = "0.12.0"
-crc32fast = "1.5.0"
 
 [profile.release]
 lto = "thin"

@@ -249,9 +249,7 @@ fn run_worker(
         if let Err(error) = sink.send(&access_unit) {
             diagnostics.set_error(error.to_string());
             diagnostics.set_state(SinkState::WaitingForKeyframe);
-            diagnostics
-                .recovery_required
-                .store(true, Ordering::Release);
+            diagnostics.recovery_required.store(true, Ordering::Release);
             sink.disconnect();
             connected = false;
             diagnostics.dropped.fetch_add(1, Ordering::Relaxed);
@@ -307,6 +305,35 @@ mod tests {
 
     struct PointerSink {
         pointers: Arc<Mutex<Vec<usize>>>,
+    }
+
+    struct ReconnectingSink {
+        connects: Arc<AtomicU64>,
+        successful_ids: Arc<Mutex<Vec<u8>>>,
+        fail_first_send: bool,
+    }
+
+    impl EncodedSink for ReconnectingSink {
+        fn name(&self) -> &str {
+            "reconnecting"
+        }
+
+        fn connect(&mut self, _config: &EncodedStreamConfig) -> Result<()> {
+            self.connects.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn send(&mut self, access_unit: &Arc<EncodedAccessUnit>) -> Result<()> {
+            if self.fail_first_send {
+                self.fail_first_send = false;
+                return Err(MediaError::Disconnected("mock loss".into()));
+            }
+            self.successful_ids
+                .lock()
+                .unwrap()
+                .push(*access_unit.bytes.last().unwrap());
+            Ok(())
+        }
     }
 
     impl EncodedSink for PointerSink {
@@ -374,5 +401,52 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(pointers.lock().unwrap().as_slice(), &[expected]);
+    }
+
+    #[test]
+    fn reconnect_discards_until_next_keyframe() {
+        let connects = Arc::new(AtomicU64::new(0));
+        let successful_ids = Arc::new(Mutex::new(Vec::new()));
+        let fanout = EncodedFanout::new(config());
+        fanout
+            .add_sink(
+                Box::new(ReconnectingSink {
+                    connects: connects.clone(),
+                    successful_ids: successful_ids.clone(),
+                    fail_first_send: true,
+                }),
+                8,
+                WorkerRecovery {
+                    initial_delay: Duration::from_millis(1),
+                    max_delay: Duration::from_millis(2),
+                    max_attempts: 1,
+                },
+            )
+            .unwrap();
+        for (kind, keyframe, id) in [
+            (EncodedKind::Avc, true, 1),
+            (EncodedKind::Aac, false, 2),
+            (EncodedKind::Avc, false, 3),
+            (EncodedKind::Avc, true, 4),
+        ] {
+            fanout.publish(Arc::new(EncodedAccessUnit {
+                pts: MediaTime::ZERO,
+                dts: Some(MediaTime::ZERO),
+                keyframe,
+                bytes: vec![0, 0, 0, 1, id].into(),
+                kind,
+            }));
+        }
+        for _ in 0..100 {
+            if successful_ids.lock().unwrap().as_slice() == [4] {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(successful_ids.lock().unwrap().as_slice(), &[4]);
+        assert_eq!(connects.load(Ordering::Relaxed), 2);
+        let diagnostics = fanout.diagnostics();
+        assert!(diagnostics[0].dropped >= 3);
+        assert!(diagnostics[0].reconnects >= 1);
     }
 }

@@ -305,7 +305,10 @@ impl Engine {
     /// Persist an explicit output mapping in the stopped state. Starting it is
     /// a separate operation so an unavailable codec never mutates the project
     /// into a falsely-running state.
-    pub fn configure_distribution_output(&self, mut output: eiviz_core::Output) -> Result<CommandAck> {
+    pub fn configure_distribution_output(
+        &self,
+        mut output: eiviz_core::Output,
+    ) -> Result<CommandAck> {
         if output.distribution.is_none()
             || !matches!(
                 output.kind,
@@ -575,9 +578,10 @@ fn distribution_diagnostics(project: &Project) -> Vec<DistributionOutputDiagnost
                 } else {
                     "stopped".into()
                 },
-                detail: capability
-                    .err()
-                    .map_or_else(|| "explicit encoder profile available".into(), |error| error.to_string()),
+                detail: capability.err().map_or_else(
+                    || "explicit encoder profile available".into(),
+                    |error| error.to_string(),
+                ),
             })
         })
         .collect()
@@ -909,5 +913,56 @@ mod tests {
             Err(EngineError::Runtime(eiviz_runtime::RuntimeError::Gpu(_))) => {}
             Err(error) => panic!("unexpected Wgpu construction result: {error}"),
         }
+    }
+
+    #[test]
+    fn distribution_mapping_is_stopped_and_encoder_activation_hard_fails() {
+        let engine = Engine::new("distribution");
+        let output = Output {
+            id: OutputId::new(),
+            name: "RTMP".into(),
+            owner: engine.primary_unit(),
+            kind: OutputKind::Rtmp {
+                url: "rtmp://127.0.0.1/live/key".into(),
+            },
+            enabled: true,
+            distribution: Some(eiviz_core::DistributionProfile {
+                video: eiviz_core::H264EncoderProfile::CiscoOpenH26426 {
+                    bitrate_bps: 8_000_000,
+                    keyframe_interval_frames: 120,
+                    level_idc: 42,
+                },
+                audio: eiviz_core::AacEncoderProfile::FdkAacLc {
+                    bitrate_bps: 192_000,
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                transport: eiviz_core::TransportProfile::RtmpPublish {
+                    chunk_size: 4096,
+                    connect_timeout_ms: 5_000,
+                },
+                queue_capacity: 128,
+                reconnect: eiviz_core::ReconnectProfile {
+                    initial_delay_ms: 100,
+                    max_delay_ms: 5_000,
+                    max_attempts: 0,
+                },
+            }),
+        };
+        engine
+            .configure_distribution_output(output.clone())
+            .unwrap();
+        assert!(!engine.snapshot().outputs[&output.id].enabled);
+        let error = engine
+            .set_distribution_enabled(output.id, true)
+            .unwrap_err();
+        assert!(error.to_string().contains("I_PCM test encoder"));
+        assert!(
+            engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .any(|diagnostic| diagnostic.state == "stopped")
+        );
     }
 }

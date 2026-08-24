@@ -43,13 +43,22 @@ all pass:
   queues, planar f32 conversion, device sample-clock timestamps, and xrun/queue
   diagnostics. ASIO is a separate opt-in licensed profile. Audio device HIL is
   still pending; unavailable selected devices/hosts never fall back.
+- Production-shaped distribution after the encoder boundary: one immutable
+  H.264/AAC access-unit allocation fans out to independent bounded fMP4, RTMP
+  FLV, and SRT MPEG-TS workers with reconnect-at-IDR and fMP4 tail recovery.
+  `rml_rtmp` and `srt-tokio` local protocol peers are covered in default CI.
+  There is currently **no production H.264 encoder or AAC encoder** in-tree:
+  the I_PCM path is test-only, output mappings start stopped, and activation
+  hard-fails instead of substituting PCM or another codec. Real-server/loss/
+  24-hour HIL remains pending.
 - Capability stub only for gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
 Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
-Video, and audio devices) is **not** claimed. See the current truth table in
+Video, audio devices, RTMP, and SRT) is **not** claimed. See the current truth table in
 the implementation plan, the [DeckLink HIL procedure](docs/hil/decklink.md),
-and the [audio HIL procedure](docs/hil/audio.md).
+the [audio HIL procedure](docs/hil/audio.md), and the
+[distribution HIL procedure](docs/hil/distribution.md).
 
 ## Build
 

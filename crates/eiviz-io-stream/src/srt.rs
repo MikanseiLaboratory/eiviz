@@ -1,8 +1,6 @@
 use crate::fanout::EncodedSink;
 use bytes::Bytes;
-use eiviz_media::{
-    EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result,
-};
+use eiviz_media::{EncodedAccessUnit, EncodedKind, EncodedStreamConfig, MediaError, Result};
 use futures::SinkExt;
 use srt_tokio::{SrtSocket, options::SocketAddress};
 use std::sync::Arc;
@@ -157,11 +155,104 @@ fn parse_srt_url(url: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eiviz_time::MediaTime;
+    use futures::StreamExt;
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
 
     #[test]
     fn endpoint_does_not_accept_implicit_query_options() {
-        assert_eq!(parse_srt_url("srt://127.0.0.1:9000").unwrap(), "127.0.0.1:9000");
+        assert_eq!(
+            parse_srt_url("srt://127.0.0.1:9000").unwrap(),
+            "127.0.0.1:9000"
+        );
         assert!(parse_srt_url("udp://127.0.0.1:9000").is_err());
         assert!(parse_srt_url("srt://127.0.0.1:9000?latency=20").is_err());
+    }
+
+    #[test]
+    fn local_srt_listener_receives_mpegts_avc_and_aac_pids() {
+        let reservation = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        drop(reservation);
+        let (result_tx, result_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let mut socket = SrtSocket::builder()
+                    .latency(Duration::from_millis(20))
+                    .listen_on(format!("127.0.0.1:{port}"))
+                    .await
+                    .unwrap();
+                let mut pids = std::collections::BTreeSet::new();
+                while ![
+                    0,
+                    eiviz_codec_software::PMT_PID,
+                    eiviz_codec_software::VIDEO_PID,
+                    eiviz_codec_software::AUDIO_PID,
+                ]
+                .iter()
+                .all(|pid| pids.contains(pid))
+                {
+                    let (_, bytes) = socket.next().await.unwrap().unwrap();
+                    for packet in bytes.chunks_exact(188) {
+                        assert_eq!(packet[0], 0x47);
+                        pids.insert((((packet[1] & 0x1f) as u16) << 8) | packet[2] as u16);
+                    }
+                }
+                result_tx.send(pids).unwrap();
+            });
+        });
+
+        let mut publisher = SrtMpegTsPublisher::new(
+            &format!("srt://127.0.0.1:{port}"),
+            None,
+            Duration::from_millis(20),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let config = test_config();
+        publisher.connect(&config).unwrap();
+        publisher
+            .send(&Arc::new(EncodedAccessUnit {
+                pts: MediaTime::ZERO,
+                dts: Some(MediaTime::ZERO),
+                keyframe: true,
+                bytes: vec![0, 0, 0, 1, 0x65, 1].into(),
+                kind: EncodedKind::Avc,
+            }))
+            .unwrap();
+        publisher
+            .send(&Arc::new(EncodedAccessUnit {
+                pts: MediaTime::ZERO,
+                dts: Some(MediaTime::ZERO),
+                keyframe: false,
+                bytes: vec![0x21, 0x10].into(),
+                kind: EncodedKind::Aac,
+            }))
+            .unwrap();
+        let pids = result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(pids.contains(&eiviz_codec_software::VIDEO_PID));
+        assert!(pids.contains(&eiviz_codec_software::AUDIO_PID));
+        publisher.disconnect();
+        server.join().unwrap();
+    }
+
+    fn test_config() -> EncodedStreamConfig {
+        EncodedStreamConfig {
+            h264_sps: vec![0x67, 66, 0, 31].into(),
+            h264_pps: vec![0x68, 0].into(),
+            aac_audio_specific_config: vec![0x11, 0x90].into(),
+            video_width: 1920,
+            video_height: 1080,
+            video_timescale: 60_000,
+            video_sample_duration: 1001,
+            audio_sample_rate: 48_000,
+            audio_channels: 2,
+        }
     }
 }

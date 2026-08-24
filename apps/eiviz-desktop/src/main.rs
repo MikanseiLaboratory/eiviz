@@ -1,12 +1,12 @@
 use eiviz_command::{Command, CommandEnvelope};
-#[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
-use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_core::{
     AacEncoderProfile, CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId,
     InputSource, Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId,
-    OutputKind, Project, ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId,
-    Transform2D, TransitionStyle, TransportProfile,
+    OutputKind, Project, ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
+    TransitionStyle, TransportProfile,
 };
+#[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
+use eiviz_core::{AudioRoute, RouteMode};
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;

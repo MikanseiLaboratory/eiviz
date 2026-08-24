@@ -19,6 +19,8 @@
 | Smelter | 非同梱 | ADR-0002 |
 | openmediatransport-rs | git rev 2a0a9d31 | Pure Rust OMT、MIT、HIL pending |
 | grafton-ndi | 1.0.0 exact | Apache-2.0 wrapper。NDI 6 SDK headers/runtimeは別途必要。`ndi` feature、HIL pending |
+| rml_rtmp | 0.8.0 exact | pure Rust RTMP session、MIT、upstream MSRV未宣言、Rust 1.97確認 |
+| srt-tokio | 0.4.4 exact | pure safe Rust SRT caller、Apache-2.0、upstream MSRV未宣言、Rust 1.97確認、HIL pending |
 | DeckLink / ASIO | feature + HIL | ADR-0007 |
 
 認定プロファイル: 1920×1080p, `60000/1001` fps, SDR BT.709 8-bit, 48 kHz。

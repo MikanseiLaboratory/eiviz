@@ -10,7 +10,7 @@ use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -386,7 +386,9 @@ fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<
 
     let profile = output.distribution.as_ref().expect("checked above");
     if profile.queue_capacity == 0 {
-        return Err(DomainError::msg("distribution queue capacity must be non-zero"));
+        return Err(DomainError::msg(
+            "distribution queue capacity must be non-zero",
+        ));
     }
     if profile.reconnect.initial_delay_ms == 0
         || profile.reconnect.max_delay_ms < profile.reconnect.initial_delay_ms
@@ -602,5 +604,79 @@ mod tests {
             source: MultiviewSource::Black,
         }];
         assert!(matches!(p.validate(), Err(DomainError::InvalidRef(_))));
+    }
+
+    #[test]
+    fn distribution_outputs_require_matching_explicit_profiles() {
+        let mut project = Project::new("distribution");
+        let owner = *project.mixing_units.keys().next().unwrap();
+        let output = Output {
+            id: OutputId::new(),
+            name: "RTMP".into(),
+            owner,
+            kind: crate::OutputKind::Rtmp {
+                url: "rtmp://127.0.0.1/live/key".into(),
+            },
+            enabled: false,
+            distribution: None,
+        };
+        project.outputs.insert(output.id, output.clone());
+        project
+            .mixing_units
+            .get_mut(&owner)
+            .unwrap()
+            .outputs
+            .push(output.id);
+        assert!(
+            project
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("explicit")
+        );
+
+        project.outputs.get_mut(&output.id).unwrap().distribution =
+            Some(crate::DistributionProfile {
+                video: crate::H264EncoderProfile::ExternalAnnexB {
+                    adapter: "certified-h264".into(),
+                    bitrate_bps: 8_000_000,
+                    keyframe_interval_frames: 120,
+                },
+                audio: crate::AacEncoderProfile::ExternalRawAacLc {
+                    adapter: "certified-aac".into(),
+                    bitrate_bps: 192_000,
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                transport: crate::TransportProfile::SrtCallerMpegTs {
+                    latency_ms: 120,
+                    stream_id: None,
+                },
+                queue_capacity: 128,
+                reconnect: crate::ReconnectProfile {
+                    initial_delay_ms: 100,
+                    max_delay_ms: 5_000,
+                    max_attempts: 0,
+                },
+            });
+        assert!(
+            project
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
+        project
+            .outputs
+            .get_mut(&output.id)
+            .unwrap()
+            .distribution
+            .as_mut()
+            .unwrap()
+            .transport = crate::TransportProfile::RtmpPublish {
+            chunk_size: 4096,
+            connect_timeout_ms: 5_000,
+        };
+        project.validate().unwrap();
     }
 }

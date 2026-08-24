@@ -16,9 +16,7 @@ pub use h264::{
     AvccError, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb, encode_idr, extract_sps_pps,
     split_annexb,
 };
-pub use mpegts::{
-    AUDIO_PID, PMT_PID, VIDEO_PID, media_time_90k, pat, pes_aac, pes_video, pmt,
-};
+pub use mpegts::{AUDIO_PID, PMT_PID, VIDEO_PID, media_time_90k, pat, pes_aac, pes_video, pmt};
 pub use openh264::{OpenH264Decoder, OpenH264Error};
 
 /// Legacy private AU used when a caller needs a non-H.264 dump.

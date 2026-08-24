@@ -1143,15 +1143,14 @@ name = "eiviz-io-stream"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "crc32fast",
  "crossbeam-channel",
  "eiviz-codec-software",
+ "eiviz-core",
  "eiviz-media",
  "eiviz-time",
  "futures",
  "rml_rtmp",
  "srt-tokio",
- "thiserror 2.0.20",
  "tokio",
 ]
 
