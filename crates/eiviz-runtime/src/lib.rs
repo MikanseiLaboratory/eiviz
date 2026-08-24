@@ -977,11 +977,11 @@ mod tests {
     fn take_changes_program_pixels_on_same_boundary() {
         let (mut p, _iid, sid, unit) = setup();
         let mut rt = Runtime::new(48000);
-        let before = rt.tick(&mut p).unwrap();
+        let before = rt.tick(&p).unwrap();
         assert_eq!(before.programs[&unit].pixel(10, 10)[0], 0);
         p.mixing_units.get_mut(&unit).unwrap().transition.style = TransitionStyle::Cut;
         p.mixing_units.get_mut(&unit).unwrap().take(false);
-        let after = rt.tick(&mut p).unwrap();
+        let after = rt.tick(&p).unwrap();
         assert_eq!(after.programs[&unit].pixel(10, 10), [255, 0, 0, 255]);
         assert_eq!(p.mixing_units[&unit].program.scene, Some(sid));
         let peak = after.audio.planes[0]
@@ -1019,7 +1019,7 @@ mod tests {
         let mut rt = Runtime::new(48000);
         rt.mark_output_failed("rtmp-primary", "connection reset");
         for _ in 0..10 {
-            rt.tick(&mut p).unwrap();
+            rt.tick(&p).unwrap();
         }
         assert_eq!(rt.frame(), 10);
         assert!(!rt.failed_outputs().is_empty());
@@ -1085,7 +1085,7 @@ mod tests {
         p.mixing_units.get_mut(&b).unwrap().program.scene = Some(scene_b.id);
         p.validate().unwrap();
         let mut rt = Runtime::new(48000);
-        let tick = rt.tick(&mut p).unwrap();
+        let tick = rt.tick(&p).unwrap();
         assert_eq!(tick.programs[&a].pixel(8, 8), [255, 0, 0, 255]);
         assert_eq!(tick.programs[&b].pixel(8, 8), [255, 0, 0, 255]);
     }
@@ -1096,7 +1096,7 @@ mod tests {
         p.audio_matrix.routes[0].mode = RouteMode::Manual;
         p.audio_matrix.routes[0].delay_ms = 1000.0;
         let mut rt = Runtime::new(48000);
-        let first = rt.tick(&mut p).unwrap();
+        let first = rt.tick(&p).unwrap();
         let peak = first.audio.planes[0]
             .iter()
             .fold(0.0f32, |a, x| a.max(x.abs()));
@@ -1119,7 +1119,7 @@ mod tests {
         let (mut p, _, _, _) = setup();
         p.compositor = CompositorBackend::Wgpu;
         let mut rt = Runtime::new(48_000);
-        let err = rt.tick(&mut p).unwrap_err();
+        let err = rt.tick(&p).unwrap_err();
         assert!(matches!(err, RuntimeError::BackendMismatch { .. }));
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
             source_name: "cam".into(),
         };
         let mut rt = Runtime::new(48_000);
-        let err = rt.tick(&mut p).unwrap_err();
+        let err = rt.tick(&p).unwrap_err();
         assert!(matches!(err, RuntimeError::MissingMedia(_)));
     }
 
@@ -1150,7 +1150,7 @@ mod tests {
         };
         project.audio_matrix.routes[0].mode = RouteMode::Manual;
         let mut runtime = Runtime::new(48_000);
-        let error = runtime.tick(&mut project).unwrap_err();
+        let error = runtime.tick(&project).unwrap_err();
         assert!(matches!(error, RuntimeError::MissingMedia(_)));
     }
 
@@ -1163,7 +1163,7 @@ mod tests {
         };
         p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
         let mut rt = Runtime::new(48_000);
-        let tick = rt.tick(&mut p).unwrap();
+        let tick = rt.tick(&p).unwrap();
         assert_eq!(tick.programs[&unit].pixel(8, 8), SLATE_RGBA);
     }
 
@@ -1173,12 +1173,12 @@ mod tests {
         p.missing_media = MissingMediaPolicy::LastGood;
         p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
         let mut rt = Runtime::new(48_000);
-        let first = rt.tick(&mut p).unwrap();
+        let first = rt.tick(&p).unwrap();
         assert_eq!(first.programs[&unit].pixel(8, 8), [255, 0, 0, 255]);
         p.inputs.get_mut(&iid).unwrap().source = InputSource::Ndi {
             source_name: "cam".into(),
         };
-        let second = rt.tick(&mut p).unwrap();
+        let second = rt.tick(&p).unwrap();
         assert_eq!(second.programs[&unit].pixel(8, 8), [255, 0, 0, 255]);
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
             source_name: "cam".into(),
         };
         let mut rt = Runtime::new(48_000);
-        let err = rt.tick(&mut p).unwrap_err();
+        let err = rt.tick(&p).unwrap_err();
         assert!(matches!(err, RuntimeError::MissingMedia(_)));
     }
 
@@ -1212,7 +1212,7 @@ mod tests {
             video,
             audio,
         }));
-        let tick = rt.tick(&mut p).unwrap();
+        let tick = rt.tick(&p).unwrap();
         assert_eq!(tick.programs[&unit].pixel(8, 8), [7, 8, 9, 255]);
         assert!(tick.audio.planes[0].iter().any(|sample| *sample > 0.4));
         assert!(tick.audio.planes[1].iter().any(|sample| *sample < -0.2));
@@ -1280,7 +1280,7 @@ mod tests {
             .push(view.id);
         p.validate().unwrap();
         let mut rt = Runtime::new(48_000);
-        let tick = rt.tick(&mut p).unwrap();
+        let tick = rt.tick(&p).unwrap();
         let frame = &tick.multiviews[&view.id];
         assert_eq!(frame.pixel(100, 100), [255, 0, 0, 255]);
         assert_eq!(frame.pixel(800, 100), [255, 0, 0, 255]);
