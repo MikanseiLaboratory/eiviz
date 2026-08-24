@@ -1263,7 +1263,7 @@ fn desktop_capabilities() -> Vec<CapabilityEntry> {
         compiled: midi.compiled,
         available: midi.compiled,
         active: false,
-        detail: midi.detail,
+        detail: midi.detail.into(),
         evidence: EvidenceState::HilPending,
     });
     capabilities
