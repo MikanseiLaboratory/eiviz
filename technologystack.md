@@ -4,12 +4,13 @@
 
 | コンポーネント | 版 | 備考 |
 |---|---|---|
-| Rust | 1.85.0 (MSRV) / CI 1.85 | edition 2024 |
+| Rust | 1.85.0 target MSRV / CI 1.98 | edition 2024。core/fileは1.85確認済み、desktop推移依存は未解決 |
 | wgpu（eiviz-gpu直接依存） | 24.0.5 | 合成は `Project.compositor` で明示選択（ADR-0010） |
 | egui / eframe | 0.32.3 | `egui-wgpu`はwgpu 25.0.2を推移依存。現在compositorとDevice共有不可（ADR-0011） |
 | serde / serde_json | 1.0.219 / 1.0.143 | 永続化・制御面 |
 | uuid | 1.18.1 | v7 IDs |
 | image | 0.25.6 | PNG/JPEG 入力 |
+| mp4io | 0.1.2 exact | H.264 MP4 sample index、Rust 1.85確認済み |
 | zip | 4.3.x | portable `.eiviz` |
 | tiny_http | 0.12.0 | localhost HTTP |
 | gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
