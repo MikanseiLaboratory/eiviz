@@ -191,11 +191,13 @@ impl Runtime {
             )),
         };
         #[cfg(not(feature = "wgpu-backend"))]
-        let wgpu = {
+        {
             if matches!(backend, CompositorBackend::Wgpu) {
                 return Err(RuntimeError::WgpuFeatureDisabled);
             }
-        };
+            Self::with_configured_wgpu(sample_rate, backend, ())
+        }
+        #[cfg(feature = "wgpu-backend")]
         Self::with_configured_wgpu(sample_rate, backend, wgpu)
     }
 
@@ -211,7 +213,7 @@ impl Runtime {
     fn with_configured_wgpu(
         sample_rate: u32,
         backend: CompositorBackend,
-        wgpu: ConfiguredWgpu,
+        _wgpu: ConfiguredWgpu,
     ) -> Result<Self> {
         Ok(Self {
             clock: VirtualClock::new(),
@@ -237,7 +239,7 @@ impl Runtime {
             active_snapshot: None,
             transitions: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
-            wgpu,
+            wgpu: _wgpu,
             #[cfg(feature = "wgpu-backend")]
             program_textures: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
