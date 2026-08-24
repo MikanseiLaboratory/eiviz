@@ -1504,6 +1504,9 @@ mod tests {
         let engine = Engine::new("tcp").shared();
         let stop = Arc::new(AtomicBool::new(false));
         let ports = spawn_control(engine.clone(), config(), stop.clone()).unwrap();
+        // The TCP accept loop is deliberately non-blocking. Ensure its worker
+        // has entered the poll loop before the synchronous test request.
+        std::thread::sleep(Duration::from_millis(50));
         let mut envelope = CommandEnvelope::new(
             ClientId::new(),
             Command::SetName {
