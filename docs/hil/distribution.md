@@ -24,6 +24,11 @@ is compiled only in tests.
 Default CI uses mock encoders to prove one encode per shared profile and shared
 `Arc<EncodedAccessUnit>` fanout. To exercise real dynamic binaries:
 
+The in-process `rml_rtmp` mock-server handshake test is skipped on macOS
+because that upstream mock is nondeterministic under macOS CI scheduling.
+macOS still compiles and lints the RTMP path; interoperability is proven only
+by the real-server procedure below, not by substituting another transport.
+
 ```bash
 EIVIZ_OPENH264_HIL_BINARY=/absolute/path/to/cisco/libopenh264-2.6.0.so \
 EIVIZ_FDK_AAC_HIL_BINARY=/absolute/path/to/reviewed/libfdk-aac.so \
