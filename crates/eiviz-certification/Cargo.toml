@@ -1,0 +1,19 @@
+[package]
+name = "eiviz-certification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Deterministic certification, soak, fault, and traceability evidence harness"
+
+[dependencies]
+eiviz-command.workspace = true
+eiviz-core.workspace = true
+eiviz-engine.workspace = true
+eiviz-operations.workspace = true
+eiviz-runtime.workspace = true
+eiviz-time.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true

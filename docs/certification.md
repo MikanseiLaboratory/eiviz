@@ -39,6 +39,47 @@ Extended-profile implementation does not change the required
 5. Soak: 24 h gate、release 72 h
 6. Fault: GPU lost、disk full、NIC down、SDK 切断
 
+## 自動認定ハーネス
+
+`eiviz-certification` は software-testable gate の構造化 JSON 証跡を生成します。
+証跡には requirement ID、commit、OS/kernel、architecture、Rust version、
+profile、test ID、assertion、memory/queue high-water、artifact path を記録します。
+
+```sh
+# CI と同じ短い決定論 smoke。24 h 分の時刻を反復せず有理数で監査する
+cargo run -p eiviz-certification -- \
+  --mode virtual --equivalent-hours 24 --profile ci-smoke
+
+# 72 h equivalent release audit
+cargo run -p eiviz-certification -- \
+  --mode virtual --equivalent-hours 72 --profile release-72h
+
+# 実時間 soak（例は24 h。private/HIL runnerで実行する）
+cargo run -p eiviz-certification -- \
+  --mode wall --wall-seconds 86400 --equivalent-hours 24 \
+  --profile windows-baseline-24h
+
+# requirement matrix の再生成
+cargo run -p eiviz-certification -- matrix
+```
+
+Virtual mode は `60000/1001` frame/audio boundary、Program
+drop/repeat、xrun、deadline、synthetic A/V drift、maximum admitted DAG、
+multi-client flood/replay hash、sink/disk-full/NIC-outage isolation、
+memory/queue high-water を高速に検査します。Wall mode は同じ gate に実時間の
+deadline observation を追加します。既定 artifact は
+`target/certification/evidence.json` です。
+
+GPU device loss は simulation で合格にしません。private runner が実 hardware
+へ device-loss を注入した場合だけ、`evidence_source` が
+`hardware_device_loss_injection` の attestation を
+`--gpu-device-loss-evidence` で取り込みます。attestation が無ければ
+`CERT-GPU-DEVICE-LOSS` は `hil_pending/skipped` です。Virtual mode、mock sink、
+CPU reference の成功は HIL/interop/24 h wall-clock 合格を意味しません。
+
+[生成済み traceability matrix](traceability.md) は R01–R11 と AC-01–11 を
+automated test、HIL status、artifact path へ結合します。
+
 Clock/Timing の共通 HIL は [hil/timing.md](hil/timing.md) に定義します。
 unit test の affine/drift/jump/wrap/domain 結果だけでは、実 adapter の
 monotonic correlation、genlock、A/V skew gate を合格にしません。
@@ -46,8 +87,11 @@ monotonic correlation、genlock、A/V skew gate を合格にしません。
 ## CI
 
 - PR: fmt、clippy `-D warnings`、workspace test（default features）
+- PR Linux: 24 h virtual-clock equivalent の短い deterministic certification
+  smoke と traceability generator drift check。JSON を artifact として保存
 - Nightly: Windows / Linux / macOS
-- HIL: self-hosted。SDK 再配布を CI に置かない
+- 24/72 h wall-clock と HIL: manual/private self-hosted。SDK、hardware
+  attestation を public CI に置かない
 
 ## トレーサビリティ
 

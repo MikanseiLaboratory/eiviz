@@ -65,6 +65,31 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test default profile
         run: cargo test --workspace
+      - name: deterministic certification smoke
+        if: runner.os == 'Linux'
+        run: >-
+          cargo run -p eiviz-certification --
+          --mode virtual
+          --equivalent-hours 24
+          --profile ci-smoke
+          --graph-units 8
+          --graph-inputs 16
+          --clients 4
+          --commands-per-client 32
+          --output target/certification/evidence.json
+      - name: traceability matrix is current
+        if: runner.os == 'Linux'
+        run: |
+          cargo run -p eiviz-certification -- matrix \
+            --json target/certification/traceability.json \
+            --markdown target/certification/traceability.md
+          cmp docs/traceability.md target/certification/traceability.md
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: certification-smoke
+          path: target/certification/*.json
+          if-no-files-found: error
       - name: test hardware GPU feature wiring
         run: cargo test -p eiviz-gpu --features wgpu-backend
       - name: verify desktop wgpu version singleton

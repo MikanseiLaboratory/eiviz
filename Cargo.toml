@@ -20,6 +20,7 @@ members = [
     "crates/eiviz-io-stream",
     "crates/eiviz-codec-gpu-video",
     "crates/eiviz-codec-software",
+    "crates/eiviz-certification",
 ]
 
 [workspace.package]
@@ -50,6 +51,7 @@ eiviz-io-audio = { path = "crates/eiviz-io-audio" }
 eiviz-io-stream = { path = "crates/eiviz-io-stream" }
 eiviz-codec-gpu-video = { path = "crates/eiviz-codec-gpu-video" }
 eiviz-codec-software = { path = "crates/eiviz-codec-software" }
+eiviz-certification = { path = "crates/eiviz-certification" }
 crossbeam-channel = "0.5.15"
 cpal = { version = "0.18.2", default-features = false }
 eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
