@@ -15,9 +15,10 @@
 | gpu-video 0.4.0 | optional adapter。既定実行経路にしない |
 | compositor | 明示 `CpuReference` と `Wgpu`。CI は CpuReference profile（fallback ではない） |
 | GUI | egui 0.32 / wgpu 24 |
-| file media | image crate + software frame source |
-| NDI/OMT/DeckLink/ASIO | feature + mock。実機は HIL |
-| RTMP/SRT/MP4 | 内蔵 muxer。GStreamer は後続 feature |
+| file media | image + Shiguredo MP4 + explicit dynamic OpenH264 2.6 profile |
+| OMT | pure-Rust openmediatransport-rs/vmx-rs。実機interopはHIL |
+| NDI/DeckLink/Audio | 実adapterをfeature隔離。SDK/device HIL pending |
+| RTMP/SRT/fMP4 | bounded fanout/transport/recovery実装。production AVC/AAC encoder pending |
 | 認定 profile | 1080p59.94 SDR / 48 kHz |
 
 copy 回数や P99 GPU 時間は HIL で測定し、本 ADR を改訂するまでゼロコピーを前提にしない。

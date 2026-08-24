@@ -1,6 +1,6 @@
 # OMT receive HIL
 
-Status: **not yet executed**. Passing unit tests or loading `libomt` is not an
+Status: **not yet executed**. Passing unit tests or compiling the pure-Rust stack is not an
 interop pass.
 
 ## Implementation
@@ -17,7 +17,7 @@ interop pass.
 
 1. Two separate machines on the same LAN.
 2. Official OMT signal generator/reference sender on machine A.
-3. eiviz plus official `libomt`/`libvmx` on machine B.
+3. eiviz with `openmediatransport-rs`/`vmx-rs` on machine B.
 4. Packet loss/jitter injection between them for the fault cases.
 
 ## Acceptance scenarios
@@ -37,14 +37,11 @@ interop pass.
 
 ## Current automated evidence
 
-- ABI size/offset test for `OMTMediaFrame`
-- BGRA/BGRX → RGBA conversion
-- Premultiplied BGRA → straight-alpha RGBA conversion
-- UYVY BT.709 → RGBA conversion
-- FPA1 planar audio conversion
-- Bounded 8-packet audio FIFO with explicit overflow diagnostic
-- Truncated frame rejection
-- Registered live `MediaSource` reaches Program and Audio Matrix
-- RGBA/FPA1 Program output conversion and bounded sender queue
+- Adapter capability and test-only loopback tests
+- Generic registered `MediaSource` → Program/Audio Matrix integration test
+- Upstream `openmediatransport-rs`/`vmx-rs` protocol and codec test suites via pinned revisions
+
+UYVY, tally/metadata surfacing, reconnect behavior, and reference-tool
+interoperability remain HIL gaps rather than automated evidence.
 
 These tests do not satisfy any `OMT-HIL-*` scenario.
