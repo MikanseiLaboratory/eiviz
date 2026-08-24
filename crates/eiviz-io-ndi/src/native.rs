@@ -126,6 +126,8 @@ pub struct NdiSource {
     name: String,
     video_rx: QueueReceiver<EivizVideoFrame>,
     audio_rx: QueueReceiver<AudioBuffer>,
+    last_video: Mutex<Option<EivizVideoFrame>>,
+    video_active: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     health: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
@@ -152,6 +154,7 @@ impl NdiSource {
         let video_drop_rx = video_rx.clone();
         let (audio_tx, audio_rx) = bounded(config.audio_queue_capacity);
         let audio_drop_rx = audio_rx.clone();
+        let video_active = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let health = Arc::new(AtomicU8::new(HEALTH_DEGRADED));
         let last_error = Arc::new(Mutex::new(None));
@@ -164,6 +167,7 @@ impl NdiSource {
             let health = health.clone();
             let last_error = last_error.clone();
             let dropped = dropped_video.clone();
+            let video_active = video_active.clone();
             let poll = config.capture_poll;
             thread::Builder::new()
                 .name(format!("ndi-video-{}", id))
@@ -182,10 +186,12 @@ impl NdiSource {
                                         previous_timestamp = Some(timestamp);
                                         sequence = sequence.saturating_add(1);
                                         push_latest(&video_tx, &video_drop_rx, converted, &dropped);
+                                        video_active.store(true, Ordering::Release);
                                         health.store(HEALTH_RUNNING, Ordering::Release);
                                         *last_error.lock() = None;
                                     }
                                     Err(error) => {
+                                        video_active.store(false, Ordering::Release);
                                         health.store(HEALTH_DEGRADED, Ordering::Release);
                                         *last_error.lock() = Some(error.to_string());
                                     }
@@ -193,10 +199,12 @@ impl NdiSource {
                             }
                             Ok(None) => {
                                 if !receiver.is_connected() {
+                                    video_active.store(false, Ordering::Release);
                                     health.store(HEALTH_DEGRADED, Ordering::Release);
                                 }
                             }
                             Err(error) => {
+                                video_active.store(false, Ordering::Release);
                                 health.store(HEALTH_DEGRADED, Ordering::Release);
                                 *last_error.lock() = Some(error.to_string());
                             }
@@ -254,6 +262,8 @@ impl NdiSource {
             name: source.name.clone(),
             video_rx,
             audio_rx,
+            last_video: Mutex::new(None),
+            video_active,
             stop,
             health,
             last_error,
@@ -297,7 +307,14 @@ impl MediaSource for NdiSource {
         for frame in self.video_rx.try_iter() {
             latest = Some(frame);
         }
-        Ok(latest)
+        if let Some(frame) = latest {
+            *self.last_video.lock() = Some(frame.clone());
+            return Ok(Some(frame));
+        }
+        if self.video_active.load(Ordering::Acquire) {
+            return Ok(self.last_video.lock().clone());
+        }
+        Ok(None)
     }
 
     fn pull_audio(

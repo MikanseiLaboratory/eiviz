@@ -51,4 +51,8 @@ bundled, keep them application-local and include
   frame
 
 These checks do not satisfy any `NDI-HIL-*` scenario. The native-feature tests
-also remain unexecuted until an NDI SDK/runtime host is available.
+also remain unexecuted until an NDI SDK/runtime host is available. On
+2026-08-24, `cargo check -p eiviz-desktop --features ndi` on the current Linux
+agent stopped in `grafton-ndi`'s build script because
+`/usr/share/NDI SDK for Linux/include/Processing.NDI.Lib.h` was not installed;
+no native adapter code or interoperability scenario was claimed as executed.
