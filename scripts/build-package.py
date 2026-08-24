@@ -82,8 +82,20 @@ def source_revision() -> str:
 
 def normalize_tree(root: pathlib.Path, epoch: int) -> None:
     for path in sorted(root.rglob("*"), reverse=True):
+        set_mtime(path, epoch)
+    set_mtime(root, epoch)
+
+
+def set_mtime(path: pathlib.Path, epoch: int) -> None:
+    try:
         os.utime(path, (epoch, epoch), follow_symlinks=False)
-    os.utime(root, (epoch, epoch), follow_symlinks=False)
+    except NotImplementedError:
+        # Windows does not expose follow_symlinks for utime. Packaging policy
+        # rejects symlink payloads before this normalization step, so the
+        # ordinary call has the same safety semantics on that platform.
+        if path.is_symlink():
+            raise ValueError(f"refusing to normalize symlink payload: {path}")
+        os.utime(path, (epoch, epoch))
 
 
 def legal_payload(destination: pathlib.Path) -> None:
