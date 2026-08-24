@@ -181,7 +181,7 @@ pub enum ColorConversionPolicy {
 pub enum ToneMapPolicy {
     #[default]
     Disabled,
-    /// Deterministic extended-Reinhard HDR-to-SDR mapping. This is an
+    /// Deterministic Reinhard HDR-to-SDR mapping. This is an
     /// operator-selected rendering policy, not a certification claim.
     HdrToSdr {
         source_peak_nits: u16,
@@ -298,6 +298,17 @@ impl VideoFormat {
     pub fn is_baseline_1080p5994(&self) -> bool {
         self.width == 1920
             && self.height == 1080
+            && self.frame_rate == eiviz_time::NTSC_5994
+            && self.color == ColorSpace::Bt709Sdr
+            && !self.interlaced
+            && self.field_order.is_none()
+            && self.bit_depth == 8
+            && self.color_conversion == ColorConversionPolicy::Exact
+    }
+
+    pub fn is_cpu_reference_compatible(&self) -> bool {
+        self.width <= 1920
+            && self.height <= 1080
             && self.frame_rate == eiviz_time::NTSC_5994
             && self.color == ColorSpace::Bt709Sdr
             && !self.interlaced
@@ -703,10 +714,11 @@ impl Project {
                 "HDR-to-SDR tone mapping requires non-zero target below source peak",
             ));
         }
-        if self.compositor == CompositorBackend::CpuReference && !self.video.is_baseline_1080p5994()
+        if self.compositor == CompositorBackend::CpuReference
+            && !self.video.is_cpu_reference_compatible()
         {
             return Err(DomainError::msg(
-                "CpuReference is restricted to the 1080p59.94 SDR 8-bit baseline; extended video profiles require explicit Wgpu",
+                "CpuReference accepts only reduced-raster or full 1080p59.94 SDR 8-bit reference profiles; extended video profiles require explicit Wgpu",
             ));
         }
         Ok(())

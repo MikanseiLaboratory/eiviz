@@ -1416,6 +1416,37 @@ impl Engine {
         if p.mixing_units.len() > b.max_units {
             return Err(EngineError::Admission("mixing unit count".into()));
         }
+        for output in p.outputs.values().filter(|output| output.enabled) {
+            let unsupported = match &output.kind {
+                OutputKind::Ndi { .. } => eiviz_io_ndi::validate_video_format(&p.video).err(),
+                OutputKind::Omt { .. } => eiviz_io_omt::validate_video_format(
+                    &p.video,
+                    eiviz_io_omt::OmtColorProfile::Bt709Limited,
+                )
+                .err()
+                .map(|error| error.to_string()),
+                OutputKind::DeckLink { .. } => {
+                    eiviz_io_decklink::validate_video_format(&p.video).err()
+                }
+                OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. }
+                    if !p.video.is_baseline_1080p5994() =>
+                {
+                    Some("baseline H.264 distribution output supports only 1080p59.94 SDR 8-bit progressive".into())
+                }
+                OutputKind::PreviewWindow
+                | OutputKind::ProgramWindow
+                | OutputKind::AudioDevice { .. }
+                | OutputKind::Rtmp { .. }
+                | OutputKind::Srt { .. }
+                | OutputKind::Mp4 { .. } => None,
+            };
+            if let Some(detail) = unsupported {
+                return Err(EngineError::Admission(format!(
+                    "{} output {} does not support the selected video profile: {detail}; no conversion/profile fallback is permitted",
+                    output.name, output.id
+                )));
+            }
+        }
         let bytes = p
             .inputs
             .len()

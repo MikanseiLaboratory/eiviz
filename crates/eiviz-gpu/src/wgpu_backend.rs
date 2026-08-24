@@ -247,13 +247,10 @@ impl AdapterCapabilities {
             )));
         }
         if format.bit_depth == 10
-            && (!self.rgba16_float_renderable
-                || !self.rgba16_float_filterable
-                || !self.rgba32_float_sampleable)
+            && (!self.rgba16_float_renderable || !self.rgba16_float_filterable)
         {
             return Err(WgpuError::UnsupportedProfile(
-                "10-bit/HDR requires renderable/filterable RGBA16Float and sampleable RGBA32Float"
-                    .into(),
+                "10-bit/HDR requires renderable and filterable RGBA16Float".into(),
             ));
         }
         Ok(())
@@ -608,7 +605,7 @@ impl WgpuCompositor {
             ));
         }
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let layers = match self.prepare_layers(plan, sources) {
+        let layers = match self.prepare_layers(plan, sources, frame_id) {
             Ok(layers) => layers,
             Err(error) => {
                 let _ = self.device.poll(wgpu::PollType::Wait);
@@ -862,12 +859,20 @@ impl WgpuCompositor {
         &self,
         plan: &RenderPlan,
         sources: &HashMap<InputId, VideoFrame>,
+        frame_id: u64,
     ) -> Result<Vec<PreparedLayer>, WgpuError> {
         let mut prepared = Vec::with_capacity(plan.layers.len());
         for layer in &plan.layers {
             let source = sources
                 .get(&layer.input)
                 .ok_or(WgpuError::MissingSource(layer.input))?;
+            let expected_field = plan.field_at(frame_id);
+            if source.field != expected_field {
+                return Err(WgpuError::UnsupportedProfile(format!(
+                    "input {} field {:?} does not match render boundary {:?}; implicit scan conversion is forbidden",
+                    layer.input, source.field, expected_field
+                )));
+            }
             validate_source(source, layer.input)?;
             let upload = prepare_upload(source, layer.input)?;
             if upload.texture_format == wgpu::TextureFormat::Rgba16Float
@@ -1177,7 +1182,21 @@ fn layer_uniform_bytes(
                         target_nits,
                     },
             },
-        ) => Some((f32::from(source_peak_nits), f32::from(target_nits))),
+        ) if is_hdr(source.color.transfer) && !is_hdr(plan.color.transfer) => {
+            Some((f32::from(source_peak_nits), f32::from(target_nits)))
+        }
+        (
+            true,
+            ColorConversionPolicy::Gpu {
+                tone_map: ToneMapPolicy::HdrToSdr { .. },
+            },
+        ) => {
+            return Err(WgpuError::ColorConversion {
+                input: layer.input,
+                detail: "HDR-to-SDR tone map was selected for a conversion that is not HDR-to-SDR"
+                    .into(),
+            });
+        }
         (true, ColorConversionPolicy::Gpu { .. }) => None,
     };
     let source_2020 = source.color.matrix == ColorMatrix::Bt2020NonConstantLuminance;
@@ -1361,5 +1380,56 @@ mod tests {
             Err(WgpuError::UnsupportedProfile(_))
         ));
         capabilities.admit(&VideoFormat::uhd_5994_sdr()).unwrap();
+    }
+
+    #[test]
+    fn hdr_to_sdr_requires_and_encodes_explicit_policy() {
+        let layer = Layer {
+            input: InputId::from_u128(7),
+            transform: Transform2D::fullscreen(),
+            opacity: 1.0,
+        };
+        let mut source = VideoFrame::rgba_solid(1, MediaTime::ZERO, 2, 2, [128, 128, 128, 255]);
+        source.color = eiviz_core::ColorSpace::Bt2020Pq.metadata();
+        let mut plan = RenderPlan {
+            width: 2,
+            height: 2,
+            output_format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(2, 2, PixelFormat::Rgba8, 1),
+            layers: vec![layer.clone()],
+        };
+        assert!(matches!(
+            layer_uniform_bytes(&plan, &layer, &source, false),
+            Err(WgpuError::ColorConversion { .. })
+        ));
+        plan.color_conversion = ColorConversionPolicy::Gpu {
+            tone_map: ToneMapPolicy::Disabled,
+        };
+        assert!(
+            layer_uniform_bytes(&plan, &layer, &source, false)
+                .unwrap_err()
+                .to_string()
+                .contains("tone-map")
+        );
+        plan.color_conversion = ColorConversionPolicy::Gpu {
+            tone_map: ToneMapPolicy::HdrToSdr {
+                source_peak_nits: 1_000,
+                target_nits: 100,
+            },
+        };
+        let uniform = layer_uniform_bytes(&plan, &layer, &source, false).unwrap();
+        let flags = uniform[48..64]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_ne_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let policy = uniform[64..80]
+            .chunks_exact(4)
+            .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(flags[3], 1);
+        assert_eq!(policy, [1_000.0, 100.0, 2.0, 1.0]);
     }
 }

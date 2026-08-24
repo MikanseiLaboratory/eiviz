@@ -12,6 +12,9 @@ eiviz-codec-software.workspace = true
 eiviz-core.workspace = true
 eiviz-gpu = { workspace = true, optional = true }
 eiviz-io-file.workspace = true
+eiviz-io-decklink.workspace = true
+eiviz-io-ndi.workspace = true
+eiviz-io-omt.workspace = true
 eiviz-media.workspace = true
 eiviz-operations.workspace = true
 eiviz-project.workspace = true
