@@ -171,13 +171,7 @@ impl FlightRecorder {
         let oldest = self
             .latest_monotonic_nanos
             .saturating_sub(self.retention_nanos);
-        while self
-            .events
-            .front()
-            .is_some_and(|event| event.monotonic_nanos < oldest)
-        {
-            self.events.pop_front();
-        }
+        self.events.retain(|event| event.monotonic_nanos >= oldest);
         while self.events.len() > self.capacity {
             self.events.pop_front();
         }
@@ -361,6 +355,10 @@ fn redact_text(text: &str) -> String {
         "secret",
         "password",
         "authorization",
+        "native_handle",
+        "raw_handle",
+        "device_handle",
+        "socket_handle",
     ] {
         for delimiter in ["=", ":"] {
             redact_after_prefix_case_insensitive(
@@ -415,6 +413,18 @@ mod tests {
         assert_eq!(snapshot.len(), 3);
         assert_eq!(snapshot[0].monotonic_nanos, 20_000_000_000);
         assert_eq!(snapshot[2].sequence, 5);
+        recorder.record(DiagnosticEvent::new(
+            1,
+            DiagnosticLevel::Info,
+            "runtime",
+            "late event",
+        ));
+        assert!(
+            recorder
+                .snapshot()
+                .iter()
+                .all(|event| event.monotonic_nanos >= 2_000_000_000)
+        );
         assert!(FlightRecorder::new(Duration::from_secs(29), 1).is_err());
         assert!(FlightRecorder::new(Duration::from_secs(61), 1).is_err());
     }
@@ -428,7 +438,7 @@ mod tests {
                 .field("native_handle", 0xdead_beefu64)
                 .field(
                     "url",
-                    "rtmp://host/live?token=query-secret&name=ok password=hunter2",
+                    "rtmp://host/live?token=query-secret&name=ok password=hunter2 native_handle=0x1234",
                 )
                 .field(
                     "nested",
@@ -442,6 +452,7 @@ mod tests {
             "query-secret",
             "hunter2",
             "nested-secret",
+            "0x1234",
         ] {
             assert!(!json.contains(secret), "leaked {secret}: {json}");
         }

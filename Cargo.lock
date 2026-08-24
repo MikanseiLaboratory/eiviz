@@ -1101,6 +1101,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]
@@ -1147,6 +1148,8 @@ dependencies = [
  "eiviz-io-ndi",
  "eiviz-io-omt",
  "eiviz-media",
+ "eiviz-operations",
+ "eiviz-project",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1162,6 +1165,7 @@ dependencies = [
  "eiviz-io-file",
  "eiviz-io-stream",
  "eiviz-media",
+ "eiviz-operations",
  "eiviz-project",
  "eiviz-runtime",
  "eiviz-time",
@@ -1266,6 +1270,7 @@ dependencies = [
  "rml_rtmp",
  "srt-tokio",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1276,6 +1281,15 @@ dependencies = [
  "eiviz-core",
  "eiviz-time",
  "parking_lot",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "eiviz-operations"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
