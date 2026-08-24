@@ -26,7 +26,9 @@ all pass:
 - Desktop can ingest the constrained H.264 MP4 profile through an explicit
   end-user-installed Cisco OpenH264 2.6.0 binary path, decode I420 to BT.709
   limited-range RGBA, and play/pause/seek/loop. There is no decoder fallback.
-  Decode HIL has not been run in this repository environment.
+  A Linux x64 smoke test passed with Cisco's hash-verified binary and a
+  generated Constrained Baseline clip; representative conformance and
+  certification HIL remain pending.
 - Real OMT receive/output through pure-Rust `openmediatransport-rs` / `vmx-rs`;
   interop HIL is still pending
 - Capability stubs only for NDI / DeckLink / ASIO / gpu-video

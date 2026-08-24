@@ -45,5 +45,9 @@ color metadata validation remains a certification blocker. They are not
 silently accepted or decoded by another backend.
 
 No Cisco binary or representative conformance clip is stored in this
-repository, so unit tests cover missing-binary failure and playback cursor
-behavior only. Hardware/integration decode evidence is not claimed.
+repository. Default tests cover missing-binary failure and playback cursor
+behavior; an ignored opt-in test accepts explicit binary and MP4 paths. On
+2026-08-24 that test decoded an ffmpeg-generated 16x16 Constrained Baseline MP4
+with Cisco's Linux x64 2.6.0 `.8.so` whose SHA-256 matched the
+`openh264-sys2` allow-list. This is a local smoke test, not representative
+conformance, cross-platform evidence, or certification HIL.
