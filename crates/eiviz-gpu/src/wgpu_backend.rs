@@ -317,6 +317,8 @@ impl Default for ResourcePoolLimits {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResourcePoolDiagnostics {
+    pub limit_bytes: u64,
+    pub limit_resources: usize,
     pub resident_bytes: u64,
     pub resident_resources: usize,
     pub idle_resources: usize,
@@ -381,9 +383,10 @@ impl ResourceKey {
                     .saturating_mul(alignment)
                     .saturating_mul(u64::from(self.height))
             }
-            ResourceKind::Source | ResourceKind::Output => {
-                row_bytes.saturating_mul(u64::from(self.height))
-            }
+            ResourceKind::Source => row_bytes
+                .saturating_mul(u64::from(self.height))
+                .saturating_add(80),
+            ResourceKind::Output => row_bytes.saturating_mul(u64::from(self.height)),
         }
     }
 }
@@ -444,6 +447,8 @@ impl ResourcePool {
 
     fn diagnostics(&self) -> ResourcePoolDiagnostics {
         let mut value = self.diagnostics.clone();
+        value.limit_bytes = self.limits.max_bytes;
+        value.limit_resources = self.limits.max_resources;
         value.resident_bytes = self.resident_bytes;
         value.resident_resources = self.resident_resources;
         value.idle_resources = self.idle_count();

@@ -829,7 +829,23 @@ impl Runtime {
             if let GpuRuntimeState::Degraded { reason } = &self.gpu_state {
                 return Err(RuntimeError::GpuDegraded(reason.clone()));
             }
-            let plans = snapshot.gpu_prewarm_plans();
+            let mut plans = snapshot.gpu_prewarm_plans();
+            if let Some(previous) = &self.active_snapshot {
+                for (unit_id, unit) in &project.mixing_units {
+                    let old_program = previous
+                        .project
+                        .mixing_units
+                        .get(unit_id)
+                        .and_then(|old| old.program.scene);
+                    if old_program != unit.program.scene
+                        && unit.transition.style == TransitionStyle::Mix
+                        && unit.transition.duration_frames > 0
+                        && let Some(from) = previous.render.programs.get(unit_id)
+                    {
+                        plans.push(from.clone());
+                    }
+                }
+            }
             let source_slots = plans
                 .iter()
                 .map(|plan| plan.layers.len())

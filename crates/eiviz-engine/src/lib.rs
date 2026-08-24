@@ -116,6 +116,8 @@ pub struct EngineMetrics {
     pub gpu_automatic_recovery: bool,
     pub gpu_lifecycle_state: String,
     pub gpu_lifecycle_detail: Option<String>,
+    pub gpu_pool_limit_bytes: u64,
+    pub gpu_pool_limit_resources: usize,
     pub gpu_pool_resident_bytes: u64,
     pub gpu_pool_resident_resources: usize,
     pub gpu_pool_idle_resources: usize,
@@ -830,6 +832,14 @@ impl Engine {
                 | GpuLifecycleState::Active
                 | GpuLifecycleState::RecoveryPending => None,
             },
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_limit_bytes: gpu_pool.limit_bytes,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_limit_bytes: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_limit_resources: gpu_pool.limit_resources,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_limit_resources: 0,
             #[cfg(feature = "wgpu-backend")]
             gpu_pool_resident_bytes: gpu_pool.resident_bytes,
             #[cfg(not(feature = "wgpu-backend"))]
@@ -1675,30 +1685,29 @@ fn apply_pending_gpu_reinjection(inner: &mut Inner) -> Result<()> {
 
 fn observe_gpu_lifecycle(inner: &mut Inner) -> Result<()> {
     #[cfg(feature = "wgpu-backend")]
-    if inner.project.compositor == CompositorBackend::Wgpu {
-        if let Some(loss) = inner
+    if inner.project.compositor == CompositorBackend::Wgpu
+        && let Some(loss) = inner
             .runtime
             .wgpu_diagnostics()
             .and_then(|diagnostics| diagnostics.device_loss)
-        {
-            let reason = format!("{}: {}", loss.reason, loss.message);
-            if matches!(
-                inner.gpu_lifecycle,
-                GpuLifecycleState::Active | GpuLifecycleState::RecoveryPending
-            ) {
-                device_loss_transition(&mut inner.gpu_lifecycle, reason.clone());
-                inner.flight.record(
-                    DiagnosticEvent::new(
-                        eiviz_time::monotonic_nanos(),
-                        DiagnosticLevel::Error,
-                        "gpu",
-                        "gpu.device_lost",
-                    )
-                    .frame(inner.runtime.frame())
-                    .field("reason", reason.clone())
-                    .field("backend", "Wgpu"),
-                );
-            }
+    {
+        let reason = format!("{}: {}", loss.reason, loss.message);
+        if matches!(
+            inner.gpu_lifecycle,
+            GpuLifecycleState::Active | GpuLifecycleState::RecoveryPending
+        ) {
+            device_loss_transition(&mut inner.gpu_lifecycle, reason.clone());
+            inner.flight.record(
+                DiagnosticEvent::new(
+                    eiviz_time::monotonic_nanos(),
+                    DiagnosticLevel::Error,
+                    "gpu",
+                    "gpu.device_lost",
+                )
+                .frame(inner.runtime.frame())
+                .field("reason", reason.clone())
+                .field("backend", "Wgpu"),
+            );
         }
     }
     match &inner.gpu_lifecycle {
@@ -1713,6 +1722,7 @@ fn observe_gpu_lifecycle(inner: &mut Inner) -> Result<()> {
     }
 }
 
+#[cfg(any(feature = "wgpu-backend", test))]
 fn device_loss_transition(state: &mut GpuLifecycleState, reason: String) {
     if matches!(
         state,
@@ -2245,6 +2255,8 @@ fn record_operational_sample(inner: &mut Inner) {
             .field("readbacks", gpu.readbacks)
             .field("readback_nanos", gpu.readback_nanos)
             .field("readback_max_nanos", gpu.readback_max_nanos)
+            .field("pool_limit_bytes", gpu.pool.limit_bytes)
+            .field("pool_limit_resources", gpu.pool.limit_resources as u64)
             .field("pool_resident_bytes", gpu.pool.resident_bytes)
             .field(
                 "pool_resident_resources",

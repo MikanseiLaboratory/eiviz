@@ -1007,7 +1007,11 @@ fn trace_entries() -> Vec<TraceEntry> {
         ),
         (
             "R05",
-            &["CERT-MAX-ADMITTED-GRAPH", "eiviz-runtime::tests"],
+            &[
+                "CERT-MAX-ADMITTED-GRAPH",
+                "eiviz-runtime::tests",
+                "eiviz-gpu pool/device lifecycle tests",
+            ],
             &["GPU-HIL-01..08"],
             "pending",
             &[evidence, "target/certification/hil/gpu"],

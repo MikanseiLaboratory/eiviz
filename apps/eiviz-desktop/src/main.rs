@@ -1853,14 +1853,16 @@ impl eframe::App for DesktopApp {
                 gpu_metrics.gpu_readbacks,
             ));
             ui.label(format!(
-                "GPU lifecycle: {}{}; pool={} bytes / {} resources (idle {}, allocations {}, reuse {}, evictions {}, misses {}, prewarms {}, reinjections {})",
+                "GPU lifecycle: {}{}; pool={}/{} bytes, {}/{} resources (idle {}, allocations {}, reuse {}, evictions {}, misses {}, prewarms {}, reinjections {})",
                 gpu_metrics.gpu_lifecycle_state,
                 gpu_metrics
                     .gpu_lifecycle_detail
                     .as_ref()
                     .map_or_else(String::new, |detail| format!(" — {detail}")),
                 gpu_metrics.gpu_pool_resident_bytes,
+                gpu_metrics.gpu_pool_limit_bytes,
                 gpu_metrics.gpu_pool_resident_resources,
+                gpu_metrics.gpu_pool_limit_resources,
                 gpu_metrics.gpu_pool_idle_resources,
                 gpu_metrics.gpu_pool_allocations,
                 gpu_metrics.gpu_pool_reuses,
