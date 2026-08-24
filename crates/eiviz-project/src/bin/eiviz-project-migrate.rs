@@ -11,11 +11,17 @@ fn usage() -> ! {
 
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
-    let input = arguments.next().map(PathBuf::from).unwrap_or_else(|| usage());
+    let input = arguments
+        .next()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| usage());
     if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--output")) {
         usage();
     }
-    let output = arguments.next().map(PathBuf::from).unwrap_or_else(|| usage());
+    let output = arguments
+        .next()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| usage());
     if arguments.next().is_some() || input == output {
         usage();
     }
