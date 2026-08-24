@@ -18,6 +18,7 @@
 | gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
 | Smelter | 非同梱 | ADR-0002 |
 | openmediatransport-rs | git rev 2a0a9d31 | Pure Rust OMT、MIT、HIL pending |
-| NDI / DeckLink / ASIO | feature + HIL | ADR-0007 |
+| grafton-ndi | 1.0.0 exact | Apache-2.0 wrapper。NDI 6 SDK headers/runtimeは別途必要。`ndi` feature、HIL pending |
+| DeckLink / ASIO | feature + HIL | ADR-0007 |
 
 認定プロファイル: 1920×1080p, `60000/1001` fps, SDR BT.709 8-bit, 48 kHz。

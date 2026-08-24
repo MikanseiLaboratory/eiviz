@@ -2,15 +2,28 @@ Third-party software notices
 ============================
 
 eiviz itself is MIT-licensed. Native SDKs are optional, feature-gated, and
-never vendored into the default build. Operators must obtain their own
-licenses before enabling the corresponding Cargo features.
+never vendored into the default build. Operators and distributors remain
+responsible for the terms of each native SDK they enable.
 
 NDI
 ---
-NDI is a trademark of Vizrt NDI AB. The NDI SDK is proprietary. Default
-builds compile `eiviz-io-ndi` without linking the SDK and report the
-capability as unavailable. Enabling `ndi-sdk` requires a valid NDI SDK
-license from Vizrt and compliance with the NDI SDK license agreement.
+NDI is a trademark of Vizrt NDI AB. The optional adapter uses
+`grafton-ndi` 1.0.0, Copyright Grant Sparks, licensed Apache-2.0.
+`grafton-ndi` generates bindings from locally installed NDI 6 SDK headers;
+those generated bindings and SDK files are not redistributed by this
+repository.
+
+The NDI SDK/runtime is proprietary and royalty-free only subject to the
+license agreement shipped in the SDK. Building the `ndi` feature requires an
+NDI 6 SDK installation; execution requires the matching NDI runtime library
+to be discoverable. eiviz does not download, bundle, or silently substitute
+that runtime.
+
+Distributors that bundle permitted NDI runtime files must comply with the
+current SDK license and visual-identification requirements, keep the runtime
+application-local, and include `Processing.NDI.Lib.Licenses.txt`. NDI tools
+may not be redistributed. See https://ndi.video/ and the license in the
+installed SDK; those terms, not this notice, are authoritative.
 
 OMT (Open Media Transport)
 --------------------------

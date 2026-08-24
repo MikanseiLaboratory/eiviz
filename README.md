@@ -31,7 +31,10 @@ all pass:
   certification HIL remain pending.
 - Real OMT receive/output through pure-Rust `openmediatransport-rs` / `vmx-rs`;
   interop HIL is still pending
-- Capability stubs only for NDI / DeckLink / ASIO / gpu-video
+- Optional real NDI discovery/receive/output through `grafton-ndi` 1.0.0 and
+  an installed NDI 6 SDK/runtime. Video and planar audio use bounded adapter
+  workers and NDI's 100 ns timestamps. NDI interop HIL is still pending.
+- Capability stubs only for DeckLink / ASIO / gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
 Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
@@ -51,6 +54,11 @@ EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
 # Optional initial value for the desktop's explicit binary-path field.
 EIVIZ_OPENH264_PATH=/absolute/path/to/libopenh264-2.6.0-linux64.8.so \
   cargo run -p eiviz-desktop
+
+# Explicit NDI profile. NDI 6 SDK headers and runtime must already be installed.
+# Set NDI_SDK_DIR for a nonstandard SDK location and make the runtime library
+# discoverable using the platform's documented loader mechanism.
+cargo run -p eiviz-desktop --features ndi
 ```
 
 Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but
@@ -68,4 +76,6 @@ Requirements live in [docs/requirements.md](docs/requirements.md).
 ## License
 
 MIT for this repository. Third-party SDKs (NDI, DeckLink, ASIO, codecs) keep
-their own terms and are never compiled in by default.
+their own terms and are never compiled in by default. `grafton-ndi` is
+Apache-2.0; the separately installed NDI SDK/runtime remains subject to
+Vizrt NDI's SDK agreement. See [NOTICE](NOTICE).

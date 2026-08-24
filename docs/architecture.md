@@ -58,6 +58,13 @@ Native source adapter は専用受信 thread で vendor/network API を呼び、
 し、`InputId` で Project の論理 Input と結びます。adapter 未登録や受信前
 は Project の missing-media policy を適用し、simulator を暗黙使用しません。
 
+NDI は `ndi` feature でのみ `grafton-ndi` 1.0.0 とローカルの NDI 6
+SDK/runtime を使います。映像・音声 capture は別 worker、送信は Output ごとの
+worker で行い、全 queue は bounded です。受信した SDK 所有bufferは
+RGBA/planar f32 の eiviz 所有bufferへコピーし、NDI の100 ns timestampを
+`MediaTime`/sample indexへ整数変換します。feature未選択時にfake capability、
+OMT、simulator、slateをNDI adapterとして生成する経路はありません。
+
 file-video は `eiviz-io-file::VideoFileSource` が `shiguredo_mp4` の
 Annex-B sample indexを再生し、`eiviz-codec-software` が明示されたCisco
 OpenH264 2.6.0 binaryだけをdynamic loadします。seek/loop時は直前sync

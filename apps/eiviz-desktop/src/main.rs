@@ -4,6 +4,8 @@ use eiviz_core::{
     MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
     Transform2D, TransitionStyle,
 };
+#[cfg(feature = "ndi")]
+use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_engine::Engine;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +39,18 @@ struct DesktopApp {
     omt_output_name: String,
     omt_discovered: Vec<String>,
     omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
+    #[cfg(feature = "ndi")]
+    ndi_discovered: Vec<eiviz_io_ndi::NdiSourceInfo>,
+    #[cfg(feature = "ndi")]
+    ndi_selected: Option<usize>,
+    #[cfg(feature = "ndi")]
+    ndi_connections: Vec<Arc<eiviz_io_ndi::NdiSource>>,
+    #[cfg(feature = "ndi")]
+    ndi_outputs: Vec<(OutputId, Arc<eiviz_io_ndi::NdiSink>)>,
+    #[cfg(feature = "ndi")]
+    ndi_output_name: String,
+    #[cfg(feature = "ndi")]
+    ndi_capability: eiviz_media::Capability,
     control_stop: Arc<AtomicBool>,
     http_port: Option<u16>,
     tcp_port: Option<u16>,
@@ -120,6 +134,18 @@ impl DesktopApp {
             omt_output_name: "eiviz Program".into(),
             omt_discovered: Vec::new(),
             omt_connections: Vec::new(),
+            #[cfg(feature = "ndi")]
+            ndi_discovered: Vec::new(),
+            #[cfg(feature = "ndi")]
+            ndi_selected: None,
+            #[cfg(feature = "ndi")]
+            ndi_connections: Vec::new(),
+            #[cfg(feature = "ndi")]
+            ndi_outputs: Vec::new(),
+            #[cfg(feature = "ndi")]
+            ndi_output_name: "eiviz Program".into(),
+            #[cfg(feature = "ndi")]
+            ndi_capability: eiviz_io_ndi::probe(),
             control_stop,
             http_port,
             tcp_port,
@@ -284,6 +310,131 @@ impl DesktopApp {
         }
         self.selected_scene = Some(scene.id);
         self.status = format!("video ready: {}", scene.name);
+    }
+
+    #[cfg(feature = "ndi")]
+    fn connect_ndi(&mut self) {
+        let Some(index) = self.ndi_selected else {
+            self.status = "NDI: discover and select a source".into();
+            return;
+        };
+        let Some(discovered) = self.ndi_discovered.get(index).cloned() else {
+            self.status = "NDI: selected source is no longer in the discovery list".into();
+            return;
+        };
+        let input = Input {
+            id: InputId::new(),
+            name: discovered.name().to_owned(),
+            tags: vec!["ndi".into(), "live".into()],
+            groups: vec![],
+            source: InputSource::Ndi {
+                source_name: discovered.name().to_owned(),
+            },
+        };
+        let source = match eiviz_io_ndi::NdiSource::connect(
+            input.id,
+            &discovered,
+            eiviz_io_ndi::NdiConfig::default(),
+        ) {
+            Ok(source) => Arc::new(source),
+            Err(error) => {
+                self.status = format!("NDI connect: {error}");
+                return;
+            }
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: format!("NDI {}", discovered.name()),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddInput {
+            input: input.clone(),
+        }) {
+            self.status = format!("NDI input: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.submit_payload(Command::AddScene {
+            scene: scene.clone(),
+        }) {
+            self.status = format!("NDI scene: {error}");
+            return;
+        }
+        let unit = self.engine.primary_unit();
+        if let Some(bus) = self.engine.snapshot().audio_matrix.buses.first() {
+            let route = AudioRoute {
+                input: input.id,
+                bus: bus.id,
+                mode: RouteMode::Follow { unit },
+                gain_db: 0.0,
+                muted: false,
+                solo: false,
+                delay_ms: 0.0,
+                pan: 0.0,
+            };
+            if let Err(error) = self
+                .engine
+                .submit_payload(Command::SetAudioRoute { route })
+            {
+                self.status = format!("NDI audio route: {error}");
+                return;
+            }
+        }
+        self.engine.attach_source(source.clone());
+        self.ndi_connections.push(source);
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("NDI preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("NDI connected: {}", discovered.label());
+    }
+
+    #[cfg(feature = "ndi")]
+    fn start_ndi_output(&mut self, owner: eiviz_core::MixingUnitId) {
+        let name = self.ndi_output_name.trim().to_owned();
+        let project = self.engine.snapshot();
+        let sink = match eiviz_io_ndi::NdiSink::create(
+            &name,
+            project.video.frame_rate,
+            eiviz_io_ndi::NdiConfig::default(),
+        ) {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                self.status = format!("NDI output: {error}");
+                return;
+            }
+        };
+        let output = Output {
+            id: OutputId::new(),
+            name: name.clone(),
+            owner,
+            kind: OutputKind::Ndi { name: name.clone() },
+            enabled: true,
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddOutput {
+            output: output.clone(),
+        }) {
+            self.status = format!("NDI output project: {error}");
+            return;
+        }
+        if let Err(error) = self
+            .engine
+            .attach_output_sink(output.id, sink.clone())
+        {
+            self.status = format!("NDI output route: {error}");
+            return;
+        }
+        self.ndi_outputs.push((output.id, sink));
+        self.status = format!("NDI output started: {name}");
     }
 }
 
@@ -515,7 +666,6 @@ impl eframe::App for DesktopApp {
                 _ => "control disabled".into(),
             });
             for cap in [
-                eiviz_io_ndi::probe(),
                 eiviz_io_omt::probe(),
                 eiviz_io_decklink::probe(),
                 eiviz_codec_gpu_video::probe(),
@@ -530,6 +680,19 @@ impl eframe::App for DesktopApp {
                     }
                 ));
             }
+            #[cfg(feature = "ndi")]
+            ui.label(format!(
+                "{}: {} ({})",
+                self.ndi_capability.id,
+                if self.ndi_capability.available {
+                    "ready"
+                } else {
+                    "unavailable"
+                },
+                self.ndi_capability.detail
+            ));
+            #[cfg(not(feature = "ndi"))]
+            ui.label("NDI: not compiled (enable the explicit `ndi` feature)");
             for cap in eiviz_io_audio::probe() {
                 ui.label(format!(
                     "{}: {}",
@@ -576,6 +739,89 @@ impl eframe::App for DesktopApp {
                     source.health()
                 ));
             }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.heading("NDI");
+                ui.hyperlink_to("ndi.video", "https://ndi.video/");
+            });
+            #[cfg(feature = "ndi")]
+            {
+                ui.horizontal(|ui| {
+                    if ui.button("Discover NDI").clicked() {
+                        match eiviz_io_ndi::discover_sources(std::time::Duration::from_secs(2)) {
+                            Ok(sources) => {
+                                self.ndi_discovered = sources;
+                                self.ndi_selected = None;
+                                self.status =
+                                    format!("NDI: {} source(s)", self.ndi_discovered.len());
+                            }
+                            Err(error) => self.status = format!("NDI discovery: {error}"),
+                        }
+                    }
+                    if ui.button("Connect NDI").clicked() {
+                        self.connect_ndi();
+                    }
+                });
+                for (index, source) in self.ndi_discovered.iter().enumerate() {
+                    if ui
+                        .selectable_label(self.ndi_selected == Some(index), source.label())
+                        .clicked()
+                    {
+                        self.ndi_selected = Some(index);
+                    }
+                }
+                for source in &self.ndi_connections {
+                    let detail = source
+                        .last_error()
+                        .unwrap_or_else(|| "no adapter error".into());
+                    let (video_drops, audio_drops) = source.dropped_frames();
+                    ui.label(format!(
+                        "{}: {:?}, drops video={video_drops} audio={audio_drops} ({detail})",
+                        source.source_name(),
+                        source.health()
+                    ));
+                }
+                ui.label("Program output");
+                ui.text_edit_singleline(&mut self.ndi_output_name);
+                if ui.button("Start NDI Output").clicked() {
+                    self.start_ndi_output(unit_id);
+                }
+                let mut stop_output = None;
+                for (output_id, sink) in &self.ndi_outputs {
+                    let detail = sink
+                        .last_error()
+                        .unwrap_or_else(|| "no adapter error".into());
+                    let mut enabled = project
+                        .outputs
+                        .get(output_id)
+                        .is_some_and(|output| output.enabled);
+                    if ui.checkbox(&mut enabled, "Enabled").changed() {
+                        let _ = self.engine.submit_payload(Command::SetOutputEnabled {
+                            id: *output_id,
+                            enabled,
+                        });
+                    }
+                    ui.label(format!(
+                        "{}: {:?}, drops={} ({detail})",
+                        eiviz_media::MediaSink::name(sink.as_ref()),
+                        sink.health(),
+                        sink.dropped_frames()
+                    ));
+                    if ui.button("Stop NDI Output").clicked() {
+                        stop_output = Some(*output_id);
+                    }
+                }
+                if let Some(output_id) = stop_output {
+                    let _ = self
+                        .engine
+                        .submit_payload(Command::RemoveOutput { id: output_id });
+                    self.engine.detach_output_sink(output_id);
+                    self.ndi_outputs.retain(|(id, _)| *id != output_id);
+                    self.status = "NDI output stopped".into();
+                }
+            }
+            #[cfg(not(feature = "ndi"))]
+            ui.label("Build with `--features ndi` after installing the NDI 6 SDK/runtime.");
             ui.label("Program output");
             ui.text_edit_singleline(&mut self.omt_output_name);
             if ui.button("Start OMT Output").clicked() {

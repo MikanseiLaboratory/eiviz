@@ -25,4 +25,5 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
+ndi = ["eiviz-io-ndi/ndi"]
 wgpu-backend = ["eiviz-engine/wgpu-backend"]
