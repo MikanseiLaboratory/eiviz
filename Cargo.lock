@@ -686,6 +686,7 @@ version = "0.1.0"
 dependencies = [
  "eiviz-media",
  "eiviz-time",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
