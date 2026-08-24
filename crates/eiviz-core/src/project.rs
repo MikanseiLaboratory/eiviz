@@ -12,6 +12,25 @@ use std::collections::BTreeMap;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Explicit compositor selection. Never switch at runtime without a command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompositorBackend {
+    /// CI / golden-frame reference. Not a substitute for [`Self::Wgpu`].
+    #[default]
+    CpuReference,
+    /// Production GPU path. Absence of a device is a hard error.
+    Wgpu,
+}
+
+/// Configured response to a missing asset or device. Not an implicit source.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MissingMediaPolicy {
+    #[default]
+    Slate,
+    LastGood,
+    Fail,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoFormat {
     pub width: u32,
@@ -50,6 +69,10 @@ pub struct Project {
     pub audio_matrix: AudioMatrix,
     pub device_bindings: BTreeMap<DeviceBindingId, DeviceBinding>,
     pub assets: BTreeMap<AssetId, AssetRef>,
+    #[serde(default)]
+    pub compositor: CompositorBackend,
+    #[serde(default)]
+    pub missing_media: MissingMediaPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -99,6 +122,8 @@ impl Project {
             audio_matrix: AudioMatrix::default(),
             device_bindings: BTreeMap::new(),
             assets: BTreeMap::new(),
+            compositor: CompositorBackend::CpuReference,
+            missing_media: MissingMediaPolicy::Slate,
         };
         let unit = MixingUnit::new("Mix 1");
         let output = Output {
@@ -276,5 +301,16 @@ mod tests {
         p.mixing_units.get_mut(&b_id).unwrap().program.scene = Some(scene_b.id);
         assert_eq!(p.validate(), Err(DomainError::Cycle));
         let _ = b;
+    }
+
+    #[test]
+    fn compositor_and_missing_media_default_on_old_json() {
+        let p = Project::new("demo");
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("compositor");
+        v.as_object_mut().unwrap().remove("missing_media");
+        let loaded: Project = serde_json::from_value(v).unwrap();
+        assert_eq!(loaded.compositor, CompositorBackend::CpuReference);
+        assert_eq!(loaded.missing_media, MissingMediaPolicy::Slate);
     }
 }

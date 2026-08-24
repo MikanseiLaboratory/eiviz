@@ -9,10 +9,10 @@ eiviz/
     eiviz-command/        # sequencer / reducer
     eiviz-project/        # schema, ZIP, atomic save
     eiviz-media/          # frame/audio 契約
-    eiviz-gpu/            # CPU compositor（wgpu feature 可）
+    eiviz-gpu/            # 明示 CpuReference compositor。wgpu-backend は別 backend
     eiviz-runtime/        # virtual clock, audio matrix
     eiviz-engine/         # 合成ルート
-    eiviz-control/        # HTTP / TCP
+    eiviz-control/        # HTTP / TCP Command API（Stream Deck 固有ロジックなし）
     eiviz-io-*            # ファイル / NDI / OMT / DeckLink / audio / stream
     eiviz-codec-*         # software + gpu-video 隔離
   docs/                   # 要件・ADR・認定

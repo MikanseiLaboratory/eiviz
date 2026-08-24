@@ -35,10 +35,10 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 | eiviz-project | schema、migration、ZIP | 再生 |
 | eiviz-media | frame/audio/packet 契約 | 具体 SDK 型 |
 | eiviz-runtime | グラフ検証、スケジューラ、registry | GUI |
-| eiviz-gpu | 合成（wgpu + CPU fallback） | NDI/DeckLink 型 |
+| eiviz-gpu | 合成（明示 CpuReference / Wgpu。暗黙切替なし） | NDI/DeckLink 型 |
 | eiviz-engine | 所有権の結線 | 個別 SDK 実装の詳細 |
 | eiviz-io-* / codec-* | adapter | domain 型の再定義 |
-| eiviz-control | 外部操作の Command 化 | Project 直接更新 |
+| eiviz-control | HTTP/TCP Command API。Stream Deck 固有ロジックは置かない | Project 直接更新 |
 
 ## 時刻
 
@@ -58,7 +58,7 @@ source は `MediaSource`、sink は `MediaSink` です。queue は bounded、pol
 
 ## GPU
 
-RenderPlan は due output から逆算した demand-driven DAG です。submit は GPU executor の単一箇所に限ります。ゼロコピーは `GpuInterop` に隔離し、既定経路は staging copy です。
+RenderPlan は due output から逆算した demand-driven DAG です。submit は GPU executor の単一箇所に限ります。ゼロコピーは `GpuInterop` に隔離し、既定経路は staging copy です。`Project.compositor` が `Wgpu` のとき CPU 合成へ落とさない。`CpuReference` は CI / 参照用の明示 profile です。
 
 ## 失敗ドメイン
 

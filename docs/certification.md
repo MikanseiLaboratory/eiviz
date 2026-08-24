@@ -31,8 +31,8 @@
 
 1. Unit / property: 有理数、reducer、DAG、audio routing、migration
 2. Virtual-clock integration: TAKE、overlay、follow、queue overflow、replay
-3. GPU: adapter がある環境のみ。無ければ CPU compositor で合同試験
-4. HIL: DeckLink / ASIO / NDI / OMT / Stream Deck は private runner
+3. GPU: `Wgpu` profile は hardware adapter 必須。無ければその profile は試験対象外（CPU に置換しない）。CI は明示 `CpuReference` profile
+4. HIL: DeckLink / ASIO / NDI / OMT は private runner。Stream Deck は out-of-tree プラグインが HTTP/TCP Command API を叩く試験とする
 5. Soak: 24 h gate、release 72 h
 6. Fault: GPU lost、disk full、NIC down、SDK 切断
 

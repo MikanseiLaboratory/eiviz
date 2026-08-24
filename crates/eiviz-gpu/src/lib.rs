@@ -1,5 +1,8 @@
-//! Demand-driven compositor. The CPU path is the CI/reference implementation.
-//! A wgpu backend can be enabled with `--features wgpu-backend`.
+//! Demand-driven compositor.
+//!
+//! [`composite`] is the **explicit** [`eiviz_core::CompositorBackend::CpuReference`]
+//! implementation (CI / golden frames). Optional `wgpu-backend` is a separate
+//! backend. There is no implicit switch from GPU to CPU.
 
 use eiviz_core::{MixingUnit, Project, Transform2D};
 use eiviz_media::{PixelFormat, VideoFrame};
@@ -264,10 +267,27 @@ mod tests {
         assert_eq!(frame.pixel(0, 0), [255, 0, 0, 255]);
         assert_eq!(frame.pixel(frame.width - 1, frame.height - 1)[0], 255);
     }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn wgpu_does_not_return_cpu_pixels() {
+        use crate::wgpu_backend::{WgpuCompositor, WgpuError};
+        let plan = RenderPlan {
+            width: 16,
+            height: 16,
+            layers: vec![],
+        };
+        if let Ok(gpu) = WgpuCompositor::new() {
+            let err = gpu
+                .composite(&plan, &HashMap::new(), MediaTime::ZERO, 1)
+                .expect_err("must not substitute CPU frames");
+            assert!(matches!(err, WgpuError::NotImplemented));
+        }
+    }
 }
 
 #[cfg(feature = "wgpu-backend")]
 mod wgpu_backend;
 
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu_backend::WgpuCompositor;
+pub use wgpu_backend::{WgpuCompositor, WgpuError};

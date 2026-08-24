@@ -9,7 +9,7 @@ and feature-gated I/O adapters.
 Phase 0–1 of the architecture plan are in-tree:
 
 - Deterministic core (`eiviz-time`, `eiviz-core`, `eiviz-command`, `eiviz-project`)
-- CPU compositor + virtual-clock runtime (`eiviz-gpu`, `eiviz-runtime`, `eiviz-engine`)
+- Explicit CpuReference compositor + virtual-clock runtime (`eiviz-gpu`, `eiviz-runtime`, `eiviz-engine`). `Wgpu` is a separate project backend, never a silent fallback.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
 - Adapter stubs for NDI / OMT / DeckLink / ASIO / gpu-video (capability probes)
 - Portable `.eiviz` packages and crash-safe JSON save

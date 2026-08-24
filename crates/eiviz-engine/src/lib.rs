@@ -80,11 +80,16 @@ struct Inner {
 
 impl Engine {
     pub fn new(name: impl Into<String>) -> Self {
-        Self {
+        Self::from_project(Project::new(name)).expect("default project uses CpuReference")
+    }
+
+    pub fn from_project(project: Project) -> Result<Self> {
+        let runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
+        Ok(Self {
             inner: Mutex::new(Inner {
-                project: Project::new(name),
+                project,
                 sequencer: Sequencer::default(),
-                runtime: Runtime::new(48_000),
+                runtime,
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
                 flight: VecDeque::with_capacity(FLIGHT_CAP),
@@ -92,7 +97,7 @@ impl Engine {
                 autosave_path: None,
                 journal_path: None,
             }),
-        }
+        })
     }
 
     pub fn shared(self) -> Arc<Self> {
@@ -233,20 +238,7 @@ impl Engine {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let project = load(path)?;
-        Ok(Self {
-            inner: Mutex::new(Inner {
-                project,
-                sequencer: Sequencer::default(),
-                runtime: Runtime::new(48_000),
-                client: ClientId::new(),
-                budget: AdmissionBudget::default(),
-                flight: VecDeque::with_capacity(FLIGHT_CAP),
-                sinks: Vec::new(),
-                autosave_path: None,
-                journal_path: None,
-            }),
-        })
+        Self::from_project(load(path)?)
     }
 
     pub fn primary_unit(&self) -> MixingUnitId {
@@ -389,5 +381,17 @@ mod tests {
         }
         assert!(engine.metrics().frame >= 5);
         assert!(!engine.metrics().failed_outputs.is_empty());
+    }
+
+    #[test]
+    fn wgpu_project_does_not_construct_cpu_engine() {
+        let mut project = Project::new("gpu-required");
+        project.compositor = eiviz_core::CompositorBackend::Wgpu;
+        match Engine::from_project(project) {
+            Err(EngineError::Runtime(eiviz_runtime::RuntimeError::WgpuFeatureDisabled))
+            | Err(EngineError::Runtime(eiviz_runtime::RuntimeError::Gpu(_))) => {}
+            Err(e) => panic!("must not substitute CPU runtime: {e}"),
+            Ok(_) => panic!("must not construct an engine when Wgpu is unavailable"),
+        }
     }
 }

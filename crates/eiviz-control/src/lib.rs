@@ -1,4 +1,6 @@
-//! Control adapters convert wire/HID events into CommandEnvelope only.
+//! Control adapters expose the Command API. Stream Deck plugins live out of
+//! tree and must call HTTP/TCP themselves; this crate has no Deck-specific
+//! protocol or action map.
 
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_engine::Engine;
@@ -195,77 +197,7 @@ fn serve_tcp(engine: Arc<Engine>, mut stream: TcpStream) -> std::io::Result<()> 
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct DeckEvent {
-    event: Option<String>,
-    action: Option<String>,
-    command: Option<Command>,
-}
-
-pub fn spawn_streamdeck(
-    engine: Arc<Engine>,
-    bind: &str,
-    stop: Arc<AtomicBool>,
-) -> std::io::Result<u16> {
-    let listener = TcpListener::bind(bind)?;
-    listener.set_nonblocking(true)?;
-    let port = listener.local_addr()?.port();
-    thread::spawn(move || {
-        loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let engine = engine.clone();
-                    thread::spawn(move || {
-                        let _ = serve_streamdeck(engine, stream);
-                    });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    Ok(port)
-}
-
-fn serve_streamdeck(engine: Arc<Engine>, mut stream: TcpStream) -> std::io::Result<()> {
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 1024];
-    loop {
-        let n = match stream.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        buf.extend_from_slice(&tmp[..n]);
-        while let Some(idx) = buf.iter().position(|b| *b == b'\n') {
-            let line = buf.drain(..=idx).collect::<Vec<_>>();
-            let line = String::from_utf8_lossy(&line);
-            if let Ok(ev) = serde_json::from_str::<DeckEvent>(line.trim()) {
-                if let Some(cmd) = ev.command {
-                    let _ = engine.submit(CommandEnvelope::new(engine.client(), cmd));
-                } else if ev.event.as_deref() == Some("keyDown")
-                    && ev
-                        .action
-                        .as_deref()
-                        .is_some_and(|a| a.contains("take") || a.ends_with(".take"))
-                {
-                    keyboard_take(&engine);
-                }
-                let hash = engine.state_hash();
-                let _ = stream.write_all(format!("{hash}\n").as_bytes());
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Best-effort MIDI listener. Default builds do not link midir (ALSA/CoreMIDI).
-/// Enable `--features midi` on a machine with the native MIDI stack.
 pub fn spawn_midi(_engine: Arc<Engine>, _stop: Arc<AtomicBool>) {}
 
 pub fn keyboard_take(engine: &Engine) {

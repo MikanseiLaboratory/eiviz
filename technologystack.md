@@ -5,7 +5,7 @@
 | コンポーネント | 版 | 備考 |
 |---|---|---|
 | Rust | 1.85.0 (MSRV) / CI 1.85 | edition 2024 |
-| wgpu | 24.0.5 | GUI と CPU 合成の既定。gpu-video とは両立させない |
+| wgpu | 24.0.5 | GUI の既定。合成は `Project.compositor` で明示選択（ADR-0010）。gpu-video とは両立させない |
 | egui / eframe | 0.32.3 | ADR-0005 |
 | serde / serde_json | 1.0.219 / 1.0.143 | 永続化・制御面 |
 | uuid | 1.18.1 | v7 IDs |

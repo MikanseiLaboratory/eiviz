@@ -5,7 +5,7 @@
 
 ## Context
 
-Issue は TCP/HTTP/MIDI/StreamDeck/keyboard/UI を Command Queue で順次処理すると書く。I/O 完了待ちまで直列化するとフレームが止まる。
+Issue は TCP/HTTP/MIDI/Stream Deck/keyboard/UI を Command Queue で順次処理すると書く。Stream Deck の action 解釈は **プラグイン側** の責務であり、本リポジトリは Command API だけを提供する。I/O 完了待ちまで直列化するとフレームが止まる。
 
 ## Decision
 
@@ -13,4 +13,4 @@ Issue は TCP/HTTP/MIDI/StreamDeck/keyboard/UI を Command Queue で順次処理
 
 ## Consequences
 
-外部 API は Query と Command を分ける。リアルタイムスレッドは sequencer を直接呼ばない。
+外部 API は Query と Command を分ける。リアルタイムスレッドは sequencer を直接呼ばない。Stream Deck 用の別プロトコルや action map は追加しない。

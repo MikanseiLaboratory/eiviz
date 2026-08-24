@@ -1,10 +1,10 @@
 //! Virtual-clock media runtime. Command snapshots are applied at frame boundaries.
 
 use eiviz_core::{
-    AssetId, AudioBusId, AudioFollowPolicy, InputId, InputSource, MixTap, MixingGraph,
-    MixingUnitId, Project, RouteMode,
+    AssetId, AudioBusId, AudioFollowPolicy, CompositorBackend, InputId, InputSource,
+    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, Project, RouteMode,
 };
-use eiviz_gpu::{color_bars, composite, mix_frames, plan_preview, plan_program};
+use eiviz_gpu::{RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{AudioBuffer, BoundedSlot, QueuePolicy, VideoFrame};
 use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
@@ -12,10 +12,24 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Configured missing-media slate. Not a fake camera or decoded still.
+pub const SLATE_RGBA: [u8; 4] = [32, 32, 48, 255];
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("unknown mixing unit {0}")]
     UnknownUnit(String),
+    #[error("compositor backend mismatch: project={project:?} runtime={runtime:?}")]
+    BackendMismatch {
+        project: CompositorBackend,
+        runtime: CompositorBackend,
+    },
+    #[error("wgpu compositor requested but feature wgpu-backend is not enabled")]
+    WgpuFeatureDisabled,
+    #[error("GPU compositor failed: {0}")]
+    Gpu(String),
+    #[error("missing media and policy is Fail: {0}")]
+    MissingMedia(String),
     #[error("{0}")]
     Other(String),
 }
@@ -33,8 +47,10 @@ pub struct Runtime {
     clock: VirtualClock,
     frame: u64,
     sample_rate: u32,
+    backend: CompositorBackend,
     last_program: HashMap<MixingUnitId, VideoFrame>,
     last_preview: HashMap<MixingUnitId, VideoFrame>,
+    last_good_inputs: HashMap<InputId, VideoFrame>,
     program_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
     preview_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
     pub metrics: TickMetrics,
@@ -44,16 +60,37 @@ pub struct Runtime {
     delay_lines: HashMap<(InputId, AudioBusId), Vec<VecDeque<f32>>>,
     simulated: HashMap<InputId, VideoFrame>,
     pub peak_meters: HashMap<AudioBusId, f32>,
+    #[cfg(feature = "wgpu-backend")]
+    wgpu: Option<eiviz_gpu::WgpuCompositor>,
 }
 
 impl Runtime {
+    /// Explicit [`CompositorBackend::CpuReference`]. Used by CI and the default engine.
     pub fn new(sample_rate: u32) -> Self {
-        Self {
+        Self::with_backend(sample_rate, CompositorBackend::CpuReference)
+            .expect("CpuReference backend is always available")
+    }
+
+    pub fn with_backend(sample_rate: u32, backend: CompositorBackend) -> Result<Self> {
+        #[cfg(feature = "wgpu-backend")]
+        let wgpu = match backend {
+            CompositorBackend::CpuReference => None,
+            CompositorBackend::Wgpu => Some(
+                eiviz_gpu::WgpuCompositor::new().map_err(|e| RuntimeError::Gpu(e.to_string()))?,
+            ),
+        };
+        #[cfg(not(feature = "wgpu-backend"))]
+        if matches!(backend, CompositorBackend::Wgpu) {
+            return Err(RuntimeError::WgpuFeatureDisabled);
+        }
+        Ok(Self {
             clock: VirtualClock::new(),
             frame: 0,
             sample_rate,
+            backend,
             last_program: HashMap::new(),
             last_preview: HashMap::new(),
+            last_good_inputs: HashMap::new(),
             program_slots: HashMap::new(),
             preview_slots: HashMap::new(),
             metrics: TickMetrics::default(),
@@ -63,7 +100,13 @@ impl Runtime {
             delay_lines: HashMap::new(),
             simulated: HashMap::new(),
             peak_meters: HashMap::new(),
-        }
+            #[cfg(feature = "wgpu-backend")]
+            wgpu,
+        })
+    }
+
+    pub fn backend(&self) -> CompositorBackend {
+        self.backend
     }
 
     pub fn set_asset_root(&mut self, root: impl Into<PathBuf>) {
@@ -73,6 +116,10 @@ impl Runtime {
 
     pub fn inject_simulated(&mut self, id: InputId, frame: VideoFrame) {
         self.simulated.insert(id, frame);
+    }
+
+    pub fn clear_simulated(&mut self, id: InputId) {
+        self.simulated.remove(&id);
     }
 
     pub fn frame(&self) -> u64 {
@@ -121,12 +168,18 @@ impl Runtime {
 
     pub fn tick(&mut self, project: &mut Project) -> Result<TickResult> {
         MixingGraph::assert_acyclic(project).map_err(|e| RuntimeError::Other(e.to_string()))?;
+        if project.compositor != self.backend {
+            return Err(RuntimeError::BackendMismatch {
+                project: project.compositor,
+                runtime: self.backend,
+            });
+        }
         let order = MixingGraph::topological_order(project)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         let pts = MediaTime::from_frame_index(self.frame, project.video.frame_rate)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         self.clock.seek_frame(self.frame, project.video.frame_rate);
-        let mut sources = self.generate_sources(project, pts);
+        let mut sources = self.generate_sources(project, pts)?;
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
         for unit_id in order {
@@ -142,14 +195,14 @@ impl Runtime {
             }
             fill_mixfeeds(project, &mut sources, &programs, &previews);
             let pg_plan = plan_program(project, &unit);
-            let mut pg = composite(&pg_plan, &sources, pts, self.frame);
+            let mut pg = self.composite_plan(&pg_plan, &sources, pts)?;
             if unit.transition.remaining_frames > 0 {
                 let pv_plan = plan_preview(project, &unit);
-                let pv = composite(&pv_plan, &sources, pts, self.frame);
+                let pv = self.composite_plan(&pv_plan, &sources, pts)?;
                 pg = mix_frames(&pv, &pg, unit.mix_factor(), pts, self.frame);
             }
             let pv_plan = plan_preview(project, &unit);
-            let pv = composite(&pv_plan, &sources, pts, self.frame);
+            let pv = self.composite_plan(&pv_plan, &sources, pts)?;
             self.program_slot(unit.id)
                 .push(pg.clone())
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
@@ -180,11 +233,36 @@ impl Runtime {
         })
     }
 
+    fn composite_plan(
+        &self,
+        plan: &RenderPlan,
+        sources: &HashMap<InputId, VideoFrame>,
+        pts: MediaTime,
+    ) -> Result<VideoFrame> {
+        match self.backend {
+            CompositorBackend::CpuReference => Ok(composite(plan, sources, pts, self.frame)),
+            CompositorBackend::Wgpu => {
+                #[cfg(not(feature = "wgpu-backend"))]
+                {
+                    Err(RuntimeError::WgpuFeatureDisabled)
+                }
+                #[cfg(feature = "wgpu-backend")]
+                {
+                    let gpu = self.wgpu.as_ref().ok_or_else(|| {
+                        RuntimeError::Gpu("wgpu compositor was not constructed".into())
+                    })?;
+                    gpu.composite(plan, sources, pts, self.frame)
+                        .map_err(|e| RuntimeError::Gpu(e.to_string()))
+                }
+            }
+        }
+    }
+
     fn generate_sources(
         &mut self,
         project: &Project,
         pts: MediaTime,
-    ) -> HashMap<InputId, VideoFrame> {
+    ) -> Result<HashMap<InputId, VideoFrame>> {
         let mut out = HashMap::new();
         let w = project.video.width.clamp(16, 1920);
         let h = project.video.height.clamp(16, 1080);
@@ -193,80 +271,117 @@ impl Runtime {
                 let mut f = sim.clone();
                 f.pts = pts;
                 f.source = Some(input.id);
+                self.last_good_inputs.insert(input.id, f.clone());
                 out.insert(input.id, f);
                 continue;
             }
-            let mut generated = match &input.source {
-                InputSource::ColorBars => color_bars(self.frame, pts, w, h),
-                InputSource::SolidColor { r, g, b, a } => {
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [*r, *g, *b, *a])
-                }
-                InputSource::Image { asset } => self.load_image(project, *asset, pts, w, h),
+            let (mut generated, authentic) = match &input.source {
+                InputSource::ColorBars => (color_bars(self.frame, pts, w, h), true),
+                InputSource::SolidColor { r, g, b, a } => (
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [*r, *g, *b, *a]),
+                    true,
+                ),
+                InputSource::Image { asset } => match self.try_load_image(project, *asset, pts) {
+                    Some(frame) => (frame, true),
+                    None => (
+                        self.missing_frame(project, input.id, w, h, pts, "image")?,
+                        false,
+                    ),
+                },
                 InputSource::Video { asset, playback } => {
-                    let mut frame = self.load_image(project, *asset, pts, w, h);
-                    if !playback.playing {
-                        frame.discontinuity = false;
+                    match self.try_load_image(project, *asset, pts) {
+                        Some(mut frame) => {
+                            if !playback.playing {
+                                frame.discontinuity = false;
+                            }
+                            (frame, true)
+                        }
+                        None => (
+                            self.missing_frame(project, input.id, w, h, pts, "video")?,
+                            false,
+                        ),
                     }
-                    frame
                 }
                 InputSource::Ndi { .. }
                 | InputSource::Omt { .. }
-                | InputSource::DeckLink { .. }
-                | InputSource::AudioDevice { .. } => {
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [16, 16, 16, 255])
-                }
-                InputSource::MixFeed { .. } => {
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255])
-                }
+                | InputSource::DeckLink { .. } => (
+                    self.missing_frame(project, input.id, w, h, pts, "live input")?,
+                    false,
+                ),
+                InputSource::AudioDevice { .. } => (
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]),
+                    true,
+                ),
+                InputSource::MixFeed { .. } => (
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]),
+                    false,
+                ),
             };
             generated.source = Some(input.id);
+            if authentic {
+                self.last_good_inputs.insert(input.id, generated.clone());
+            }
             out.insert(input.id, generated);
         }
-        out
+        Ok(out)
     }
 
-    fn load_image(
+    fn missing_frame(
+        &self,
+        project: &Project,
+        id: InputId,
+        w: u32,
+        h: u32,
+        pts: MediaTime,
+        why: &str,
+    ) -> Result<VideoFrame> {
+        match project.missing_media {
+            MissingMediaPolicy::Fail => Err(RuntimeError::MissingMedia(why.into())),
+            MissingMediaPolicy::Slate => {
+                Ok(VideoFrame::rgba_solid(self.frame, pts, w, h, SLATE_RGBA))
+            }
+            MissingMediaPolicy::LastGood => {
+                self.last_good_inputs.get(&id).cloned().ok_or_else(|| {
+                    RuntimeError::MissingMedia(format!(
+                        "LastGood requested but no prior frame ({why})"
+                    ))
+                })
+            }
+        }
+    }
+
+    fn try_load_image(
         &mut self,
         project: &Project,
         asset: AssetId,
         pts: MediaTime,
-        w: u32,
-        h: u32,
-    ) -> VideoFrame {
+    ) -> Option<VideoFrame> {
         if let Some(cached) = self.image_cache.get(&asset) {
             let mut f = cached.clone();
             f.pts = pts;
             f.id = self.frame;
-            return f;
+            return Some(f);
         }
-        let Some(meta) = project.assets.get(&asset) else {
-            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
-        };
+        let meta = project.assets.get(&asset)?;
         if meta.missing {
-            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
+            return None;
         }
-        let Some(root) = &self.asset_root else {
-            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
-        };
+        let root = self.asset_root.as_ref()?;
         let path = root.join(&meta.relative_path);
-        match decode_rgba(&path) {
-            Some((width, height, data)) => {
-                let frame = VideoFrame {
-                    id: self.frame,
-                    source: None,
-                    pts,
-                    capture_domain: ClockDomain::SourceMedia,
-                    width,
-                    height,
-                    format: eiviz_media::PixelFormat::Rgba8,
-                    data: data.into(),
-                    discontinuity: false,
-                };
-                self.image_cache.insert(asset, frame.clone());
-                frame
-            }
-            None => VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]),
-        }
+        let (width, height, data) = decode_rgba(&path)?;
+        let frame = VideoFrame {
+            id: self.frame,
+            source: None,
+            pts,
+            capture_domain: ClockDomain::SourceMedia,
+            width,
+            height,
+            format: eiviz_media::PixelFormat::Rgba8,
+            data: data.into(),
+            discontinuity: false,
+        };
+        self.image_cache.insert(asset, frame.clone());
+        Some(frame)
     }
 
     fn mix_audio(
@@ -553,5 +668,76 @@ mod tests {
             .fold(0.0f32, |a, x| a.max(x.abs()));
         assert!(peak < 1e-6, "1s delay must zero the first 59.94 frame");
         let _ = unit;
+    }
+
+    #[cfg(not(feature = "wgpu-backend"))]
+    #[test]
+    fn wgpu_without_feature_is_hard_error() {
+        match Runtime::with_backend(48_000, CompositorBackend::Wgpu) {
+            Err(RuntimeError::WgpuFeatureDisabled) => {}
+            Err(e) => panic!("unexpected error: {e}"),
+            Ok(_) => panic!("Wgpu must not construct a CPU runtime"),
+        }
+    }
+
+    #[test]
+    fn wgpu_project_does_not_run_on_cpu_runtime() {
+        let (mut p, _, _, _) = setup();
+        p.compositor = CompositorBackend::Wgpu;
+        let mut rt = Runtime::new(48_000);
+        let err = rt.tick(&mut p).unwrap_err();
+        assert!(matches!(err, RuntimeError::BackendMismatch { .. }));
+    }
+
+    #[test]
+    fn missing_live_fail_does_not_invent_a_camera() {
+        let (mut p, iid, _, _) = setup();
+        p.missing_media = MissingMediaPolicy::Fail;
+        p.inputs.get_mut(&iid).unwrap().source = InputSource::Ndi {
+            source_name: "cam".into(),
+        };
+        let mut rt = Runtime::new(48_000);
+        let err = rt.tick(&mut p).unwrap_err();
+        assert!(matches!(err, RuntimeError::MissingMedia(_)));
+    }
+
+    #[test]
+    fn missing_live_slate_is_configured_not_a_fake_feed() {
+        let (mut p, iid, sid, unit) = setup();
+        p.missing_media = MissingMediaPolicy::Slate;
+        p.inputs.get_mut(&iid).unwrap().source = InputSource::Ndi {
+            source_name: "cam".into(),
+        };
+        p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
+        let mut rt = Runtime::new(48_000);
+        let tick = rt.tick(&mut p).unwrap();
+        assert_eq!(tick.programs[&unit].pixel(8, 8), SLATE_RGBA);
+    }
+
+    #[test]
+    fn last_good_replays_prior_authentic_frame() {
+        let (mut p, iid, sid, unit) = setup();
+        p.missing_media = MissingMediaPolicy::LastGood;
+        p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
+        let mut rt = Runtime::new(48_000);
+        let first = rt.tick(&mut p).unwrap();
+        assert_eq!(first.programs[&unit].pixel(8, 8), [255, 0, 0, 255]);
+        p.inputs.get_mut(&iid).unwrap().source = InputSource::Ndi {
+            source_name: "cam".into(),
+        };
+        let second = rt.tick(&mut p).unwrap();
+        assert_eq!(second.programs[&unit].pixel(8, 8), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn last_good_without_prior_frame_errors() {
+        let (mut p, iid, _, _) = setup();
+        p.missing_media = MissingMediaPolicy::LastGood;
+        p.inputs.get_mut(&iid).unwrap().source = InputSource::Ndi {
+            source_name: "cam".into(),
+        };
+        let mut rt = Runtime::new(48_000);
+        let err = rt.tick(&mut p).unwrap_err();
+        assert!(matches!(err, RuntimeError::MissingMedia(_)));
     }
 }

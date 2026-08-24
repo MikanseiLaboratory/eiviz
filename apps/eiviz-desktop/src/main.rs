@@ -169,6 +169,8 @@ impl eframe::App for DesktopApp {
 
         egui::SidePanel::right("caps").show(ctx, |ui| {
             ui.heading("Capabilities");
+            ui.label(format!("compositor {:?}", project.compositor));
+            ui.label(format!("missing-media {:?}", project.missing_media));
             for cap in [
                 eiviz_io_ndi::probe(),
                 eiviz_io_omt::probe(),

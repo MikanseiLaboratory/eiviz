@@ -15,3 +15,7 @@ thiserror.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 image.workspace = true
+
+[features]
+default = []
+wgpu-backend = ["eiviz-gpu/wgpu-backend"]

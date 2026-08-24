@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "CPU reference compositor and optional wgpu path"
+description = "Explicit CpuReference compositor and optional wgpu backend (no implicit switch)"
 
 [dependencies]
 eiviz-core.workspace = true

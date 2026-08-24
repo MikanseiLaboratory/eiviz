@@ -13,7 +13,7 @@
 | --- | --- |
 | Smelter 本体 | 非同梱。ライセンスゲート未通過 |
 | gpu-video 0.4.0 | optional adapter。既定実行経路にしない |
-| compositor | CPU reference + wgpu。CI は CPU |
+| compositor | 明示 `CpuReference` と `Wgpu`。CI は CpuReference profile（fallback ではない） |
 | GUI | egui 0.32 / wgpu 24 |
 | file media | image crate + software frame source |
 | NDI/OMT/DeckLink/ASIO | feature + mock。実機は HIL |

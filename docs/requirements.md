@@ -49,7 +49,8 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R05.2 live thread は検証済み immutable RenderPlan のみ読む
 - R05.3 Program を最優先。Preview/Multiview は負荷時に refresh/resolution を落とせるが Program の format/cadence は暗黙変更しない
 - R05.4 pipeline は activation 前に prewarm する
-- R05.5 device lost 時は slate/last-good を cadence どおり出し、再生成後に frame boundary で復帰する
+- R05.5 device lost 時は `missing_media` に従い slate / last-good / fail を cadence どおり適用し、再生成後に frame boundary で復帰する。CPU compositor へは落とさない
+- R05.6 compositor backend（`CpuReference` / `Wgpu`）は Project の明示フィールド。Runtime と不一致、または選択 backend が利用不能ならエラー。暗黙切替禁止（INV-10）
 
 ### R06 Audio
 - R06.1 内部は planar f32
@@ -70,7 +71,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R08.3 disk full / 切断時も Program を停止しない。MP4 は異常終了後に回復可能とする
 
 ### R09 Command
-- R09.1 UI / keyboard / HTTP / TCP / MIDI / Stream Deck は共通 `CommandEnvelope`
+- R09.1 UI / keyboard / HTTP / TCP / MIDI は in-tree adapter が共通 `CommandEnvelope` を発行する。Stream Deck は **out-of-tree プラグイン** が同じ HTTP/TCP Command API を呼ぶ。本リポジトリに Deck 固有プロトコルや action map を置かない
 - R09.2 単一 sequencer が id、client sequence、expected revision、effective media time を検証し全順序化する
 - R09.3 「順次処理」は state mutation の確定順序のみ。I/O や GPU を直列実行しない
 - R09.4 再送は command id で冪等。満杯時は Busy を返し捨てない
@@ -82,7 +83,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 
 ### R11 Portability / Security
 - R11.1 Windows x64 を必須 gate
-- R11.2 非対応機能は起動失敗させず capability として表示する
+- R11.2 非対応の optional I/O / codec feature はプロセス起動を止めず capability として表示する。選択済み compositor / encode / audio backend が利用不能なときはその Project を実行せず、他 backend へ黙って乗り換えない
 - R11.3 配布物は NDI / DeckLink / ASIO / codec のライセンス表示を含む
 
 ## 不変条件
@@ -94,8 +95,9 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - INV-05 live thread は immutable snapshot のみ読む
 - INV-06 callback で allocation、blocking mutex、file/network I/O、同期 log、GPU wait、panic 越境を禁止
 - INV-07 全 queue は bounded。Program へ backpressure を伝播させない
-- INV-08 欠落資源の暗黙置換禁止
+- INV-08 欠落資源の暗黙置換禁止。適用するのは設定済み `Slate` / `LastGood` / `Fail` のみ
 - INV-09 永続データに native handle を書かない
+- INV-10 compositor / codec / device backend は明示選択。利用不能時はエラーまたは capability 不足であり、他 backend へ黙って乗り換えない
 
 ## 受入条件（baseline）
 
