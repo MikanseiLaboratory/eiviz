@@ -799,8 +799,10 @@ impl Runtime {
             programs.insert(unit.id, pg);
             let program_required = snapshot.render.program_required_previews.contains(&unit_id);
             let preview_due = program_required
-                || self.last_preview.get(&unit_id).is_none()
-                || self.frame % u64::from(auxiliary_quality.preview_cadence_divisor) == 0;
+                || !self.last_preview.contains_key(&unit_id)
+                || self
+                    .frame
+                    .is_multiple_of(u64::from(auxiliary_quality.preview_cadence_divisor));
             let pv = if preview_due {
                 let plan = if program_required {
                     pv_plan.clone()
@@ -1198,8 +1200,10 @@ impl Runtime {
     ) -> Result<HashMap<MultiviewId, VideoFrame>> {
         let mut rendered = HashMap::new();
         for view in project.multiviews.values() {
-            let due = self.last_multiview.get(&view.id).is_none()
-                || self.frame % u64::from(auxiliary_quality.multiview_cadence_divisor) == 0;
+            let due = !self.last_multiview.contains_key(&view.id)
+                || self
+                    .frame
+                    .is_multiple_of(u64::from(auxiliary_quality.multiview_cadence_divisor));
             if !due {
                 self.metrics.decimated_multiview =
                     self.metrics.decimated_multiview.saturating_add(1);
