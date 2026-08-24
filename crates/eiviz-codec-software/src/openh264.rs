@@ -257,7 +257,10 @@ mod tests {
             "eiviz-openh264-does-not-exist-{}",
             std::process::id()
         ));
-        let error = OpenH264Decoder::new(&path).unwrap_err();
+        let error = match OpenH264Decoder::new(&path) {
+            Ok(_) => panic!("missing OpenH264 must not construct a decoder"),
+            Err(error) => error,
+        };
         assert!(matches!(error, OpenH264Error::Load { .. }));
         assert!(error.to_string().contains("Cisco OpenH264 2.6.0"));
     }
