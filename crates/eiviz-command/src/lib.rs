@@ -1264,9 +1264,6 @@ mod tests {
         assert_eq!(mixing.transition.duration_frames, 12);
         assert_eq!(mixing.transition.remaining_frames, 12);
         assert!(mixing.overlays[0].enabled);
-        assert_eq!(
-            mixing.audio_follow,
-            AudioFollowPolicy::ProgramAndPreview
-        );
+        assert_eq!(mixing.audio_follow, AudioFollowPolicy::ProgramAndPreview);
     }
 }

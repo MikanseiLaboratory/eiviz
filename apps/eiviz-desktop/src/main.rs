@@ -2,10 +2,10 @@ use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
     AacEncoderProfile, AsrcProfile, AudioFollowPolicy, AudioResamplingPolicy, AudioRoute,
     AuxiliaryLoadSheddingPolicy, CompositorBackend, DistributionProfile, H264EncoderProfile, Input,
-    InputId, InputSource, MixTap, MixingUnit, MixingUnitId, Multiview, MultiviewId, MultiviewSource,
-    MultiviewTile, Output, OutputId, OutputKind, OutputVideoSource, OverlayId, OverlaySlot, Project,
-    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, ToneMapPolicy, Transform2D,
-    TransitionStyle, TransportProfile, VideoFormat,
+    InputId, InputSource, MixTap, MixingUnit, MixingUnitId, Multiview, MultiviewId,
+    MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, OutputVideoSource, OverlayId,
+    OverlaySlot, Project, ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId,
+    ToneMapPolicy, Transform2D, TransitionStyle, TransportProfile, VideoFormat,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
@@ -1623,15 +1623,6 @@ impl DesktopApp {
         show_frame(ui, self.engine.last_program(unit), key, fill)
     }
 
-    fn show_program_frame_as(
-        &mut self,
-        ui: &mut egui::Ui,
-        unit: eiviz_core::MixingUnitId,
-        key: &str,
-    ) -> Option<egui::Response> {
-        self.show_program_frame_filled(ui, unit, key, false)
-    }
-
     fn show_program_frame_at(
         &mut self,
         ui: &mut egui::Ui,
@@ -1666,15 +1657,6 @@ impl DesktopApp {
             return Some(self.wgpu_preview.show(ui, key, texture, fill));
         }
         show_frame(ui, self.engine.last_preview(unit), key, fill)
-    }
-
-    fn show_preview_frame_as(
-        &mut self,
-        ui: &mut egui::Ui,
-        unit: eiviz_core::MixingUnitId,
-        key: &str,
-    ) -> Option<egui::Response> {
-        self.show_preview_frame_filled(ui, unit, key, false)
     }
 
     fn show_preview_frame_at(
@@ -1730,8 +1712,10 @@ impl DesktopApp {
             .map(|bus| bus.name.clone())
             .collect();
         let strip_h = (ui.available_height() - 4.0).max(120.0);
-        let (meter_rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), strip_h), egui::Sense::hover());
+        let (meter_rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), strip_h),
+            egui::Sense::hover(),
+        );
         ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(meter_rect)
@@ -1775,10 +1759,7 @@ impl DesktopApp {
                         ui.set_width(ui.available_width());
                         ui.vertical(|ui| {
                             if ui
-                                .add_sized(
-                                    [ui.available_width(), 40.0],
-                                    egui::Button::new("CUT"),
-                                )
+                                .add_sized([ui.available_width(), 40.0], egui::Button::new("CUT"))
                                 .clicked()
                             {
                                 self.submit(self.take_command(TransitionStyle::Cut));
@@ -1802,10 +1783,7 @@ impl DesktopApp {
                         ui.set_width(ui.available_width());
                         ui.vertical(|ui| {
                             if ui
-                                .add_sized(
-                                    [ui.available_width(), 40.0],
-                                    egui::Button::new("MIX"),
-                                )
+                                .add_sized([ui.available_width(), 40.0], egui::Button::new("MIX"))
                                 .clicked()
                             {
                                 self.submit(self.take_command(TransitionStyle::Mix));
@@ -1857,141 +1835,140 @@ impl DesktopApp {
             .id_salt("input-grid")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            ui.horizontal_wrapped(|ui| {
-                for input in project.inputs.values() {
-                    let scene_id = scene_id_for_input(project, input.id);
-                    let on_preview = unit
-                        .and_then(|u| u.preview.scene)
-                        .is_some_and(|id| Some(id) == scene_id);
-                    let on_program = unit
-                        .and_then(|u| u.program.scene)
-                        .is_some_and(|id| Some(id) == scene_id);
-                    let desired = egui::vec2(TILE_W + 14.0, TILE_H);
-                    let (rect, tile_resp) =
-                        ui.allocate_exact_size(desired, egui::Sense::hover());
-                    ui.scope_builder(
-                        egui::UiBuilder::new()
-                            .max_rect(rect)
-                            .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                        |ui| {
-                            ui.set_clip_rect(rect);
-                            egui::Frame::group(ui.style())
-                                .inner_margin(6.0)
-                                .show(ui, |ui| {
-                                    ui.set_width(TILE_W);
-                                    ui.set_max_size(egui::vec2(TILE_W, TILE_H));
-                                    ui.label(&input.name);
-                                    ui.allocate_ui(egui::vec2(TILE_W, PREVIEW_H), |ui| {
-                                        ui.set_min_size(egui::vec2(TILE_W, PREVIEW_H));
-                                        ui.set_max_size(egui::vec2(TILE_W, PREVIEW_H));
-                                        if on_program {
-                                            let _ = self.show_program_frame_at(
-                                                ui,
-                                                unit_id,
-                                                &format!("tile-pgm-{}", input.id),
-                                                egui::vec2(TILE_W, PREVIEW_H),
-                                            );
-                                        } else if on_preview {
-                                            let _ = self.show_preview_frame_at(
-                                                ui,
-                                                unit_id,
-                                                &format!("tile-prv-{}", input.id),
-                                                egui::vec2(TILE_W, PREVIEW_H),
-                                            );
-                                        } else {
-                                            ui.weak("off-air");
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .add_enabled(
-                                                scene_id.is_some(),
-                                                egui::Button::new("PRV"),
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(scene) = scene_id {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for input in project.inputs.values() {
+                        let scene_id = scene_id_for_input(project, input.id);
+                        let on_preview = unit
+                            .and_then(|u| u.preview.scene)
+                            .is_some_and(|id| Some(id) == scene_id);
+                        let on_program = unit
+                            .and_then(|u| u.program.scene)
+                            .is_some_and(|id| Some(id) == scene_id);
+                        let desired = egui::vec2(TILE_W + 14.0, TILE_H);
+                        let (rect, tile_resp) =
+                            ui.allocate_exact_size(desired, egui::Sense::hover());
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(rect)
+                                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                            |ui| {
+                                ui.set_clip_rect(rect);
+                                egui::Frame::group(ui.style())
+                                    .inner_margin(6.0)
+                                    .show(ui, |ui| {
+                                        ui.set_width(TILE_W);
+                                        ui.set_max_size(egui::vec2(TILE_W, TILE_H));
+                                        ui.label(&input.name);
+                                        ui.allocate_ui(egui::vec2(TILE_W, PREVIEW_H), |ui| {
+                                            ui.set_min_size(egui::vec2(TILE_W, PREVIEW_H));
+                                            ui.set_max_size(egui::vec2(TILE_W, PREVIEW_H));
+                                            if on_program {
+                                                let _ = self.show_program_frame_at(
+                                                    ui,
+                                                    unit_id,
+                                                    &format!("tile-pgm-{}", input.id),
+                                                    egui::vec2(TILE_W, PREVIEW_H),
+                                                );
+                                            } else if on_preview {
+                                                let _ = self.show_preview_frame_at(
+                                                    ui,
+                                                    unit_id,
+                                                    &format!("tile-prv-{}", input.id),
+                                                    egui::vec2(TILE_W, PREVIEW_H),
+                                                );
+                                            } else {
+                                                ui.weak("off-air");
+                                            }
+                                        });
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    scene_id.is_some(),
+                                                    egui::Button::new("PRV"),
+                                                )
+                                                .clicked()
+                                                && let Some(scene) = scene_id
+                                            {
                                                 self.selected_scene = Some(scene);
                                                 self.submit(Command::SetPreview {
                                                     unit: unit_id,
                                                     scene: Some(scene),
                                                 });
                                             }
-                                        }
-                                        if ui
-                                            .add_enabled(
-                                                scene_id.is_some(),
-                                                egui::Button::new("CUT"),
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(scene) = scene_id {
+                                            if ui
+                                                .add_enabled(
+                                                    scene_id.is_some(),
+                                                    egui::Button::new("CUT"),
+                                                )
+                                                .clicked()
+                                                && let Some(scene) = scene_id
+                                            {
                                                 self.selected_scene = Some(scene);
                                                 self.submit(Command::SetProgram {
                                                     unit: unit_id,
                                                     scene: Some(scene),
                                                 });
                                             }
-                                        }
-                                        if ui.button("FS").clicked() {
-                                            self.output_windows
-                                                .insert(OutputWindow::Input(input.id));
-                                        }
-                                        if let InputSource::Video { playback, .. } =
-                                            &input.source
-                                        {
-                                            let mut updated = playback.clone();
-                                            if ui
-                                                .button(if playback.playing {
-                                                    "Pause"
-                                                } else {
-                                                    "Play"
-                                                })
-                                                .clicked()
+                                            if ui.button("FS").clicked() {
+                                                self.output_windows
+                                                    .insert(OutputWindow::Input(input.id));
+                                            }
+                                            if let InputSource::Video { playback, .. } =
+                                                &input.source
                                             {
-                                                updated.playing = !playback.playing;
-                                                match self
-                                                    .engine
-                                                    .set_video_playback(input.id, updated)
+                                                let mut updated = playback.clone();
+                                                if ui
+                                                    .button(if playback.playing {
+                                                        "Pause"
+                                                    } else {
+                                                        "Play"
+                                                    })
+                                                    .clicked()
                                                 {
-                                                    Ok(_) => {
-                                                        self.status = format!(
-                                                            "video playback: {}",
-                                                            input.name
-                                                        )
-                                                    }
-                                                    Err(error) => {
-                                                        self.status = format!(
-                                                            "video playback: {error}"
-                                                        )
+                                                    updated.playing = !playback.playing;
+                                                    match self
+                                                        .engine
+                                                        .set_video_playback(input.id, updated)
+                                                    {
+                                                        Ok(_) => {
+                                                            self.status = format!(
+                                                                "video playback: {}",
+                                                                input.name
+                                                            )
+                                                        }
+                                                        Err(error) => {
+                                                            self.status =
+                                                                format!("video playback: {error}")
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
+                                        });
                                     });
-                                });
-                        },
-                    );
-                    if self.layout_audit.tile.is_none() {
-                        self.layout_audit.tile = Some(tile_resp.rect);
+                            },
+                        );
+                        if self.layout_audit.tile.is_none() {
+                            self.layout_audit.tile = Some(tile_resp.rect);
+                        }
                     }
-                }
+                });
             });
-        });
     }
 
     fn draw_logs(&self, ui: &mut egui::Ui) {
         ui.heading("Logs");
         ui.label(&self.status);
-        egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-            for event in self.engine.flight_log().iter().rev().take(300).rev() {
-                ui.monospace(format!(
-                    "{} {} {} {}",
-                    event.sequence, event.subsystem, event.kind, event.monotonic_nanos
-                ));
-            }
-        });
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for event in self.engine.flight_log().iter().rev().take(300).rev() {
+                    ui.monospace(format!(
+                        "{} {} {} {}",
+                        event.sequence, event.subsystem, event.kind, event.monotonic_nanos
+                    ));
+                }
+            });
     }
 
     fn draw_output_window(&mut self, ui: &mut egui::Ui, target: OutputWindow, project: &Project) {
@@ -2183,9 +2160,11 @@ impl DesktopApp {
                         egui::Color32::from_rgb(210, 130, 40),
                         |ui| {
                             let preview = self.show_preview_frame(ui, unit_id);
-                            if let (Some(resp), Some(u), Some(scene_id)) =
-                                (preview, unit.as_ref(), unit.as_ref().and_then(|u| u.preview.scene))
-                            {
+                            if let (Some(resp), Some(u), Some(scene_id)) = (
+                                preview,
+                                unit.as_ref(),
+                                unit.as_ref().and_then(|u| u.preview.scene),
+                            ) {
                                 if let Some(scene) = project.scenes.get(&scene_id) {
                                     self.handle_preview_pointer(ui, &resp, scene, unit_id);
                                 }
@@ -2260,9 +2239,7 @@ impl DesktopApp {
         }
         self.layout_audit.frames += 1;
         if self.layout_audit.frames == 45 && !self.layout_audit.screenshot_requested {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
-                egui::UserData::default(),
-            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             self.layout_audit.screenshot_requested = true;
             if let Err(error) = self.layout_audit.write_report() {
                 tracing::error!("layout audit report: {error}");
@@ -2714,19 +2691,16 @@ impl eframe::App for DesktopApp {
                 ui.separator();
                 ui.menu_button("Fullscreen", |ui| {
                     if ui.button("This unit Preview").clicked() {
-                        self.output_windows
-                            .insert(OutputWindow::Preview(unit_id));
+                        self.output_windows.insert(OutputWindow::Preview(unit_id));
                         ui.close();
                     }
                     if ui.button("This unit Program").clicked() {
-                        self.output_windows
-                            .insert(OutputWindow::Program(unit_id));
+                        self.output_windows.insert(OutputWindow::Program(unit_id));
                         ui.close();
                     }
                     for view in project.multiviews.values() {
                         if ui.button(format!("Multiview {}", view.name)).clicked() {
-                            self.output_windows
-                                .insert(OutputWindow::Multiview(view.id));
+                            self.output_windows.insert(OutputWindow::Multiview(view.id));
                             ui.close();
                         }
                     }
@@ -2744,9 +2718,7 @@ impl eframe::App for DesktopApp {
                 ui.label(format!("{:?}", project.compositor));
                 ui.separator();
                 ui.label("path");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.save_path).desired_width(180.0),
-                );
+                ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(180.0));
                 if ui.button("Save").clicked() {
                     match self.engine.save(std::path::Path::new(&self.save_path)) {
                         Ok(()) => {
@@ -4396,8 +4368,7 @@ fn show_frame(
             img[i..i + 4].copy_from_slice(&px);
         }
     }
-    let color =
-        egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
+    let color = egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
     let tex = ui.ctx().load_texture(id, color, Default::default());
     Some(ui.image((tex.id(), display)))
 }
@@ -4426,8 +4397,7 @@ fn show_frame_at(
             img[i..i + 4].copy_from_slice(&px);
         }
     }
-    let color =
-        egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
+    let color = egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
     let tex = ui.ctx().load_texture(id, color, Default::default());
     Some(ui.image((tex.id(), size)))
 }
