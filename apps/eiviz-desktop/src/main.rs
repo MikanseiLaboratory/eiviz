@@ -1084,15 +1084,32 @@ impl DesktopApp {
                 Err(error) => failures.push(format!("{url}: {error}")),
             }
         }
+        for (id, source_name) in self.engine.declared_ndi_sources() {
+            #[cfg(feature = "ndi")]
+            match self.engine.bind_ndi_source(id, &source_name) {
+                Ok(source) => {
+                    self.ndi_connections.push(source);
+                    bound += 1;
+                }
+                Err(error) => failures.push(format!("{source_name}: {error}")),
+            }
+            #[cfg(not(feature = "ndi"))]
+            {
+                let _ = id;
+                failures.push(format!(
+                    "{source_name}: NDI adapter is not enabled in this build; no substitute"
+                ));
+            }
+        }
         self.status = if failures.is_empty() {
             if bound == 0 {
                 action.to_owned()
             } else {
-                format!("{action}; rebound {bound} OMT source(s)")
+                format!("{action}; rebound {bound} live source(s)")
             }
         } else {
             format!(
-                "{action}; OMT bind failures (no implicit substitute): {}",
+                "{action}; live bind failures (no implicit substitute): {}",
                 failures.join("; ")
             )
         };

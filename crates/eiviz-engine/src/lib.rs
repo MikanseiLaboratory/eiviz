@@ -645,6 +645,80 @@ impl Engine {
         Ok(source)
     }
 
+    pub fn declared_ndi_sources(&self) -> Vec<(InputId, String)> {
+        self.snapshot()
+            .inputs
+            .values()
+            .filter_map(|input| match &input.source {
+                InputSource::Ndi { source_name } => Some((input.id, source_name.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn require_declared_ndi(&self, id: InputId, source_name: &str) -> Result<()> {
+        let declared = self.staged_snapshot();
+        let input = declared
+            .inputs
+            .get(&id)
+            .ok_or_else(|| EngineError::Admission(format!("unknown input {id}")))?;
+        match &input.source {
+            InputSource::Ndi {
+                source_name: expected,
+            } if expected == source_name => Ok(()),
+            InputSource::Ndi {
+                source_name: expected,
+            } => Err(EngineError::Admission(format!(
+                "NDI input {id} is declared as {expected}, not {source_name}"
+            ))),
+            other => Err(EngineError::Admission(format!(
+                "input {id} is {other:?}, not an NDI source"
+            ))),
+        }
+    }
+
+    /// Connects a project-declared NDI name through the real adapter when the
+    /// `ndi` feature and runtime are present. Failure is returned; no simulator
+    /// substitute is attached.
+    #[cfg(feature = "ndi")]
+    pub fn bind_ndi_source(
+        &self,
+        id: InputId,
+        source_name: &str,
+    ) -> Result<Arc<eiviz_io_ndi::NdiSource>> {
+        self.require_declared_ndi(id, source_name)?;
+        let discovered = eiviz_io_ndi::discover_sources(std::time::Duration::from_secs(2))
+            .map_err(|error| EngineError::Admission(error.to_string()))?;
+        let info = discovered
+            .iter()
+            .find(|source| source.name() == source_name || source.label() == source_name)
+            .ok_or_else(|| {
+                EngineError::Admission(format!(
+                    "NDI source {source_name} is not discoverable; no substitute is attached"
+                ))
+            })?;
+        let source = Arc::new(
+            eiviz_io_ndi::NdiSource::connect(id, info, eiviz_io_ndi::NdiConfig::default())
+                .map_err(|error| EngineError::Admission(error.to_string()))?,
+        );
+        self.attach_source(
+            source.clone(),
+            SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: UnlockedBehavior::Fail,
+            },
+        );
+        Ok(source)
+    }
+
+    #[cfg(not(feature = "ndi"))]
+    pub fn bind_ndi_source(&self, id: InputId, source_name: &str) -> Result<()> {
+        self.require_declared_ndi(id, source_name)?;
+        Err(EngineError::Admission(
+            "NDI adapter is not enabled in this build; no substitute is attached".into(),
+        ))
+    }
+
     pub fn detach_source(&self, id: eiviz_core::InputId) {
         let mut inner = self.inner.lock();
         inner.runtime.detach_source(id);
@@ -2818,6 +2892,150 @@ mod tests {
         }
         assert!(engine.source_control_diagnostics().is_empty());
         assert_eq!(engine.declared_omt_sources().len(), 1);
+    }
+
+    #[test]
+    fn load_drops_ndi_bindings_instead_of_inventing_a_capture() {
+        let engine = Engine::new("ndi reload");
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "ndi cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Ndi {
+                source_name: "CAM (LAN)".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "ndi cam".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(1, eiviz_time::MediaTime::ZERO, 2, 2, [3, 4, 5, 255]),
+                audio: AudioBuffer::silence(0, 48_000, 2, 800),
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
+        engine.tick().unwrap();
+        assert_eq!(engine.source_control_diagnostics().len(), 1);
+        let dir = std::env::temp_dir().join(format!("eiviz-ndi-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("project.json");
+        engine.save(&path).unwrap();
+        engine.load_project(&path, None).unwrap();
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(
+            engine.declared_ndi_sources(),
+            vec![(input.id, "CAM (LAN)".into())]
+        );
+    }
+
+    #[test]
+    fn unattached_ndi_program_obeys_fail_policy() {
+        let mut project = Project::new("ndi fail");
+        project.missing_media = eiviz_core::MissingMediaPolicy::Fail;
+        let engine = Engine::from_project(project).unwrap();
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "ndi cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Ndi {
+                source_name: "CAM (LAN)".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "ndi cam".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        let error = engine.tick().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EngineError::Runtime(eiviz_runtime::RuntimeError::MissingMedia(_))
+            ),
+            "{error:?}"
+        );
+        assert!(engine.source_control_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn bind_ndi_source_rejects_without_a_substitute() {
+        let engine = Engine::new("ndi bind");
+        let input = Input {
+            id: InputId::new(),
+            name: "ndi cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Ndi {
+                source_name: "missing-ndi-source".into(),
+            },
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine.tick().unwrap();
+        match engine.bind_ndi_source(input.id, "missing-ndi-source") {
+            Ok(_) => panic!("missing NDI source must not bind a substitute"),
+            Err(error) => {
+                assert!(matches!(error, EngineError::Admission(_)), "{error:?}");
+                assert!(error.to_string().contains("no substitute"), "{error}");
+            }
+        }
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(engine.declared_ndi_sources().len(), 1);
     }
 
     #[test]

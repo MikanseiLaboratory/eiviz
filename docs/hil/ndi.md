@@ -48,6 +48,10 @@ bundled, keep them application-local and include
 - Bounded latest-wins capture queue behavior in the native-feature test module
 - SDK-independent bounded metadata queue and explicit BT.709 limited-range
   RGBA/BGRA-to-NV12 conversion tests
+- Engine `declared_ndi_sources` / `bind_ndi_source`: load drops live bindings;
+  a missing adapter or undiscoverable name returns Admission and attaches no
+  substitute. Desktop rebinds declared NDI names only when the `ndi` feature is
+  enabled. This is not `NDI-HIL-*`.
 - Engine routes each `OutputId` from its owning Mixing Unit to its registered
   nonblocking `MediaSink`
 - Runtime applies only the configured missing-media policy when a source has no

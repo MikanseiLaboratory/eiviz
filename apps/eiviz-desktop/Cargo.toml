@@ -33,7 +33,7 @@ tracing-subscriber.workspace = true
 [features]
 default = []
 decklink = ["eiviz-io-decklink/decklink-sdk"]
-ndi = ["eiviz-io-ndi/ndi"]
+ndi = ["eiviz-io-ndi/ndi", "eiviz-engine/ndi"]
 wgpu-backend = ["eiviz-engine/wgpu-backend", "dep:eiviz-gpu"]
 audio-cpal = ["eiviz-io-audio/cpal"]
 audio-pipewire = ["audio-cpal", "eiviz-io-audio/pipewire"]
