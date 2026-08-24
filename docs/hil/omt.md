@@ -15,9 +15,10 @@ Official binary releases currently contain Windows x64/arm64 and macOS
 libraries. Linux must build `libomt` from source; it is not silently replaced
 with a simulator.
 
-Set `EIVIZ_OMT_LIBRARY` to the exact `libomt.dll`, `libomt.dylib`, or
-`libomt.so` path. Native dependencies such as `libvmx` must be discoverable by
-the platform loader. `EIVIZ_OMT_SOURCE` may contain an OMT discovery name or
+Set `EIVIZ_OMT_LIBRARY` to the exact **absolute** `libomt.dll`,
+`libomt.dylib`, or `libomt.so` path, or package libomt and libvmx beside the
+eiviz executable. Relative/system DLL lookup is intentionally rejected.
+`EIVIZ_OMT_SOURCE` may contain an OMT discovery name or
 `omt://hostname:port` to connect at desktop startup.
 
 ## Required equipment
@@ -46,8 +47,10 @@ the platform loader. `EIVIZ_OMT_SOURCE` may contain an OMT discovery name or
 
 - ABI size/offset test for `OMTMediaFrame`
 - BGRA/BGRX → RGBA conversion
+- Premultiplied BGRA → straight-alpha RGBA conversion
 - UYVY BT.709 → RGBA conversion
 - FPA1 planar audio conversion
+- Bounded 8-packet audio FIFO with explicit overflow diagnostic
 - Truncated frame rejection
 - Registered live `MediaSource` reaches Program and Audio Matrix
 - RGBA/FPA1 Program output conversion and bounded sender queue

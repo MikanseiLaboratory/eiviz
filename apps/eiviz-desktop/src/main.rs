@@ -307,7 +307,10 @@ impl eframe::App for DesktopApp {
             ui.label("Program output");
             ui.text_edit_singleline(&mut self.omt_output_name);
             if ui.button("Start OMT Output").clicked() {
-                match eiviz_io_omt::OmtSink::create(self.omt_output_name.trim()) {
+                match eiviz_io_omt::OmtSink::create(
+                    self.omt_output_name.trim(),
+                    project.video.frame_rate,
+                ) {
                     Ok(sink) => {
                         self.engine.attach_sink(Arc::new(sink));
                         self.status =

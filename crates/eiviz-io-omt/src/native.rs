@@ -3,6 +3,7 @@ use eiviz_media::{AdapterHealth, AudioBuffer, MediaError, MediaSink, MediaSource
 use eiviz_time::{ClockDomain, FrameRate, MediaTime, Rational};
 use libloading::Library;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -23,21 +24,22 @@ const OMT_CODEC_UYVY: c_int = 0x5956_5955;
 const OMT_CODEC_BGRA: c_int = 0x4152_4742;
 const OMT_COLORSPACE_BT709: c_int = 709;
 const OMT_VIDEO_FLAG_ALPHA: c_int = 2;
+const OMT_VIDEO_FLAG_PREMULTIPLIED: c_int = 4;
 const OMT_TICKS_PER_SECOND: i64 = 10_000_000;
 const RECEIVE_TIMEOUT_MS: c_int = 20;
+const AUDIO_QUEUE_CAPACITY: usize = 8;
 const MAX_DIMENSION: c_int = 16_384;
 const MAX_AUDIO_CHANNELS: c_int = 32;
 const MAX_AUDIO_SAMPLES: c_int = 1_000_000;
 
-type OmtReceiveHandle = i64;
 type DiscoveryGetAddresses = unsafe extern "C" fn(*mut c_int) -> *mut *mut c_char;
-type ReceiveCreate =
-    unsafe extern "C" fn(*const c_char, c_int, c_int, c_int) -> *mut OmtReceiveHandle;
-type ReceiveDestroy = unsafe extern "C" fn(*mut OmtReceiveHandle);
-type Receive = unsafe extern "C" fn(*mut OmtReceiveHandle, c_int, c_int) -> *mut OmtMediaFrame;
-type SendCreate = unsafe extern "C" fn(*const c_char, c_int) -> *mut OmtReceiveHandle;
-type SendDestroy = unsafe extern "C" fn(*mut OmtReceiveHandle);
-type SendFrame = unsafe extern "C" fn(*mut OmtReceiveHandle, *mut OmtMediaFrame) -> c_int;
+type ReceiveCreate = unsafe extern "C" fn(*const c_char, c_int, c_int, c_int) -> *mut c_void;
+type ReceiveDestroy = unsafe extern "C" fn(*mut c_void);
+type Receive = unsafe extern "C" fn(*mut c_void, c_int, c_int) -> *mut OmtMediaFrame;
+type ReceiveStatistics = unsafe extern "C" fn(*mut c_void, *mut OmtStatistics);
+type SendCreate = unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void;
+type SendDestroy = unsafe extern "C" fn(*mut c_void);
+type SendFrame = unsafe extern "C" fn(*mut c_void, *mut OmtMediaFrame) -> c_int;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -64,6 +66,27 @@ struct OmtMediaFrame {
     frame_metadata_length: c_int,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct OmtStatistics {
+    bytes_sent: i64,
+    bytes_received: i64,
+    bytes_sent_since_last: i64,
+    bytes_received_since_last: i64,
+    frames: i64,
+    frames_since_last: i64,
+    frames_dropped: i64,
+    codec_time: i64,
+    codec_time_since_last: i64,
+    reserved1: i64,
+    reserved2: i64,
+    reserved3: i64,
+    reserved4: i64,
+    reserved5: i64,
+    reserved6: i64,
+    reserved7: i64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum OmtError {
     #[error("OMT native library unavailable; set EIVIZ_OMT_LIBRARY to libomt: {0}")]
@@ -87,11 +110,14 @@ type Result<T> = std::result::Result<T, OmtError>;
 
 struct NativeApi {
     _library: Library,
+    _vmx_library: Library,
     discovery_get_addresses: DiscoveryGetAddresses,
     discovery_lock: Mutex<()>,
     receive_create: ReceiveCreate,
     receive_destroy: ReceiveDestroy,
     receive: Receive,
+    receive_video_statistics: ReceiveStatistics,
+    receive_audio_statistics: ReceiveStatistics,
     send_create: SendCreate,
     send_destroy: SendDestroy,
     send: SendFrame,
@@ -100,9 +126,19 @@ struct NativeApi {
 
 impl NativeApi {
     fn load() -> Result<Self> {
-        let candidates = library_candidates();
+        let candidates = library_candidates()?;
         let mut errors = Vec::new();
         for path in candidates {
+            let vmx_path = sibling_vmx_path(&path);
+            // SAFETY: libvmx is an official native dependency loaded from the
+            // same explicit directory as libomt and retained for process life.
+            let vmx_library = match unsafe { Library::new(&vmx_path) } {
+                Ok(library) => library,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", vmx_path.display()));
+                    continue;
+                }
+            };
             // SAFETY: Loading a vendor library is inherently unsafe. All resolved
             // symbols are checked below against libomt.h's C ABI and the Library
             // is retained for at least as long as any copied function pointer.
@@ -142,6 +178,22 @@ impl NativeApi {
                 }
             })?;
             // SAFETY: See above.
+            let receive_video_statistics =
+                unsafe { load_symbol(&library, b"omt_receive_getvideostatistics\0") }.map_err(
+                    |source| OmtError::Symbol {
+                        symbol: "omt_receive_getvideostatistics",
+                        source,
+                    },
+                )?;
+            // SAFETY: See above.
+            let receive_audio_statistics =
+                unsafe { load_symbol(&library, b"omt_receive_getaudiostatistics\0") }.map_err(
+                    |source| OmtError::Symbol {
+                        symbol: "omt_receive_getaudiostatistics",
+                        source,
+                    },
+                )?;
+            // SAFETY: See above.
             let send_create =
                 unsafe { load_symbol(&library, b"omt_send_create\0") }.map_err(|source| {
                     OmtError::Symbol {
@@ -166,11 +218,14 @@ impl NativeApi {
             })?;
             return Ok(Self {
                 _library: library,
+                _vmx_library: vmx_library,
                 discovery_get_addresses,
                 discovery_lock: Mutex::new(()),
                 receive_create,
                 receive_destroy,
                 receive,
+                receive_video_statistics,
+                receive_audio_statistics,
                 send_create,
                 send_destroy,
                 send,
@@ -223,21 +278,50 @@ unsafe fn load_symbol<T: Copy>(
     Ok(*symbol)
 }
 
-fn library_candidates() -> Vec<PathBuf> {
+fn library_candidates() -> Result<Vec<PathBuf>> {
     if let Some(path) = std::env::var_os("EIVIZ_OMT_LIBRARY") {
-        return vec![PathBuf::from(path)];
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err(OmtError::LibraryUnavailable(
+                "EIVIZ_OMT_LIBRARY must be an absolute path".into(),
+            ));
+        }
+        return Ok(vec![path]);
     }
+    let executable_dir = std::env::current_exe()
+        .map_err(|error| OmtError::LibraryUnavailable(error.to_string()))?
+        .parent()
+        .ok_or_else(|| OmtError::LibraryUnavailable("executable has no parent".into()))?
+        .to_path_buf();
     #[cfg(target_os = "windows")]
     {
-        vec![PathBuf::from("libomt.dll"), PathBuf::from("omt.dll")]
+        Ok(vec![executable_dir.join("libomt.dll")])
     }
     #[cfg(target_os = "macos")]
     {
-        vec![PathBuf::from("libomt.dylib")]
+        Ok(vec![executable_dir.join("libomt.dylib")])
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        vec![PathBuf::from("libomt.so")]
+        Ok(vec![executable_dir.join("libomt.so")])
+    }
+}
+
+fn sibling_vmx_path(omt_path: &std::path::Path) -> PathBuf {
+    let parent = omt_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    #[cfg(target_os = "windows")]
+    {
+        parent.join("libvmx.dll")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        parent.join("libvmx.dylib")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        parent.join("libvmx.so")
     }
 }
 
@@ -255,7 +339,7 @@ fn api() -> Result<Arc<NativeApi>> {
 
 struct Receiver {
     api: Arc<NativeApi>,
-    handle: NonNull<OmtReceiveHandle>,
+    handle: NonNull<c_void>,
 }
 
 // SAFETY: libomt documents a receiver instance as usable by a receive worker;
@@ -292,6 +376,18 @@ impl Receiver {
             unsafe { *frame.as_ptr() }
         })
     }
+
+    fn statistics(&self) -> (OmtStatistics, OmtStatistics) {
+        let mut video = OmtStatistics::default();
+        let mut audio = OmtStatistics::default();
+        // SAFETY: The receiver handle is live and the output structs are valid
+        // writable C-layout storage.
+        unsafe {
+            (self.api.receive_video_statistics)(self.handle.as_ptr(), &mut video);
+            (self.api.receive_audio_statistics)(self.handle.as_ptr(), &mut audio);
+        }
+        (video, audio)
+    }
 }
 
 impl Drop for Receiver {
@@ -304,7 +400,7 @@ impl Drop for Receiver {
 
 struct Sender {
     api: Arc<NativeApi>,
-    handle: NonNull<OmtReceiveHandle>,
+    handle: NonNull<c_void>,
 }
 
 // SAFETY: The native sender is moved to and used by exactly one output thread.
@@ -344,7 +440,7 @@ pub struct OmtSource {
     id: InputId,
     address: String,
     video: Arc<Mutex<Option<VideoFrame>>>,
-    audio: Arc<Mutex<Option<AudioBuffer>>>,
+    audio: Arc<Mutex<VecDeque<AudioBuffer>>>,
     health: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
@@ -356,7 +452,7 @@ impl OmtSource {
         let address = address.into();
         let receiver = Receiver::connect(&address)?;
         let video = Arc::new(Mutex::new(None));
-        let audio = Arc::new(Mutex::new(None));
+        let audio = Arc::new(Mutex::new(VecDeque::with_capacity(AUDIO_QUEUE_CAPACITY)));
         let health = Arc::new(AtomicU8::new(health_to_u8(AdapterHealth::Degraded)));
         let last_error = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
@@ -425,7 +521,7 @@ impl MediaSource for OmtSource {
         _sample_index: u64,
         _frames: usize,
     ) -> eiviz_media::Result<Option<AudioBuffer>> {
-        Ok(self.audio.lock().take())
+        Ok(self.audio.lock().pop_front())
     }
 }
 
@@ -441,7 +537,7 @@ pub struct OmtSink {
 }
 
 impl OmtSink {
-    pub fn create(name: impl Into<String>) -> Result<Self> {
+    pub fn create(name: impl Into<String>, frame_rate: FrameRate) -> Result<Self> {
         let name = name.into();
         let sender = Sender::create(&name)?;
         let (queue, receiver) = sync_channel(4);
@@ -452,7 +548,8 @@ impl OmtSink {
                 while let Ok(packet) = receiver.recv() {
                     match packet {
                         OutputPacket::Video(frame) => {
-                            if let Ok((mut native, _storage)) = video_to_native(&frame) {
+                            if let Ok((mut native, _storage)) = video_to_native(&frame, frame_rate)
+                            {
                                 sender.send(&mut native);
                             }
                         }
@@ -508,7 +605,7 @@ fn receive_loop(
     mut receiver: Receiver,
     id: InputId,
     video: &Mutex<Option<VideoFrame>>,
-    audio: &Mutex<Option<AudioBuffer>>,
+    audio: &Mutex<VecDeque<AudioBuffer>>,
     health: &AtomicU8,
     last_error: &Mutex<Option<String>>,
     stop: &AtomicBool,
@@ -516,15 +613,40 @@ fn receive_loop(
     let mut frame_id = 0u64;
     let mut last_frame = Instant::now();
     let mut discontinuity = false;
+    let mut last_video_timestamp = None;
     while !stop.load(Ordering::Acquire) {
         let Some(frame) = receiver.receive() else {
             if last_frame.elapsed() >= Duration::from_secs(2) {
                 discontinuity = true;
+                let (video_stats, audio_stats) = receiver.statistics();
                 health.store(health_to_u8(AdapterHealth::Degraded), Ordering::Release);
-                *last_error.lock() = Some("OMT receive timeout; waiting for sender".into());
+                *last_error.lock() = Some(format!(
+                    "OMT receive timeout; video frames={} dropped={}, audio frames={} dropped={}",
+                    video_stats.frames,
+                    video_stats.frames_dropped,
+                    audio_stats.frames,
+                    audio_stats.frames_dropped
+                ));
             }
             continue;
         };
+        if frame.frame_type == OMT_FRAME_VIDEO {
+            if let Some(previous) = last_video_timestamp {
+                let expected = if frame.frame_rate_n > 0 && frame.frame_rate_d > 0 {
+                    OMT_TICKS_PER_SECOND.saturating_mul(i64::from(frame.frame_rate_d))
+                        / i64::from(frame.frame_rate_n)
+                } else {
+                    0
+                };
+                if frame.timestamp <= previous
+                    || (expected > 0 && frame.timestamp - previous > expected.saturating_mul(4))
+                {
+                    discontinuity = true;
+                }
+            }
+            last_video_timestamp = Some(frame.timestamp);
+        }
+        let mut degraded_reason = None;
         let converted = match frame.frame_type {
             OMT_FRAME_VIDEO => convert_video(&frame, id, frame_id).map(|mut frame| {
                 frame.discontinuity = discontinuity;
@@ -532,7 +654,12 @@ fn receive_loop(
                 *video.lock() = Some(frame);
             }),
             OMT_FRAME_AUDIO => convert_audio(&frame).map(|frame| {
-                *audio.lock() = Some(frame);
+                let mut queue = audio.lock();
+                if queue.len() == AUDIO_QUEUE_CAPACITY {
+                    queue.pop_front();
+                    degraded_reason = Some("OMT audio queue overflow; oldest packet dropped");
+                }
+                queue.push_back(frame);
             }),
             OMT_FRAME_METADATA => Ok(()),
             other => Err(OmtError::InvalidFrame(format!(
@@ -543,8 +670,13 @@ fn receive_loop(
             Ok(()) => {
                 frame_id = frame_id.saturating_add(1);
                 last_frame = Instant::now();
-                health.store(health_to_u8(AdapterHealth::Running), Ordering::Release);
-                *last_error.lock() = None;
+                if let Some(reason) = degraded_reason {
+                    health.store(health_to_u8(AdapterHealth::Degraded), Ordering::Release);
+                    *last_error.lock() = Some(reason.into());
+                } else {
+                    health.store(health_to_u8(AdapterHealth::Running), Ordering::Release);
+                    *last_error.lock() = None;
+                }
             }
             Err(error) => {
                 health.store(health_to_u8(AdapterHealth::Degraded), Ordering::Release);
@@ -572,16 +704,21 @@ fn convert_video(frame: &OmtMediaFrame, id: InputId, frame_id: u64) -> Result<Vi
     match frame.codec {
         OMT_CODEC_BGRA => {
             let alpha = frame.flags & OMT_VIDEO_FLAG_ALPHA != 0;
+            let premultiplied = frame.flags & OMT_VIDEO_FLAG_PREMULTIPLIED != 0;
             for row in 0..height {
                 let src = &source[row * stride..row * stride + width * 4];
                 let dst = &mut rgba[row * width * 4..(row + 1) * width * 4];
                 for (input, output) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-                    output.copy_from_slice(&[
-                        input[2],
-                        input[1],
-                        input[0],
-                        if alpha { input[3] } else { 255 },
-                    ]);
+                    let a = if alpha { input[3] } else { 255 };
+                    let channels = [input[2], input[1], input[0]];
+                    for (target, channel) in output[..3].iter_mut().zip(channels) {
+                        *target = if premultiplied && alpha {
+                            unpremultiply(channel, a)
+                        } else {
+                            channel
+                        };
+                    }
+                    output[3] = a;
                 }
             }
         }
@@ -615,6 +752,14 @@ fn convert_video(frame: &OmtMediaFrame, id: InputId, frame_id: u64) -> Result<Vi
         data: rgba.into(),
         discontinuity: false,
     })
+}
+
+fn unpremultiply(channel: u8, alpha: u8) -> u8 {
+    if alpha == 0 {
+        0
+    } else {
+        ((u32::from(channel) * 255 + u32::from(alpha) / 2) / u32::from(alpha)).min(255) as u8
+    }
 }
 
 fn validate_video_shape(frame: &OmtMediaFrame) -> Result<()> {
@@ -703,12 +848,22 @@ fn convert_audio(frame: &OmtMediaFrame) -> Result<AudioBuffer> {
     })
 }
 
-fn video_to_native(frame: &VideoFrame) -> Result<(OmtMediaFrame, Vec<u8>)> {
+fn video_to_native(frame: &VideoFrame, frame_rate: FrameRate) -> Result<(OmtMediaFrame, Vec<u8>)> {
     if frame.format != eiviz_media::PixelFormat::Rgba8 {
         return Err(OmtError::InvalidFrame(format!(
             "OMT output requires RGBA8, got {:?}",
             frame.format
         )));
+    }
+    if frame.width > c_int::MAX as u32 || frame.height > c_int::MAX as u32 {
+        return Err(OmtError::InvalidFrame(
+            "output video dimensions exceed C ABI".into(),
+        ));
+    }
+    if frame_rate.numerator() > c_int::MAX as u32 || frame_rate.denominator() > c_int::MAX as u32 {
+        return Err(OmtError::InvalidFrame(
+            "output frame rate exceeds C ABI".into(),
+        ));
     }
     let required = (frame.width as usize)
         .checked_mul(frame.height as usize)
@@ -717,6 +872,11 @@ fn video_to_native(frame: &VideoFrame) -> Result<(OmtMediaFrame, Vec<u8>)> {
     if frame.data.len() < required {
         return Err(OmtError::InvalidFrame(
             "output video buffer is truncated".into(),
+        ));
+    }
+    if required > c_int::MAX as usize {
+        return Err(OmtError::InvalidFrame(
+            "output video buffer exceeds C ABI".into(),
         ));
     }
     let mut bgra = vec![0u8; required];
@@ -732,8 +892,8 @@ fn video_to_native(frame: &VideoFrame) -> Result<(OmtMediaFrame, Vec<u8>)> {
         height: frame.height as c_int,
         stride: frame.width.saturating_mul(4) as c_int,
         flags: OMT_VIDEO_FLAG_ALPHA,
-        frame_rate_n: 60_000,
-        frame_rate_d: 1001,
+        frame_rate_n: frame_rate.numerator() as c_int,
+        frame_rate_d: frame_rate.denominator() as c_int,
         aspect_ratio: frame.width as f32 / frame.height.max(1) as f32,
         color_space: OMT_COLORSPACE_BT709,
         sample_rate: 0,
@@ -752,8 +912,11 @@ fn video_to_native(frame: &VideoFrame) -> Result<(OmtMediaFrame, Vec<u8>)> {
 fn audio_to_native(audio: &AudioBuffer) -> Result<(OmtMediaFrame, Vec<u8>)> {
     let samples_per_channel = audio.planes.first().map_or(0, Vec::len);
     if audio.sample_rate == 0
+        || audio.sample_rate > c_int::MAX as u32
         || audio.channels == 0
+        || audio.channels as usize > MAX_AUDIO_CHANNELS as usize
         || audio.channels as usize != audio.planes.len()
+        || samples_per_channel > c_int::MAX as usize
         || audio
             .planes
             .iter()
@@ -768,6 +931,11 @@ fn audio_to_native(audio: &AudioBuffer) -> Result<(OmtMediaFrame, Vec<u8>)> {
         for sample in plane {
             data.extend_from_slice(&sample.to_ne_bytes());
         }
+    }
+    if data.len() > c_int::MAX as usize {
+        return Err(OmtError::InvalidFrame(
+            "output audio buffer exceeds C ABI".into(),
+        ));
     }
     let timestamp = ((audio.sample_index as u128) * OMT_TICKS_PER_SECOND as u128
         / audio.sample_rate as u128)
@@ -906,6 +1074,16 @@ mod tests {
     }
 
     #[test]
+    fn premultiplied_bgra_is_converted_to_straight_alpha() {
+        let mut data = [25, 50, 100, 128, 0, 0, 0, 0];
+        let mut frame = frame_with_data(OMT_CODEC_BGRA, &mut data);
+        frame.flags = OMT_VIDEO_FLAG_ALPHA | OMT_VIDEO_FLAG_PREMULTIPLIED;
+        let output = convert_video(&frame, InputId::new(), 0).unwrap();
+        assert_eq!(output.pixel(0, 0), [199, 100, 50, 128]);
+        assert_eq!(output.pixel(1, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
     fn uyvy_bt709_converts_black_and_white() {
         let mut data = [128, 16, 128, 235];
         let frame = frame_with_data(OMT_CODEC_UYVY, &mut data);
@@ -940,7 +1118,7 @@ mod tests {
             1,
             [1, 2, 3, 4],
         );
-        let (native, data) = video_to_native(&frame).unwrap();
+        let (native, data) = video_to_native(&frame, eiviz_time::NTSC_5994).unwrap();
         assert_eq!(native.timestamp, 166_833);
         assert_eq!(data, vec![3, 2, 1, 4, 3, 2, 1, 4]);
     }
