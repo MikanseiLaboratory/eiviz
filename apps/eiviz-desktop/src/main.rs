@@ -1,11 +1,11 @@
 use eiviz_command::{Command, CommandEnvelope};
+#[cfg(feature = "ndi")]
+use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_core::{
     CompositorBackend, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
     MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
     Transform2D, TransitionStyle,
 };
-#[cfg(feature = "ndi")]
-use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_engine::Engine;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -377,10 +377,7 @@ impl DesktopApp {
                 delay_ms: 0.0,
                 pan: 0.0,
             };
-            if let Err(error) = self
-                .engine
-                .submit_payload(Command::SetAudioRoute { route })
-            {
+            if let Err(error) = self.engine.submit_payload(Command::SetAudioRoute { route }) {
                 self.status = format!("NDI audio route: {error}");
                 return;
             }
@@ -426,10 +423,7 @@ impl DesktopApp {
             self.status = format!("NDI output project: {error}");
             return;
         }
-        if let Err(error) = self
-            .engine
-            .attach_output_sink(output.id, sink.clone())
-        {
+        if let Err(error) = self.engine.attach_output_sink(output.id, sink.clone()) {
             self.status = format!("NDI output route: {error}");
             return;
         }
@@ -791,25 +785,27 @@ impl eframe::App for DesktopApp {
                     let detail = sink
                         .last_error()
                         .unwrap_or_else(|| "no adapter error".into());
-                    let mut enabled = project
-                        .outputs
-                        .get(output_id)
-                        .is_some_and(|output| output.enabled);
-                    if ui.checkbox(&mut enabled, "Enabled").changed() {
-                        let _ = self.engine.submit_payload(Command::SetOutputEnabled {
-                            id: *output_id,
-                            enabled,
-                        });
-                    }
-                    ui.label(format!(
-                        "{}: {:?}, drops={} ({detail})",
-                        eiviz_media::MediaSink::name(sink.as_ref()),
-                        sink.health(),
-                        sink.dropped_frames()
-                    ));
-                    if ui.button("Stop NDI Output").clicked() {
-                        stop_output = Some(*output_id);
-                    }
+                    ui.push_id(output_id, |ui| {
+                        let mut enabled = project
+                            .outputs
+                            .get(output_id)
+                            .is_some_and(|output| output.enabled);
+                        if ui.checkbox(&mut enabled, "Enabled").changed() {
+                            let _ = self.engine.submit_payload(Command::SetOutputEnabled {
+                                id: *output_id,
+                                enabled,
+                            });
+                        }
+                        ui.label(format!(
+                            "{}: {:?}, drops={} ({detail})",
+                            eiviz_media::MediaSink::name(sink.as_ref()),
+                            sink.health(),
+                            sink.dropped_frames()
+                        ));
+                        if ui.button("Stop NDI Output").clicked() {
+                            stop_output = Some(*output_id);
+                        }
+                    });
                 }
                 if let Some(output_id) = stop_output {
                     let _ = self

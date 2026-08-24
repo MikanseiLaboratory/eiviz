@@ -883,10 +883,12 @@ name = "eiviz-io-ndi"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "eiviz-core",
  "eiviz-media",
  "eiviz-time",
  "grafton-ndi",
  "parking_lot",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

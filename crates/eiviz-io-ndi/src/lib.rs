@@ -5,14 +5,14 @@
 
 #[cfg(any(feature = "ndi", test))]
 use eiviz_time::{MediaTime, Rational};
+#[cfg(any(feature = "ndi", test))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "ndi")]
 mod native;
 
 #[cfg(feature = "ndi")]
-pub use native::{
-    NdiConfig, NdiError, NdiSink, NdiSource, NdiSourceInfo, discover_sources, probe,
-};
+pub use native::{NdiConfig, NdiError, NdiSink, NdiSource, NdiSourceInfo, discover_sources, probe};
 
 /// NDI timestamps and timecodes are signed 100 ns ticks.
 pub const NDI_TICKS_PER_SECOND: i64 = 10_000_000;
@@ -27,10 +27,9 @@ fn ndi_ticks_to_media_time(ticks: i64) -> MediaTime {
 
 #[cfg(any(feature = "ndi", test))]
 fn media_time_to_ndi_ticks(time: MediaTime) -> i64 {
-    let value = time.ticks() as i128
-        * time.timebase().numerator() as i128
-        * NDI_TICKS_PER_SECOND as i128
-        / time.timebase().denominator() as i128;
+    let value =
+        time.ticks() as i128 * time.timebase().numerator() as i128 * NDI_TICKS_PER_SECOND as i128
+            / time.timebase().denominator() as i128;
     value.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
@@ -39,8 +38,7 @@ fn ndi_ticks_to_sample_index(ticks: i64, sample_rate: u32) -> u64 {
     if ticks <= 0 {
         return 0;
     }
-    let samples =
-        ticks as u128 * sample_rate as u128 / NDI_TICKS_PER_SECOND as u128;
+    let samples = ticks as u128 * sample_rate as u128 / NDI_TICKS_PER_SECOND as u128;
     samples.min(u64::MAX as u128) as u64
 }
 
@@ -49,15 +47,33 @@ fn sample_index_to_ndi_ticks(sample_index: u64, sample_rate: u32) -> i64 {
     if sample_rate == 0 {
         return 0;
     }
-    let ticks =
-        sample_index as u128 * NDI_TICKS_PER_SECOND as u128 / sample_rate as u128;
+    let ticks = sample_index as u128 * NDI_TICKS_PER_SECOND as u128 / sample_rate as u128;
     ticks.min(i64::MAX as u128) as i64
+}
+
+#[cfg(any(feature = "ndi", test))]
+fn push_latest<T>(
+    tx: &crossbeam_channel::Sender<T>,
+    drop_rx: &crossbeam_channel::Receiver<T>,
+    value: T,
+    dropped: &AtomicU64,
+) {
+    match tx.try_send(value) {
+        Ok(()) => {}
+        Err(crossbeam_channel::TrySendError::Full(value)) => {
+            let _ = drop_rx.try_recv();
+            let _ = tx.try_send(value);
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(crossbeam_channel::TrySendError::Disconnected(_)) => {}
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use eiviz_time::{MediaTime, NTSC_5994};
+    use std::sync::atomic::AtomicU64;
 
     #[test]
     fn ndi_timestamp_roundtrip_is_exact_at_one_second() {
@@ -78,5 +94,15 @@ mod tests {
         assert_eq!(ndi_ticks_to_sample_index(10_000_000, 48_000), 48_000);
         assert_eq!(ndi_ticks_to_sample_index(-1, 48_000), 0);
         assert_eq!(sample_index_to_ndi_ticks(1, 0), 0);
+    }
+
+    #[test]
+    fn bounded_capture_queue_keeps_latest_frame() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let dropped = AtomicU64::new(0);
+        push_latest(&tx, &rx, 1, &dropped);
+        push_latest(&tx, &rx, 2, &dropped);
+        assert_eq!(rx.try_recv().unwrap(), 2);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
     }
 }

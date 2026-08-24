@@ -1,6 +1,6 @@
 use crate::{
-    NDI_TICKS_PER_SECOND, media_time_to_ndi_ticks, ndi_ticks_to_media_time,
-    ndi_ticks_to_sample_index, sample_index_to_ndi_ticks,
+    media_time_to_ndi_ticks, ndi_ticks_to_media_time, ndi_ticks_to_sample_index, push_latest,
+    sample_index_to_ndi_ticks,
 };
 use crossbeam_channel::{Receiver as QueueReceiver, Sender as QueueSender, TrySendError, bounded};
 use eiviz_core::InputId;
@@ -11,12 +11,11 @@ use eiviz_media::{
 use eiviz_time::{ClockDomain, FrameRate, MediaTime};
 use grafton_ndi::{
     AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
-    ReceiverColorFormat, ReceiverOptions, ScanType, Sender, SenderOptions, Source,
-    VideoFrame,
+    ReceiverColorFormat, ReceiverOptions, ScanType, Sender, SenderOptions, Source, VideoFrame,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -174,19 +173,15 @@ impl NdiSource {
                     while !stop.load(Ordering::Acquire) {
                         match receiver.video().try_capture(poll) {
                             Ok(Some(frame)) => {
-                                let timestamp = frame_timestamp(frame.timestamp(), frame.timecode());
+                                let timestamp =
+                                    frame_timestamp(frame.timestamp(), frame.timecode());
                                 match receive_video(id, sequence, frame) {
                                     Ok(mut converted) => {
                                         converted.discontinuity =
                                             previous_timestamp.is_some_and(|old| timestamp <= old);
                                         previous_timestamp = Some(timestamp);
                                         sequence = sequence.saturating_add(1);
-                                        push_latest(
-                                            &video_tx,
-                                            &video_drop_rx,
-                                            converted,
-                                            &dropped,
-                                        );
+                                        push_latest(&video_tx, &video_drop_rx, converted, &dropped);
                                         health.store(HEALTH_RUNNING, Ordering::Release);
                                         *last_error.lock() = None;
                                     }
@@ -223,12 +218,7 @@ impl NdiSource {
                         match receiver.audio().try_capture(poll) {
                             Ok(Some(frame)) => match receive_audio(frame) {
                                 Ok(converted) => {
-                                    push_latest(
-                                        &audio_tx,
-                                        &audio_drop_rx,
-                                        converted,
-                                        &dropped,
-                                    );
+                                    push_latest(&audio_tx, &audio_drop_rx, converted, &dropped);
                                     health.store(HEALTH_RUNNING, Ordering::Release);
                                     *last_error.lock() = None;
                                 }
@@ -379,9 +369,7 @@ impl NdiSink {
                             continue;
                         };
                         let result = match frame {
-                            OutputFrame::Video(frame) => {
-                                send_video(&sender, &frame, frame_rate)
-                            }
+                            OutputFrame::Video(frame) => send_video(&sender, &frame, frame_rate),
                             OutputFrame::Audio(audio) => send_audio(&sender, &audio),
                         };
                         match result {
@@ -431,9 +419,7 @@ impl NdiSink {
             }
             Err(TrySendError::Disconnected(_)) => {
                 self.health.store(HEALTH_FAILED, Ordering::Release);
-                Err(MediaError::Disconnected(
-                    "NDI output worker stopped".into(),
-                ))
+                Err(MediaError::Disconnected("NDI output worker stopped".into()))
             }
         }
     }
@@ -459,23 +445,6 @@ impl Drop for NdiSink {
         if let Some(worker) = self.worker.get_mut().take() {
             let _ = worker.join();
         }
-    }
-}
-
-fn push_latest<T>(
-    tx: &QueueSender<T>,
-    drop_rx: &QueueReceiver<T>,
-    value: T,
-    dropped: &AtomicU64,
-) {
-    match tx.try_send(value) {
-        Ok(()) => {}
-        Err(TrySendError::Full(value)) => {
-            let _ = drop_rx.try_recv();
-            let _ = tx.try_send(value);
-            dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        Err(TrySendError::Disconnected(_)) => {}
     }
 }
 
@@ -559,9 +528,9 @@ fn receive_audio(frame: AudioFrame) -> Result<AudioBuffer, NdiError> {
         .map_err(|_| NdiError::InvalidFrame("audio channel count is invalid".into()))?;
     let samples = usize::try_from(frame.num_samples())
         .map_err(|_| NdiError::InvalidFrame("audio sample count is negative".into()))?;
-    if sample_rate == 0 || channels == 0 {
+    if sample_rate == 0 || channels == 0 || samples == 0 {
         return Err(NdiError::InvalidFrame(
-            "audio sample rate and channels must be non-zero".into(),
+            "audio sample rate, channels, and sample count must be non-zero".into(),
         ));
     }
     let required = channels as usize * samples;
@@ -634,7 +603,8 @@ fn send_audio(sender: &Sender, audio: &AudioBuffer) -> Result<(), NdiError> {
         ));
     }
     let samples = audio.planes.first().map_or(0, Vec::len);
-    if audio.planes.len() != audio.channels as usize
+    if samples == 0
+        || audio.planes.len() != audio.channels as usize
         || audio.planes.iter().any(|plane| plane.len() != samples)
     {
         return Err(NdiError::InvalidFrame(
@@ -704,17 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_latest_queue_evicts_oldest_value() {
-        let (tx, rx) = bounded(1);
-        let dropped = AtomicU64::new(0);
-        push_latest(&tx, &rx, 1, &dropped);
-        push_latest(&tx, &rx, 2, &dropped);
-        assert_eq!(rx.try_recv().unwrap(), 2);
-        assert_eq!(dropped.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
     fn ndi_clock_is_one_hundred_nanoseconds() {
-        assert_eq!(NDI_TICKS_PER_SECOND, 10_000_000);
+        assert_eq!(crate::NDI_TICKS_PER_SECOND, 10_000_000);
     }
 }
