@@ -27,20 +27,20 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     }
     // Distribution profiles became mandatory in v2. Never invent a codec or
     // transport profile for a legacy streaming output.
-    if project.schema_version < 2 {
-        if let Some(output) = project.outputs.values().find(|output| {
+    if project.schema_version < 2
+        && let Some(output) = project.outputs.values().find(|output| {
             matches!(
                 output.kind,
                 eiviz_core::OutputKind::Rtmp { .. }
                     | eiviz_core::OutputKind::Srt { .. }
                     | eiviz_core::OutputKind::Mp4 { .. }
             ) && output.distribution.is_none()
-        }) {
-            return Err(ProjectError::Package(format!(
-                "legacy distribution output {} requires an explicit codec and transport profile",
-                output.id
-            )));
-        }
+        })
+    {
+        return Err(ProjectError::Package(format!(
+            "legacy distribution output {} requires an explicit codec and transport profile",
+            output.id
+        )));
     }
     // v3 persists the audio resampling policy. Serde defaults every older
     // project to ExactRate; migration never opts a project into ASRC.

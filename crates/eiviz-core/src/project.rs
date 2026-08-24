@@ -156,16 +156,15 @@ impl Project {
                 "audio sample rate and channel count must be non-zero",
             ));
         }
-        if let AudioResamplingPolicy::Asrc { profile } = self.audio.resampling {
-            if profile.target_latency_ms == 0
+        if let AudioResamplingPolicy::Asrc { profile } = self.audio.resampling
+            && (profile.target_latency_ms == 0
                 || profile.max_buffer_ms <= profile.target_latency_ms
                 || profile.max_drift_ppm == 0
-                || profile.max_drift_ppm > 10_000
-            {
-                return Err(DomainError::msg(
-                    "ASRC profile requires non-zero latency/drift, a larger buffer, and at most 10000 ppm correction",
-                ));
-            }
+                || profile.max_drift_ppm > 10_000)
+        {
+            return Err(DomainError::msg(
+                "ASRC profile requires non-zero latency/drift, a larger buffer, and at most 10000 ppm correction",
+            ));
         }
         for input in self.inputs.values() {
             match input.source {

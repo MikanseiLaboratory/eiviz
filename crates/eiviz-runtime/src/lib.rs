@@ -35,10 +35,10 @@ pub enum RuntimeError {
     #[error("missing media and policy is Fail: {0}")]
     MissingMedia(String),
     #[error(
-        "audio source {source} is {source_rate} Hz but project is {project_rate} Hz and policy is ExactRate"
+        "audio source {input} is {source_rate} Hz but project is {project_rate} Hz and policy is ExactRate"
     )]
     AudioRateMismatch {
-        source: InputId,
+        input: InputId,
         source_rate: u32,
         project_rate: u32,
     },
@@ -784,7 +784,7 @@ impl Runtime {
                 if buffer.sample_rate != sample_rate {
                     let AudioResamplingPolicy::Asrc { profile } = plan.resampling else {
                         return Err(RuntimeError::AudioRateMismatch {
-                            source: route.input,
+                            input: route.input,
                             source_rate: buffer.sample_rate,
                             project_rate: sample_rate,
                         });
@@ -1240,7 +1240,7 @@ mod tests {
         assert!(matches!(
             error,
             RuntimeError::AudioRateMismatch {
-                source,
+                input: source,
                 source_rate: 44_100,
                 project_rate: 48_000,
             } if source == input

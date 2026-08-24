@@ -108,7 +108,7 @@ struct CaptureConsumer {
 impl CaptureConsumer {
     fn pull(
         &mut self,
-        project_sample_index: u64,
+        _project_sample_index: u64,
         frames: usize,
         sample_rate: u32,
         channels: u16,
@@ -128,7 +128,7 @@ impl CaptureConsumer {
         let mut discontinuity = self
             .expected_device_sample
             .is_some_and(|expected| expected != first_device_sample);
-        let mut buffer = AudioBuffer::silence(project_sample_index, sample_rate, channels, frames);
+        let mut buffer = AudioBuffer::silence(first_device_sample, sample_rate, channels, frames);
         buffer.capture_timestamp = Some(AudioCaptureTimestamp {
             device_sample_index: first_device_sample,
             callback_nanos: first_stamp.callback_nanos,

@@ -558,6 +558,7 @@ impl Engine {
         let ack = candidate.stage(&g.project, env, now)?;
         let staged = candidate.staged_project().unwrap_or(&g.project);
         Self::admit_project(&g, staged)?;
+        validate_audio_policy_change(&g, staged)?;
         RuntimeSnapshot::compile(
             Arc::new(staged.clone()),
             candidate.revision(),
@@ -591,6 +592,7 @@ impl Engine {
         let acknowledgements = candidate.stage_transaction(&g.project, envelopes, now)?;
         let staged = candidate.staged_project().unwrap_or(&g.project);
         Self::admit_project(&g, staged)?;
+        validate_audio_policy_change(&g, staged)?;
         RuntimeSnapshot::compile(
             Arc::new(staged.clone()),
             candidate.revision(),
@@ -891,6 +893,15 @@ fn validate_distribution_admission(inner: &Inner, project: &Project) -> Result<(
             ));
         }
         inner.encoder_capabilities.validate(profile)?;
+    }
+    Ok(())
+}
+
+fn validate_audio_policy_change(inner: &Inner, project: &Project) -> Result<()> {
+    if project.audio.resampling != inner.project.audio.resampling && !inner.audio_sinks.is_empty() {
+        return Err(EngineError::Admission(
+            "stop all attached audio outputs before changing the ASRC policy/profile".into(),
+        ));
     }
     Ok(())
 }
