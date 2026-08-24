@@ -37,7 +37,10 @@ interop pass.
 
 ## Current automated evidence
 
-- Adapter capability and test-only loopback tests
+- `eiviz-io-omt` protocol loopback: real `OmtSink` → `OmtSource` pixel roundtrip on localhost (not a production substitute and not an `OMT-HIL-*` pass)
+- `Engine::bind_omt_source` Program loopback: declared OMT URL, real adapter, Fail missing-media policy, Program pixels from the protocol path (still not `OMT-HIL-*`)
+- Project load/import/recovery drops live bindings; Desktop rebinds declared OMT URLs explicitly and surfaces connect failures without attaching a simulator
+- Unattached OMT Program with `MissingMediaPolicy::Fail` errors instead of inventing a camera
 - Generic registered `MediaSource` → Program/Audio Matrix integration test
 - Upstream `openmediatransport-rs`/`vmx-rs` protocol and codec test suites via pinned revisions
 - OMT video/audio receive stamps adapter capture with process monotonic and

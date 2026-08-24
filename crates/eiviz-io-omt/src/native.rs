@@ -414,6 +414,24 @@ impl OmtSink {
         })
     }
 
+    pub fn advertised_url(&self) -> String {
+        format!("omt://127.0.0.1:{}", self.sender.lock().port())
+    }
+
+    pub fn pump(&self) {
+        let mut sender = self.sender.lock();
+        let _ = sender.poll_accept();
+        let _ = sender.poll_peer_metadata();
+    }
+
+    pub fn video_subscribed(&self) -> bool {
+        self.sender.lock().video_subscribed()
+    }
+
+    pub fn force_video_subscribe(&self) {
+        self.sender.lock().force_subscribe(true, false, true);
+    }
+
     pub fn send_metadata(&self, timestamp: MediaTime, xml: &str) -> Result<(), OmtError> {
         Ok(self
             .sender
@@ -728,6 +746,84 @@ mod tests {
                 OmtColorProfile::Bt709Limited,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn protocol_loopback_delivers_captured_pixels_without_a_simulator() {
+        use eiviz_core::VideoFormat;
+        use eiviz_media::{MediaSink, MediaSource};
+        use std::time::{Duration, Instant};
+
+        let mut video = VideoFormat::hd_5994();
+        video.width = 128;
+        video.height = 128;
+        let sink = OmtSink::create_for_video_format(
+            "eiviz-omt-loopback",
+            &video,
+            OmtOutputConfig {
+                pixel_format: OmtOutputPixelFormat::Uyvy,
+                color_profile: OmtColorProfile::Bt709Limited,
+                send_queue_depth: 4,
+            },
+        )
+        .expect("omt sink");
+        let source =
+            OmtSource::connect(InputId::new(), sink.advertised_url()).expect("omt receiver");
+        let subscribe_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < subscribe_deadline {
+            sink.pump();
+            if sink.video_subscribed() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !sink.video_subscribed() {
+            sink.force_video_subscribe();
+        }
+        assert!(
+            sink.video_subscribed(),
+            "OMT sink never observed a video subscription"
+        );
+
+        let frame = VideoFrame::rgba_solid(
+            1,
+            MediaTime::from_frame_index(1, video.frame_rate).unwrap(),
+            128,
+            128,
+            [255, 255, 255, 255],
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut captured = None;
+        let mut last_error = None;
+        while Instant::now() < deadline {
+            sink.pump();
+            if let Err(error) = MediaSink::push_video(&sink, &frame) {
+                last_error = Some(error.to_string());
+            }
+            match MediaSource::pull_video(&source, MediaTime::ZERO, video.frame_rate) {
+                Ok(Some(received)) => {
+                    captured = Some(received);
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => last_error = Some(error.to_string()),
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let captured = captured.unwrap_or_else(|| {
+            panic!(
+                "OMT receiver must see a real protocol frame; last error {last_error:?}; source error {:?}",
+                source.last_error()
+            )
+        });
+        assert_eq!(captured.width, 128);
+        assert_eq!(captured.height, 128);
+        assert_eq!(captured.color, OmtColorProfile::Bt709Limited.metadata());
+        let pixel = captured.pixel(0, 0);
+        assert!(
+            pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200,
+            "{pixel:?}"
         );
     }
 }

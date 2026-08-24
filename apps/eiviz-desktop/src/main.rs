@@ -1056,6 +1056,48 @@ impl DesktopApp {
         self.status = format!("OMT connected: {address}");
     }
 
+    fn clear_stale_live_io(&mut self) {
+        self.omt_connections.clear();
+        self.omt_outputs.clear();
+        #[cfg(feature = "ndi")]
+        {
+            self.ndi_connections.clear();
+            self.ndi_outputs.clear();
+        }
+        #[cfg(feature = "decklink")]
+        {
+            self.decklink_sources.clear();
+            self.decklink_outputs.clear();
+        }
+    }
+
+    fn rebind_declared_live_sources(&mut self, action: &str) {
+        self.clear_stale_live_io();
+        let mut failures = Vec::new();
+        let mut bound = 0usize;
+        for (id, url) in self.engine.declared_omt_sources() {
+            match self.engine.bind_omt_source(id, &url) {
+                Ok(source) => {
+                    self.omt_connections.push(source);
+                    bound += 1;
+                }
+                Err(error) => failures.push(format!("{url}: {error}")),
+            }
+        }
+        self.status = if failures.is_empty() {
+            if bound == 0 {
+                action.to_owned()
+            } else {
+                format!("{action}; rebound {bound} OMT source(s)")
+            }
+        } else {
+            format!(
+                "{action}; OMT bind failures (no implicit substitute): {}",
+                failures.join("; ")
+            )
+        };
+    }
+
     fn add_image(&mut self) {
         let path = std::path::Path::new(self.image_path.trim());
         let root = std::path::Path::new(self.asset_root.trim());
@@ -2635,11 +2677,12 @@ impl eframe::App for DesktopApp {
                 Ok(true) => {
                     self.engine.set_autosave_path(&self.save_path);
                     self.selected_scene = None;
+                    self.selected_unit = self.engine.primary_unit();
                     self.asset_diagnostics = self.engine.asset_diagnostics();
                     self.recovery = None;
-                    self.status =
-                        "autosave recovered in memory; Save explicitly to replace project.json"
-                            .into();
+                    self.rebind_declared_live_sources(
+                        "autosave recovered in memory; Save explicitly to replace project.json",
+                    );
                 }
                 Ok(false) => {
                     self.engine.set_autosave_path(&self.save_path);
@@ -2738,7 +2781,7 @@ impl eframe::App for DesktopApp {
                             self.selected_scene = None;
                             self.selected_unit = self.engine.primary_unit();
                             self.asset_diagnostics = self.engine.asset_diagnostics();
-                            self.status = "loaded".into();
+                            self.rebind_declared_live_sources("loaded");
                         }
                         Err(e) => self.status = format!("load: {e}"),
                     }
@@ -2820,8 +2863,9 @@ impl eframe::App for DesktopApp {
                                     ) {
                                         Ok(()) => {
                                             self.selected_scene = None;
+                                            self.selected_unit = self.engine.primary_unit();
                                             self.asset_diagnostics = self.engine.asset_diagnostics();
-                                            self.status = "portable imported".into();
+                                            self.rebind_declared_live_sources("portable imported");
                                         }
                                         Err(error) => {
                                             self.status = format!("portable import: {error}")

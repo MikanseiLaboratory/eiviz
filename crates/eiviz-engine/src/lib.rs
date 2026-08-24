@@ -599,6 +599,52 @@ impl Engine {
         inner.runtime.attach_source(source, policy);
     }
 
+    pub fn declared_omt_sources(&self) -> Vec<(InputId, String)> {
+        self.snapshot()
+            .inputs
+            .values()
+            .filter_map(|input| match &input.source {
+                InputSource::Omt { url } => Some((input.id, url.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Connects a project-declared OMT URL through the real adapter.
+    /// Failure is returned; no slate/simulator substitute is attached.
+    pub fn bind_omt_source(&self, id: InputId, url: &str) -> Result<Arc<eiviz_io_omt::OmtSource>> {
+        let declared = self.staged_snapshot();
+        let input = declared
+            .inputs
+            .get(&id)
+            .ok_or_else(|| EngineError::Admission(format!("unknown input {id}")))?;
+        match &input.source {
+            InputSource::Omt { url: expected } if expected == url => {}
+            InputSource::Omt { url: expected } => {
+                return Err(EngineError::Admission(format!(
+                    "OMT input {id} is declared as {expected}, not {url}"
+                )));
+            }
+            other => {
+                return Err(EngineError::Admission(format!(
+                    "input {id} is {other:?}, not an OMT source"
+                )));
+            }
+        }
+        let source = Arc::new(
+            eiviz_io_omt::OmtSource::connect(id, url)
+                .map_err(|error| EngineError::Admission(error.to_string()))?,
+        );
+        self.attach_source(
+            source.clone(),
+            SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: UnlockedBehavior::Fail,
+            },
+        );
+        Ok(source)
+    }
+
     pub fn detach_source(&self, id: eiviz_core::InputId) {
         let mut inner = self.inner.lock();
         inner.runtime.detach_source(id);
@@ -2628,6 +2674,273 @@ mod tests {
         );
         assert_eq!(loaded.state_hash(), engine.state_hash());
         assert!(!engine.flight_log().is_empty());
+    }
+
+    #[test]
+    fn load_drops_live_source_bindings_instead_of_inventing_a_capture() {
+        let engine = Engine::new("omt reload");
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "camera".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://127.0.0.1:6400".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "camera".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(1, eiviz_time::MediaTime::ZERO, 2, 2, [9, 8, 7, 255]),
+                audio: AudioBuffer::silence(0, 48_000, 2, 800),
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
+        engine.tick().unwrap();
+        assert_eq!(engine.source_control_diagnostics().len(), 1);
+
+        let dir = std::env::temp_dir().join(format!("eiviz-omt-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("project.json");
+        engine.save(&path).unwrap();
+        engine.load_project(&path, None).unwrap();
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(
+            engine.declared_omt_sources(),
+            vec![(input.id, "omt://127.0.0.1:6400".into())]
+        );
+        let loaded = Engine::load(&path).unwrap();
+        assert!(loaded.source_control_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn unattached_omt_program_obeys_fail_policy() {
+        let mut project = Project::new("omt fail");
+        project.missing_media = eiviz_core::MissingMediaPolicy::Fail;
+        let engine = Engine::from_project(project).unwrap();
+        let unit = engine.primary_unit();
+        let input = Input {
+            id: InputId::new(),
+            name: "camera".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://127.0.0.1:6400".into(),
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "camera".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        let error = engine.tick().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EngineError::Runtime(eiviz_runtime::RuntimeError::MissingMedia(_))
+            ),
+            "{error:?}"
+        );
+        assert!(engine.source_control_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn bind_omt_source_rejects_dead_endpoints_without_a_substitute() {
+        let engine = Engine::new("omt bind");
+        let input = Input {
+            id: InputId::new(),
+            name: "camera".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://".into(),
+            },
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine.tick().unwrap();
+        match engine.bind_omt_source(input.id, "omt://") {
+            Ok(_) => panic!("dead OMT URL must not bind"),
+            Err(error) => assert!(matches!(error, EngineError::Admission(_)), "{error:?}"),
+        }
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(engine.declared_omt_sources().len(), 1);
+    }
+
+    #[test]
+    fn bind_omt_source_delivers_real_protocol_pixels_to_program() {
+        use eiviz_io_omt::{OmtColorProfile, OmtOutputConfig, OmtOutputPixelFormat, OmtSink};
+        use eiviz_media::MediaSink;
+        use std::time::{Duration, Instant};
+
+        let mut project = Project::new("omt engine loopback");
+        project.video.width = 128;
+        project.video.height = 128;
+        project.missing_media = eiviz_core::MissingMediaPolicy::Fail;
+        let engine = Engine::from_project(project).unwrap();
+        let unit = engine.primary_unit();
+        let video = engine.snapshot().video.clone();
+        let sink = OmtSink::create_for_video_format(
+            "eiviz-engine-omt-loopback",
+            &video,
+            OmtOutputConfig {
+                pixel_format: OmtOutputPixelFormat::Uyvy,
+                color_profile: OmtColorProfile::Bt709Limited,
+                send_queue_depth: 4,
+            },
+        )
+        .expect("omt sink");
+        let url = sink.advertised_url();
+        let input = Input {
+            id: InputId::new(),
+            name: "camera".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt { url: url.clone() },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "camera".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        let source = engine
+            .bind_omt_source(input.id, &url)
+            .expect("real OMT bind");
+        assert_eq!(engine.source_control_diagnostics().len(), 1);
+
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut last_error = None;
+        let mut captured = None;
+        let mut adapter_pixel = None;
+        let mut frame_index = 0u64;
+        while Instant::now() < deadline {
+            sink.pump();
+            if !sink.video_subscribed() {
+                sink.force_video_subscribe();
+            }
+            let frame = VideoFrame::rgba_solid(
+                frame_index,
+                eiviz_time::MediaTime::from_frame_index(frame_index, video.frame_rate).unwrap(),
+                128,
+                128,
+                [255, 255, 255, 255],
+            );
+            if let Err(error) = MediaSink::push_video(&sink, &frame) {
+                last_error = Some(format!("push: {error}"));
+            }
+            match eiviz_media::MediaSource::pull_video(
+                source.as_ref(),
+                eiviz_time::MediaTime::ZERO,
+                video.frame_rate,
+            ) {
+                Ok(Some(received)) => {
+                    adapter_pixel = Some(received.pixel(0, 0));
+                }
+                Ok(None) => {}
+                Err(error) => last_error = Some(format!("pull: {error}")),
+            }
+            match engine.tick() {
+                Ok(_) => {
+                    if let Some(program) = engine.last_program(unit) {
+                        let pixel = program.pixel(0, 0);
+                        if pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200 {
+                            captured = Some(pixel);
+                            break;
+                        }
+                        last_error = Some(format!("program pixel {pixel:?}"));
+                    }
+                }
+                Err(error) => last_error = Some(format!("tick: {error}")),
+            }
+            frame_index += 1;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pixel = captured.unwrap_or_else(|| {
+            panic!(
+                "Engine Program must show real OMT pixels; last error {last_error:?}; adapter pixel {adapter_pixel:?}; subscribed={}; diagnostics {:?}",
+                sink.video_subscribed(),
+                engine.source_control_diagnostics()
+            )
+        });
+        assert!(
+            pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200,
+            "{pixel:?}"
+        );
     }
 
     #[test]
