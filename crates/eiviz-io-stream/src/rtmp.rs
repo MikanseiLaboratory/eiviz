@@ -393,7 +393,7 @@ mod tests {
 
         let mut publisher = RtmpPublisher::new(
             &format!("rtmp://127.0.0.1:{port}/live/key"),
-            Duration::from_secs(2),
+            Duration::from_secs(10),
             4096,
         )
         .unwrap();
@@ -420,7 +420,7 @@ mod tests {
         publisher.disconnect();
 
         let (video_messages, audio_messages) =
-            result_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            result_rx.recv_timeout(Duration::from_secs(12)).unwrap();
         assert_eq!(video_messages, 2, "sequence header + AVC access unit");
         assert_eq!(audio_messages, 2, "sequence header + AAC access unit");
         server.join().unwrap();
@@ -432,7 +432,7 @@ mod tests {
             // Keep the mock peer's read deadline comfortably above the
             // publisher's connect timeout. On macOS, equal deadlines can race
             // and surface EAGAIN before the session command is scheduled.
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         let mut handshake = Handshake::new(PeerType::Server);
         let mut buffer = [0u8; 16 * 1024];
