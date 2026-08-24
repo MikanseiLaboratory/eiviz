@@ -180,10 +180,15 @@ fn push_latest<T>(
 
 #[cfg(any(feature = "decklink-sdk", test))]
 mod ffi {
-    use std::ffi::{c_char, c_void};
+    use std::ffi::c_char;
+    #[cfg(feature = "decklink-sdk")]
+    use std::ffi::c_void;
 
+    #[cfg(feature = "decklink-sdk")]
     pub const DEVICE_CAPTURE: u32 = 1;
+    #[cfg(feature = "decklink-sdk")]
     pub const DEVICE_PLAYBACK: u32 = 2;
+    #[cfg(feature = "decklink-sdk")]
     pub const FRAME_NO_INPUT: u32 = 1;
 
     #[repr(C)]
