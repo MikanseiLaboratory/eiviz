@@ -125,7 +125,8 @@ impl EncodedFanout {
                 "encoded sink {name} is already attached"
             )));
         }
-        let (sender, receiver) = crossbeam_channel::bounded(capacity);
+        let (sender, receiver): (Sender<QueuedAccessUnit>, Receiver<QueuedAccessUnit>) =
+            crossbeam_channel::bounded(capacity);
         let diagnostics = Arc::new(SharedDiagnostics {
             name: name.clone(),
             state: Mutex::new(SinkState::WaitingForKeyframe),
@@ -449,12 +450,7 @@ mod tests {
                 },
             )
             .unwrap();
-        for (kind, keyframe, id) in [
-            (EncodedKind::Avc, true, 1),
-            (EncodedKind::Aac, false, 2),
-            (EncodedKind::Avc, false, 3),
-            (EncodedKind::Avc, true, 4),
-        ] {
+        let publish = |kind, keyframe, id| {
             fanout.publish(Arc::new(EncodedAccessUnit {
                 pts: MediaTime::ZERO,
                 dts: Some(MediaTime::ZERO),
@@ -462,6 +458,20 @@ mod tests {
                 bytes: vec![0, 0, 0, 1, id].into(),
                 kind,
             }));
+        };
+        publish(EncodedKind::Avc, true, 1);
+        for _ in 0..100 {
+            if fanout.diagnostics()[0].reconnects >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        for (kind, keyframe, id) in [
+            (EncodedKind::Aac, false, 2),
+            (EncodedKind::Avc, false, 3),
+            (EncodedKind::Avc, true, 4),
+        ] {
+            publish(kind, keyframe, id);
         }
         for _ in 0..100 {
             if successful_ids.lock().unwrap().as_slice() == [4] {
