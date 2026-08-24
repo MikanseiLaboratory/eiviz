@@ -6,7 +6,9 @@ use eiviz_core::{
     Project, RouteMode, Transform2D,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
-use eiviz_media::{AudioBuffer, BoundedSlot, MediaSource, QueuePolicy, VideoFrame};
+use eiviz_media::{
+    AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy, VideoFrame,
+};
 use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -151,6 +153,13 @@ impl Runtime {
     pub fn detach_source(&mut self, id: InputId) {
         self.sources.remove(&id);
         self.last_good_inputs.remove(&id);
+    }
+
+    pub fn audio_source_diagnostics(&self) -> Vec<AudioIoDiagnostics> {
+        self.sources
+            .values()
+            .filter_map(|source| source.audio_diagnostics())
+            .collect()
     }
 
     pub fn update_source_playback(&self, id: InputId, playback: &Playback) {
@@ -409,6 +418,13 @@ impl Runtime {
         let w = project.video.width.clamp(16, 1920);
         let h = project.video.height.clamp(16, 1080);
         for input in project.inputs.values() {
+            if matches!(input.source, InputSource::AudioDevice { .. }) {
+                let mut frame =
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
+                frame.source = Some(input.id);
+                out.insert(input.id, frame);
+                continue;
+            }
             if let Some(source) = self.sources.get(&input.id) {
                 match source.pull_video(pts, project.video.frame_rate) {
                     Ok(Some(mut frame)) => {
@@ -561,6 +577,16 @@ impl Runtime {
                 continue;
             }
             let Some(source) = self.sources.get(&route.input) else {
+                if project
+                    .inputs
+                    .get(&route.input)
+                    .is_some_and(|input| matches!(input.source, InputSource::AudioDevice { .. }))
+                {
+                    return Err(RuntimeError::MissingMedia(format!(
+                        "audio device source {} is selected but not attached",
+                        route.input
+                    )));
+                }
                 continue;
             };
             let buffer = source.pull_audio(sample_index, frames).map_err(|error| {
@@ -613,14 +639,7 @@ impl Runtime {
             let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
             let g_l = angle.cos() * std::f32::consts::SQRT_2;
             let g_r = angle.sin() * std::f32::consts::SQRT_2;
-            let has_registered_source = self.sources.contains_key(&route.input);
             for n in 0..frames {
-                let generated = if has_registered_source {
-                    None
-                } else {
-                    let t = (sample_index + n as u64) as f32 / sample_rate as f32;
-                    Some((2.0 * std::f32::consts::PI * 1000.0 * t).sin() * 0.1)
-                };
                 #[allow(clippy::needless_range_loop)]
                 for c in 0..ch {
                     let source_sample = source_audio
@@ -632,7 +651,6 @@ impl Runtime {
                         })
                         .and_then(|plane| plane.get(n))
                         .copied()
-                        .or(generated)
                         .unwrap_or(0.0);
                     let g = if ch >= 2 {
                         if c == 0 {
@@ -818,8 +836,11 @@ mod tests {
         let peak = after.audio.planes[0]
             .iter()
             .fold(0.0f32, |a, x| a.max(x.abs()));
-        assert!(peak > 0.01, "audio follow should unmute on take");
-        assert!(after.peak_meters.values().any(|m| *m > 0.01));
+        assert!(
+            peak < 1e-6,
+            "a route without an attached source must not invent a tone"
+        );
+        assert!(after.peak_meters.values().all(|m| *m < 1e-6));
     }
 
     #[test]

@@ -1,9 +1,9 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
 use eiviz_core::{
-    AssetRef, ClientId, Input, InputId, InputSource, MixingUnitId, MultiviewId, OutputId, Playback,
-    Project,
+    AssetRef, ClientId, Input, InputId, InputSource, MixingUnitId, MultiviewId, OutputId,
+    OutputKind, Playback, Project,
 };
-use eiviz_media::{MediaSink, MediaSource, VideoFrame};
+use eiviz_media::{AudioIoDiagnostics, AudioSink, MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{
     append_journal, export_portable as export_project_portable,
     import_portable as import_project_portable, load, save_atomic, save_autosave, stage_asset,
@@ -31,6 +31,8 @@ pub enum EngineError {
     Admission(String),
     #[error("unknown output {0}")]
     UnknownOutput(OutputId),
+    #[error("output {0} is not an audio-device output")]
+    NotAudioOutput(OutputId),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -69,6 +71,22 @@ pub struct EngineMetrics {
     pub state_hash: String,
     pub failed_outputs: Vec<(String, String)>,
     pub peak_meters: Vec<(String, f32)>,
+    pub audio_devices: Vec<EngineAudioDiagnostics>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineAudioDiagnostics {
+    pub name: String,
+    pub health: String,
+    pub callbacks: u64,
+    pub device_frames: u64,
+    pub xruns: u64,
+    pub queue_overflows: u64,
+    pub queue_underflows: u64,
+    pub last_device_sample_index: u64,
+    pub last_callback_nanos: u64,
+    pub last_device_nanos: u64,
+    pub last_error: Option<String>,
 }
 
 /// Process-wide composition root. GUI and control adapters only talk to this.
@@ -84,6 +102,7 @@ struct Inner {
     budget: AdmissionBudget,
     flight: VecDeque<FlightEvent>,
     sinks: HashMap<OutputId, Arc<dyn MediaSink>>,
+    audio_sinks: HashMap<OutputId, Arc<dyn AudioSink>>,
     autosave_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
 }
@@ -104,6 +123,7 @@ impl Engine {
                 budget: AdmissionBudget::default(),
                 flight: VecDeque::with_capacity(FLIGHT_CAP),
                 sinks: HashMap::new(),
+                audio_sinks: HashMap::new(),
                 autosave_path: None,
                 journal_path: None,
             }),
@@ -197,6 +217,22 @@ impl Engine {
         self.inner.lock().sinks.remove(&output);
     }
 
+    pub fn attach_audio_output(&self, output: OutputId, sink: Arc<dyn AudioSink>) -> Result<()> {
+        let mut inner = self.inner.lock();
+        let Some(configured) = inner.project.outputs.get(&output) else {
+            return Err(EngineError::UnknownOutput(output));
+        };
+        if !matches!(configured.kind, OutputKind::AudioDevice { .. }) {
+            return Err(EngineError::NotAudioOutput(output));
+        }
+        inner.audio_sinks.insert(output, sink);
+        Ok(())
+    }
+
+    pub fn detach_audio_output(&self, output: OutputId) {
+        self.inner.lock().audio_sinks.remove(&output);
+    }
+
     pub fn attach_source(&self, source: Arc<dyn MediaSource>) {
         self.inner.lock().runtime.attach_source(source);
     }
@@ -228,6 +264,8 @@ impl Engine {
 
     pub fn metrics(&self) -> EngineMetrics {
         let g = self.inner.lock();
+        let mut audio_devices = g.runtime.audio_source_diagnostics();
+        audio_devices.extend(g.audio_sinks.values().map(|sink| sink.diagnostics()));
         EngineMetrics {
             revision: g.sequencer.revision(),
             frame: g.runtime.frame(),
@@ -238,6 +276,10 @@ impl Engine {
                 .peak_meters
                 .iter()
                 .map(|(k, v)| (k.to_string(), *v))
+                .collect(),
+            audio_devices: audio_devices
+                .into_iter()
+                .map(EngineAudioDiagnostics::from)
                 .collect(),
         }
     }
@@ -318,6 +360,19 @@ impl Engine {
                 }
             }
         }
+        let audio_sinks = g.audio_sinks.clone();
+        for (output_id, sink) in audio_sinks {
+            let enabled = g
+                .project
+                .outputs
+                .get(&output_id)
+                .is_some_and(|output| output.enabled);
+            if enabled
+                && let Err(error) = sink.push_audio(&audio)
+            {
+                g.runtime.mark_output_failed(sink.name(), error.to_string());
+            }
+        }
         let ev = FlightEvent {
             frame: g.runtime.frame().saturating_sub(1),
             revision: g.sequencer.revision(),
@@ -394,6 +449,7 @@ impl Engine {
         inner.sequencer = Sequencer::default();
         inner.flight.clear();
         inner.sinks.clear();
+        inner.audio_sinks.clear();
         Ok(())
     }
 
@@ -433,6 +489,24 @@ impl Engine {
             _ => {}
         }
         Ok(())
+    }
+}
+
+impl From<AudioIoDiagnostics> for EngineAudioDiagnostics {
+    fn from(value: AudioIoDiagnostics) -> Self {
+        Self {
+            name: value.name,
+            health: format!("{:?}", value.health),
+            callbacks: value.callbacks,
+            device_frames: value.device_frames,
+            xruns: value.xruns,
+            queue_overflows: value.queue_overflows,
+            queue_underflows: value.queue_underflows,
+            last_device_sample_index: value.last_device_sample_index,
+            last_callback_nanos: value.last_callback_nanos,
+            last_device_nanos: value.last_device_nanos,
+            last_error: value.last_error,
+        }
     }
 }
 

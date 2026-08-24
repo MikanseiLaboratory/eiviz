@@ -153,6 +153,8 @@ fn convert_audio(frame: openmediatransport::DecodedAudioFrame) -> Result<AudioBu
         sample_rate: frame.sample_rate as u32,
         channels: frame.channels as u16,
         planes,
+        capture_timestamp: None,
+        discontinuity: false,
     })
 }
 

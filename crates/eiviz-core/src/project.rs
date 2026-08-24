@@ -240,7 +240,8 @@ impl Project {
                     output.id, output.owner
                 )));
             }
-            if let crate::OutputKind::DeckLink { binding } = output.kind
+            if let crate::OutputKind::DeckLink { binding }
+            | crate::OutputKind::AudioDevice { binding } = output.kind
                 && !self.device_bindings.contains_key(&binding)
             {
                 return Err(DomainError::InvalidRef(format!(

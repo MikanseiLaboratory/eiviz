@@ -485,6 +485,8 @@ fn convert_capture_audio(packet: &ffi::AudioPacket) -> Result<AudioBuffer, DeckL
         sample_rate: packet.sample_rate,
         channels,
         planes,
+        capture_timestamp: None,
+        discontinuity: false,
     })
 }
 

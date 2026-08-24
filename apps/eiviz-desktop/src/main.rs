@@ -1,12 +1,12 @@
 use eiviz_command::{Command, CommandEnvelope};
-#[cfg(any(feature = "decklink", feature = "ndi"))]
+#[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
 use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_core::{
     CompositorBackend, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
     MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
     Transform2D, TransitionStyle,
 };
-#[cfg(feature = "decklink")]
+#[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
 use std::sync::Arc;
@@ -65,6 +65,20 @@ struct DesktopApp {
     ndi_output_name: String,
     #[cfg(feature = "ndi")]
     ndi_capability: eiviz_media::Capability,
+    #[cfg(feature = "audio-cpal")]
+    audio_backends: Vec<eiviz_io_audio::AudioBackend>,
+    #[cfg(feature = "audio-cpal")]
+    audio_backend_selected: Option<usize>,
+    #[cfg(feature = "audio-cpal")]
+    audio_devices: Vec<eiviz_io_audio::AudioDeviceInfo>,
+    #[cfg(feature = "audio-cpal")]
+    audio_input_selected: Option<usize>,
+    #[cfg(feature = "audio-cpal")]
+    audio_output_selected: Option<usize>,
+    #[cfg(feature = "audio-cpal")]
+    audio_inputs: Vec<(InputId, Arc<eiviz_io_audio::CpalInput>)>,
+    #[cfg(feature = "audio-cpal")]
+    audio_outputs: Vec<(OutputId, Arc<eiviz_io_audio::CpalOutput>)>,
     control_stop: Arc<AtomicBool>,
     http_port: Option<u16>,
     tcp_port: Option<u16>,
@@ -172,6 +186,20 @@ impl DesktopApp {
             ndi_output_name: "eiviz Program".into(),
             #[cfg(feature = "ndi")]
             ndi_capability: eiviz_io_ndi::probe(),
+            #[cfg(feature = "audio-cpal")]
+            audio_backends: eiviz_io_audio::AudioBackend::compiled(),
+            #[cfg(feature = "audio-cpal")]
+            audio_backend_selected: None,
+            #[cfg(feature = "audio-cpal")]
+            audio_devices: Vec::new(),
+            #[cfg(feature = "audio-cpal")]
+            audio_input_selected: None,
+            #[cfg(feature = "audio-cpal")]
+            audio_output_selected: None,
+            #[cfg(feature = "audio-cpal")]
+            audio_inputs: Vec::new(),
+            #[cfg(feature = "audio-cpal")]
+            audio_outputs: Vec::new(),
             control_stop,
             http_port,
             tcp_port,
@@ -627,6 +655,184 @@ impl DesktopApp {
         self.ndi_outputs.push((output.id, sink));
         self.status = format!("NDI output started: {name}");
     }
+
+    #[cfg(feature = "audio-cpal")]
+    fn refresh_audio_devices(&mut self) {
+        let Some(backend) = self
+            .audio_backend_selected
+            .and_then(|index| self.audio_backends.get(index))
+            .copied()
+        else {
+            self.status = "Audio: select an explicit backend".into();
+            return;
+        };
+        match eiviz_io_audio::enumerate_devices(backend) {
+            Ok(devices) => {
+                self.audio_devices = devices;
+                self.audio_input_selected = None;
+                self.audio_output_selected = None;
+                self.status = format!(
+                    "Audio {backend}: {} physical/virtual device(s)",
+                    self.audio_devices.len()
+                );
+            }
+            Err(error) => {
+                self.audio_devices.clear();
+                self.status = format!("Audio {backend} enumeration: {error}");
+            }
+        }
+    }
+
+    #[cfg(feature = "audio-cpal")]
+    fn start_audio_input(&mut self) {
+        let Some(backend) = self
+            .audio_backend_selected
+            .and_then(|index| self.audio_backends.get(index))
+            .copied()
+        else {
+            self.status = "Audio input: select a backend".into();
+            return;
+        };
+        let Some(device) = self
+            .audio_input_selected
+            .and_then(|index| self.audio_devices.get(index))
+            .cloned()
+        else {
+            self.status = "Audio input: refresh and select a device".into();
+            return;
+        };
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: backend.binding_kind(),
+            logical_name: device.display_name.clone(),
+            last_seen_hardware_id: Some(device.persistent_id.clone()),
+        };
+        let input = Input {
+            id: InputId::new(),
+            name: format!("Audio {}", device.display_name),
+            tags: vec!["audio".into(), backend.id().into(), "live".into()],
+            groups: vec![],
+            source: InputSource::AudioDevice {
+                binding: binding.id,
+            },
+        };
+        let project = self.engine.snapshot();
+        let config = eiviz_io_audio::AudioStreamConfig {
+            sample_rate: project.audio.sample_rate,
+            channels: project.audio.channels,
+            ..Default::default()
+        };
+        let source =
+            match eiviz_io_audio::CpalInput::open(input.id, &binding, backend, config) {
+                Ok(source) => Arc::new(source),
+                Err(error) => {
+                    self.status = format!("Audio input open: {error}");
+                    return;
+                }
+            };
+        for command in [
+            Command::AddDeviceBinding {
+                binding: binding.clone(),
+            },
+            Command::AddInput {
+                input: input.clone(),
+            },
+        ] {
+            if let Err(error) = self.engine.submit_payload(command) {
+                self.status = format!("Audio input project binding: {error}");
+                return;
+            }
+        }
+        let Some(bus) = self.engine.snapshot().audio_matrix.buses.first().cloned() else {
+            self.status = "Audio input: project has no audio bus".into();
+            return;
+        };
+        if let Err(error) = self.engine.submit_payload(Command::SetAudioRoute {
+            route: AudioRoute {
+                input: input.id,
+                bus: bus.id,
+                mode: RouteMode::Manual,
+                gain_db: 0.0,
+                muted: false,
+                solo: false,
+                delay_ms: 0.0,
+                pan: 0.0,
+            },
+        }) {
+            self.status = format!("Audio input route: {error}");
+            return;
+        }
+        self.engine.attach_source(source.clone());
+        self.audio_inputs.push((input.id, source));
+        self.status = format!("Audio input started: {}", device.display_name);
+    }
+
+    #[cfg(feature = "audio-cpal")]
+    fn start_audio_output(&mut self, owner: eiviz_core::MixingUnitId) {
+        let Some(backend) = self
+            .audio_backend_selected
+            .and_then(|index| self.audio_backends.get(index))
+            .copied()
+        else {
+            self.status = "Audio output: select a backend".into();
+            return;
+        };
+        let Some(device) = self
+            .audio_output_selected
+            .and_then(|index| self.audio_devices.get(index))
+            .cloned()
+        else {
+            self.status = "Audio output: refresh and select a device".into();
+            return;
+        };
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: backend.binding_kind(),
+            logical_name: device.display_name.clone(),
+            last_seen_hardware_id: Some(device.persistent_id.clone()),
+        };
+        let project = self.engine.snapshot();
+        let config = eiviz_io_audio::AudioStreamConfig {
+            sample_rate: project.audio.sample_rate,
+            channels: project.audio.channels,
+            ..Default::default()
+        };
+        let name = format!("Audio {}", device.display_name);
+        let sink = match eiviz_io_audio::CpalOutput::open(&name, &binding, backend, config) {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                self.status = format!("Audio output open: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddDeviceBinding {
+            binding: binding.clone(),
+        }) {
+            self.status = format!("Audio output binding: {error}");
+            return;
+        }
+        let output = Output {
+            id: OutputId::new(),
+            name: name.clone(),
+            owner,
+            kind: OutputKind::AudioDevice {
+                binding: binding.id,
+            },
+            enabled: true,
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddOutput {
+            output: output.clone(),
+        }) {
+            self.status = format!("Audio output project: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.attach_audio_output(output.id, sink.clone()) {
+            self.status = format!("Audio output attachment: {error}");
+            return;
+        }
+        self.audio_outputs.push((output.id, sink));
+        self.status = format!("Audio output started: {}", device.display_name);
+    }
 }
 
 fn bootstrap(engine: &Engine) {
@@ -901,15 +1107,165 @@ impl eframe::App for DesktopApp {
             ui.label("NDI: not compiled (enable the explicit `ndi` feature)");
             for cap in eiviz_io_audio::probe() {
                 ui.label(format!(
-                    "{}: {}",
+                    "{}: {} ({})",
                     cap.id,
                     if cap.available {
                         "ready"
                     } else {
                         "unavailable"
-                    }
+                    },
+                    cap.detail
                 ));
             }
+            ui.separator();
+            ui.heading("Audio I/O");
+            #[cfg(feature = "audio-cpal")]
+            {
+                ui.label(
+                    "Select one backend explicitly. Device IDs are persisted; no host/device fallback.",
+                );
+                for (index, backend) in self.audio_backends.iter().enumerate() {
+                    if ui
+                        .selectable_label(
+                            self.audio_backend_selected == Some(index),
+                            backend.id(),
+                        )
+                        .clicked()
+                    {
+                        self.audio_backend_selected = Some(index);
+                        self.audio_devices.clear();
+                        self.audio_input_selected = None;
+                        self.audio_output_selected = None;
+                    }
+                }
+                if ui.button("Refresh audio devices").clicked() {
+                    self.refresh_audio_devices();
+                }
+                ui.label("Capture");
+                for (index, device) in self.audio_devices.iter().enumerate() {
+                    if device.supports_input
+                        && ui
+                            .selectable_label(
+                                self.audio_input_selected == Some(index),
+                                format!(
+                                    "{} [{}]{}",
+                                    device.display_name,
+                                    device.persistent_id,
+                                    if device.default_input { " (default)" } else { "" }
+                                ),
+                            )
+                            .clicked()
+                    {
+                        self.audio_input_selected = Some(index);
+                    }
+                }
+                if ui.button("Start audio capture").clicked() {
+                    self.start_audio_input();
+                }
+                let mut stop_input = None;
+                for (input_id, source) in &self.audio_inputs {
+                    let diagnostic = source.diagnostics();
+                    ui.push_id(input_id, |ui| {
+                        ui.label(format!(
+                            "{}: {:?}; callbacks={} frames={} xruns={} over={} under={} sample={} capture={}ns{}",
+                            diagnostic.name,
+                            diagnostic.health,
+                            diagnostic.callbacks,
+                            diagnostic.device_frames,
+                            diagnostic.xruns,
+                            diagnostic.queue_overflows,
+                            diagnostic.queue_underflows,
+                            diagnostic.last_device_sample_index,
+                            diagnostic.last_device_nanos,
+                            diagnostic
+                                .last_error
+                                .as_deref()
+                                .map_or(String::new(), |error| format!("; {error}")),
+                        ));
+                        if ui.button("Stop audio capture").clicked() {
+                            stop_input = Some(*input_id);
+                        }
+                    });
+                }
+                if let Some(input_id) = stop_input {
+                    let snapshot = self.engine.snapshot();
+                    for route in snapshot
+                        .audio_matrix
+                        .routes
+                        .iter()
+                        .filter(|route| route.input == input_id)
+                    {
+                        let _ = self.engine.submit_payload(Command::ClearAudioRoute {
+                            input: input_id,
+                            bus: route.bus,
+                        });
+                    }
+                    let _ = self
+                        .engine
+                        .submit_payload(Command::RemoveInput { id: input_id });
+                    self.engine.detach_source(input_id);
+                    self.audio_inputs.retain(|(id, _)| *id != input_id);
+                    self.status = "Audio capture stopped".into();
+                }
+                ui.label("Master output");
+                for (index, device) in self.audio_devices.iter().enumerate() {
+                    if device.supports_output
+                        && ui
+                            .selectable_label(
+                                self.audio_output_selected == Some(index),
+                                format!(
+                                    "{} [{}]{}",
+                                    device.display_name,
+                                    device.persistent_id,
+                                    if device.default_output { " (default)" } else { "" }
+                                ),
+                            )
+                            .clicked()
+                    {
+                        self.audio_output_selected = Some(index);
+                    }
+                }
+                if ui.button("Start audio output").clicked() {
+                    self.start_audio_output(unit_id);
+                }
+                let mut stop_output = None;
+                for (output_id, sink) in &self.audio_outputs {
+                    let diagnostic = sink.diagnostics();
+                    ui.push_id(output_id, |ui| {
+                        ui.label(format!(
+                            "{}: {:?}; callbacks={} frames={} xruns={} over={} under={} sample={} playback={}ns{}",
+                            diagnostic.name,
+                            diagnostic.health,
+                            diagnostic.callbacks,
+                            diagnostic.device_frames,
+                            diagnostic.xruns,
+                            diagnostic.queue_overflows,
+                            diagnostic.queue_underflows,
+                            diagnostic.last_device_sample_index,
+                            diagnostic.last_device_nanos,
+                            diagnostic
+                                .last_error
+                                .as_deref()
+                                .map_or(String::new(), |error| format!("; {error}")),
+                        ));
+                        if ui.button("Stop audio output").clicked() {
+                            stop_output = Some(*output_id);
+                        }
+                    });
+                }
+                if let Some(output_id) = stop_output {
+                    let _ = self
+                        .engine
+                        .submit_payload(Command::RemoveOutput { id: output_id });
+                    self.engine.detach_audio_output(output_id);
+                    self.audio_outputs.retain(|(id, _)| *id != output_id);
+                    self.status = "Audio output stopped".into();
+                }
+            }
+            #[cfg(not(feature = "audio-cpal"))]
+            ui.label(
+                "Build with `--features audio-cpal`; use `audio-pipewire` or the separately licensed `audio-asio` profile when required.",
+            );
             ui.separator();
             ui.heading("OMT Capture");
             ui.text_edit_singleline(&mut self.omt_address);

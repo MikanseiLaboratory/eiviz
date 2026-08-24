@@ -38,12 +38,18 @@ all pass:
   official SDK 16 C++ shim. The fixed vertical slice is 1080p59.94 BGRA with
   48 kHz PCM, persistent device binding, bounded queues, and reference-lock /
   completion diagnostics. DeckLink interop and genlock HIL are still pending.
-- Capability stubs only for ASIO / gpu-video
+- Optional real CPAL input/output for explicit WASAPI, CoreAudio, ALSA, and
+  native PipeWire hosts, with persistent device IDs, bounded lock-free callback
+  queues, planar f32 conversion, device sample-clock timestamps, and xrun/queue
+  diagnostics. ASIO is a separate opt-in licensed profile. Audio device HIL is
+  still pending; unavailable selected devices/hosts never fall back.
+- Capability stub only for gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
 Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
-Video) is **not** claimed. See the current truth table in the implementation
-plan and the [DeckLink HIL procedure](docs/hil/decklink.md).
+Video, and audio devices) is **not** claimed. See the current truth table in
+the implementation plan, the [DeckLink HIL procedure](docs/hil/decklink.md),
+and the [audio HIL procedure](docs/hil/audio.md).
 
 ## Build
 
@@ -68,6 +74,17 @@ cargo run -p eiviz-desktop --features ndi
 # The SDK remains external and is never downloaded or vendored.
 DECKLINK_SDK_DIR=/absolute/path/to/Blackmagic_DeckLink_SDK_16 \
   cargo run -p eiviz-desktop --features decklink
+
+# Production OS-default CPAL host: WASAPI, CoreAudio, or ALSA.
+cargo run -p eiviz-desktop --features audio-cpal
+
+# Explicit native PipeWire host; requires PipeWire development packages.
+cargo run -p eiviz-desktop --features audio-pipewire
+
+# Separately licensed Windows ASIO profile. CPAL_ASIO_DIR is mandatory for
+# eiviz builds so the SDK is operator-installed and license-reviewed.
+CPAL_ASIO_DIR=C:\path\to\asiosdk \
+  cargo run -p eiviz-desktop --features audio-asio
 ```
 
 Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but

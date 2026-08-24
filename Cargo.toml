@@ -49,12 +49,14 @@ eiviz-io-stream = { path = "crates/eiviz-io-stream" }
 eiviz-codec-gpu-video = { path = "crates/eiviz-codec-gpu-video" }
 eiviz-codec-software = { path = "crates/eiviz-codec-software" }
 crossbeam-channel = "0.5.15"
+cpal = { version = "0.18.2", default-features = false }
 eframe = { version = "0.32.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui = "0.32.3"
 hex = "0.4.3"
 image = { version = "=0.25.6", default-features = false, features = ["png", "jpeg"] }
 parking_lot = "0.12.4"
 pollster = "0.4.0"
+rtrb = "0.4.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
 sha2 = "0.10.9"

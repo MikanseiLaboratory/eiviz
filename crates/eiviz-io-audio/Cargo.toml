@@ -6,4 +6,18 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cpal = { workspace = true, optional = true }
+eiviz-core.workspace = true
 eiviz-media.workspace = true
+eiviz-time.workspace = true
+parking_lot.workspace = true
+rtrb = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[features]
+default = []
+cpal = ["dep:cpal", "dep:rtrb"]
+# PipeWire is an explicit Linux host, not an ALSA fallback.
+pipewire = ["cpal", "cpal/pipewire"]
+# ASIO requires the separately installed Steinberg SDK and acceptance of its license.
+asio = ["cpal", "cpal/asio"]

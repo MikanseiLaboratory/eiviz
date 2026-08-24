@@ -75,6 +75,19 @@ pub struct AudioBuffer {
     pub channels: u16,
     /// Planar f32, channel-major.
     pub planes: Vec<Vec<f32>>,
+    /// Source-device clock correlation, when the adapter exposes one.
+    pub capture_timestamp: Option<AudioCaptureTimestamp>,
+    pub discontinuity: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioCaptureTimestamp {
+    /// Absolute sample index in the source device's clock domain.
+    pub device_sample_index: u64,
+    /// Device callback instant, relative to the stream clock origin.
+    pub callback_nanos: u64,
+    /// Estimated ADC capture instant, relative to the same stream clock origin.
+    pub capture_nanos: u64,
 }
 
 impl AudioBuffer {
@@ -84,6 +97,8 @@ impl AudioBuffer {
             sample_rate,
             channels,
             planes: vec![vec![0.0; frames]; channels as usize],
+            capture_timestamp: None,
+            discontinuity: false,
         }
     }
 }
@@ -170,6 +185,10 @@ pub trait MediaSource: Send + Sync {
 
     /// Applies authoritative project playback state when this source supports it.
     fn update_playback(&self, _playback: &Playback) {}
+
+    fn audio_diagnostics(&self) -> Option<AudioIoDiagnostics> {
+        None
+    }
 }
 
 pub trait MediaSink: Send + Sync {
@@ -178,10 +197,32 @@ pub trait MediaSink: Send + Sync {
     fn push_audio(&self, audio: &AudioBuffer) -> Result<()>;
 }
 
+/// Dedicated audio-only output attachment.
+pub trait AudioSink: Send + Sync {
+    fn name(&self) -> &str;
+    fn push_audio(&self, audio: &AudioBuffer) -> Result<()>;
+    fn diagnostics(&self) -> AudioIoDiagnostics;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdapterHealth {
     Running,
     Degraded,
     Unavailable,
     Failed,
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioIoDiagnostics {
+    pub name: String,
+    pub health: AdapterHealth,
+    pub callbacks: u64,
+    pub device_frames: u64,
+    pub xruns: u64,
+    pub queue_overflows: u64,
+    pub queue_underflows: u64,
+    pub last_device_sample_index: u64,
+    pub last_callback_nanos: u64,
+    pub last_device_nanos: u64,
+    pub last_error: Option<String>,
 }

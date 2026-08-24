@@ -17,6 +17,7 @@ pub enum OutputKind {
     Ndi { name: String },
     Omt { url: String },
     DeckLink { binding: crate::DeviceBindingId },
+    AudioDevice { binding: crate::DeviceBindingId },
     Rtmp { url: String },
     Srt { url: String },
     Mp4 { path: String },

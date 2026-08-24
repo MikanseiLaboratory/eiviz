@@ -568,6 +568,8 @@ fn receive_audio(frame: AudioFrame) -> Result<AudioBuffer, NdiError> {
         sample_rate,
         channels,
         planes,
+        capture_timestamp: None,
+        discontinuity: false,
     })
 }
 

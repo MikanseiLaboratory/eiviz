@@ -55,9 +55,19 @@ https://www.blackmagicdesign.com/developer/product/capture-and-playback.
 ASIO
 ----
 ASIO is a trademark and technology of Steinberg Media Technologies GmbH.
-An ASIO adapter is not linked in default builds. Shipping ASIO support
-requires a Steinberg ASIO license or an alternative GPLv3-compatible path
-that is kept out of the MIT binary.
+The MIT/Apache-2.0 CPAL and asio-sys crates expose the optional ASIO host, but
+the Steinberg ASIO SDK remains separately licensed. An ASIO adapter is not
+linked in default builds. Building the explicit `audio-asio` profile requires
+an operator-installed, license-reviewed SDK selected with `CPAL_ASIO_DIR`;
+shipping ASIO support requires compliance with Steinberg's current terms.
+ASIO-enabled artifacts must remain a separately reviewed distribution profile.
+
+CPAL
+----
+The optional audio adapter uses CPAL 0.18.2 (Apache-2.0) and rtrb 0.4.0
+(MIT OR Apache-2.0). CPAL links platform audio APIs only in explicit audio
+feature profiles. Native PipeWire builds additionally link PipeWire libraries
+under their applicable licenses; default builds compile no CPAL system backend.
 
 H.264 / AVC
 -----------
