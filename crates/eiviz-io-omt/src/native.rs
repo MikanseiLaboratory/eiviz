@@ -194,6 +194,7 @@ impl MediaSource for OmtSource {
                 i32::from(tally.preview),
                 i32::from(tally.program),
             ))
+            .map_err(OmtError::from)
             .map_err(MediaError::from)?;
         self.tally_updates.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -388,9 +389,10 @@ impl OmtSink {
     }
 
     pub fn send_metadata(&self, timestamp: MediaTime, xml: &str) -> Result<(), OmtError> {
-        self.sender
+        Ok(self
+            .sender
             .lock()
-            .send_metadata(media_time_to_omt(timestamp), xml)
+            .send_metadata(media_time_to_omt(timestamp), xml)?)
     }
 
     pub fn receiver_tally(&self) -> Tally {

@@ -58,6 +58,7 @@ impl Default for NdiConfig {
 }
 
 impl NdiConfig {
+    #[cfg(any(feature = "ndi", test))]
     pub(crate) fn validation_error(&self) -> Option<&'static str> {
         if self.video_queue_capacity == 0
             || self.audio_queue_capacity == 0
