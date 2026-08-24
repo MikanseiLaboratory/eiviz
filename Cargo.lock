@@ -860,9 +860,12 @@ name = "eiviz-io-decklink"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "crossbeam-channel",
+ "eiviz-core",
  "eiviz-media",
  "eiviz-time",
  "parking_lot",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
