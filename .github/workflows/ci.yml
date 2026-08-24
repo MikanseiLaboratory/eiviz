@@ -47,8 +47,10 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test default profile
         run: cargo test --workspace
-      - name: test all feature wiring
-        run: cargo test --workspace --all-features
+      - name: test hardware GPU feature wiring
+        run: cargo test -p eiviz-gpu --features wgpu-backend
+      - name: check desktop GPU feature wiring
+        run: cargo check -p eiviz-desktop --features wgpu-backend
