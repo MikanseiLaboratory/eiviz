@@ -2300,20 +2300,16 @@ impl eframe::App for DesktopApp {
                 },
                 midi.detail
             ));
-            for cap in [
-                eiviz_io_omt::probe(),
-                eiviz_codec_gpu_video::probe(),
-            ] {
-                ui.label(format!(
-                    "{}: {}",
-                    cap.id,
-                    if cap.available {
-                        "ready"
-                    } else {
-                        "unavailable"
-                    }
-                ));
-            }
+            let omt = eiviz_io_omt::probe();
+            ui.label(format!(
+                "{}: {}",
+                omt.id,
+                if omt.available {
+                    "ready"
+                } else {
+                    "unavailable"
+                }
+            ));
             for capability in self.engine.distribution_capabilities() {
                 ui.label(format!(
                     "{}: {} ({})",

@@ -1148,6 +1148,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "eiviz-codec-software",
  "eiviz-command",
  "eiviz-control",
  "eiviz-core",
@@ -1158,9 +1159,11 @@ dependencies = [
  "eiviz-io-file",
  "eiviz-io-ndi",
  "eiviz-io-omt",
+ "eiviz-io-stream",
  "eiviz-media",
  "eiviz-operations",
  "eiviz-project",
+ "eiviz-time",
  "tracing",
  "tracing-subscriber",
 ]
