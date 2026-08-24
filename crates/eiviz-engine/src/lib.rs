@@ -367,9 +367,7 @@ impl Engine {
                 .outputs
                 .get(&output_id)
                 .is_some_and(|output| output.enabled);
-            if enabled
-                && let Err(error) = sink.push_audio(&audio)
-            {
+            if enabled && let Err(error) = sink.push_audio(&audio) {
                 g.runtime.mark_output_failed(sink.name(), error.to_string());
             }
         }
