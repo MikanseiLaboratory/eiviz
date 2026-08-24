@@ -1,7 +1,7 @@
 use crate::audio::AudioMatrix;
 use crate::graph::MixingGraph;
 use crate::ids::*;
-use crate::input::{DeviceBinding, Input, InputSource};
+use crate::input::{DeviceBinding, Input, InputSource, Playback};
 use crate::mixing::MixingUnit;
 use crate::output::{Multiview, MultiviewSource, Output};
 use crate::scene::Scene;
@@ -178,6 +178,9 @@ impl Project {
                 | InputSource::Ndi { .. }
                 | InputSource::Omt { .. } => {}
             }
+            if let InputSource::Video { playback, .. } = &input.source {
+                validate_playback(playback)?;
+            }
         }
         for scene in self.scenes.values() {
             for item in &scene.items {
@@ -187,6 +190,7 @@ impl Project {
                         item.id, item.input
                     )));
                 }
+                validate_playback(&item.playback)?;
             }
         }
         for unit in self.mixing_units.values() {
@@ -329,6 +333,23 @@ impl Project {
             .get_mut(&id)
             .ok_or_else(|| DomainError::UnknownId(id.to_string()))
     }
+}
+
+fn validate_playback(playback: &Playback) -> Result<()> {
+    if !playback.speed.is_finite() || playback.speed <= 0.0 {
+        return Err(DomainError::msg(
+            "playback speed must be finite and greater than zero",
+        ));
+    }
+    if playback
+        .out_us
+        .is_some_and(|out_us| out_us <= playback.in_us)
+    {
+        return Err(DomainError::msg(
+            "playback out point must be after in point",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

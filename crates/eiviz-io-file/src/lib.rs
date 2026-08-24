@@ -1,6 +1,6 @@
 mod video;
 
-pub use video::{H264Mp4Index, H264Sample};
+pub use video::{H264Mp4Index, H264Sample, VideoFileSource};
 
 use eiviz_core::InputId;
 use eiviz_media::{MediaError, MediaSource, Result, VideoFrame};

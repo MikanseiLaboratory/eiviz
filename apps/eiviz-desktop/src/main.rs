@@ -30,6 +30,8 @@ struct DesktopApp {
     save_path: String,
     asset_root: String,
     image_path: String,
+    video_path: String,
+    openh264_path: String,
     portable_path: String,
     omt_address: String,
     omt_output_name: String,
@@ -111,6 +113,8 @@ impl DesktopApp {
             save_path: "project.json".into(),
             asset_root: "eiviz-assets".into(),
             image_path: String::new(),
+            video_path: String::new(),
+            openh264_path: std::env::var("EIVIZ_OPENH264_PATH").unwrap_or_default(),
             portable_path: "project.eiviz".into(),
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
             omt_output_name: "eiviz Program".into(),
@@ -234,6 +238,52 @@ impl DesktopApp {
         }
         self.selected_scene = Some(scene.id);
         self.status = format!("image ready: {}", scene.name);
+    }
+
+    fn add_video(&mut self) {
+        if self.openh264_path.trim().is_empty() {
+            self.status = "video ingest: enter an explicit Cisco OpenH264 2.6.0 binary path".into();
+            return;
+        }
+        let input = match self.engine.ingest_video(
+            std::path::Path::new(self.video_path.trim()),
+            std::path::Path::new(self.asset_root.trim()),
+            std::path::Path::new(self.openh264_path.trim()),
+            Default::default(),
+        ) {
+            Ok(input) => input,
+            Err(error) => {
+                self.status = format!("video ingest: {error}");
+                return;
+            }
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: input.name.clone(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddScene {
+            scene: scene.clone(),
+        }) {
+            self.status = format!("video scene: {error}");
+            return;
+        }
+        let unit = self.engine.primary_unit();
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("video preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("video ready: {}", scene.name);
     }
 }
 
@@ -373,6 +423,15 @@ impl eframe::App for DesktopApp {
                 }
             });
             ui.horizontal(|ui| {
+                ui.label("H.264 MP4");
+                ui.text_edit_singleline(&mut self.video_path);
+                ui.label("Cisco OpenH264 2.6.0 binary");
+                ui.text_edit_singleline(&mut self.openh264_path);
+                if ui.button("Add Video").clicked() {
+                    self.add_video();
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.label("portable");
                 ui.text_edit_singleline(&mut self.portable_path);
                 if ui.button("Export .eiviz").clicked() {
@@ -403,6 +462,30 @@ impl eframe::App for DesktopApp {
             ui.heading("Inputs");
             for input in project.inputs.values() {
                 ui.label(format!("{} [{}]", input.name, input.tags.join(",")));
+                if let InputSource::Video { playback, .. } = &input.source {
+                    let mut updated = playback.clone();
+                    let mut changed = false;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(if playback.playing { "Pause" } else { "Play" })
+                            .clicked()
+                        {
+                            updated.playing = !playback.playing;
+                            changed = true;
+                        }
+                        changed |= ui.checkbox(&mut updated.loop_playback, "Loop").changed();
+                        ui.label("seek us");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut updated.position_us).speed(1_000.0))
+                            .changed();
+                    });
+                    if changed {
+                        match self.engine.set_video_playback(input.id, updated) {
+                            Ok(_) => self.status = format!("video playback: {}", input.name),
+                            Err(error) => self.status = format!("video playback: {error}"),
+                        }
+                    }
+                }
             }
             ui.separator();
             ui.heading("Scenes");

@@ -1,4 +1,4 @@
-use eiviz_core::InputId;
+use eiviz_core::{InputId, Playback};
 use eiviz_time::{ClockDomain, FrameRate, MediaTime};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -167,6 +167,9 @@ pub trait MediaSource: Send + Sync {
     fn id(&self) -> InputId;
     fn pull_video(&self, pts: MediaTime, rate: FrameRate) -> Result<Option<VideoFrame>>;
     fn pull_audio(&self, sample_index: u64, frames: usize) -> Result<Option<AudioBuffer>>;
+
+    /// Applies authoritative project playback state when this source supports it.
+    fn update_playback(&self, _playback: &Playback) {}
 }
 
 pub trait MediaSink: Send + Sync {

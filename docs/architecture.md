@@ -58,6 +58,13 @@ Native source adapter は専用受信 thread で vendor/network API を呼び、
 し、`InputId` で Project の論理 Input と結びます。adapter 未登録や受信前
 は Project の missing-media policy を適用し、simulator を暗黙使用しません。
 
+file-video は `eiviz-io-file::VideoFileSource` が `shiguredo_mp4` の
+Annex-B sample indexを再生し、`eiviz-codec-software` が明示されたCisco
+OpenH264 2.6.0 binaryだけをdynamic loadします。seek/loop時は直前sync
+sampleからdecoderをresetしてSPS/PPSを再投入します。binary pathはruntime
+設定でありProjectへ保存しません。欠落・hash/version不一致時はsource構築
+エラーとし、別decoder、source build、fake frameへ切り替えません。
+
 Output adapter は `OutputId` で Engine の sink registry へ登録します。
 各 tick は `Output.owner` の Mixing Unit Program だけを該当sinkへ送り、
 `enabled=false` と削除済みOutputは送信しません。全sinkへprimary unitを

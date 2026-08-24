@@ -36,8 +36,8 @@ H.264 / AVC
 The software encoder in `eiviz-codec-software` emits Baseline I_PCM access
 units for tests and an explicitly selected software recording profile. Product distributions that encode
 or decode AVC in the field may require MPEG-LA / Via LA patent licenses.
-The planned software decode profile dynamically loads an end-user-installed
-Cisco OpenH264 2.6.0 binary. It must not be bundled and must display
+The software decode profile dynamically loads an end-user-installed Cisco
+OpenH264 2.6.0 binary from an explicit path. It must not be bundled and must display
 "OpenH264 Video Codec provided by Cisco Systems, Inc." with Cisco's binary
 license. Compiling OpenH264 source does not receive Cisco's binary patent
 coverage and is not the selected profile.

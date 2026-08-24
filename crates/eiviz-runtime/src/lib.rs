@@ -2,8 +2,8 @@
 
 use eiviz_core::{
     AssetId, AudioBusId, AudioFollowPolicy, CompositorBackend, InputId, InputSource,
-    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Project,
-    RouteMode, Transform2D,
+    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Playback,
+    Project, RouteMode, Transform2D,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{AudioBuffer, BoundedSlot, MediaSource, QueuePolicy, VideoFrame};
@@ -151,6 +151,12 @@ impl Runtime {
     pub fn detach_source(&mut self, id: InputId) {
         self.sources.remove(&id);
         self.last_good_inputs.remove(&id);
+    }
+
+    pub fn update_source_playback(&self, id: InputId, playback: &Playback) {
+        if let Some(source) = self.sources.get(&id) {
+            source.update_playback(playback);
+        }
     }
 
     pub fn clear_simulated(&mut self, id: InputId) {

@@ -9,6 +9,7 @@ description = "Composition root for sequencer, runtime, and persistence"
 [dependencies]
 eiviz-command.workspace = true
 eiviz-core.workspace = true
+eiviz-io-file.workspace = true
 eiviz-media.workspace = true
 eiviz-project.workspace = true
 eiviz-runtime.workspace = true

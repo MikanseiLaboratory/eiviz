@@ -46,6 +46,10 @@ pub enum Command {
     AddInput {
         input: Input,
     },
+    SetInputPlayback {
+        input: InputId,
+        playback: Playback,
+    },
     AddAsset {
         asset: AssetRef,
     },
@@ -232,6 +236,21 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             }
         }
         Command::AddInput { input } => project.insert_input(input.clone())?,
+        Command::SetInputPlayback { input, playback } => {
+            let input = project
+                .inputs
+                .get_mut(input)
+                .ok_or_else(|| DomainError::UnknownId(input.to_string()))?;
+            let eiviz_core::InputSource::Video {
+                playback: current, ..
+            } = &mut input.source
+            else {
+                return Err(CommandError::Rejected(
+                    "input playback can only be set on a video input".into(),
+                ));
+            };
+            *current = playback.clone();
+        }
         Command::AddAsset { asset } => {
             if project.assets.contains_key(&asset.id) {
                 return Err(CommandError::Domain(DomainError::DuplicateId(

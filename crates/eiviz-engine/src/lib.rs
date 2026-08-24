@@ -1,5 +1,8 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
-use eiviz_core::{AssetRef, ClientId, MixingUnitId, MultiviewId, OutputId, Project};
+use eiviz_core::{
+    AssetRef, ClientId, Input, InputId, InputSource, MixingUnitId, MultiviewId, OutputId, Playback,
+    Project,
+};
 use eiviz_media::{MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{
     append_journal, export_portable as export_project_portable,
@@ -22,6 +25,8 @@ pub enum EngineError {
     Runtime(#[from] eiviz_runtime::RuntimeError),
     #[error(transparent)]
     Persist(#[from] eiviz_project::ProjectError),
+    #[error(transparent)]
+    Media(#[from] eiviz_media::MediaError),
     #[error("admission denied: {0}")]
     Admission(String),
     #[error("unknown output {0}")]
@@ -122,6 +127,44 @@ impl Engine {
         Ok(asset)
     }
 
+    /// Stages an MP4, validates the explicit Cisco binary, and attaches its real decoder source.
+    pub fn ingest_video(
+        &self,
+        file: &Path,
+        asset_root: &Path,
+        openh264_binary: &Path,
+        playback: Playback,
+    ) -> Result<Input> {
+        let asset = stage_asset(file, asset_root)?;
+        let input = Input {
+            id: InputId::new(),
+            name: asset.original_name.clone(),
+            tags: vec!["video".into(), "h264".into()],
+            groups: vec![],
+            source: InputSource::Video {
+                asset: asset.id,
+                playback: playback.clone(),
+            },
+        };
+        let source = Arc::new(eiviz_io_file::VideoFileSource::open(
+            input.id,
+            &asset_root.join(&asset.relative_path),
+            openh264_binary,
+            playback,
+        )?);
+        self.submit_payload(Command::AddAsset { asset })?;
+        self.submit_payload(Command::AddInput {
+            input: input.clone(),
+        })?;
+        self.set_asset_root(asset_root.to_path_buf());
+        self.attach_source(source);
+        Ok(input)
+    }
+
+    pub fn set_video_playback(&self, input: InputId, playback: Playback) -> Result<CommandAck> {
+        self.submit_payload(Command::SetInputPlayback { input, playback })
+    }
+
     pub fn set_autosave_path(&self, path: impl Into<PathBuf>) {
         let mut g = self.inner.lock();
         let p = path.into();
@@ -200,11 +243,18 @@ impl Engine {
 
     pub fn submit(&self, env: CommandEnvelope) -> Result<CommandAck> {
         let mut g = self.inner.lock();
+        let playback_update = match &env.payload {
+            Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
+            _ => None,
+        };
         Self::admit(&g, &env.payload)?;
         let Inner {
             sequencer, project, ..
         } = &mut *g;
         let ack = sequencer.apply(project, env)?;
+        if let Some((input, playback)) = playback_update {
+            g.runtime.update_source_playback(input, &playback);
+        }
         let hash = state_hash(project);
         let ev = FlightEvent {
             frame: g.runtime.frame(),

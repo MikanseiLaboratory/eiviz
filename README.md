@@ -23,8 +23,12 @@ all pass:
 - Desktop can ingest PNG/JPEG files into the content-addressed asset store,
   create a fullscreen Preview scene, and export/import portable `.eiviz`
   packages without replacing the running control-server Engine instance.
-- Real OMT receive/output adapter through the official `libomt` C ABI
-  (runtime-loaded); interop HIL is still pending
+- Desktop can ingest the constrained H.264 MP4 profile through an explicit
+  end-user-installed Cisco OpenH264 2.6.0 binary path, decode I420 to BT.709
+  limited-range RGBA, and play/pause/seek/loop. There is no decoder fallback.
+  Decode HIL has not been run in this repository environment.
+- Real OMT receive/output through pure-Rust `openmediatransport-rs` / `vmx-rs`;
+  interop HIL is still pending
 - Capability stubs only for NDI / DeckLink / ASIO / gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
@@ -35,12 +39,16 @@ plan and [OMT HIL procedure](docs/hil/omt.md).
 ## Build
 
 ```bash
-rustup toolchain install 1.85
+rustup toolchain install 1.97
 cargo test --workspace
 cargo run -p eiviz-desktop
 
 # Explicit hardware-GPU profile. Fails if no hardware adapter is available.
 EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
+
+# Optional initial value for the desktop's explicit binary-path field.
+EIVIZ_OPENH264_PATH=/absolute/path/to/libopenh264-2.6.0-linux64.8.so \
+  cargo run -p eiviz-desktop
 ```
 
 Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but
@@ -48,7 +56,7 @@ only loopback addresses are accepted until remote authorization is implemented.
 `EIVIZ_CONTROL_TOKEN` protects HTTP commands; TCP remains localhost-only.
 
 Windows x64 is the first-class target. Linux/macOS compile the same core.
-MSRV is 1.85; the repo `rust-toolchain.toml` pins the CI/dev toolchain.
+MSRV is 1.97; the repo `rust-toolchain.toml` pins the CI/dev toolchain.
 
 ## Layout
 

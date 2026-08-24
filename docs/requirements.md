@@ -27,6 +27,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R02.3 Scene は Input を所有せず参照する
 - R02.4 SceneItem は position / size / crop / rotation / opacity / z-order / playback を持つ
 - R02.5 マウス編集は domain Command のみを発行する
+- R02.6 H.264 MP4 Video は明示されたCisco OpenH264 2.6.0 binaryのみでdecodeする。`InputSource::Video.playback`のplay/pause/forward seek/loop/in/out/正速度を適用し、欠落時に別decoderやfake frameへ切り替えない
 
 ### R03 Mixing
 - R03.1 Mixing Unit を製品固定上限なしで追加・削除できる

@@ -3,6 +3,7 @@ mod flv;
 mod fmp4;
 mod h264;
 mod mpegts;
+mod openh264;
 
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
@@ -13,6 +14,7 @@ pub use h264::{
     split_annexb,
 };
 pub use mpegts::{pat, pes_video, pmt};
+pub use openh264::{OpenH264Decoder, OpenH264Error};
 
 /// Legacy private AU used when a caller needs a non-H.264 dump.
 pub fn wrap_raw(frame: &VideoFrame) -> EncodedAccessUnit {
