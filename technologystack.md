@@ -11,6 +11,8 @@
 | uuid | 1.18.1 | v7 IDs |
 | image | 0.25.6 | PNG/JPEG 入力 |
 | mp4io | 0.1.2 exact | H.264 MP4 sample index、Rust 1.85確認済み |
+| openh264-sys2 | 0.9.8 exact | `libloading`のみ。Cisco 2.6.0外部binary、source build禁止 |
+| yuv | 0.8.17 exact | 明示NCLXに基づくYUV420→RGBA変換 |
 | zip | 4.3.x | portable `.eiviz` |
 | tiny_http | 0.12.0 | localhost HTTP |
 | gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
