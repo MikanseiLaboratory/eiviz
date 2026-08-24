@@ -1,7 +1,7 @@
 use crate::timeline::{PlaybackTimeline, parse_movie_timeline, scale_u64};
 use crate::video::{H264Mp4Index, VideoFileSource};
 use eiviz_codec_software::{AacLcConfig, FdkAacDecoder, OpenH264Decoder};
-use eiviz_core::{AudioResamplingPolicy, InputId, Playback};
+use eiviz_core::{AudioResamplingPolicy, ColorSpace, InputId, Playback};
 use eiviz_media::{AudioBuffer, MediaError, MediaSource, Result, VideoFrame};
 use eiviz_time::{FrameRate, MediaTime};
 use shiguredo_mp4::{
@@ -259,6 +259,7 @@ impl FileMediaSource {
         fdk_aac_binary: Option<&Path>,
         project_sample_rate: u32,
         resampling: AudioResamplingPolicy,
+        expected_color: ColorSpace,
         playback: Playback,
     ) -> Result<Self> {
         // Verify the mandatory video backend before reading media. There is no alternate path.
@@ -270,7 +271,7 @@ impl FileMediaSource {
             return Err(MediaError::Unsupported("MP4 exceeds 2 GiB limit".into()));
         }
         let bytes = std::fs::read(path).map_err(|error| MediaError::Other(error.to_string()))?;
-        let video_index = H264Mp4Index::parse(&bytes)?;
+        let video_index = H264Mp4Index::parse(&bytes, expected_color)?;
         let audio_index = AacMp4Index::parse_optional(&bytes)?;
         let has_audio = audio_index.is_some();
         let timeline = Arc::new(Mutex::new(PlaybackTimeline::new(
@@ -624,6 +625,7 @@ mod tests {
             Some(Path::new(&fdk)),
             index.config.sample_rate,
             AudioResamplingPolicy::ExactRate,
+            ColorSpace::Bt709Sdr,
             Playback::default(),
         )
         .unwrap();

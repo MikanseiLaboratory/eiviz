@@ -3,7 +3,7 @@ mod timeline;
 mod video;
 
 pub use audio::{AacMp4Index, AacSample, FileMediaSource, FileMediaStatus};
-pub use video::{H264Mp4Index, H264Sample, VideoFileSource};
+pub use video::{H264Mp4Index, H264Sample, VideoColorMetadataSource, VideoFileSource};
 
 use eiviz_core::InputId;
 use eiviz_media::{MediaError, MediaSource, Result, VideoFrame};

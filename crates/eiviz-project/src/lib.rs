@@ -1,4 +1,5 @@
-use eiviz_core::{AssetRef, Project, SCHEMA_VERSION};
+use eiviz_core::{AssetId, AssetRef, MissingMediaPolicy, Project, SCHEMA_VERSION};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -20,6 +21,84 @@ pub enum ProjectError {
 }
 
 pub type Result<T> = std::result::Result<T, ProjectError>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetDiagnosticKind {
+    AssetRootUnavailable,
+    Missing,
+    HashMismatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AssetDiagnostic {
+    pub asset_id: AssetId,
+    pub original_name: String,
+    pub path: String,
+    pub expected_sha256: String,
+    pub actual_sha256: Option<String>,
+    pub policy: MissingMediaPolicy,
+    pub kind: AssetDiagnosticKind,
+}
+
+/// Resolve and hash every persisted asset reference. A failure is reported
+/// against the configured missing-media policy; no alternate path is searched.
+pub fn inspect_assets(project: &Project, asset_root: Option<&Path>) -> Vec<AssetDiagnostic> {
+    project
+        .assets
+        .values()
+        .filter_map(|asset| {
+            let Some(root) = asset_root else {
+                return Some(AssetDiagnostic {
+                    asset_id: asset.id,
+                    original_name: asset.original_name.clone(),
+                    path: format!("<asset-root>/{}", asset.relative_path),
+                    expected_sha256: asset.sha256_hex.clone(),
+                    actual_sha256: None,
+                    policy: project.missing_media,
+                    kind: AssetDiagnosticKind::AssetRootUnavailable,
+                });
+            };
+            let path = root.join(&asset.relative_path);
+            let path_display = path.display().to_string();
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    let actual = hash_bytes(&bytes);
+                    (actual != asset.sha256_hex).then(|| AssetDiagnostic {
+                        asset_id: asset.id,
+                        original_name: asset.original_name.clone(),
+                        path: path_display,
+                        expected_sha256: asset.sha256_hex.clone(),
+                        actual_sha256: Some(actual),
+                        policy: project.missing_media,
+                        kind: AssetDiagnosticKind::HashMismatch,
+                    })
+                }
+                Err(_) => Some(AssetDiagnostic {
+                    asset_id: asset.id,
+                    original_name: asset.original_name.clone(),
+                    path: path_display,
+                    expected_sha256: asset.sha256_hex.clone(),
+                    actual_sha256: None,
+                    policy: project.missing_media,
+                    kind: AssetDiagnosticKind::Missing,
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Mark missing or hash-mismatched assets so Runtime applies only the explicit
+/// project policy. This never changes a path or substitutes another file.
+pub fn reconcile_assets(project: &mut Project, asset_root: Option<&Path>) -> Vec<AssetDiagnostic> {
+    let diagnostics = inspect_assets(project, asset_root);
+    for asset in project.assets.values_mut() {
+        asset.missing = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.asset_id == asset.id);
+    }
+    diagnostics
+}
 
 pub fn migrate(mut project: Project) -> Result<Project> {
     if project.schema_version > SCHEMA_VERSION {
@@ -465,6 +544,42 @@ mod tests {
         assert!(matches!(error, ProjectError::Io(_)));
         assert!(root.is_dir());
         assert!(!root.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn asset_diagnostics_include_exact_path_hash_and_policy_without_substitution() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-asset-diagnostics-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).unwrap();
+        let mut project = Project::new("diagnostics");
+        project.missing_media = MissingMediaPolicy::Fail;
+        let asset = AssetRef {
+            id: eiviz_core::AssetId::new(),
+            original_name: "clip.mp4".into(),
+            sha256_hex: hash_bytes(b"expected"),
+            relative_path: "assets/exact-path".into(),
+            missing: false,
+        };
+        project.assets.insert(asset.id, asset.clone());
+        fs::write(root.join(&asset.relative_path), b"different").unwrap();
+
+        let diagnostics = reconcile_assets(&mut project, Some(&root));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].kind, AssetDiagnosticKind::HashMismatch);
+        assert_eq!(diagnostics[0].policy, MissingMediaPolicy::Fail);
+        assert_eq!(diagnostics[0].expected_sha256, hash_bytes(b"expected"));
+        assert_eq!(
+            diagnostics[0].actual_sha256.as_deref(),
+            Some(hash_bytes(b"different").as_str())
+        );
+        assert_eq!(
+            diagnostics[0].path,
+            root.join("assets/exact-path").display().to_string()
+        );
+        assert!(project.assets[&asset.id].missing);
+        assert!(!root.join("clip.mp4").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

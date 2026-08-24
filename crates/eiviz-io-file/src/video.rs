@@ -1,6 +1,6 @@
 use crate::timeline::{PlaybackTimeline, parse_movie_timeline};
 use eiviz_codec_software::{OpenH264Decoder, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb};
-use eiviz_core::{InputId, Playback};
+use eiviz_core::{ColorSpace, InputId, Playback};
 use eiviz_media::{MediaError, MediaSource, Result, VideoFrame};
 use eiviz_time::{ClockDomain, ClockObservation, ClockTimestamp, FrameRate, MediaTime, Rational};
 use shiguredo_mp4::{
@@ -29,22 +29,29 @@ pub struct H264Mp4Index {
     pub height: u16,
     pub timescale: u32,
     pub decoder_preamble: Vec<u8>,
+    pub color_metadata_sources: Vec<VideoColorMetadataSource>,
     pub samples: Vec<H264Sample>,
     pub presentation_duration_us: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoColorMetadataSource {
+    Mp4Nclx,
+    H264Vui,
+}
+
 impl H264Mp4Index {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path, expected_color: ColorSpace) -> Result<Self> {
         let metadata =
             std::fs::metadata(path).map_err(|error| MediaError::Other(error.to_string()))?;
         if metadata.len() > MAX_FILE_BYTES {
             return Err(MediaError::Unsupported("MP4 exceeds 2 GiB limit".into()));
         }
         let bytes = std::fs::read(path).map_err(|error| MediaError::Other(error.to_string()))?;
-        Self::parse(&bytes)
+        Self::parse(&bytes, expected_color)
     }
 
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
+    pub fn parse(bytes: &[u8], expected_color: ColorSpace) -> Result<Self> {
         let movie_timeline = parse_movie_timeline(bytes)?;
         let mut demuxer = Mp4FileDemuxer::new();
         while let Some(required) = demuxer.required_input() {
@@ -105,6 +112,8 @@ impl H264Mp4Index {
                         "only H.264 Constrained Baseline is supported".into(),
                     ));
                 }
+                let color_metadata_sources =
+                    validate_color_signaling(&avc1.unknown_boxes, &avcc.sps_list, expected_color)?;
                 config = Some((
                     avc1.visual.width,
                     avc1.visual.height,
@@ -115,9 +124,10 @@ impl H264Mp4Index {
                         MAX_ACCESS_UNIT_BYTES,
                     )
                     .map_err(|error| MediaError::Other(error.to_string()))?,
+                    color_metadata_sources,
                 ));
             }
-            let (_, _, length_size, _) = config.as_ref().ok_or_else(|| {
+            let (_, _, length_size, _, _) = config.as_ref().ok_or_else(|| {
                 MediaError::Unsupported("H.264 sample precedes avc1 configuration".into())
             })?;
             let start = usize::try_from(sample.data_offset)
@@ -142,7 +152,7 @@ impl H264Mp4Index {
                 keyframe: sample.keyframe,
             });
         }
-        let (width, height, _, decoder_preamble) =
+        let (width, height, _, decoder_preamble, color_metadata_sources) =
             config.ok_or_else(|| MediaError::Unsupported("avc1 configuration missing".into()))?;
         let sample_end_us = samples
             .last()
@@ -158,6 +168,7 @@ impl H264Mp4Index {
             height,
             timescale,
             decoder_preamble,
+            color_metadata_sources,
             samples,
             presentation_duration_us: movie_timeline.duration_us.max(sample_end_us),
         })
@@ -171,6 +182,247 @@ impl H264Mp4Index {
             .filter(|(_, sample)| sample.keyframe)
             .map(|(index, _)| index)
             .last()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ParsedColorSignal {
+    primaries: u16,
+    transfer: u16,
+    matrix: u16,
+    full_range: bool,
+    source: VideoColorMetadataSource,
+}
+
+fn validate_color_signaling(
+    boxes: &[shiguredo_mp4::boxes::UnknownBox],
+    sps_list: &[Vec<u8>],
+    expected_color: ColorSpace,
+) -> Result<Vec<VideoColorMetadataSource>> {
+    if expected_color != ColorSpace::Bt709Sdr {
+        return Err(MediaError::Unsupported(format!(
+            "H.264 file decode requires an explicit Bt709Sdr Project profile, got {expected_color:?}"
+        )));
+    }
+    let mut signals = Vec::new();
+    for color_box in boxes
+        .iter()
+        .filter(|child| child.box_type.as_bytes() == b"colr")
+    {
+        signals.push(parse_nclx(&color_box.payload)?);
+    }
+    for sps in sps_list {
+        if let Some(signal) = parse_h264_vui_color(sps)? {
+            signals.push(signal);
+        }
+    }
+    if signals.is_empty() {
+        return Err(MediaError::Unsupported(
+            "H.264 MP4 has no colr/nclx or SPS VUI colour description; Bt709Sdr is not assumed"
+                .into(),
+        ));
+    }
+    for signal in &signals {
+        if signal.primaries != 1 || signal.transfer != 1 || signal.matrix != 1 || signal.full_range
+        {
+            return Err(MediaError::Unsupported(format!(
+                "{:?} color metadata is primaries={} transfer={} matrix={} full_range={}; explicit Bt709Sdr requires 1/1/1 limited range",
+                signal.source, signal.primaries, signal.transfer, signal.matrix, signal.full_range
+            )));
+        }
+    }
+    let mut sources = Vec::new();
+    for signal in signals {
+        if !sources.contains(&signal.source) {
+            sources.push(signal.source);
+        }
+    }
+    Ok(sources)
+}
+
+fn parse_nclx(payload: &[u8]) -> Result<ParsedColorSignal> {
+    if payload.len() < 11 {
+        return Err(MediaError::Unsupported(
+            "MP4 colr/nclx payload is truncated".into(),
+        ));
+    }
+    if &payload[..4] != b"nclx" {
+        return Err(MediaError::Unsupported(format!(
+            "MP4 colr type {:?} is unsupported; explicit nclx metadata is required",
+            &payload[..4]
+        )));
+    }
+    if payload[10] & 0x7f != 0 {
+        return Err(MediaError::Unsupported(
+            "MP4 colr/nclx reserved range bits are non-zero".into(),
+        ));
+    }
+    Ok(ParsedColorSignal {
+        primaries: u16::from_be_bytes([payload[4], payload[5]]),
+        transfer: u16::from_be_bytes([payload[6], payload[7]]),
+        matrix: u16::from_be_bytes([payload[8], payload[9]]),
+        full_range: payload[10] & 0x80 != 0,
+        source: VideoColorMetadataSource::Mp4Nclx,
+    })
+}
+
+fn parse_h264_vui_color(sps_nal: &[u8]) -> Result<Option<ParsedColorSignal>> {
+    let Some((&header, encoded_rbsp)) = sps_nal.split_first() else {
+        return Err(MediaError::Unsupported("empty H.264 SPS".into()));
+    };
+    if header & 0x1f != 7 {
+        return Err(MediaError::Unsupported(
+            "avcC sequence parameter set is not an SPS NAL".into(),
+        ));
+    }
+    let mut rbsp = Vec::with_capacity(encoded_rbsp.len());
+    let mut zeros = 0u8;
+    for &byte in encoded_rbsp {
+        if zeros >= 2 && byte == 3 {
+            zeros = 0;
+            continue;
+        }
+        rbsp.push(byte);
+        zeros = if byte == 0 {
+            zeros.saturating_add(1)
+        } else {
+            0
+        };
+    }
+    let mut bits = BitReader::new(&rbsp);
+    let profile_idc = bits.read_bits(8)?;
+    bits.skip(16)?; // constraint flags/reserved_zero_2bits and level_idc
+    bits.read_ue()?; // seq_parameter_set_id
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
+        return Err(MediaError::Unsupported(
+            "high-profile SPS is outside the explicit Constrained Baseline profile".into(),
+        ));
+    }
+    bits.read_ue()?; // log2_max_frame_num_minus4
+    match bits.read_ue()? {
+        0 => {
+            bits.read_ue()?;
+        }
+        1 => {
+            bits.read_bit()?;
+            bits.read_se()?;
+            bits.read_se()?;
+            let cycle = bits.read_ue()?;
+            for _ in 0..cycle {
+                bits.read_se()?;
+            }
+        }
+        2 => {}
+        value => {
+            return Err(MediaError::Unsupported(format!(
+                "invalid H.264 pic_order_cnt_type {value}"
+            )));
+        }
+    }
+    bits.read_ue()?; // max_num_ref_frames
+    bits.read_bit()?; // gaps_in_frame_num_value_allowed_flag
+    bits.read_ue()?; // pic_width_in_mbs_minus1
+    bits.read_ue()?; // pic_height_in_map_units_minus1
+    if !bits.read_bit()? {
+        bits.read_bit()?; // mb_adaptive_frame_field_flag
+    }
+    bits.read_bit()?; // direct_8x8_inference_flag
+    if bits.read_bit()? {
+        for _ in 0..4 {
+            bits.read_ue()?;
+        }
+    }
+    if !bits.read_bit()? {
+        return Ok(None);
+    }
+    if bits.read_bit()? {
+        let aspect_ratio_idc = bits.read_bits(8)?;
+        if aspect_ratio_idc == 255 {
+            bits.skip(32)?;
+        }
+    }
+    if bits.read_bit()? {
+        bits.read_bit()?; // overscan_appropriate_flag
+    }
+    if !bits.read_bit()? {
+        return Ok(None);
+    }
+    bits.skip(3)?; // video_format
+    let full_range = bits.read_bit()?;
+    if !bits.read_bit()? {
+        return Ok(None);
+    }
+    Ok(Some(ParsedColorSignal {
+        primaries: bits.read_bits(8)? as u16,
+        transfer: bits.read_bits(8)? as u16,
+        matrix: bits.read_bits(8)? as u16,
+        full_range,
+        source: VideoColorMetadataSource::H264Vui,
+    }))
+}
+
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    bit: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, bit: 0 }
+    }
+
+    fn read_bit(&mut self) -> Result<bool> {
+        let byte = *self
+            .bytes
+            .get(self.bit / 8)
+            .ok_or_else(|| MediaError::Unsupported("truncated H.264 SPS VUI".into()))?;
+        let value = byte & (1 << (7 - self.bit % 8)) != 0;
+        self.bit += 1;
+        Ok(value)
+    }
+
+    fn read_bits(&mut self, count: usize) -> Result<u32> {
+        if count > 32 {
+            return Err(MediaError::Unsupported(
+                "invalid H.264 bit-field width".into(),
+            ));
+        }
+        let mut value = 0u32;
+        for _ in 0..count {
+            value = (value << 1) | u32::from(self.read_bit()?);
+        }
+        Ok(value)
+    }
+
+    fn skip(&mut self, count: usize) -> Result<()> {
+        self.read_bits(count).map(|_| ())
+    }
+
+    fn read_ue(&mut self) -> Result<u32> {
+        let mut zeros = 0usize;
+        while !self.read_bit()? {
+            zeros += 1;
+            if zeros > 31 {
+                return Err(MediaError::Unsupported(
+                    "H.264 Exp-Golomb value is too large".into(),
+                ));
+            }
+        }
+        let suffix = self.read_bits(zeros)?;
+        Ok((1u32 << zeros) - 1 + suffix)
+    }
+
+    fn read_se(&mut self) -> Result<i32> {
+        let value = self.read_ue()?;
+        let magnitude = value.div_ceil(2) as i32;
+        Ok(if value.is_multiple_of(2) {
+            -magnitude
+        } else {
+            magnitude
+        })
     }
 }
 
@@ -195,9 +447,15 @@ impl VideoFileSource {
     ///
     /// The binary is loaded and verified first so its absence is always a hard
     /// construction error and cannot be hidden by another decoder or media path.
-    pub fn open(id: InputId, path: &Path, binary_path: &Path, playback: Playback) -> Result<Self> {
+    pub fn open(
+        id: InputId,
+        path: &Path,
+        binary_path: &Path,
+        expected_color: ColorSpace,
+        playback: Playback,
+    ) -> Result<Self> {
         OpenH264Decoder::new(binary_path).map_err(|error| MediaError::Other(error.to_string()))?;
-        let index = H264Mp4Index::open(path)?;
+        let index = H264Mp4Index::open(path, expected_color)?;
         let timeline = Arc::new(Mutex::new(PlaybackTimeline::new(
             playback,
             index.presentation_duration_us,
@@ -407,7 +665,7 @@ mod tests {
 
     #[test]
     fn malformed_input_is_rejected() {
-        assert!(H264Mp4Index::parse(b"not an mp4").is_err());
+        assert!(H264Mp4Index::parse(b"not an mp4", ColorSpace::Bt709Sdr).is_err());
     }
 
     #[test]
@@ -420,6 +678,7 @@ mod tests {
             InputId::new(),
             &missing_video,
             &missing_binary,
+            ColorSpace::Bt709Sdr,
             Playback::default(),
         );
         let error = match result {
@@ -444,6 +703,7 @@ mod tests {
             InputId::new(),
             Path::new(&mp4),
             Path::new(&binary),
+            ColorSpace::Bt709Sdr,
             Playback::default(),
         )
         .unwrap();
@@ -456,5 +716,132 @@ mod tests {
             frame.data.len(),
             frame.width as usize * frame.height as usize * 4
         );
+    }
+
+    #[test]
+    fn nclx_and_vui_require_explicit_limited_bt709() {
+        assert_eq!(
+            parse_nclx(b"nclx\0\x01\0\x01\0\x01\0").unwrap(),
+            ParsedColorSignal {
+                primaries: 1,
+                transfer: 1,
+                matrix: 1,
+                full_range: false,
+                source: VideoColorMetadataSource::Mp4Nclx,
+            }
+        );
+        let full_range = parse_nclx(b"nclx\0\x01\0\x01\0\x01\x80").unwrap();
+        assert!(full_range.full_range);
+
+        let sps = baseline_sps_with_vui(1, 1, 1, false);
+        assert_eq!(
+            parse_h264_vui_color(&sps).unwrap(),
+            Some(ParsedColorSignal {
+                primaries: 1,
+                transfer: 1,
+                matrix: 1,
+                full_range: false,
+                source: VideoColorMetadataSource::H264Vui,
+            })
+        );
+        assert_eq!(
+            validate_color_signaling(&[], &[sps], ColorSpace::Bt709Sdr).unwrap(),
+            [VideoColorMetadataSource::H264Vui]
+        );
+        assert!(
+            validate_color_signaling(
+                &[],
+                &[baseline_sps_with_vui(1, 1, 6, false)],
+                ColorSpace::Bt709Sdr
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("matrix=6")
+        );
+    }
+
+    #[test]
+    fn absent_color_metadata_is_rejected_instead_of_assuming_bt709() {
+        let error = validate_color_signaling(&[], &[], ColorSpace::Bt709Sdr).unwrap_err();
+        assert!(error.to_string().contains("is not assumed"));
+        let error = validate_color_signaling(&[], &[], ColorSpace::Bt2020Pq).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("explicit Bt709Sdr Project profile")
+        );
+    }
+
+    fn baseline_sps_with_vui(primaries: u8, transfer: u8, matrix: u8, full_range: bool) -> Vec<u8> {
+        let mut bits = TestBitWriter::default();
+        bits.write_bits(66, 8);
+        bits.write_bits(0x40, 8);
+        bits.write_bits(30, 8);
+        bits.write_ue(0); // seq_parameter_set_id
+        bits.write_ue(0); // log2_max_frame_num_minus4
+        bits.write_ue(0); // pic_order_cnt_type
+        bits.write_ue(0); // log2_max_pic_order_cnt_lsb_minus4
+        bits.write_ue(1); // max_num_ref_frames
+        bits.write_bit(false); // gaps
+        bits.write_ue(0); // width
+        bits.write_ue(0); // height
+        bits.write_bit(true); // frame_mbs_only
+        bits.write_bit(true); // direct_8x8
+        bits.write_bit(false); // crop
+        bits.write_bit(true); // vui
+        bits.write_bit(false); // aspect ratio
+        bits.write_bit(false); // overscan
+        bits.write_bit(true); // video signal type
+        bits.write_bits(5, 3); // unspecified video format
+        bits.write_bit(full_range);
+        bits.write_bit(true); // colour description
+        bits.write_bits(u32::from(primaries), 8);
+        bits.write_bits(u32::from(transfer), 8);
+        bits.write_bits(u32::from(matrix), 8);
+        let mut sps = vec![0x67];
+        sps.extend(bits.finish());
+        sps
+    }
+
+    #[derive(Default)]
+    struct TestBitWriter {
+        bytes: Vec<u8>,
+        current: u8,
+        count: u8,
+    }
+
+    impl TestBitWriter {
+        fn write_bit(&mut self, value: bool) {
+            self.current = (self.current << 1) | u8::from(value);
+            self.count += 1;
+            if self.count == 8 {
+                self.bytes.push(self.current);
+                self.current = 0;
+                self.count = 0;
+            }
+        }
+
+        fn write_bits(&mut self, value: u32, count: usize) {
+            for shift in (0..count).rev() {
+                self.write_bit(value & (1 << shift) != 0);
+            }
+        }
+
+        fn write_ue(&mut self, value: u32) {
+            let encoded = value + 1;
+            let bits = 32 - encoded.leading_zeros();
+            for _ in 1..bits {
+                self.write_bit(false);
+            }
+            self.write_bits(encoded, bits as usize);
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            self.write_bit(true);
+            while self.count != 0 {
+                self.write_bit(false);
+            }
+            self.bytes
+        }
     }
 }

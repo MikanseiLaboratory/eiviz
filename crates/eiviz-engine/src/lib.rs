@@ -21,9 +21,9 @@ use eiviz_operations::{
     EvidenceState, FlightRecorder,
 };
 use eiviz_project::{
-    append_journal, discard_autosave, export_portable as export_project_portable,
-    import_portable as import_project_portable, load, recover_autosave, save_atomic, save_autosave,
-    stage_asset,
+    AssetDiagnostic, append_journal, discard_autosave, export_portable as export_project_portable,
+    import_portable as import_project_portable, inspect_assets, load, reconcile_assets,
+    recover_autosave, save_atomic, save_autosave, stage_asset,
 };
 use eiviz_runtime::{Runtime, RuntimeSnapshot, TickResult};
 pub use eiviz_runtime::{SourceClockPolicy, UnlockedBehavior};
@@ -235,6 +235,7 @@ struct Inner {
     encoder_capabilities: EncoderCapabilities,
     encoder_sessions: HashMap<EncodingProfileKey, EncodingSession>,
     distribution_bindings: HashMap<OutputId, DistributionBinding>,
+    asset_diagnostics: Vec<AssetDiagnostic>,
     autosave_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
     persistence_errors: u64,
@@ -339,6 +340,7 @@ impl Engine {
         #[cfg(feature = "wgpu-backend")]
         let wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
         runtime.activate_snapshot(active_snapshot.clone())?;
+        let asset_diagnostics = inspect_assets(&project, None);
         let engine = Self {
             inner: Mutex::new(Inner {
                 project,
@@ -363,6 +365,7 @@ impl Engine {
                 encoder_capabilities: EncoderCapabilities::default(),
                 encoder_sessions: HashMap::new(),
                 distribution_bindings: HashMap::new(),
+                asset_diagnostics,
                 autosave_path: None,
                 journal_path: None,
                 persistence_errors: 0,
@@ -381,7 +384,13 @@ impl Engine {
     }
 
     pub fn set_asset_root(&self, root: impl Into<PathBuf>) {
-        self.inner.lock().runtime.set_asset_root(root);
+        let mut inner = self.inner.lock();
+        let root = root.into();
+        inner.runtime.set_asset_root(root);
+    }
+
+    pub fn asset_diagnostics(&self) -> Vec<AssetDiagnostic> {
+        self.inner.lock().asset_diagnostics.clone()
     }
 
     pub fn admission_budget(&self) -> AdmissionBudget {
@@ -431,6 +440,7 @@ impl Engine {
             fdk_aac_binary,
             project.audio.sample_rate,
             project.audio.resampling,
+            project.video.color,
             playback.clone(),
         )?);
         let status = source.status().clone();
@@ -1314,7 +1324,8 @@ impl Engine {
             .expect("default mix")
     }
 
-    fn replace_project(&self, project: Project, asset_root: Option<PathBuf>) -> Result<()> {
+    fn replace_project(&self, mut project: Project, asset_root: Option<PathBuf>) -> Result<()> {
+        let asset_diagnostics = reconcile_assets(&mut project, asset_root.as_deref());
         validate_enabled_distribution_outputs(&project)?;
         let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
         #[cfg(feature = "wgpu-backend")]
@@ -1346,8 +1357,8 @@ impl Engine {
             };
         #[cfg(not(feature = "wgpu-backend"))]
         let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
-        if let Some(root) = asset_root {
-            runtime.set_asset_root(root);
+        if let Some(root) = &asset_root {
+            runtime.set_asset_root(root.clone());
         }
         runtime.activate_snapshot(active_snapshot.clone())?;
         let mut inner = self.inner.lock();
@@ -1359,6 +1370,7 @@ impl Engine {
             inner.wgpu_context = wgpu_context;
         }
         inner.runtime = runtime;
+        inner.asset_diagnostics = asset_diagnostics;
         let command_limits = inner.sequencer.diagnostics();
         inner.sequencer = Sequencer::with_capacities(
             command_limits.pending_capacity,
@@ -2059,8 +2071,8 @@ fn unix_millis() -> u64 {
 mod tests {
     use super::*;
     use eiviz_core::{
-        Input, InputId, InputSource, MixingUnit, Output, OutputId, OutputKind, Scene, SceneId,
-        SceneItem, SceneItemId, Transform2D, TransitionStyle,
+        Input, InputId, InputSource, MixingUnit, Output, OutputId, OutputKind, OverlaySlot, Scene,
+        SceneId, SceneItem, SceneItemId, Transform2D, TransitionStyle,
     };
     use eiviz_io_stream::FailingSink;
     use eiviz_media::{
@@ -2833,7 +2845,7 @@ mod tests {
     }
 
     #[test]
-    fn take_and_audio_follow_latch_on_the_same_boundary() {
+    fn take_overlay_and_audio_follow_latch_on_the_same_boundary() {
         let engine = Engine::new("follow");
         let unit = engine.primary_unit();
         let input = Input {
@@ -2856,6 +2868,37 @@ mod tests {
                 playback: Default::default(),
             }],
         };
+        let overlay_input = Input {
+            id: InputId::new(),
+            name: "overlay source".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: "omt://overlay".into(),
+            },
+        };
+        let overlay_scene = Scene {
+            id: SceneId::new(),
+            name: "key".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: overlay_input.id,
+                transform: Transform2D {
+                    width: 0.5,
+                    height: 0.5,
+                    ..Transform2D::fullscreen()
+                },
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let overlay = OverlaySlot {
+            id: eiviz_core::OverlayId::new(),
+            name: "key".into(),
+            scene: Some(overlay_scene.id),
+            enabled: false,
+            z_order: 0,
+        };
         let bus = engine.snapshot().audio_matrix.buses[0].id;
         engine
             .submit_transaction(vec![
@@ -2869,6 +2912,25 @@ mod tests {
                     engine.client(),
                     Command::AddScene {
                         scene: scene.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddInput {
+                        input: overlay_input.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddScene {
+                        scene: overlay_scene.clone(),
+                    },
+                ),
+                CommandEnvelope::new(
+                    engine.client(),
+                    Command::AddOverlay {
+                        unit,
+                        overlay: overlay.clone(),
                     },
                 ),
                 CommandEnvelope::new(
@@ -2912,6 +2974,20 @@ mod tests {
             }),
             SourceClockPolicy::ScheduleTime,
         );
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: overlay_input.id,
+                video: VideoFrame::rgba_solid(
+                    0,
+                    eiviz_time::MediaTime::ZERO,
+                    16,
+                    16,
+                    [200, 10, 10, 255],
+                ),
+                audio: AudioBuffer::silence(0, 48_000, 2, 801),
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
         let setup = engine.tick().unwrap();
         assert_eq!(setup.programs[&unit].pixel(0, 0), [0, 0, 0, 255]);
         assert!(
@@ -2920,6 +2996,8 @@ mod tests {
                 .all(|sample| sample.abs() < 1e-6)
         );
 
+        let due =
+            eiviz_time::MediaTime::from_frame_index(2, engine.snapshot().video.frame_rate).unwrap();
         let mut take = CommandEnvelope::new(
             engine.client(),
             Command::Take {
@@ -2929,10 +3007,19 @@ mod tests {
                 duration_frames: 0,
             },
         );
-        take.effective_time = Some(
-            eiviz_time::MediaTime::from_frame_index(2, engine.snapshot().video.frame_rate).unwrap(),
+        take.effective_time = Some(due);
+        let mut enable_overlay = CommandEnvelope::new(
+            engine.client(),
+            Command::SetOverlayEnabled {
+                unit,
+                overlay: overlay.id,
+                enabled: true,
+            },
         );
-        engine.submit(take).unwrap();
+        enable_overlay.effective_time = Some(due);
+        engine
+            .submit_transaction(vec![take, enable_overlay])
+            .unwrap();
         let early = engine.tick().unwrap();
         assert_eq!(early.programs[&unit].pixel(0, 0), [0, 0, 0, 255]);
         assert!(
@@ -2941,7 +3028,16 @@ mod tests {
                 .all(|sample| sample.abs() < 1e-6)
         );
         let applied = engine.tick().unwrap();
-        assert_eq!(applied.programs[&unit].pixel(0, 0), [20, 40, 60, 255]);
+        assert_eq!(
+            applied.programs[&unit].pixel(1_500, 900),
+            [20, 40, 60, 255],
+            "TAKE must change the Program underlay on the due boundary"
+        );
+        assert_eq!(
+            applied.programs[&unit].pixel(100, 100),
+            [200, 10, 10, 255],
+            "overlay enable must latch on the same due boundary"
+        );
         assert!(applied.audio.planes[0].iter().any(|sample| *sample > 0.4));
     }
 

@@ -77,7 +77,7 @@ GPU device loss は simulation で合格にしません。private runner が実 
 `CERT-GPU-DEVICE-LOSS` は `hil_pending/skipped` です。Virtual mode、mock sink、
 CPU reference の成功は HIL/interop/24 h wall-clock 合格を意味しません。
 
-[生成済み traceability matrix](traceability.md) は R01–R11 と AC-01–11 を
+[生成済み traceability matrix](traceability.md) は R01–R11 と AC-01–12 を
 automated test、HIL status、artifact path へ結合します。
 
 Clock/Timing の共通 HIL は [hil/timing.md](hil/timing.md) に定義します。

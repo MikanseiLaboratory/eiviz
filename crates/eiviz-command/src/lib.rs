@@ -4,8 +4,8 @@ use eiviz_core::{
     VideoFormat,
 };
 use eiviz_core::{
-    AudioBusId, ClientId, CommandId, InputId, MixingUnitId, OutputId, OverlayId, SceneId,
-    SceneItemId,
+    AudioBusId, ClientId, CommandId, DeviceBindingId, InputId, MixingUnitId, OutputId, OverlayId,
+    SceneId, SceneItemId,
 };
 use eiviz_time::MediaTime;
 use serde::{Deserialize, Serialize};
@@ -167,6 +167,14 @@ pub enum Command {
     },
     AddDeviceBinding {
         binding: DeviceBinding,
+    },
+    /// Atomically reassign an existing logical binding to one explicitly
+    /// enumerated physical device. Display names are diagnostic only.
+    UpdateDeviceBinding {
+        id: DeviceBindingId,
+        expected_hardware_id: Option<String>,
+        hardware_id: String,
+        logical_name: String,
     },
 }
 
@@ -536,6 +544,7 @@ impl Sequencer {
                     | Command::AddInput { .. }
                     | Command::AddAsset { .. }
                     | Command::RemoveInput { .. }
+                    | Command::UpdateDeviceBinding { .. }
             )
         {
             return Err(CommandError::Rejected(
@@ -806,7 +815,44 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             }
         }
         Command::AddDeviceBinding { binding } => {
+            if binding
+                .last_seen_hardware_id
+                .as_ref()
+                .is_none_or(String::is_empty)
+            {
+                return Err(CommandError::Rejected(
+                    "device bindings require an exact non-empty hardware ID; name fallback is forbidden"
+                        .into(),
+                ));
+            }
+            if project.device_bindings.contains_key(&binding.id) {
+                return Err(DomainError::DuplicateId(binding.id.to_string()).into());
+            }
             project.device_bindings.insert(binding.id, binding.clone());
+        }
+        Command::UpdateDeviceBinding {
+            id,
+            expected_hardware_id,
+            hardware_id,
+            logical_name,
+        } => {
+            if hardware_id.is_empty() {
+                return Err(CommandError::Rejected(
+                    "device reassignment requires an exact non-empty hardware ID".into(),
+                ));
+            }
+            let binding = project
+                .device_bindings
+                .get_mut(id)
+                .ok_or_else(|| DomainError::UnknownId(id.to_string()))?;
+            if &binding.last_seen_hardware_id != expected_hardware_id {
+                return Err(CommandError::Rejected(format!(
+                    "device binding {id} changed: expected hardware {:?}, actual {:?}",
+                    expected_hardware_id, binding.last_seen_hardware_id
+                )));
+            }
+            binding.last_seen_hardware_id = Some(hardware_id.clone());
+            binding.logical_name = logical_name.clone();
         }
     }
     let _ = RouteMode::Manual;
@@ -997,5 +1043,52 @@ mod tests {
             sequencer.apply(&mut project, future),
             Err(CommandError::UnsupportedVersion { .. })
         ));
+    }
+
+    #[test]
+    fn versioned_device_reassignment_is_atomic_and_requires_exact_hardware_id() {
+        let mut project = Project::new("devices");
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: "decklink".into(),
+            logical_name: "old display name".into(),
+            last_seen_hardware_id: Some("decklink:old".into()),
+        };
+        project.device_bindings.insert(binding.id, binding.clone());
+        let client = ClientId::new();
+        let mut sequencer = Sequencer::default();
+
+        let mut update = CommandEnvelope::new(
+            client,
+            Command::UpdateDeviceBinding {
+                id: binding.id,
+                expected_hardware_id: Some("decklink:old".into()),
+                hardware_id: "decklink:exact-new".into(),
+                logical_name: "new display name".into(),
+            },
+        );
+        update.expected_revision = Some(0);
+        sequencer.apply(&mut project, update).unwrap();
+        assert_eq!(
+            project.device_bindings[&binding.id]
+                .last_seen_hardware_id
+                .as_deref(),
+            Some("decklink:exact-new")
+        );
+
+        let committed = project.clone();
+        let mut stale = CommandEnvelope::new(
+            client,
+            Command::UpdateDeviceBinding {
+                id: binding.id,
+                expected_hardware_id: Some("decklink:old".into()),
+                hardware_id: "decklink:wrong".into(),
+                logical_name: "same-name-is-not-used".into(),
+            },
+        );
+        stale.expected_revision = Some(1);
+        assert!(sequencer.apply(&mut project, stale).is_err());
+        assert_eq!(project, committed);
+        assert_eq!(sequencer.revision(), 1);
     }
 }

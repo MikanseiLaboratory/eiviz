@@ -73,20 +73,18 @@ impl DeviceInfo {
 pub enum BindingResolutionError {
     #[error("binding kind must be `decklink`, got `{0}`")]
     WrongKind(String),
+    #[error("DeckLink binding has no exact hardware ID; logical-name fallback is forbidden")]
+    MissingHardwareId,
     #[error("bound DeckLink hardware `{0}` is not present")]
     HardwareMissing(String),
     #[error("DeckLink hardware `{0}` does not support {1:?}")]
     UnsupportedDirection(String, DeviceDirection),
-    #[error("no DeckLink named `{0}` supports {1:?}")]
-    LogicalNameMissing(String, DeviceDirection),
-    #[error("DeckLink logical name `{0}` is ambiguous for {1:?}")]
-    AmbiguousLogicalName(String, DeviceDirection),
 }
 
 /// Resolves a project binding without silently switching to another physical card.
 ///
-/// A remembered persistent ID is authoritative. Logical-name matching is used
-/// only for a new binding and must produce exactly one direction-capable device.
+/// The persistent ID is authoritative. Display names are diagnostics only and
+/// are never used to choose hardware.
 pub fn resolve_binding<'a>(
     binding: &eiviz_core::DeviceBinding,
     direction: DeviceDirection,
@@ -95,32 +93,22 @@ pub fn resolve_binding<'a>(
     if binding.kind != "decklink" {
         return Err(BindingResolutionError::WrongKind(binding.kind.clone()));
     }
-    if let Some(id) = &binding.last_seen_hardware_id {
-        let device = devices
-            .iter()
-            .find(|device| device.persistent_id == *id)
-            .ok_or_else(|| BindingResolutionError::HardwareMissing(id.clone()))?;
-        if !device.supports(direction) {
-            return Err(BindingResolutionError::UnsupportedDirection(
-                id.clone(),
-                direction,
-            ));
-        }
-        return Ok(device);
-    }
-    let mut matches = devices
+    let id = binding
+        .last_seen_hardware_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or(BindingResolutionError::MissingHardwareId)?;
+    let device = devices
         .iter()
-        .filter(|device| device.display_name == binding.logical_name && device.supports(direction));
-    let first = matches.next().ok_or_else(|| {
-        BindingResolutionError::LogicalNameMissing(binding.logical_name.clone(), direction)
-    })?;
-    if matches.next().is_some() {
-        return Err(BindingResolutionError::AmbiguousLogicalName(
-            binding.logical_name.clone(),
+        .find(|device| device.persistent_id == id)
+        .ok_or_else(|| BindingResolutionError::HardwareMissing(id.into()))?;
+    if !device.supports(direction) {
+        return Err(BindingResolutionError::UnsupportedDirection(
+            id.into(),
             direction,
         ));
     }
-    Ok(first)
+    Ok(device)
 }
 
 pub const fn schedule_timescale() -> (u32, u32) {
@@ -416,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn new_logical_binding_must_be_unambiguous() {
+    fn new_binding_without_hardware_id_never_uses_logical_name() {
         let binding = eiviz_core::DeviceBinding {
             id: eiviz_core::DeviceBindingId::new(),
             kind: "decklink".into(),
@@ -429,19 +417,9 @@ mod tests {
             supports_capture: true,
             supports_playback: false,
         };
-        assert!(matches!(
-            resolve_binding(
-                &binding,
-                DeviceDirection::Capture,
-                &[
-                    device.clone(),
-                    DeviceInfo {
-                        persistent_id: "persistent:b".into(),
-                        ..device
-                    }
-                ]
-            ),
-            Err(BindingResolutionError::AmbiguousLogicalName(_, _))
-        ));
+        assert_eq!(
+            resolve_binding(&binding, DeviceDirection::Capture, &[device]),
+            Err(BindingResolutionError::MissingHardwareId)
+        );
     }
 }

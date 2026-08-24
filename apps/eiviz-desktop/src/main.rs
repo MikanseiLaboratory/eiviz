@@ -107,6 +107,7 @@ struct DesktopApp {
     capability_report_path: String,
     diagnostics_export_path: String,
     crash_report_path: String,
+    asset_diagnostics: Vec<eiviz_project::AssetDiagnostic>,
     recovery: Option<RecoveryPrompt>,
     rtmp_url: String,
     srt_url: String,
@@ -296,6 +297,7 @@ impl DesktopApp {
             capability_report_path: "eiviz-capabilities.json".into(),
             diagnostics_export_path: "eiviz-flight-recorder.json".into(),
             crash_report_path: "eiviz-crash-report.json".into(),
+            asset_diagnostics: Vec::new(),
             recovery,
             rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
             srt_url: "srt://127.0.0.1:9000".into(),
@@ -390,6 +392,46 @@ impl DesktopApp {
                 self.status = format!("DeckLink enumeration: {error}");
             }
         }
+    }
+
+    #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
+    fn reassign_device_binding(
+        &mut self,
+        binding_id: DeviceBindingId,
+        hardware_id: String,
+        logical_name: String,
+    ) {
+        let project = self.engine.staged_snapshot();
+        let Some(binding) = project.device_bindings.get(&binding_id) else {
+            self.status = format!("Device reassignment: unknown binding {binding_id}");
+            return;
+        };
+        let mut envelope = CommandEnvelope::new(
+            self.engine.client(),
+            Command::UpdateDeviceBinding {
+                id: binding_id,
+                expected_hardware_id: binding.last_seen_hardware_id.clone(),
+                hardware_id: hardware_id.clone(),
+                logical_name,
+            },
+        );
+        envelope.expected_revision = Some(self.engine.revision());
+        match self.engine.submit(envelope) {
+            Ok(ack) => {
+                self.status = format!(
+                    "Device binding {binding_id} staged at revision {} with exact hardware ID {hardware_id}; restart any active endpoint to apply it",
+                    ack.revision
+                );
+            }
+            Err(error) => self.status = format!("Device reassignment rejected: {error}"),
+        }
+    }
+
+    fn refresh_asset_diagnostics(&mut self) {
+        self.asset_diagnostics = eiviz_project::inspect_assets(
+            &self.engine.staged_snapshot(),
+            Some(std::path::Path::new(self.asset_root.trim())),
+        );
     }
 
     #[cfg(feature = "decklink")]
@@ -1421,6 +1463,8 @@ impl eframe::App for DesktopApp {
         let project = self.engine.snapshot();
         let unit_id = self.engine.primary_unit();
         let unit = project.mixing_units.get(&unit_id).cloned();
+        #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
+        let mut device_reassignment = None;
 
         let mut recover = false;
         let mut discard = false;
@@ -1468,6 +1512,7 @@ impl eframe::App for DesktopApp {
                 Ok(true) => {
                     self.engine.set_autosave_path(&self.save_path);
                     self.selected_scene = None;
+                    self.asset_diagnostics = self.engine.asset_diagnostics();
                     self.recovery = None;
                     self.status =
                         "autosave recovered in memory; Save explicitly to replace project.json"
@@ -1534,6 +1579,7 @@ impl eframe::App for DesktopApp {
                         Ok(()) => {
                             self.engine.set_autosave_path(&self.save_path);
                             self.selected_scene = None;
+                            self.asset_diagnostics = self.engine.asset_diagnostics();
                             self.status = "loaded".into();
                         }
                         Err(e) => self.status = format!("load: {e}"),
@@ -1543,6 +1589,9 @@ impl eframe::App for DesktopApp {
             ui.horizontal(|ui| {
                 ui.label("asset root");
                 ui.text_edit_singleline(&mut self.asset_root);
+                if ui.button("Verify asset paths + SHA-256").clicked() {
+                    self.refresh_asset_diagnostics();
+                }
                 ui.label("image");
                 ui.text_edit_singleline(&mut self.image_path);
                 if ui.button("Add Image").clicked() {
@@ -1581,6 +1630,7 @@ impl eframe::App for DesktopApp {
                     ) {
                         Ok(()) => {
                             self.selected_scene = None;
+                            self.asset_diagnostics = self.engine.asset_diagnostics();
                             self.status = "portable imported".into();
                         }
                         Err(error) => self.status = format!("portable import: {error}"),
@@ -1979,6 +2029,23 @@ impl eframe::App for DesktopApp {
             }
             ui.label("Clock deadlines use process monotonic only; UTC is not a timing domain.");
             ui.label(format!("missing-media {:?}", project.missing_media));
+            if self.asset_diagnostics.is_empty() {
+                ui.label("Asset integrity: no missing/hash-mismatched assets detected");
+            }
+            for diagnostic in &self.asset_diagnostics {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    format!(
+                        "Asset {:?}: {} path={} expected-sha256={} actual-sha256={} policy={:?}; no alternate file is substituted",
+                        diagnostic.kind,
+                        diagnostic.original_name,
+                        diagnostic.path,
+                        diagnostic.expected_sha256,
+                        diagnostic.actual_sha256.as_deref().unwrap_or("<unavailable>"),
+                        diagnostic.policy,
+                    ),
+                );
+            }
             ui.label(match self.control_ports {
                 Some(ports) => format!(
                     "control HTTP :{} / TCP :{} / WS :{}; auth={}; rate={}/s; command queue={}",
@@ -2271,6 +2338,35 @@ impl eframe::App for DesktopApp {
                 if ui.button("Start audio capture").clicked() {
                     self.start_audio_input();
                 }
+                if let Some(device) = self
+                    .audio_input_selected
+                    .and_then(|index| self.audio_devices.get(index))
+                {
+                    for input in project.inputs.values() {
+                        let InputSource::AudioDevice { binding } = &input.source else {
+                            continue;
+                        };
+                        if let Some(current) = project.device_bindings.get(binding)
+                            && ui
+                                .button(format!(
+                                    "Reassign {} [{}] → exact [{}]",
+                                    input.name,
+                                    current
+                                        .last_seen_hardware_id
+                                        .as_deref()
+                                        .unwrap_or("<missing>"),
+                                    device.persistent_id
+                                ))
+                                .clicked()
+                        {
+                            device_reassignment = Some((
+                                *binding,
+                                device.persistent_id.clone(),
+                                device.display_name.clone(),
+                            ));
+                        }
+                    }
+                }
                 let mut stop_input = None;
                 for (input_id, source) in &self.audio_inputs {
                     let diagnostic = source.diagnostics();
@@ -2336,6 +2432,35 @@ impl eframe::App for DesktopApp {
                 }
                 if ui.button("Start audio output").clicked() {
                     self.start_audio_output(unit_id);
+                }
+                if let Some(device) = self
+                    .audio_output_selected
+                    .and_then(|index| self.audio_devices.get(index))
+                {
+                    for output in project.outputs.values() {
+                        let OutputKind::AudioDevice { binding } = &output.kind else {
+                            continue;
+                        };
+                        if let Some(current) = project.device_bindings.get(binding)
+                            && ui
+                                .button(format!(
+                                    "Reassign {} [{}] → exact [{}]",
+                                    output.name,
+                                    current
+                                        .last_seen_hardware_id
+                                        .as_deref()
+                                        .unwrap_or("<missing>"),
+                                    device.persistent_id
+                                ))
+                                .clicked()
+                        {
+                            device_reassignment = Some((
+                                *binding,
+                                device.persistent_id.clone(),
+                                device.display_name.clone(),
+                            ));
+                        }
+                    }
                 }
                 let mut stop_output = None;
                 for (output_id, sink) in &self.audio_outputs {
@@ -2527,6 +2652,35 @@ impl eframe::App for DesktopApp {
                 if ui.button("Start DeckLink Capture").clicked() {
                     self.connect_decklink_capture();
                 }
+                if let Some(device) = self
+                    .decklink_capture_selected
+                    .and_then(|index| self.decklink_devices.get(index))
+                {
+                    for input in project.inputs.values() {
+                        let InputSource::DeckLink { binding } = &input.source else {
+                            continue;
+                        };
+                        if let Some(current) = project.device_bindings.get(binding)
+                            && ui
+                                .button(format!(
+                                    "Reassign {} [{}] → exact [{}]",
+                                    input.name,
+                                    current
+                                        .last_seen_hardware_id
+                                        .as_deref()
+                                        .unwrap_or("<missing>"),
+                                    device.persistent_id
+                                ))
+                                .clicked()
+                        {
+                            device_reassignment = Some((
+                                *binding,
+                                device.persistent_id.clone(),
+                                device.display_name.clone(),
+                            ));
+                        }
+                    }
+                }
                 for source in &self.decklink_sources {
                     let (video_drops, audio_drops) = source.dropped_frames();
                     let detail = source
@@ -2555,6 +2709,35 @@ impl eframe::App for DesktopApp {
                 }
                 if ui.button("Start DeckLink Output").clicked() {
                     self.start_decklink_output(unit_id);
+                }
+                if let Some(device) = self
+                    .decklink_playback_selected
+                    .and_then(|index| self.decklink_devices.get(index))
+                {
+                    for output in project.outputs.values() {
+                        let OutputKind::DeckLink { binding } = &output.kind else {
+                            continue;
+                        };
+                        if let Some(current) = project.device_bindings.get(binding)
+                            && ui
+                                .button(format!(
+                                    "Reassign {} [{}] → exact [{}]",
+                                    output.name,
+                                    current
+                                        .last_seen_hardware_id
+                                        .as_deref()
+                                        .unwrap_or("<missing>"),
+                                    device.persistent_id
+                                ))
+                                .clicked()
+                        {
+                            device_reassignment = Some((
+                                *binding,
+                                device.persistent_id.clone(),
+                                device.display_name.clone(),
+                            ));
+                        }
+                    }
                 }
                 let mut stop_output = None;
                 for (output_id, sink) in &self.decklink_outputs {
@@ -2814,6 +2997,10 @@ impl eframe::App for DesktopApp {
                 self.show_multiview_frame(ui, multiview.id, &texture_id);
             }
         });
+        #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
+        if let Some((binding, hardware_id, logical_name)) = device_reassignment {
+            self.reassign_device_binding(binding, hardware_id, logical_name);
+        }
         ctx.request_repaint();
     }
 }

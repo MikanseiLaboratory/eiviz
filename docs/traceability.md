@@ -19,10 +19,11 @@
 | AC-02 | eiviz-project migration tests |  | not_applicable | target/certification/project |
 | AC-03 | CERT-TIMING-SOAK | TIME-HIL-01 | pending | target/certification/evidence.json |
 | AC-04 | CERT-MAX-ADMITTED-GRAPH<br>mixing_graph_rejects_cycle |  | not_applicable | target/certification/evidence.json |
-| AC-05 | take_changes_program_pixels_on_same_boundary | AUDIO-HIL | pending | target/certification/runtime |
+| AC-05 | take_overlay_and_audio_follow_latch_on_the_same_boundary | AUDIO-HIL | pending | target/certification/runtime |
 | AC-06 | CERT-FAULT-SINK<br>CERT-FAULT-DISK-FULL<br>CERT-FAULT-NIC-OUTAGE | DIST-HIL | pending | target/certification/evidence.json |
 | AC-07 | CERT-COMMAND-FLOOD-REPLAY |  | not_applicable | target/certification/evidence.json |
 | AC-08 | CERT-MAX-ADMITTED-GRAPH<br>CERT-GPU-DEVICE-LOSS | GPU-HIL | pending | target/certification/evidence.json |
 | AC-09 | CERT-TIMING-SOAK | 24H-WALL-SOAK | pending | target/certification/evidence.json<br>target/certification/manual/24h |
 | AC-10 | CERT-TIMING-SOAK | TIME-HIL-06<br>AUDIO-HIL | pending | target/certification/evidence.json<br>target/certification/hil/timing |
 | AC-11 | adapter contract tests | NDI-HIL<br>OMT-HIL<br>DECKLINK-HIL | pending | target/certification/hil/interop |
+| AC-12 | bounded_regression_locks_and_tracks_drift<br>explicit_jump_resets_lock_and_filter<br>source_counter_wrap_is_unwrapped_without_reset<br>domains_and_timebases_never_mix_implicitly | TIME-HIL-01..08 | pending | target/certification/evidence.json<br>target/certification/hil/timing |

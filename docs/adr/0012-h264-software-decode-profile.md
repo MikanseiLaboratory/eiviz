@@ -54,16 +54,19 @@ stateful converter.
 
 Main/High profile, `avc3`, encrypted/fMP4 inputs, reverse/time-stretched A/V
 playback, HE-AAC, more than stereo, complex edit lists, and compressed samples
-above configured limits are hard errors. The decoder API
-requires the explicitly selected `Bt709Sdr` Project profile and exposes the
-conversion as `decode_bt709_limited`; other Project color profiles are rejected.
-MP4 color metadata cross-validation remains a certification blocker. They are not
-silently accepted or decoded by another backend.
+above configured limits are hard errors. The decoder API requires the explicitly
+selected `Bt709Sdr` Project profile and exposes the conversion as
+`decode_bt709_limited`; other Project color profiles are rejected. Demux
+validates Shiguredo's retained `colr`/`nclx` sample-entry box or H.264 SPS VUI
+colour description before constructing the decoder. At least one source must
+explicitly signal primaries/transfer/matrix `1/1/1` and limited range. Missing,
+malformed, full-range, or mismatched metadata is a hard error; BT.709 is never
+assumed. Inputs are not silently accepted or decoded by another backend.
 
 No Cisco/FDK binary or representative conformance clip is stored in this
 repository. Default tests cover deterministic `mp4a`/`esds` demux, edit-list
-timeline mapping, synchronized cursor generations, AudioSpecificConfig
-validation, and missing-binary failures. Ignored opt-in video and A/V tests
+timeline mapping, synchronized cursor generations, AudioSpecificConfig and
+MP4/H.264 color-signaling validation, and missing-binary failures. Ignored opt-in video and A/V tests
 accept explicit binary and MP4 paths. On
 2026-08-24 that test decoded an ffmpeg-generated 16x16 Constrained Baseline MP4
 with Cisco's Linux x64 2.6.0 `.8.so` whose SHA-256 matched the

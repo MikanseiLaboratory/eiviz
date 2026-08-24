@@ -976,7 +976,7 @@ fn trace_entries() -> Vec<TraceEntry> {
     );
 
     let evidence = "target/certification/evidence.json";
-    let maps: [TraceDefinition<'_>; 22] = [
+    let maps: [TraceDefinition<'_>; 23] = [
         (
             "R01",
             &["eiviz-project::tests", "packaging/tests"],
@@ -1088,7 +1088,7 @@ fn trace_entries() -> Vec<TraceEntry> {
         ),
         (
             "AC-05",
-            &["take_changes_program_pixels_on_same_boundary"],
+            &["take_overlay_and_audio_follow_latch_on_the_same_boundary"],
             &["AUDIO-HIL"],
             "pending",
             &["target/certification/runtime"],
@@ -1138,6 +1138,21 @@ fn trace_entries() -> Vec<TraceEntry> {
             &["NDI-HIL", "OMT-HIL", "DECKLINK-HIL"],
             "pending",
             &["target/certification/hil/interop"],
+        ),
+        (
+            "AC-12",
+            &[
+                "bounded_regression_locks_and_tracks_drift",
+                "explicit_jump_resets_lock_and_filter",
+                "source_counter_wrap_is_unwrapped_without_reset",
+                "domains_and_timebases_never_mix_implicitly",
+            ],
+            &["TIME-HIL-01..08"],
+            "pending",
+            &[
+                "target/certification/evidence.json",
+                "target/certification/hil/timing",
+            ],
         ),
     ];
     maps.into_iter()
@@ -1244,6 +1259,7 @@ mod tests {
         assert!(entries.iter().all(|entry| entry.hil_status != "passed"));
         assert!(entries.iter().any(|entry| entry.requirement_id == "R11"));
         assert!(entries.iter().any(|entry| entry.requirement_id == "AC-11"));
+        assert!(entries.iter().any(|entry| entry.requirement_id == "AC-12"));
     }
 
     #[test]

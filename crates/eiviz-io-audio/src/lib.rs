@@ -98,7 +98,6 @@ pub struct AudioDeviceInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindingMatch {
     PersistentId,
-    UniqueLogicalName,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,10 +140,10 @@ pub enum AudioError {
     },
     #[error("device binding kind `{actual}` does not select `{expected}`")]
     BackendMismatch { expected: String, actual: String },
+    #[error("audio device binding has no exact hardware ID; logical-name fallback is forbidden")]
+    MissingHardwareId,
     #[error("audio device binding `{0}` did not resolve")]
     DeviceNotFound(String),
-    #[error("audio device logical name `{0}` is ambiguous")]
-    AmbiguousDevice(String),
     #[error("audio device `{device}` does not support {direction:?}")]
     WrongDirection {
         device: String,
@@ -186,29 +185,19 @@ pub fn resolve_binding(
         .filter(|device| device.backend == backend)
         .filter(supports_direction)
         .collect::<Vec<_>>();
-    if let Some(persistent_id) = binding.last_seen_hardware_id.as_deref() {
-        return candidates
-            .iter()
-            .find(|device| device.persistent_id == persistent_id)
-            .map(|device| ResolvedBinding {
-                device: (*device).clone(),
-                matched_by: BindingMatch::PersistentId,
-            })
-            .ok_or_else(|| AudioError::DeviceNotFound(persistent_id.into()));
-    }
-    let mut named = candidates
-        .into_iter()
-        .filter(|device| device.display_name == binding.logical_name);
-    let Some(device) = named.next() else {
-        return Err(AudioError::DeviceNotFound(binding.logical_name.clone()));
-    };
-    if named.next().is_some() {
-        return Err(AudioError::AmbiguousDevice(binding.logical_name.clone()));
-    }
-    Ok(ResolvedBinding {
-        device: device.clone(),
-        matched_by: BindingMatch::UniqueLogicalName,
-    })
+    let persistent_id = binding
+        .last_seen_hardware_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or(AudioError::MissingHardwareId)?;
+    candidates
+        .iter()
+        .find(|device| device.persistent_id == persistent_id)
+        .map(|device| ResolvedBinding {
+            device: (*device).clone(),
+            matched_by: BindingMatch::PersistentId,
+        })
+        .ok_or_else(|| AudioError::DeviceNotFound(persistent_id.into()))
 }
 
 /// Performs real host/device enumeration. Platform `cfg` alone is never
@@ -380,25 +369,21 @@ mod tests {
     }
 
     #[test]
-    fn logical_name_rebind_requires_unique_match() {
+    fn missing_hardware_id_never_uses_logical_name() {
         let binding = DeviceBinding {
             id: DeviceBindingId::new(),
             kind: AudioBackend::Wasapi.binding_kind(),
             logical_name: "Interface".into(),
             last_seen_hardware_id: None,
         };
-        let devices = [
-            device("wasapi:a", "Interface"),
-            device("wasapi:b", "Interface"),
-        ];
         assert!(matches!(
             resolve_binding(
                 &binding,
                 AudioBackend::Wasapi,
                 DeviceDirection::Output,
-                &devices
+                &[device("wasapi:a", "Interface")]
             ),
-            Err(AudioError::AmbiguousDevice(_))
+            Err(AudioError::MissingHardwareId)
         ));
     }
 
