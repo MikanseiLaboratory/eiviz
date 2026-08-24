@@ -248,14 +248,17 @@ impl Engine {
             _ => None,
         };
         Self::admit(&g, &env.payload)?;
-        let Inner {
-            sequencer, project, ..
-        } = &mut *g;
-        let ack = sequencer.apply(project, env)?;
+        let (ack, hash) = {
+            let Inner {
+                sequencer, project, ..
+            } = &mut *g;
+            let ack = sequencer.apply(project, env)?;
+            let hash = state_hash(project);
+            (ack, hash)
+        };
         if let Some((input, playback)) = playback_update {
             g.runtime.update_source_playback(input, &playback);
         }
-        let hash = state_hash(project);
         let ev = FlightEvent {
             frame: g.runtime.frame(),
             revision: ack.revision,
