@@ -20,7 +20,8 @@ impl ImageSource {
     }
 
     fn load(&self, pts: MediaTime) -> Result<VideoFrame> {
-        let img = image::open(&self.path)
+        let bytes = std::fs::read(&self.path).map_err(|e| MediaError::Other(e.to_string()))?;
+        let img = image::load_from_memory(&bytes)
             .map_err(|e| MediaError::Other(e.to_string()))?
             .to_rgba8();
         let (w, h) = img.dimensions();

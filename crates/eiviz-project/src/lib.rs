@@ -131,13 +131,21 @@ pub fn import_portable(package: &Path, dest_dir: &Path) -> Result<Project> {
 }
 
 pub fn ingest_asset(project: &mut Project, file: &Path, dest_root: &Path) -> Result<AssetRef> {
+    let asset = stage_asset(file, dest_root)?;
+    project.assets.insert(asset.id, asset.clone());
+    Ok(asset)
+}
+
+/// Copy an asset into the content-addressed store without mutating Project.
+/// The returned reference must be committed through the Command sequencer.
+pub fn stage_asset(file: &Path, dest_root: &Path) -> Result<AssetRef> {
     let bytes = fs::read(file).map_err(|e| ProjectError::Io(e.to_string()))?;
     let hash = hash_bytes(&bytes);
     let rel = format!("assets/{hash}");
     let dest = dest_root.join(&rel);
     fs::create_dir_all(dest.parent().unwrap()).map_err(|e| ProjectError::Io(e.to_string()))?;
     fs::write(&dest, &bytes).map_err(|e| ProjectError::Io(e.to_string()))?;
-    let asset = AssetRef {
+    Ok(AssetRef {
         id: eiviz_core::AssetId::new(),
         original_name: file
             .file_name()
@@ -146,9 +154,7 @@ pub fn ingest_asset(project: &mut Project, file: &Path, dest_root: &Path) -> Res
         sha256_hex: hash,
         relative_path: rel,
         missing: false,
-    };
-    project.assets.insert(asset.id, asset.clone());
-    Ok(asset)
+    })
 }
 
 pub fn autosave_path(path: &Path) -> PathBuf {

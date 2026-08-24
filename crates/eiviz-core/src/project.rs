@@ -1,7 +1,7 @@
 use crate::audio::AudioMatrix;
 use crate::graph::MixingGraph;
 use crate::ids::*;
-use crate::input::{DeviceBinding, Input};
+use crate::input::{DeviceBinding, Input, InputSource};
 use crate::mixing::MixingUnit;
 use crate::output::{Multiview, MultiviewSource, Output};
 use crate::scene::Scene;
@@ -147,6 +147,38 @@ impl Project {
                 self.schema_version
             )));
         }
+        for input in self.inputs.values() {
+            match input.source {
+                InputSource::Image { asset } | InputSource::Video { asset, .. } => {
+                    if !self.assets.contains_key(&asset) {
+                        return Err(DomainError::InvalidRef(format!(
+                            "input {} -> asset {}",
+                            input.id, asset
+                        )));
+                    }
+                }
+                InputSource::DeckLink { binding } | InputSource::AudioDevice { binding } => {
+                    if !self.device_bindings.contains_key(&binding) {
+                        return Err(DomainError::InvalidRef(format!(
+                            "input {} -> device binding {}",
+                            input.id, binding
+                        )));
+                    }
+                }
+                InputSource::MixFeed { unit, .. } => {
+                    if !self.mixing_units.contains_key(&unit) {
+                        return Err(DomainError::InvalidRef(format!(
+                            "input {} -> mixing unit {}",
+                            input.id, unit
+                        )));
+                    }
+                }
+                InputSource::ColorBars
+                | InputSource::SolidColor { .. }
+                | InputSource::Ndi { .. }
+                | InputSource::Omt { .. } => {}
+            }
+        }
         for scene in self.scenes.values() {
             for item in &scene.items {
                 if !self.inputs.contains_key(&item.input) {
@@ -194,10 +226,24 @@ impl Project {
                 }
             }
         }
-        for view in self.multiviews.values() {
-            if !self.mixing_units.contains_key(&view.owner) {
+        for output in self.outputs.values() {
+            let owner = self.mixing_units.get(&output.owner).ok_or_else(|| {
+                DomainError::InvalidRef(format!("output {} owner {}", output.id, output.owner))
+            })?;
+            if !owner.outputs.contains(&output.id) {
                 return Err(DomainError::InvalidRef(format!(
-                    "multiview {} owner {}",
+                    "output {} missing from owner {}",
+                    output.id, output.owner
+                )));
+            }
+        }
+        for view in self.multiviews.values() {
+            let owner = self.mixing_units.get(&view.owner).ok_or_else(|| {
+                DomainError::InvalidRef(format!("multiview {} owner {}", view.id, view.owner))
+            })?;
+            if !owner.multiviews.contains(&view.id) {
+                return Err(DomainError::InvalidRef(format!(
+                    "multiview {} missing from owner {}",
                     view.id, view.owner
                 )));
             }
@@ -256,16 +302,26 @@ impl Project {
         if self.inputs.contains_key(&input.id) {
             return Err(DomainError::DuplicateId(input.id.to_string()));
         }
-        self.inputs.insert(input.id, input);
-        self.validate()
+        let id = input.id;
+        self.inputs.insert(id, input);
+        if let Err(error) = self.validate() {
+            self.inputs.remove(&id);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn insert_scene(&mut self, scene: Scene) -> Result<()> {
         if self.scenes.contains_key(&scene.id) {
             return Err(DomainError::DuplicateId(scene.id.to_string()));
         }
-        self.scenes.insert(scene.id, scene);
-        self.validate()
+        let id = scene.id;
+        self.scenes.insert(id, scene);
+        if let Err(error) = self.validate() {
+            self.scenes.remove(&id);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn mixing_unit_mut(&mut self, id: MixingUnitId) -> Result<&mut MixingUnit> {
@@ -303,7 +359,9 @@ mod tests {
                 playback: Default::default(),
             }],
         };
+        let id = scene.id;
         assert!(p.insert_scene(scene).is_err());
+        assert!(!p.scenes.contains_key(&id));
     }
 
     #[test]

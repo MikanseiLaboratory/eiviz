@@ -1,7 +1,10 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
-use eiviz_core::{ClientId, MixingUnitId, MultiviewId, OutputId, Project};
+use eiviz_core::{AssetRef, ClientId, MixingUnitId, MultiviewId, OutputId, Project};
 use eiviz_media::{MediaSink, MediaSource, VideoFrame};
-use eiviz_project::{append_journal, load, save_atomic, save_autosave};
+use eiviz_project::{
+    append_journal, export_portable as export_project_portable,
+    import_portable as import_project_portable, load, save_atomic, save_autosave, stage_asset,
+};
 use eiviz_runtime::{Runtime, TickResult};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -108,6 +111,15 @@ impl Engine {
 
     pub fn set_asset_root(&self, root: impl Into<PathBuf>) {
         self.inner.lock().runtime.set_asset_root(root);
+    }
+
+    pub fn ingest_asset(&self, file: &Path, asset_root: &Path) -> Result<AssetRef> {
+        let asset = stage_asset(file, asset_root)?;
+        self.submit_payload(Command::AddAsset {
+            asset: asset.clone(),
+        })?;
+        self.set_asset_root(asset_root.to_path_buf());
+        Ok(asset)
     }
 
     pub fn set_autosave_path(&self, path: impl Into<PathBuf>) {
@@ -276,8 +288,30 @@ impl Engine {
         Ok(())
     }
 
+    pub fn export_portable(&self, path: &Path, asset_root: &Path) -> Result<()> {
+        let project = self.snapshot();
+        export_project_portable(&project, path, asset_root)?;
+        Ok(())
+    }
+
+    pub fn import_portable(path: &Path, destination: &Path) -> Result<Self> {
+        let project = import_project_portable(path, destination)?;
+        let engine = Self::from_project(project)?;
+        engine.set_asset_root(destination.to_path_buf());
+        Ok(engine)
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         Self::from_project(load(path)?)
+    }
+
+    pub fn load_project(&self, path: &Path, asset_root: Option<&Path>) -> Result<()> {
+        self.replace_project(load(path)?, asset_root.map(std::path::Path::to_path_buf))
+    }
+
+    pub fn import_portable_into(&self, path: &Path, destination: &Path) -> Result<()> {
+        let project = import_project_portable(path, destination)?;
+        self.replace_project(project, Some(destination.to_path_buf()))
     }
 
     pub fn primary_unit(&self) -> MixingUnitId {
@@ -289,6 +323,20 @@ impl Engine {
             .keys()
             .next()
             .expect("default mix")
+    }
+
+    fn replace_project(&self, project: Project, asset_root: Option<PathBuf>) -> Result<()> {
+        let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
+        if let Some(root) = asset_root {
+            runtime.set_asset_root(root);
+        }
+        let mut inner = self.inner.lock();
+        inner.project = project;
+        inner.runtime = runtime;
+        inner.sequencer = Sequencer::default();
+        inner.flight.clear();
+        inner.sinks.clear();
+        Ok(())
     }
 
     pub fn last_program(&self, unit: MixingUnitId) -> Option<VideoFrame> {
@@ -534,6 +582,79 @@ mod tests {
         engine.tick().unwrap();
         assert_eq!(sink_a.pixels.lock()[0], [255, 0, 0, 255]);
         assert_eq!(sink_b.pixels.lock()[0], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn asset_ingest_and_portable_import_replace_project_in_place() {
+        let root = std::env::temp_dir().join(format!("eiviz-asset-engine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("still.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([12, 34, 56, 255]))
+            .save(&source)
+            .unwrap();
+        let asset_root = root.join("store");
+        let package = root.join("portable.eiviz");
+        let imported_root = root.join("imported");
+
+        let engine = Engine::new("asset project");
+        let asset = engine.ingest_asset(&source, &asset_root).unwrap();
+        assert_eq!(
+            engine.snapshot().assets[&asset.id].sha256_hex,
+            asset.sha256_hex
+        );
+        let input = Input {
+            id: InputId::new(),
+            name: "still".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Image { asset: asset.id },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "still".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let unit = engine.primary_unit();
+        engine.submit_payload(Command::AddInput { input }).unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        let tick = engine.tick().unwrap();
+        assert_eq!(tick.programs[&unit].pixel(0, 0), [12, 34, 56, 255]);
+        engine.export_portable(&package, &asset_root).unwrap();
+
+        let same_engine_id = engine.client();
+        engine
+            .import_portable_into(&package, &imported_root)
+            .unwrap();
+        assert_eq!(engine.client(), same_engine_id);
+        assert_eq!(
+            engine.snapshot().assets[&asset.id].original_name,
+            "still.png"
+        );
+        assert!(
+            imported_root
+                .join(&engine.snapshot().assets[&asset.id].relative_path)
+                .exists()
+        );
+        let imported_tick = engine.tick().unwrap();
+        assert_eq!(imported_tick.programs[&unit].pixel(0, 0), [12, 34, 56, 255]);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(not(feature = "wgpu-backend"))]

@@ -1,10 +1,10 @@
 use eiviz_core::{
-    AudioBusId, ClientId, CommandId, InputId, MixingUnitId, OutputId, OverlayId, SceneId,
-    SceneItemId,
+    AssetRef, AudioRoute, DeviceBinding, DomainError, Input, MixingUnit, Multiview, Output,
+    OverlaySlot, Playback, Project, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
 };
 use eiviz_core::{
-    AudioRoute, DeviceBinding, DomainError, Input, MixingUnit, Multiview, Output, OverlaySlot,
-    Playback, Project, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
+    AudioBusId, ClientId, CommandId, InputId, MixingUnitId, OutputId, OverlayId, SceneId,
+    SceneItemId,
 };
 use eiviz_time::MediaTime;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,9 @@ pub enum Command {
     },
     AddInput {
         input: Input,
+    },
+    AddAsset {
+        asset: AssetRef,
     },
     RemoveInput {
         id: InputId,
@@ -197,6 +200,7 @@ impl Sequencer {
                 Command::Take { .. }
                     | Command::SetOutputEnabled { .. }
                     | Command::AddInput { .. }
+                    | Command::AddAsset { .. }
                     | Command::RemoveInput { .. }
             ) {
                 return Err(CommandError::Rejected(
@@ -206,8 +210,10 @@ impl Sequencer {
             self.last_coalesce.insert(key.clone(), env.id);
             let _ = self.last_coalesce.get(key);
         }
-        apply_payload(project, &env.payload)?;
-        project.validate()?;
+        let mut candidate = project.clone();
+        apply_payload(&mut candidate, &env.payload)?;
+        candidate.validate()?;
+        *project = candidate;
         self.revision += 1;
         self.applied.insert(env.id, self.revision);
         Ok(CommandAck {
@@ -226,6 +232,14 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             }
         }
         Command::AddInput { input } => project.insert_input(input.clone())?,
+        Command::AddAsset { asset } => {
+            if project.assets.contains_key(&asset.id) {
+                return Err(CommandError::Domain(DomainError::DuplicateId(
+                    asset.id.to_string(),
+                )));
+            }
+            project.assets.insert(asset.id, asset.clone());
+        }
         Command::RemoveInput { id } => {
             project.inputs.remove(id);
         }
@@ -486,5 +500,28 @@ mod tests {
         assert!(ack2.duplicate);
         assert_eq!(p.mixing_units[&unit].program.scene, Some(scene.id));
         assert!(!state_hash(&p).is_empty());
+    }
+
+    #[test]
+    fn invalid_command_rolls_back_project_and_revision() {
+        let mut project = Project::new("rollback");
+        let before = project.clone();
+        let mut sequencer = Sequencer::default();
+        let input = Input {
+            id: InputId::new(),
+            name: "missing image".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::Image {
+                asset: eiviz_core::AssetId::new(),
+            },
+        };
+        let result = sequencer.apply(
+            &mut project,
+            CommandEnvelope::new(ClientId::new(), Command::AddInput { input }),
+        );
+        assert!(result.is_err());
+        assert_eq!(project, before);
+        assert_eq!(sequencer.revision(), 0);
     }
 }

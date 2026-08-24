@@ -20,6 +20,9 @@ all pass:
   JSON-lines API on `127.0.0.1:8091`. Set `EIVIZ_CONTROL=off` to disable.
 - Mixing Units expose rendered multi-tile Multiview frames for Input, Preview,
   and Program sources; the desktop bootstraps a PRV/PGM two-up view.
+- Desktop can ingest PNG/JPEG files into the content-addressed asset store,
+  create a fullscreen Preview scene, and export/import portable `.eiviz`
+  packages without replacing the running control-server Engine instance.
 - Real OMT receive/output adapter through the official `libomt` C ABI
   (runtime-loaded); interop HIL is still pending
 - Capability stubs only for NDI / DeckLink / ASIO / gpu-video

@@ -23,3 +23,6 @@ tracing.workspace = true
 [features]
 default = []
 wgpu-backend = ["eiviz-runtime/wgpu-backend"]
+
+[dev-dependencies]
+image.workspace = true

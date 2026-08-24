@@ -713,7 +713,8 @@ fn fill_mixfeeds(
 }
 
 fn decode_rgba(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
-    let img = image::open(path).ok()?.to_rgba8();
+    let bytes = std::fs::read(path).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     Some((w, h, img.into_raw()))
 }

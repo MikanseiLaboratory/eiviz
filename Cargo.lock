@@ -756,6 +756,7 @@ dependencies = [
  "eiviz-project",
  "eiviz-runtime",
  "eiviz-time",
+ "image",
  "parking_lot",
  "serde",
  "serde_json",

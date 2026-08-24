@@ -28,6 +28,9 @@ struct DesktopApp {
     status: String,
     selected_scene: Option<SceneId>,
     save_path: String,
+    asset_root: String,
+    image_path: String,
+    portable_path: String,
     omt_address: String,
     omt_output_name: String,
     omt_discovered: Vec<String>,
@@ -106,6 +109,9 @@ impl DesktopApp {
             status: "ready".into(),
             selected_scene: None,
             save_path: "project.json".into(),
+            asset_root: "eiviz-assets".into(),
+            image_path: String::new(),
+            portable_path: "project.eiviz".into(),
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
             omt_output_name: "eiviz Program".into(),
             omt_discovered: Vec::new(),
@@ -178,6 +184,56 @@ impl DesktopApp {
         }
         self.selected_scene = Some(scene.id);
         self.status = format!("OMT connected: {address}");
+    }
+
+    fn add_image(&mut self) {
+        let path = std::path::Path::new(self.image_path.trim());
+        let root = std::path::Path::new(self.asset_root.trim());
+        let asset = match self.engine.ingest_asset(path, root) {
+            Ok(asset) => asset,
+            Err(error) => {
+                self.status = format!("image ingest: {error}");
+                return;
+            }
+        };
+        let input = Input {
+            id: InputId::new(),
+            name: asset.original_name.clone(),
+            tags: vec!["image".into()],
+            groups: vec![],
+            source: InputSource::Image { asset: asset.id },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: asset.original_name,
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddInput { input }) {
+            self.status = format!("image input: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.submit_payload(Command::AddScene {
+            scene: scene.clone(),
+        }) {
+            self.status = format!("image scene: {error}");
+            return;
+        }
+        let unit = self.engine.primary_unit();
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("image preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("image ready: {}", scene.name);
     }
 }
 
@@ -294,12 +350,49 @@ impl eframe::App for DesktopApp {
                     }
                 }
                 if ui.button("Load").clicked() {
-                    match Engine::load(std::path::Path::new(&self.save_path)) {
-                        Ok(loaded) => {
-                            self.engine = loaded.shared();
+                    match self.engine.load_project(
+                        std::path::Path::new(&self.save_path),
+                        Some(std::path::Path::new(&self.asset_root)),
+                    ) {
+                        Ok(()) => {
+                            self.selected_scene = None;
                             self.status = "loaded".into();
                         }
                         Err(e) => self.status = format!("load: {e}"),
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("asset root");
+                ui.text_edit_singleline(&mut self.asset_root);
+                ui.label("image");
+                ui.text_edit_singleline(&mut self.image_path);
+                if ui.button("Add Image").clicked() {
+                    self.add_image();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("portable");
+                ui.text_edit_singleline(&mut self.portable_path);
+                if ui.button("Export .eiviz").clicked() {
+                    match self.engine.export_portable(
+                        std::path::Path::new(&self.portable_path),
+                        std::path::Path::new(&self.asset_root),
+                    ) {
+                        Ok(()) => self.status = "portable exported".into(),
+                        Err(error) => self.status = format!("portable export: {error}"),
+                    }
+                }
+                if ui.button("Import .eiviz").clicked() {
+                    match self.engine.import_portable_into(
+                        std::path::Path::new(&self.portable_path),
+                        std::path::Path::new(&self.asset_root),
+                    ) {
+                        Ok(()) => {
+                            self.selected_scene = None;
+                            self.status = "portable imported".into();
+                        }
+                        Err(error) => self.status = format!("portable import: {error}"),
                     }
                 }
             });
