@@ -386,7 +386,9 @@ mod tests {
 
     #[test]
     fn local_server_receives_avc_and_aac_rtmp_messages() {
-        let _network_guard = crate::NETWORK_TEST_LOCK.lock().unwrap();
+        let _network_guard = crate::NETWORK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (result_tx, result_rx) = mpsc::channel();
@@ -429,12 +431,6 @@ mod tests {
 
     fn run_mock_server(listener: TcpListener, result: mpsc::Sender<(u64, u64)>) {
         let (mut stream, _) = listener.accept().unwrap();
-        stream
-            // Keep the mock peer's read deadline comfortably above the
-            // publisher's connect timeout. On macOS, equal deadlines can race
-            // and surface EAGAIN before the session command is scheduled.
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
         let mut handshake = Handshake::new(PeerType::Server);
         let mut buffer = [0u8; 16 * 1024];
         loop {
