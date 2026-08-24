@@ -1,25 +1,44 @@
-use eiviz_media::{Capability, VideoFrame};
-use parking_lot::Mutex;
+//! Open Media Transport adapter.
+//!
+//! Production capture uses the official MIT-licensed `libomt` C ABI loaded at
+//! runtime. Missing native libraries are reported as unavailable; they are
+//! never replaced by simulated frames.
+
+mod native;
+
+pub use native::{OmtError, OmtSink, OmtSource, discover_sources, loaded_library};
+
+use eiviz_media::Capability;
 
 pub fn probe() -> Capability {
-    Capability {
-        id: "omt".into(),
-        available: false,
-        detail: "OMT adapter compiled; native libomt not linked in this build".into(),
+    match loaded_library() {
+        Ok(path) => Capability {
+            id: "omt".into(),
+            available: true,
+            detail: format!("official libomt C ABI loaded from {}", path.display()),
+        },
+        Err(error) => Capability {
+            id: "omt".into(),
+            available: false,
+            detail: error.to_string(),
+        },
     }
 }
 
+/// Test-only loopback. Runtime does not instantiate this type for OMT inputs.
+#[cfg(test)]
 #[derive(Default)]
-pub struct SimulatedOmt {
-    last: Mutex<Option<VideoFrame>>,
+struct SimulatedOmt {
+    last: parking_lot::Mutex<Option<eiviz_media::VideoFrame>>,
 }
 
+#[cfg(test)]
 impl SimulatedOmt {
-    pub fn send(&self, frame: &VideoFrame) {
+    fn send(&self, frame: &eiviz_media::VideoFrame) {
         *self.last.lock() = Some(frame.clone());
     }
 
-    pub fn receive(&self) -> Option<VideoFrame> {
+    fn receive(&self) -> Option<eiviz_media::VideoFrame> {
         self.last.lock().clone()
     }
 }
@@ -27,12 +46,12 @@ impl SimulatedOmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eiviz_media::VideoFrame;
     use eiviz_time::MediaTime;
 
     #[test]
     fn reports_capability() {
         assert_eq!(super::probe().id, "omt");
-        assert!(!super::probe().available);
     }
 
     #[test]

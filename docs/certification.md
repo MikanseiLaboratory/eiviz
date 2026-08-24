@@ -45,3 +45,6 @@
 ## トレーサビリティ
 
 各要件 ID に test 名、HIL scenario、OS、実測、既知制限を紐付けます。Phase 完了は証跡が揃った時点です。
+
+OMT の具体的な未実施シナリオは [hil/omt.md](hil/omt.md) を参照してください。
+`OMT-HIL-01..09` が未実施のため、OMT および Phase 5 は未完了です。

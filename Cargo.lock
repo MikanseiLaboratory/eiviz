@@ -817,9 +817,12 @@ dependencies = [
 name = "eiviz-io-omt"
 version = "0.1.0"
 dependencies = [
+ "eiviz-core",
  "eiviz-media",
  "eiviz-time",
+ "libloading",
  "parking_lot",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

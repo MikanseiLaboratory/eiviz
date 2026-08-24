@@ -5,7 +5,7 @@ use eiviz_core::{
     MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, Project, RouteMode,
 };
 use eiviz_gpu::{RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
-use eiviz_media::{AudioBuffer, BoundedSlot, QueuePolicy, VideoFrame};
+use eiviz_media::{AudioBuffer, BoundedSlot, MediaSource, QueuePolicy, VideoFrame};
 use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -58,6 +58,7 @@ pub struct Runtime {
     asset_root: Option<PathBuf>,
     image_cache: HashMap<AssetId, VideoFrame>,
     delay_lines: HashMap<(InputId, AudioBusId), Vec<VecDeque<f32>>>,
+    sources: HashMap<InputId, Arc<dyn MediaSource>>,
     simulated: HashMap<InputId, VideoFrame>,
     pub peak_meters: HashMap<AudioBusId, f32>,
     #[cfg(feature = "wgpu-backend")]
@@ -98,6 +99,7 @@ impl Runtime {
             asset_root: None,
             image_cache: HashMap::new(),
             delay_lines: HashMap::new(),
+            sources: HashMap::new(),
             simulated: HashMap::new(),
             peak_meters: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
@@ -116,6 +118,15 @@ impl Runtime {
 
     pub fn inject_simulated(&mut self, id: InputId, frame: VideoFrame) {
         self.simulated.insert(id, frame);
+    }
+
+    pub fn attach_source(&mut self, source: Arc<dyn MediaSource>) {
+        self.sources.insert(source.id(), source);
+    }
+
+    pub fn detach_source(&mut self, id: InputId) {
+        self.sources.remove(&id);
+        self.last_good_inputs.remove(&id);
     }
 
     pub fn clear_simulated(&mut self, id: InputId) {
@@ -220,7 +231,7 @@ impl Runtime {
             sample_index,
             sample_count as usize,
             self.sample_rate,
-        );
+        )?;
         self.peak_meters = meters.clone();
         self.metrics.frame = self.frame;
         self.frame += 1;
@@ -267,6 +278,28 @@ impl Runtime {
         let w = project.video.width.clamp(16, 1920);
         let h = project.video.height.clamp(16, 1080);
         for input in project.inputs.values() {
+            if let Some(source) = self.sources.get(&input.id) {
+                match source.pull_video(pts, project.video.frame_rate) {
+                    Ok(Some(mut frame)) => {
+                        frame.source = Some(input.id);
+                        self.last_good_inputs.insert(input.id, frame.clone());
+                        out.insert(input.id, frame);
+                        continue;
+                    }
+                    Ok(None) => {
+                        let frame =
+                            self.missing_frame(project, input.id, w, h, pts, "source pending")?;
+                        out.insert(input.id, frame);
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(RuntimeError::Other(format!(
+                            "source {} video pull failed: {error}",
+                            input.id
+                        )));
+                    }
+                }
+            }
             if let Some(sim) = self.simulated.get(&input.id) {
                 let mut f = sim.clone();
                 f.pts = pts;
@@ -390,10 +423,31 @@ impl Runtime {
         sample_index: u64,
         frames: usize,
         sample_rate: u32,
-    ) -> (AudioBuffer, HashMap<AudioBusId, f32>) {
+    ) -> Result<(AudioBuffer, HashMap<AudioBusId, f32>)> {
         let ch = project.audio.channels.max(1) as usize;
         let mut mixed =
             AudioBuffer::silence(sample_index, sample_rate, project.audio.channels, frames);
+        let mut source_audio = HashMap::new();
+        for route in &project.audio_matrix.routes {
+            if source_audio.contains_key(&route.input) {
+                continue;
+            }
+            let Some(source) = self.sources.get(&route.input) else {
+                continue;
+            };
+            let buffer = source.pull_audio(sample_index, frames).map_err(|error| {
+                RuntimeError::Other(format!("source {} audio pull failed: {error}", route.input))
+            })?;
+            if let Some(buffer) = buffer {
+                if buffer.sample_rate != sample_rate {
+                    return Err(RuntimeError::Other(format!(
+                        "source {} sample rate {} does not match project {}; explicit ASRC is required",
+                        route.input, buffer.sample_rate, sample_rate
+                    )));
+                }
+                source_audio.insert(route.input, buffer);
+            }
+        }
         for route in &project.audio_matrix.routes {
             let follow_active = match route.mode {
                 RouteMode::Manual => true,
@@ -431,11 +485,27 @@ impl Runtime {
             let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
             let g_l = angle.cos() * std::f32::consts::SQRT_2;
             let g_r = angle.sin() * std::f32::consts::SQRT_2;
+            let has_registered_source = self.sources.contains_key(&route.input);
             for n in 0..frames {
-                let t = (sample_index + n as u64) as f32 / sample_rate as f32;
-                let s = (2.0 * std::f32::consts::PI * 1000.0 * t).sin() * gain * 0.1;
+                let generated = if has_registered_source {
+                    None
+                } else {
+                    let t = (sample_index + n as u64) as f32 / sample_rate as f32;
+                    Some((2.0 * std::f32::consts::PI * 1000.0 * t).sin() * 0.1)
+                };
                 #[allow(clippy::needless_range_loop)]
                 for c in 0..ch {
+                    let source_sample = source_audio
+                        .get(&route.input)
+                        .and_then(|buffer| {
+                            buffer
+                                .planes
+                                .get(c.min(buffer.planes.len().saturating_sub(1)))
+                        })
+                        .and_then(|plane| plane.get(n))
+                        .copied()
+                        .or(generated)
+                        .unwrap_or(0.0);
                     let g = if ch >= 2 {
                         if c == 0 {
                             g_l
@@ -447,7 +517,7 @@ impl Runtime {
                     } else {
                         1.0
                     };
-                    lines[c].push_back(s * g);
+                    lines[c].push_back(source_sample * gain * g);
                     let out = if lines[c].len() > delay {
                         lines[c].pop_front().unwrap_or(0.0)
                     } else {
@@ -467,7 +537,7 @@ impl Runtime {
             }
             meters.insert(bus.id, peak);
         }
-        (mixed, meters)
+        Ok((mixed, meters))
     }
 }
 
@@ -515,6 +585,34 @@ mod tests {
         Transform2D, TransitionStyle,
     };
     use eiviz_core::{InputId, SceneId, SceneItemId};
+
+    struct RegisteredSource {
+        id: InputId,
+        video: VideoFrame,
+        audio: AudioBuffer,
+    }
+
+    impl MediaSource for RegisteredSource {
+        fn id(&self) -> InputId {
+            self.id
+        }
+
+        fn pull_video(
+            &self,
+            _pts: MediaTime,
+            _rate: eiviz_time::FrameRate,
+        ) -> eiviz_media::Result<Option<VideoFrame>> {
+            Ok(Some(self.video.clone()))
+        }
+
+        fn pull_audio(
+            &self,
+            _sample_index: u64,
+            _frames: usize,
+        ) -> eiviz_media::Result<Option<AudioBuffer>> {
+            Ok(Some(self.audio.clone()))
+        }
+    }
 
     fn setup() -> (Project, InputId, SceneId, MixingUnitId) {
         let mut p = Project::new("rt");
@@ -739,5 +837,29 @@ mod tests {
         let mut rt = Runtime::new(48_000);
         let err = rt.tick(&mut p).unwrap_err();
         assert!(matches!(err, RuntimeError::MissingMedia(_)));
+    }
+
+    #[test]
+    fn registered_live_source_reaches_program_and_audio_matrix() {
+        let (mut p, iid, sid, unit) = setup();
+        p.inputs.get_mut(&iid).unwrap().source = InputSource::Omt {
+            url: "omt://test".into(),
+        };
+        p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
+        p.audio_matrix.routes[0].mode = RouteMode::Manual;
+        let video = VideoFrame::rgba_solid(1, MediaTime::ZERO, 16, 16, [7, 8, 9, 255]);
+        let mut audio = AudioBuffer::silence(0, 48_000, 2, 801);
+        audio.planes[0].fill(0.5);
+        audio.planes[1].fill(-0.25);
+        let mut rt = Runtime::new(48_000);
+        rt.attach_source(Arc::new(RegisteredSource {
+            id: iid,
+            video,
+            audio,
+        }));
+        let tick = rt.tick(&mut p).unwrap();
+        assert_eq!(tick.programs[&unit].pixel(8, 8), [7, 8, 9, 255]);
+        assert!(tick.audio.planes[0].iter().any(|sample| *sample > 0.4));
+        assert!(tick.audio.planes[1].iter().any(|sample| *sample < -0.2));
     }
 }

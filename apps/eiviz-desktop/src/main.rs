@@ -26,6 +26,10 @@ struct DesktopApp {
     status: String,
     selected_scene: Option<SceneId>,
     save_path: String,
+    omt_address: String,
+    omt_output_name: String,
+    omt_discovered: Vec<String>,
+    omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
     drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
 }
 
@@ -33,13 +37,80 @@ impl DesktopApp {
     fn new() -> Self {
         let engine = Engine::new("Untitled").shared();
         bootstrap(&engine);
-        Self {
+        let mut app = Self {
             engine,
             status: "ready".into(),
             selected_scene: None,
             save_path: "project.json".into(),
+            omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
+            omt_output_name: "eiviz Program".into(),
+            omt_discovered: Vec::new(),
+            omt_connections: Vec::new(),
             drag_item: None,
+        };
+        if !app.omt_address.is_empty() {
+            app.connect_omt();
         }
+        app
+    }
+
+    fn connect_omt(&mut self) {
+        let address = self.omt_address.trim().to_owned();
+        if address.is_empty() {
+            self.status = "OMT: enter a source address".into();
+            return;
+        }
+        let input = Input {
+            id: InputId::new(),
+            name: format!("OMT {address}"),
+            tags: vec!["omt".into(), "live".into()],
+            groups: vec![],
+            source: InputSource::Omt {
+                url: address.clone(),
+            },
+        };
+        let source = match eiviz_io_omt::OmtSource::connect(input.id, address.clone()) {
+            Ok(source) => Arc::new(source),
+            Err(error) => {
+                self.status = format!("OMT connect: {error}");
+                return;
+            }
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: format!("OMT {address}"),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddInput {
+            input: input.clone(),
+        }) {
+            self.status = format!("OMT input: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.submit_payload(Command::AddScene {
+            scene: scene.clone(),
+        }) {
+            self.status = format!("OMT scene: {error}");
+            return;
+        }
+        self.engine.attach_source(source.clone());
+        self.omt_connections.push(source);
+        let unit = self.engine.primary_unit();
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("OMT preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("OMT connected: {address}");
     }
 }
 
@@ -197,6 +268,53 @@ impl eframe::App for DesktopApp {
                         "unavailable"
                     }
                 ));
+            }
+            ui.separator();
+            ui.heading("OMT Capture");
+            ui.text_edit_singleline(&mut self.omt_address);
+            ui.horizontal(|ui| {
+                if ui.button("Discover").clicked() {
+                    match eiviz_io_omt::discover_sources() {
+                        Ok(sources) => {
+                            self.omt_discovered = sources;
+                            self.status = format!("OMT: {} source(s)", self.omt_discovered.len());
+                        }
+                        Err(error) => self.status = format!("OMT discovery: {error}"),
+                    }
+                }
+                if ui.button("Connect").clicked() {
+                    self.connect_omt();
+                }
+            });
+            for address in &self.omt_discovered {
+                if ui
+                    .selectable_label(self.omt_address == *address, address)
+                    .clicked()
+                {
+                    self.omt_address.clone_from(address);
+                }
+            }
+            for source in &self.omt_connections {
+                let detail = source
+                    .last_error()
+                    .unwrap_or_else(|| "no adapter error".into());
+                ui.label(format!(
+                    "{}: {:?} ({detail})",
+                    source.address(),
+                    source.health()
+                ));
+            }
+            ui.label("Program output");
+            ui.text_edit_singleline(&mut self.omt_output_name);
+            if ui.button("Start OMT Output").clicked() {
+                match eiviz_io_omt::OmtSink::create(self.omt_output_name.trim()) {
+                    Ok(sink) => {
+                        self.engine.attach_sink(Arc::new(sink));
+                        self.status =
+                            format!("OMT output started: {}", self.omt_output_name.trim());
+                    }
+                    Err(error) => self.status = format!("OMT output: {error}"),
+                }
             }
             if let Some(u) = &unit {
                 ui.separator();

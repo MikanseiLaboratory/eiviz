@@ -1,6 +1,6 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
 use eiviz_core::{ClientId, MixingUnitId, Project};
-use eiviz_media::{MediaSink, VideoFrame};
+use eiviz_media::{MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{append_journal, load, save_atomic, save_autosave};
 use eiviz_runtime::{Runtime, TickResult};
 use parking_lot::Mutex;
@@ -117,6 +117,14 @@ impl Engine {
 
     pub fn attach_sink(&self, sink: Arc<dyn MediaSink>) {
         self.inner.lock().sinks.push(sink);
+    }
+
+    pub fn attach_source(&self, source: Arc<dyn MediaSource>) {
+        self.inner.lock().runtime.attach_source(source);
+    }
+
+    pub fn detach_source(&self, id: eiviz_core::InputId) {
+        self.inner.lock().runtime.detach_source(id);
     }
 
     pub fn client(&self) -> ClientId {

@@ -52,6 +52,12 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 
 source は `MediaSource`、sink は `MediaSink` です。queue は bounded、policy は用途別です。
 
+Native source adapter は専用受信 thread で vendor/network API を呼び、
+所有権のある `VideoFrame` / `AudioBuffer` へコピーしてから bounded slot
+へ公開します。Runtime tick は登録済み `MediaSource` から非blocking pull
+し、`InputId` で Project の論理 Input と結びます。adapter 未登録や受信前
+は Project の missing-media policy を適用し、simulator を暗黙使用しません。
+
 - Program: drop しない。間に合わなければ last-good を cadence どおり繰り返す
 - Preview/Multiview: latest-wins
 - Recorder/Network: 独立。満杯時は自分だけ Degraded

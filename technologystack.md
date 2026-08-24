@@ -14,6 +14,7 @@
 | tiny_http | 0.12.0 | localhost HTTP |
 | gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
 | Smelter | 非同梱 | ADR-0002 |
-| NDI / OMT / DeckLink / ASIO | feature + HIL | ADR-0007 |
+| OMT libomt C ABI | v1.0.0.16 header/binary profile | MIT、runtime load、HIL pending |
+| NDI / DeckLink / ASIO | feature + HIL | ADR-0007 |
 
 認定プロファイル: 1920×1080p, `60000/1001` fps, SDR BT.709 8-bit, 48 kHz。

@@ -60,7 +60,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R06.5 サンプルレート差は ASRC。callback 内 allocation / blocking / I/O 禁止
 
 ### R07 I/O
-- R07.1 NDI: grafton-ndi（feature）。OMT: 公式 C ABI（feature）
+- R07.1 NDI: grafton-ndi（feature）。OMT: 公式 `libomt` C ABIをruntime loadし、discovery/receive/send、BGRA/UYVY映像、FPA1音声、timestamp、tally/metadata、reconnectを実装する。ライブラリ欠落時にsimulatorへ切り替えない
 - R07.2 DeckLink: SDK 16 shim（feature）。Audio: CPAL。Windows は WASAPI 必須、ASIO はライセンス後
 - R07.3 SDK 未導入でも core は起動し、capability 不足を表示する
 - R07.4 各 source/sink は bounded queue。遅い sink が Program を止めない
@@ -111,3 +111,4 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - AC-08 無効参照・能力超過・欠落機器は診断付きで拒否し、プロセスは継続
 - AC-09 認定負荷 24h で内部要因の Program drop/repeat と audio xrun が 0
 - AC-10 lock 後 A/V sync は暫定 P99 ±1 ms、最大 ±5 ms（実測で変更する場合は ADR）
+- AC-11 実I/Oは公式reference toolまたは別PCとの相互運用証跡が必要。stub、probe、同一processのsimulated loopbackだけでは合格にしない

@@ -59,6 +59,7 @@ glam = { version = "0.30.5", features = ["serde"] }
 hex = "0.4.3"
 hound = "3.5.1"
 image = { version = "0.25.6", default-features = false, features = ["png", "jpeg"] }
+libloading = "0.8.9"
 parking_lot = "0.12.4"
 pollster = "0.4.0"
 serde = { version = "1.0.219", features = ["derive"] }

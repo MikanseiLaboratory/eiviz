@@ -14,8 +14,11 @@ license from Vizrt and compliance with the NDI SDK license agreement.
 
 OMT (Open Media Transport)
 --------------------------
-OMT native libraries, if used, remain under their upstream license. Default
-builds do not link libomt.
+The OMT adapter implements the official libomt C ABI and loads libomt at
+runtime. libomt/libomtnet/libvmx are MIT-licensed by the Open Media Transport
+contributors. They are not vendored in the default build. Distributions that
+bundle them must include their MIT notice. The target ABI is official release
+v1.0.0.16.
 
 Blackmagic DeckLink / Desktop Video
 -----------------------------------
@@ -33,7 +36,7 @@ that is kept out of the MIT binary.
 H.264 / AVC
 -----------
 The software encoder in `eiviz-codec-software` emits Baseline I_PCM access
-units for tests and fallback recording. Product distributions that encode
+units for tests and an explicitly selected software recording profile. Product distributions that encode
 or decode AVC in the field may require MPEG-LA / Via LA patent licenses.
 AAC encoding is not included in the default tree; PCM or a separately
 licensed encoder must be used until an AAC adapter is certified.

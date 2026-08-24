@@ -6,15 +6,21 @@ and feature-gated I/O adapters.
 
 ## Status
 
-Phase 0–1 of the architecture plan are in-tree:
+Parts of the architecture plan are in-tree. No phase is considered complete
+until its implementation, runtime wiring, interop, and required HIL evidence
+all pass:
 
 - Deterministic core (`eiviz-time`, `eiviz-core`, `eiviz-command`, `eiviz-project`)
 - Explicit CpuReference compositor + virtual-clock runtime (`eiviz-gpu`, `eiviz-runtime`, `eiviz-engine`). `Wgpu` is a separate project backend, never a silent fallback.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
-- Adapter stubs for NDI / OMT / DeckLink / ASIO / gpu-video (capability probes)
+- Real OMT receive/output adapter through the official `libomt` C ABI
+  (runtime-loaded); interop HIL is still pending
+- Capability stubs only for NDI / DeckLink / ASIO / gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
-Hardware HIL (DeckLink genlock, NDI round-trip, Vulkan Video) is **not** claimed.
+Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
+Video) is **not** claimed. See the current truth table in the implementation
+plan and [OMT HIL procedure](docs/hil/omt.md).
 
 ## Build
 
