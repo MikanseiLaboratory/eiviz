@@ -2068,6 +2068,36 @@ mod tests {
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[test]
+    fn configured_vram_budget_rejects_graph_growth_without_staging_it() {
+        let engine = Engine::new("vram admission");
+        engine
+            .set_admission_budget(AdmissionBudget {
+                max_vram_bytes: 39 * 1024 * 1024,
+                ..AdmissionBudget::default()
+            })
+            .unwrap();
+        let input = Input {
+            id: InputId::new(),
+            name: "budget overflow".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::SolidColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        };
+        let error = engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("VRAM budget"));
+        assert!(!engine.staged_snapshot().inputs.contains_key(&input.id));
+    }
+
     struct MockEncoderFactory {
         creates: Arc<AtomicU64>,
         encodes: Arc<AtomicU64>,

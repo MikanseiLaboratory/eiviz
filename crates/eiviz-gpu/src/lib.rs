@@ -331,6 +331,29 @@ mod tests {
         assert_eq!(frame.pixel(frame.width - 1, frame.height - 1)[0], 255);
     }
 
+    #[test]
+    fn extended_render_plan_carries_format_field_and_vram_contract() {
+        let mut project = Project::new("extended plan");
+        project.compositor = eiviz_core::CompositorBackend::Wgpu;
+        project.video = eiviz_core::VideoFormat::uhd_5994_hdr10_pq();
+        let unit = project.mixing_units.values().next().unwrap().clone();
+        let plan = plan_program(&project, &unit);
+        assert_eq!(plan.output_format, PixelFormat::Rgba16Float);
+        assert_eq!(plan.color.transfer, eiviz_core::TransferFunction::Pq);
+        assert_eq!(plan.field_at(1_000_000), FieldKind::Progressive);
+        assert_eq!(
+            plan.vram_bytes,
+            3840_u64 * 2160 * 8 * 2,
+            "empty plan retains output and staging surfaces"
+        );
+
+        project.video =
+            eiviz_core::VideoFormat::hd_interlaced_5994(eiviz_core::FieldOrder::TopFieldFirst);
+        let field_plan = plan_program(&project, &unit);
+        assert_eq!(field_plan.field_at(0), FieldKind::Top);
+        assert_eq!(field_plan.field_at(1), FieldKind::Bottom);
+    }
+
     #[cfg(feature = "wgpu-backend")]
     #[test]
     fn wgpu_composites_layers_or_explicitly_has_no_hardware() {

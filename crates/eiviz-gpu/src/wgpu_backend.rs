@@ -111,7 +111,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         var cb = yuv.y - 0.5;
         var cr = yuv.z - 0.5;
         if layer.color_flags.y == 1u {
-            if (layer.color_flags.z & 8u) != 0u {
+            if (layer.color_flags.z & 16u) != 0u {
                 y = (yuv.x * 1023.0 - 64.0) / 876.0;
                 cb = (yuv.y * 1023.0 - 512.0) / 896.0;
                 cr = (yuv.z * 1023.0 - 512.0) / 896.0;
@@ -121,7 +121,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 cr = (yuv.z * 255.0 - 128.0) / 224.0;
             }
         }
-        if (layer.color_flags.z & 1u) == 0u {
+        let matrix_code = layer.color_flags.z & 3u;
+        if matrix_code == 2u {
+            color = vec4<f32>(
+                y + 1.4020 * cr,
+                y - 0.344136 * cb - 0.714136 * cr,
+                y + 1.7720 * cb,
+                color.a,
+            );
+        } else if matrix_code == 0u {
             color = vec4<f32>(
                 y + 1.5748 * cr,
                 y - 0.1873 * cb - 0.4681 * cr,
@@ -137,10 +145,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             );
         }
     }
-    if (layer.color_flags.z & 2u) != 0u {
+    if (layer.color_flags.z & 4u) != 0u {
         var linear = decode_transfer(color.rgb, layer.tone_map.z);
-        let source_2020 = (layer.color_flags.z & 1u) != 0u;
-        let target_2020 = (layer.color_flags.z & 4u) != 0u;
+        let source_2020 = (layer.color_flags.z & 3u) == 1u;
+        let target_2020 = (layer.color_flags.z & 8u) != 0u;
         if source_2020 && !target_2020 {
             linear = mat3x3<f32>(
                 vec3<f32>(1.6605, -0.1246, -0.0182),
@@ -162,7 +170,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let scaled = max(color.rgb, vec3<f32>(0.0)) * peak / target_luminance;
         color = vec4<f32>(scaled / (vec3<f32>(1.0) + scaled), color.a);
     }
-    if (layer.color_flags.z & 2u) != 0u {
+    if (layer.color_flags.z & 4u) != 0u {
         color = vec4<f32>(encode_transfer(color.rgb, layer.tone_map.w), color.a);
     }
     color.a *= layer.rotation_opacity.y;
@@ -1199,12 +1207,16 @@ fn layer_uniform_bytes(
         }
         (true, ColorConversionPolicy::Gpu { .. }) => None,
     };
-    let source_2020 = source.color.matrix == ColorMatrix::Bt2020NonConstantLuminance;
+    let source_matrix = match source.color.matrix {
+        ColorMatrix::Bt709 => 0,
+        ColorMatrix::Bt2020NonConstantLuminance => 1,
+        ColorMatrix::Bt601 => 2,
+    };
     let target_2020 = plan.color.matrix == ColorMatrix::Bt2020NonConstantLuminance;
-    let color_mode = u32::from(source_2020)
-        | (u32::from(mismatch) << 1)
-        | (u32::from(target_2020) << 2)
-        | (u32::from(source.format.bit_depth() > 8) << 3);
+    let color_mode = source_matrix
+        | (u32::from(mismatch) << 2)
+        | (u32::from(target_2020) << 3)
+        | (u32::from(source.format.bit_depth() > 8) << 4);
     let flags = [
         u32::from(yuv),
         u32::from(source.color.range == ColorRange::Limited),
