@@ -15,7 +15,6 @@ pub(crate) struct TrackEdit {
 #[derive(Clone, Debug)]
 pub(crate) struct MovieTimeline {
     pub duration_us: u64,
-    pub movie_timescale: u32,
     pub track_edits: HashMap<u32, TrackEdit>,
 }
 
@@ -103,7 +102,6 @@ pub(crate) fn parse_movie_timeline(bytes: &[u8]) -> Result<MovieTimeline> {
     }
     Ok(MovieTimeline {
         duration_us,
-        movie_timescale,
         track_edits,
     })
 }

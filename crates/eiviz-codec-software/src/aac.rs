@@ -1,6 +1,5 @@
 use std::ffi::{c_int, c_uint, c_void};
 use std::path::{Path, PathBuf};
-use std::ptr::null_mut;
 
 const TT_MP4_RAW: c_int = 0;
 const AAC_DEC_OK: c_int = 0;
@@ -173,14 +172,16 @@ impl FdkAacDecoder {
             "aacDecoder_ConfigRaw",
             path,
         )?;
-        let fill = load_symbol(&library, b"aacDecoder_Fill\0", "aacDecoder_Fill", path)?;
-        let decode_frame = load_symbol(
+        let fill: DecoderFill =
+            load_symbol(&library, b"aacDecoder_Fill\0", "aacDecoder_Fill", path)?;
+        let decode_frame: DecoderDecodeFrame = load_symbol(
             &library,
             b"aacDecoder_DecodeFrame\0",
             "aacDecoder_DecodeFrame",
             path,
         )?;
-        let close = load_symbol(&library, b"aacDecoder_Close\0", "aacDecoder_Close", path)?;
+        let close: DecoderClose =
+            load_symbol(&library, b"aacDecoder_Close\0", "aacDecoder_Close", path)?;
         let handle = unsafe { open(TT_MP4_RAW, 1) };
         if handle.is_null() {
             return Err(AacDecoderError::Open);
@@ -265,7 +266,7 @@ impl FdkAacDecoder {
 
 impl Drop for FdkAacDecoder {
     fn drop(&mut self) {
-        if self.handle != null_mut() {
+        if !self.handle.is_null() {
             unsafe { (self.close)(self.handle) };
         }
     }
