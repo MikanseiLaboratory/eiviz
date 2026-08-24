@@ -1517,7 +1517,12 @@ mod tests {
         let error = engine
             .set_distribution_enabled(output.id, true)
             .unwrap_err();
-        assert!(error.to_string().contains("I_PCM test encoder"));
+        assert!(
+            error
+                .to_string()
+                .contains("no explicit distribution encoder factory")
+        );
+        assert!(error.to_string().contains("fallback is forbidden"));
         assert!(
             engine
                 .metrics()
