@@ -212,7 +212,7 @@ pub struct AutosaveCandidate {
 pub enum AutosaveInspection {
     Missing,
     Current,
-    Recoverable(AutosaveCandidate),
+    Recoverable(Box<AutosaveCandidate>),
     Corrupt { path: PathBuf, error: String },
 }
 
@@ -250,12 +250,12 @@ pub fn inspect_autosave(path: &Path) -> AutosaveInspection {
                 .ok(),
         )
         .is_none_or(|(autosave_modified, project_modified)| autosave_modified >= project_modified);
-    AutosaveInspection::Recoverable(AutosaveCandidate {
+    AutosaveInspection::Recoverable(Box::new(AutosaveCandidate {
         path: autosave,
         project,
         project_hash,
         newer_than_project,
-    })
+    }))
 }
 
 pub fn discard_autosave(path: &Path) -> Result<()> {
