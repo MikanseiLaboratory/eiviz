@@ -722,14 +722,13 @@ impl DesktopApp {
             channels: project.audio.channels,
             ..Default::default()
         };
-        let source =
-            match eiviz_io_audio::CpalInput::open(input.id, &binding, backend, config) {
-                Ok(source) => Arc::new(source),
-                Err(error) => {
-                    self.status = format!("Audio input open: {error}");
-                    return;
-                }
-            };
+        let source = match eiviz_io_audio::CpalInput::open(input.id, &binding, backend, config) {
+            Ok(source) => Arc::new(source),
+            Err(error) => {
+                self.status = format!("Audio input open: {error}");
+                return;
+            }
+        };
         for command in [
             Command::AddDeviceBinding {
                 binding: binding.clone(),

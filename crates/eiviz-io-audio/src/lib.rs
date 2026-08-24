@@ -41,18 +41,18 @@ impl AudioBackend {
         }
         #[cfg(feature = "cpal")]
         {
-            let mut backends = Vec::new();
-            #[cfg(target_os = "windows")]
-            backends.push(Self::Wasapi);
-            #[cfg(all(target_os = "windows", feature = "asio"))]
-            backends.push(Self::Asio);
-            #[cfg(target_os = "macos")]
-            backends.push(Self::CoreAudio);
-            #[cfg(target_os = "linux")]
-            backends.push(Self::Alsa);
-            #[cfg(all(target_os = "linux", feature = "pipewire"))]
-            backends.push(Self::PipeWire);
-            backends
+            vec![
+                #[cfg(target_os = "windows")]
+                Self::Wasapi,
+                #[cfg(all(target_os = "windows", feature = "asio"))]
+                Self::Asio,
+                #[cfg(target_os = "macos")]
+                Self::CoreAudio,
+                #[cfg(target_os = "linux")]
+                Self::Alsa,
+                #[cfg(all(target_os = "linux", feature = "pipewire"))]
+                Self::PipeWire,
+            ]
         }
     }
 }
@@ -186,15 +186,15 @@ pub fn resolve_binding(
         .filter(|device| device.backend == backend)
         .filter(supports_direction)
         .collect::<Vec<_>>();
-    if let Some(persistent_id) = binding.last_seen_hardware_id.as_deref()
-        && let Some(device) = candidates
+    if let Some(persistent_id) = binding.last_seen_hardware_id.as_deref() {
+        return candidates
             .iter()
             .find(|device| device.persistent_id == persistent_id)
-    {
-        return Ok(ResolvedBinding {
-            device: (*device).clone(),
-            matched_by: BindingMatch::PersistentId,
-        });
+            .map(|device| ResolvedBinding {
+                device: (*device).clone(),
+                matched_by: BindingMatch::PersistentId,
+            })
+            .ok_or_else(|| AudioError::DeviceNotFound(persistent_id.into()));
     }
     let mut named = candidates
         .into_iter()
@@ -203,9 +203,7 @@ pub fn resolve_binding(
         return Err(AudioError::DeviceNotFound(binding.logical_name.clone()));
     };
     if named.next().is_some() {
-        return Err(AudioError::AmbiguousDevice(
-            binding.logical_name.clone(),
-        ));
+        return Err(AudioError::AmbiguousDevice(binding.logical_name.clone()));
     }
     Ok(ResolvedBinding {
         device: device.clone(),
@@ -278,7 +276,11 @@ pub fn interleaved_to_planar(
         ));
     }
     let frames = interleaved.len() / channels;
-    if planes.iter().take(channels).any(|plane| plane.len() < frames) {
+    if planes
+        .iter()
+        .take(channels)
+        .any(|plane| plane.len() < frames)
+    {
         return Err(AudioError::InvalidBuffer(
             "planar destination is not preallocated".into(),
         ));
@@ -363,10 +365,7 @@ mod tests {
         assert_eq!(planes[0], [0.1, 0.2, 0.3]);
         assert_eq!(planes[1], [-0.1, -0.2, -0.3]);
         let mut round_trip = [0.0; 6];
-        assert_eq!(
-            planar_to_interleaved(&planes, &mut round_trip).unwrap(),
-            3
-        );
+        assert_eq!(planar_to_interleaved(&planes, &mut round_trip).unwrap(), 3);
         assert_eq!(round_trip, interleaved);
         let up = resample_linear(&src, 96000, 16);
         assert_eq!(up.sample_rate, 96000);
@@ -411,7 +410,7 @@ mod tests {
             id: DeviceBindingId::new(),
             kind: AudioBackend::Wasapi.binding_kind(),
             logical_name: "Interface".into(),
-            last_seen_hardware_id: Some("wasapi:gone".into()),
+            last_seen_hardware_id: None,
         };
         let devices = [
             device("wasapi:a", "Interface"),
@@ -425,6 +424,25 @@ mod tests {
                 &devices
             ),
             Err(AudioError::AmbiguousDevice(_))
+        ));
+    }
+
+    #[test]
+    fn missing_persistent_device_never_falls_back_by_name() {
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: AudioBackend::Wasapi.binding_kind(),
+            logical_name: "Interface".into(),
+            last_seen_hardware_id: Some("wasapi:gone".into()),
+        };
+        assert!(matches!(
+            resolve_binding(
+                &binding,
+                AudioBackend::Wasapi,
+                DeviceDirection::Input,
+                &[device("wasapi:replacement", "Interface")]
+            ),
+            Err(AudioError::DeviceNotFound(id)) if id == "wasapi:gone"
         ));
     }
 }

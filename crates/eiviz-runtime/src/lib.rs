@@ -419,8 +419,7 @@ impl Runtime {
         let h = project.video.height.clamp(16, 1080);
         for input in project.inputs.values() {
             if matches!(input.source, InputSource::AudioDevice { .. }) {
-                let mut frame =
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
+                let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
                 frame.source = Some(input.id);
                 out.insert(input.id, frame);
                 continue;
@@ -744,8 +743,9 @@ fn decode_rgba(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
 mod tests {
     use super::*;
     use eiviz_core::{
-        AudioRoute, Input, InputSource, MixingUnit, MixingUnitId, Multiview, MultiviewId,
-        MultiviewSource, MultiviewTile, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
+        AudioRoute, DeviceBinding, DeviceBindingId, Input, InputSource, MixingUnit, MixingUnitId,
+        Multiview, MultiviewId, MultiviewSource, MultiviewTile, RouteMode, Scene, SceneItem,
+        Transform2D, TransitionStyle,
     };
     use eiviz_core::{InputId, SceneId, SceneItemId};
 
@@ -963,6 +963,25 @@ mod tests {
         let mut rt = Runtime::new(48_000);
         let err = rt.tick(&mut p).unwrap_err();
         assert!(matches!(err, RuntimeError::MissingMedia(_)));
+    }
+
+    #[test]
+    fn selected_audio_device_without_attachment_is_a_hard_error() {
+        let (mut project, input, _, _) = setup();
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: "audio:alsa".into(),
+            logical_name: "missing interface".into(),
+            last_seen_hardware_id: Some("alsa:missing".into()),
+        };
+        project.device_bindings.insert(binding.id, binding.clone());
+        project.inputs.get_mut(&input).unwrap().source = InputSource::AudioDevice {
+            binding: binding.id,
+        };
+        project.audio_matrix.routes[0].mode = RouteMode::Manual;
+        let mut runtime = Runtime::new(48_000);
+        let error = runtime.tick(&mut project).unwrap_err();
+        assert!(matches!(error, RuntimeError::MissingMedia(_)));
     }
 
     #[test]

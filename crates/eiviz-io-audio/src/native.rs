@@ -138,11 +138,9 @@ impl CaptureConsumer {
                 .current_stamp
                 .is_some_and(|stamp| self.stamp_offset == stamp.frames)
             {
-                let prior_end = self.current_stamp.map(|stamp| {
-                    stamp
-                        .first_sample_index
-                        .saturating_add(stamp.frames as u64)
-                });
+                let prior_end = self
+                    .current_stamp
+                    .map(|stamp| stamp.first_sample_index.saturating_add(stamp.frames as u64));
                 self.current_stamp = self.stamps.pop().ok();
                 self.stamp_offset = 0;
                 if let (Some(expected), Some(next)) = (prior_end, self.current_stamp) {
@@ -177,8 +175,7 @@ impl CpalInput {
         config: AudioStreamConfig,
     ) -> Result<Self> {
         validate_config(config)?;
-        let (host, device, info) =
-            resolve_cpal_device(binding, backend, DeviceDirection::Input)?;
+        let (host, device, info) = resolve_cpal_device(binding, backend, DeviceDirection::Input)?;
         let _ = host;
         let selected = select_config(&device, DeviceDirection::Input, config)?;
         let sample_capacity = config
@@ -222,7 +219,11 @@ impl MediaSource for CpalInput {
         self.id
     }
 
-    fn pull_video(&self, _pts: MediaTime, _rate: FrameRate) -> eiviz_media::Result<Option<VideoFrame>> {
+    fn pull_video(
+        &self,
+        _pts: MediaTime,
+        _rate: FrameRate,
+    ) -> eiviz_media::Result<Option<VideoFrame>> {
         Ok(None)
     }
 
@@ -266,8 +267,7 @@ impl CpalOutput {
         config: AudioStreamConfig,
     ) -> Result<Self> {
         validate_config(config)?;
-        let (host, device, _) =
-            resolve_cpal_device(binding, backend, DeviceDirection::Output)?;
+        let (host, device, _) = resolve_cpal_device(binding, backend, DeviceDirection::Output)?;
         let _ = host;
         let selected = select_config(&device, DeviceDirection::Output, config)?;
         let sample_capacity = config
@@ -301,10 +301,7 @@ impl AudioSink for CpalOutput {
         if audio.sample_rate != self.config.sample_rate || audio.channels != self.config.channels {
             return Err(MediaError::Unsupported(format!(
                 "audio output requires {} Hz/{} channels, got {} Hz/{} channels; no implicit ASRC",
-                self.config.sample_rate,
-                self.config.channels,
-                audio.sample_rate,
-                audio.channels
+                self.config.sample_rate, self.config.channels, audio.sample_rate, audio.channels
             )));
         }
         let frames = audio.planes.first().map_or(0, Vec::len);
@@ -314,7 +311,9 @@ impl AudioSink for CpalOutput {
             .take(audio.channels as usize)
             .any(|plane| plane.len() != frames)
         {
-            return Err(MediaError::Other("inconsistent planar audio lengths".into()));
+            return Err(MediaError::Other(
+                "inconsistent planar audio lengths".into(),
+            ));
         }
         let needed = frames.saturating_mul(audio.channels as usize);
         let mut producer = self.producer.lock();
@@ -392,12 +391,11 @@ fn explicit_host(backend: AudioBackend) -> Result<Host> {
     if !AudioBackend::compiled().contains(&backend) {
         return Err(AudioError::BackendNotCompiled(backend.id().into()));
     }
-    let host_id = cpal::HostId::from_str(backend.id()).map_err(|error| {
-        AudioError::BackendUnavailable {
+    let host_id =
+        cpal::HostId::from_str(backend.id()).map_err(|error| AudioError::BackendUnavailable {
             backend,
             detail: error.to_string(),
-        }
-    })?;
+        })?;
     if !cpal::available_hosts().contains(&host_id) {
         return Err(AudioError::BackendUnavailable {
             backend,
@@ -419,9 +417,9 @@ fn resolve_cpal_device(
     let resolved = resolve_binding(binding, backend, direction, &devices)?;
     let host = explicit_host(backend)?;
     let id = cpal::DeviceId::from_str(&resolved.device.persistent_id).map_err(backend_error)?;
-    let device = host.device_by_id(&id).ok_or_else(|| {
-        AudioError::DeviceNotFound(resolved.device.persistent_id.clone())
-    })?;
+    let device = host
+        .device_by_id(&id)
+        .ok_or_else(|| AudioError::DeviceNotFound(resolved.device.persistent_id.clone()))?;
     Ok((host, device, resolved.device))
 }
 
@@ -449,13 +447,14 @@ fn select_config(
         })
         .collect::<Vec<_>>();
     supported.sort_by_key(|range| sample_priority(range.sample_format()));
-    let selected = supported.first().copied().ok_or_else(|| {
-        AudioError::UnsupportedFormat {
+    let selected = supported
+        .first()
+        .copied()
+        .ok_or_else(|| AudioError::UnsupportedFormat {
             device: device.to_string(),
             sample_rate: requested.sample_rate,
             channels: requested.channels,
-        }
-    })?;
+        })?;
     let supported_config = selected.with_sample_rate(requested.sample_rate);
     let mut stream_config = supported_config.config();
     stream_config.buffer_size = requested
@@ -564,11 +563,7 @@ where
                         capture_nanos,
                     })
                     .expect("capacity checked before bounded write");
-                for sample in data {
-                    samples
-                        .push(f32::from_sample(*sample))
-                        .expect("capacity checked before bounded write");
-                }
+                enqueue_input_samples(data, &mut samples);
             },
             move |error| error_diagnostics.stream_error(error),
             None,
@@ -638,15 +633,7 @@ where
                     .last_device_nanos
                     .store(playback_nanos, Ordering::Relaxed);
                 let mut underflow = false;
-                for sample in data {
-                    match samples.pop() {
-                        Ok(value) => *sample = T::from_sample(value),
-                        Err(_) => {
-                            *sample = T::EQUILIBRIUM;
-                            underflow = true;
-                        }
-                    }
-                }
+                dequeue_output_samples(data, &mut samples, &mut underflow);
                 if underflow {
                     data_diagnostics
                         .queue_underflows
@@ -667,6 +654,67 @@ fn instant_nanos(instant: cpal::StreamInstant) -> u64 {
     u64::try_from(instant.as_nanos()).unwrap_or(u64::MAX)
 }
 
+fn enqueue_input_samples<T>(data: &[T], samples: &mut Producer<f32>)
+where
+    T: Copy,
+    f32: FromSample<T>,
+{
+    for sample in data {
+        samples
+            .push(f32::from_sample(*sample))
+            .expect("capacity checked before bounded write");
+    }
+}
+
+fn dequeue_output_samples<T>(data: &mut [T], samples: &mut Consumer<f32>, underflow: &mut bool)
+where
+    T: Sample + FromSample<f32>,
+{
+    for sample in data {
+        match samples.pop() {
+            Ok(value) => *sample = T::from_sample(value),
+            Err(_) => {
+                *sample = T::EQUILIBRIUM;
+                *underflow = true;
+            }
+        }
+    }
+}
+
 fn backend_error(error: cpal::Error) -> AudioError {
     AudioError::Backend(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_sample_conversion_uses_bounded_rings() {
+        let (mut input_producer, mut input_consumer) = RingBuffer::new(3);
+        enqueue_input_samples(&[i16::MIN, 0, i16::MAX], &mut input_producer);
+        let captured = [
+            input_consumer.pop().unwrap(),
+            input_consumer.pop().unwrap(),
+            input_consumer.pop().unwrap(),
+        ];
+        assert_eq!(captured[0], -1.0);
+        assert_eq!(captured[1], 0.0);
+        assert!(captured[2] > 0.999);
+
+        let (mut output_producer, mut output_consumer) = RingBuffer::new(3);
+        for sample in [-1.0, 0.0, 1.0] {
+            output_producer.push(sample).unwrap();
+        }
+        let mut rendered = [0i16; 3];
+        let mut underflow = false;
+        dequeue_output_samples(&mut rendered, &mut output_consumer, &mut underflow);
+        assert_eq!(rendered, [i16::MIN, 0, i16::MAX]);
+        assert!(!underflow);
+
+        let mut silence = [1i16; 1];
+        dequeue_output_samples(&mut silence, &mut output_consumer, &mut underflow);
+        assert_eq!(silence, [0]);
+        assert!(underflow);
+    }
 }
