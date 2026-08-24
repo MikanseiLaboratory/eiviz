@@ -119,7 +119,7 @@ jobs:
         with:
           components: miri
       - name: Miri deterministic core
-        run: cargo miri test -p eiviz-time -p eiviz-core
+        run: cargo +nightly miri test -p eiviz-time -p eiviz-core
 
   sanitizer:
     runs-on: ubuntu-latest
@@ -131,5 +131,5 @@ jobs:
           RUSTFLAGS: -D warnings -Zsanitizer=address
           RUSTDOCFLAGS: -D warnings -Zsanitizer=address
         run: >-
-          cargo test -p eiviz-project -p eiviz-time
+          cargo +nightly test -p eiviz-project -p eiviz-time
           --target x86_64-unknown-linux-gnu

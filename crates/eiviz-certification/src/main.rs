@@ -942,7 +942,7 @@ fn resident_memory_bytes() -> Option<u64> {
         counters.cb = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).ok()?;
         let success =
             unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, counters.cb) };
-        (success != 0).then(|| counters.WorkingSetSize as u64)
+        (success != 0).then_some(counters.WorkingSetSize as u64)
     }
     #[cfg(target_os = "macos")]
     {
