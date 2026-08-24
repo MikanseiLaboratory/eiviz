@@ -495,7 +495,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains(&missing_binary.to_string_lossy())
+                .contains(missing_binary.to_string_lossy().as_ref())
         );
     }
 
