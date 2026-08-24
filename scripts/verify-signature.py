@@ -38,6 +38,8 @@ def main() -> None:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("signed") is not True:
         raise ValueError("release manifest does not declare a signed artifact")
+    if manifest.get("target") != args.target:
+        raise ValueError("release manifest target mismatch")
     if manifest["artifact"]["name"] != artifact.name:
         raise ValueError("release manifest artifact name mismatch")
     if (

@@ -77,6 +77,21 @@ def locate(root: pathlib.Path, basename: str) -> pathlib.Path:
     return matches[0]
 
 
+def verify_payload_hashes(target: str, manifest_path: pathlib.Path, manifest: dict) -> None:
+    if target == "windows-x86_64":
+        payload_root = manifest_path.parent
+    elif target == "macos-aarch64":
+        payload_root = manifest_path.parents[2]
+    else:
+        payload_root = manifest_path.parents[3]
+    for entry in manifest["files"]:
+        path = payload_root / entry["path"]
+        if not path.is_file():
+            raise ValueError(f"manifest payload is missing: {entry['path']}")
+        if path.stat().st_size != entry["size"] or sha256(path) != entry["sha256"]:
+            raise ValueError(f"manifest payload hash mismatch: {entry['path']}")
+
+
 def validate_artifact(config: dict, target: str, artifact: pathlib.Path) -> None:
     if not artifact.is_file() or artifact.stat().st_size == 0:
         raise ValueError(f"missing or empty package: {artifact}")
@@ -104,6 +119,7 @@ def validate_artifact(config: dict, target: str, artifact: pathlib.Path) -> None
             raise ValueError("payload manifest feature profile mismatch")
         if manifest["optional_sdk_payloads"]:
             raise ValueError("optional SDK payload list must remain empty")
+        verify_payload_hashes(target, manifest_path, manifest)
         for path in expanded.rglob("*"):
             if not path.is_file():
                 continue
