@@ -6,7 +6,10 @@ use eiviz_core::{
 use eiviz_engine::{AdmissionBudget, Engine, EngineError};
 use eiviz_operations::export_json_atomic;
 use eiviz_runtime::RuntimeSnapshot;
-use eiviz_time::{MediaTime, NTSC_5994, Rational, audio_sample_index};
+use eiviz_time::{
+    Clock, MediaTime, NTSC_5994, Rational, VirtualClock, audio_frame_sample_span,
+    audio_sample_index,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -115,6 +118,18 @@ struct AssertionEvidence {
     passed: bool,
     actual: Value,
     expected: Value,
+}
+
+#[derive(Default)]
+struct SoakMeasurements {
+    program_drops: u64,
+    program_repeats: u64,
+    audio_xruns: u64,
+    deadline_misses: u64,
+    max_deadline_lateness_nanos: u64,
+    av_drift_p99_nanos: u64,
+    av_drift_max_nanos: u64,
+    audited_boundaries: u64,
 }
 
 impl TestEvidence {
@@ -318,6 +333,9 @@ fn parse_run_args(args: &[String]) -> Result<Config> {
     {
         return Err("all numeric options must be non-zero".into());
     }
+    if config.graph_inputs < config.graph_units {
+        return Err("--graph-inputs must be at least --graph-units".into());
+    }
     Ok(config)
 }
 
@@ -354,15 +372,9 @@ fn run_timing_soak(config: &Config) -> Result<TestEvidence> {
     let frames = seconds.saturating_mul(60_000) / 1_001;
     let end = MediaTime::from_frame_index(frames, NTSC_5994)?;
     let samples = audio_sample_index(frames, 48_000, NTSC_5994)?;
-    let video_nanos =
-        (i128::from(end.ticks()) * i128::from(end.timebase().numerator()) * 1_000_000_000)
-            / i128::from(end.timebase().denominator());
-    let audio_nanos = i128::from(samples) * 1_000_000_000 / 48_000;
-    let av_drift_nanos = (audio_nanos - video_nanos).unsigned_abs() as u64;
-
-    let (deadline_misses, max_deadline_lateness_nanos, wall_frames) = match config.mode {
-        RunMode::Virtual => (0, 0, 0),
-        RunMode::Wall => run_wall_clock(config.wall_seconds),
+    let soak = match config.mode {
+        RunMode::Virtual => run_virtual_clock(frames)?,
+        RunMode::Wall => run_wall_clock(config.wall_seconds)?,
     };
     test.measurements
         .insert("equivalent_seconds".into(), json!(seconds));
@@ -371,34 +383,58 @@ fn run_timing_soak(config: &Config) -> Result<TestEvidence> {
     test.measurements
         .insert("audio_samples".into(), json!(samples));
     test.measurements
-        .insert("av_drift_nanos".into(), json!(av_drift_nanos));
+        .insert("av_drift_p99_nanos".into(), json!(soak.av_drift_p99_nanos));
     test.measurements
-        .insert("program_drops".into(), json!(0_u64));
+        .insert("av_drift_max_nanos".into(), json!(soak.av_drift_max_nanos));
     test.measurements
-        .insert("program_repeats".into(), json!(0_u64));
-    test.measurements.insert("audio_xruns".into(), json!(0_u64));
+        .insert("program_drops".into(), json!(soak.program_drops));
     test.measurements
-        .insert("deadline_misses".into(), json!(deadline_misses));
+        .insert("program_repeats".into(), json!(soak.program_repeats));
+    test.measurements
+        .insert("audio_xruns".into(), json!(soak.audio_xruns));
+    test.measurements
+        .insert("deadline_misses".into(), json!(soak.deadline_misses));
     test.measurements.insert(
         "max_deadline_lateness_nanos".into(),
-        json!(max_deadline_lateness_nanos),
+        json!(soak.max_deadline_lateness_nanos),
     );
     test.measurements
-        .insert("wall_frames_observed".into(), json!(wall_frames));
-    test.assert("program_drops", json!(0), json!(0), true);
-    test.assert("program_repeats", json!(0), json!(0), true);
-    test.assert("audio_xruns", json!(0), json!(0), true);
+        .insert("audited_boundaries".into(), json!(soak.audited_boundaries));
     test.assert(
-        "deadline_misses",
-        json!(deadline_misses),
+        "program_drops",
+        json!(soak.program_drops),
         json!(0),
-        deadline_misses == 0,
+        soak.program_drops == 0,
     );
     test.assert(
-        "synthetic_av_drift_within_1ms",
-        json!(av_drift_nanos),
+        "program_repeats",
+        json!(soak.program_repeats),
+        json!(0),
+        soak.program_repeats == 0,
+    );
+    test.assert(
+        "audio_xruns",
+        json!(soak.audio_xruns),
+        json!(0),
+        soak.audio_xruns == 0,
+    );
+    test.assert(
+        "deadline_misses",
+        json!(soak.deadline_misses),
+        json!(0),
+        soak.deadline_misses == 0,
+    );
+    test.assert(
+        "synthetic_av_drift_p99_within_1ms",
+        json!(soak.av_drift_p99_nanos),
         json!({"max_nanos": 1_000_000}),
-        av_drift_nanos <= 1_000_000,
+        soak.av_drift_p99_nanos <= 1_000_000,
+    );
+    test.assert(
+        "synthetic_av_drift_max_within_5ms",
+        json!(soak.av_drift_max_nanos),
+        json!({"max_nanos": 5_000_000}),
+        soak.av_drift_max_nanos <= 5_000_000,
     );
     test.assert(
         "exact_frame_index_round_trip",
@@ -409,15 +445,55 @@ fn run_timing_soak(config: &Config) -> Result<TestEvidence> {
     Ok(test)
 }
 
-fn run_wall_clock(seconds: u64) -> (u64, u64, u64) {
+fn run_virtual_clock(frames: u64) -> Result<SoakMeasurements> {
+    let clock = VirtualClock::new();
+    let mut measurements = SoakMeasurements::default();
+    let mut previous_frame = None;
+    let mut previous_deadline = None;
+    let mut av_histogram = BTreeMap::<u64, u64>::new();
+    for frame in 0..frames {
+        clock.seek_frame(frame, NTSC_5994);
+        let deadline = clock.now().nanos;
+        let expected_deadline = ((u128::from(frame) * 1_001 * 1_000_000_000) / 60_000) as u64;
+        if deadline != expected_deadline {
+            measurements.deadline_misses = measurements.deadline_misses.saturating_add(1);
+        }
+        if let Some(previous) = previous_frame {
+            if frame == previous {
+                measurements.program_repeats = measurements.program_repeats.saturating_add(1);
+            } else if frame != previous + 1 {
+                measurements.program_drops = measurements
+                    .program_drops
+                    .saturating_add(frame.saturating_sub(previous + 1));
+            }
+        }
+        if previous_deadline.is_some_and(|previous| deadline <= previous) {
+            measurements.program_repeats = measurements.program_repeats.saturating_add(1);
+        }
+        let (sample, span) = audio_frame_sample_span(frame, 48_000, NTSC_5994)?;
+        if !matches!(span, 800 | 801) {
+            measurements.audio_xruns = measurements.audio_xruns.saturating_add(1);
+        }
+        let audio_nanos = u128::from(sample) * 1_000_000_000 / 48_000;
+        let drift = audio_nanos.abs_diff(u128::from(deadline)) as u64;
+        measurements.av_drift_max_nanos = measurements.av_drift_max_nanos.max(drift);
+        *av_histogram.entry(drift).or_default() += 1;
+        previous_frame = Some(frame);
+        previous_deadline = Some(deadline);
+    }
+    measurements.audited_boundaries = frames;
+    measurements.av_drift_p99_nanos = percentile(&av_histogram, frames, 99);
+    Ok(measurements)
+}
+
+fn run_wall_clock(seconds: u64) -> Result<SoakMeasurements> {
     let period_nanos = 1_001_000_000_u64 / 60;
     let duration = Duration::from_secs(seconds);
     let start = Instant::now();
     let mut frame = 0_u64;
-    let mut misses = 0_u64;
-    let mut max_late = 0_u64;
+    let mut measurements = SoakMeasurements::default();
+    let mut av_histogram = BTreeMap::<u64, u64>::new();
     while start.elapsed() < duration {
-        frame = frame.saturating_add(1);
         let target = start + Duration::from_nanos(frame.saturating_mul(period_nanos));
         if let Some(remaining) = target.checked_duration_since(Instant::now()) {
             std::thread::sleep(remaining);
@@ -425,12 +501,40 @@ fn run_wall_clock(seconds: u64) -> (u64, u64, u64) {
         let late = Instant::now()
             .checked_duration_since(target)
             .map_or(0, |value| value.as_nanos().min(u128::from(u64::MAX)) as u64);
-        max_late = max_late.max(late);
+        measurements.max_deadline_lateness_nanos =
+            measurements.max_deadline_lateness_nanos.max(late);
         if late > period_nanos {
-            misses = misses.saturating_add(1);
+            measurements.deadline_misses = measurements.deadline_misses.saturating_add(1);
+        }
+        let (sample, span) = audio_frame_sample_span(frame, 48_000, NTSC_5994)?;
+        if !matches!(span, 800 | 801) {
+            measurements.audio_xruns = measurements.audio_xruns.saturating_add(1);
+        }
+        let logical_nanos = ((u128::from(frame) * 1_001 * 1_000_000_000) / 60_000) as u64;
+        let audio_nanos = u128::from(sample) * 1_000_000_000 / 48_000;
+        let drift = audio_nanos.abs_diff(u128::from(logical_nanos)) as u64;
+        measurements.av_drift_max_nanos = measurements.av_drift_max_nanos.max(drift);
+        *av_histogram.entry(drift).or_default() += 1;
+        frame = frame.saturating_add(1);
+    }
+    measurements.audited_boundaries = frame;
+    measurements.av_drift_p99_nanos = percentile(&av_histogram, frame, 99);
+    Ok(measurements)
+}
+
+fn percentile(histogram: &BTreeMap<u64, u64>, count: u64, percentile: u64) -> u64 {
+    if count == 0 {
+        return 0;
+    }
+    let target = count.saturating_mul(percentile).div_ceil(100);
+    let mut cumulative = 0_u64;
+    for (value, occurrences) in histogram {
+        cumulative = cumulative.saturating_add(*occurrences);
+        if cumulative >= target {
+            return *value;
         }
     }
-    (misses, max_late, frame)
+    histogram.last_key_value().map_or(0, |(value, _)| *value)
 }
 
 fn run_max_graph(config: &Config) -> Result<TestEvidence> {
@@ -1109,7 +1213,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn virtual_smoke_covers_72_hours_without_iteration() {
+    fn virtual_smoke_audits_every_boundary_over_72_hours() {
         let config = Config {
             equivalent_hours: 72,
             ..Config::default()

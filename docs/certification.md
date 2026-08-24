@@ -46,7 +46,7 @@ Extended-profile implementation does not change the required
 profile、test ID、assertion、memory/queue high-water、artifact path を記録します。
 
 ```sh
-# CI と同じ短い決定論 smoke。24 h 分の時刻を反復せず有理数で監査する
+# CI と同じ短い決定論 smoke。24 h 分の全boundaryをsleepせず有理数で監査する
 cargo run -p eiviz-certification -- \
   --mode virtual --equivalent-hours 24 --profile ci-smoke
 
