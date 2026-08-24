@@ -1,11 +1,11 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
-use eiviz_core::{ClientId, MixingUnitId, Project};
+use eiviz_core::{ClientId, MixingUnitId, OutputId, Project};
 use eiviz_media::{MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{append_journal, load, save_atomic, save_autosave};
 use eiviz_runtime::{Runtime, TickResult};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,6 +21,8 @@ pub enum EngineError {
     Persist(#[from] eiviz_project::ProjectError),
     #[error("admission denied: {0}")]
     Admission(String),
+    #[error("unknown output {0}")]
+    UnknownOutput(OutputId),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -73,7 +75,7 @@ struct Inner {
     client: ClientId,
     budget: AdmissionBudget,
     flight: VecDeque<FlightEvent>,
-    sinks: Vec<Arc<dyn MediaSink>>,
+    sinks: HashMap<OutputId, Arc<dyn MediaSink>>,
     autosave_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
 }
@@ -93,7 +95,7 @@ impl Engine {
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
                 flight: VecDeque::with_capacity(FLIGHT_CAP),
-                sinks: Vec::new(),
+                sinks: HashMap::new(),
                 autosave_path: None,
                 journal_path: None,
             }),
@@ -116,7 +118,23 @@ impl Engine {
     }
 
     pub fn attach_sink(&self, sink: Arc<dyn MediaSink>) {
-        self.inner.lock().sinks.push(sink);
+        let mut inner = self.inner.lock();
+        if let Some(output) = inner.project.outputs.keys().next().copied() {
+            inner.sinks.insert(output, sink);
+        }
+    }
+
+    pub fn attach_output_sink(&self, output: OutputId, sink: Arc<dyn MediaSink>) -> Result<()> {
+        let mut inner = self.inner.lock();
+        if !inner.project.outputs.contains_key(&output) {
+            return Err(EngineError::UnknownOutput(output));
+        }
+        inner.sinks.insert(output, sink);
+        Ok(())
+    }
+
+    pub fn detach_output_sink(&self, output: OutputId) {
+        self.inner.lock().sinks.remove(&output);
     }
 
     pub fn attach_source(&self, source: Arc<dyn MediaSource>) {
@@ -207,13 +225,22 @@ impl Engine {
             runtime, project, ..
         } = &mut *g;
         let result = runtime.tick(project)?;
-        let unit = *project.mixing_units.keys().next().expect("default mix");
-        let program = result.programs.get(&unit).cloned();
         let audio = result.audio.clone();
         let sinks = g.sinks.clone();
-        if let Some(frame) = program {
-            for sink in &sinks {
-                if let Err(e) = sink.push_video(&frame) {
+        for (output_id, sink) in sinks {
+            let Some((enabled, owner)) = g
+                .project
+                .outputs
+                .get(&output_id)
+                .map(|output| (output.enabled, output.owner))
+            else {
+                continue;
+            };
+            if !enabled {
+                continue;
+            }
+            if let Some(frame) = result.programs.get(&owner) {
+                if let Err(e) = sink.push_video(frame) {
                     g.runtime.mark_output_failed(sink.name(), e.to_string());
                 }
                 if let Err(e) = sink.push_audio(&audio) {
@@ -310,10 +337,39 @@ fn push_flight(buf: &mut VecDeque<FlightEvent>, ev: FlightEvent) {
 mod tests {
     use super::*;
     use eiviz_core::{
-        Input, InputId, InputSource, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
-        TransitionStyle,
+        Input, InputId, InputSource, MixingUnit, Output, OutputId, OutputKind, Scene, SceneId,
+        SceneItem, SceneItemId, Transform2D, TransitionStyle,
     };
     use eiviz_io_stream::FailingSink;
+
+    struct PixelSink {
+        name: String,
+        pixels: Mutex<Vec<[u8; 4]>>,
+    }
+
+    impl PixelSink {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.into(),
+                pixels: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl MediaSink for PixelSink {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn push_video(&self, frame: &VideoFrame) -> eiviz_media::Result<()> {
+            self.pixels.lock().push(frame.pixel(0, 0));
+            Ok(())
+        }
+
+        fn push_audio(&self, _audio: &eiviz_media::AudioBuffer) -> eiviz_media::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn save_reload_preserves_ids_and_take_is_atomic() {
@@ -393,6 +449,87 @@ mod tests {
         }
         assert!(engine.metrics().frame >= 5);
         assert!(!engine.metrics().failed_outputs.is_empty());
+    }
+
+    #[test]
+    fn output_registry_routes_each_mixing_unit_program() {
+        let engine = Engine::new("routes");
+        let unit_a = engine.primary_unit();
+        let unit_b = MixingUnit::new("Mix B");
+        let output_a = *engine.snapshot().outputs.keys().next().unwrap();
+        engine
+            .submit_payload(Command::AddMixingUnit {
+                unit: unit_b.clone(),
+            })
+            .unwrap();
+
+        let make_input_scene = |name: &str, rgba: [u8; 4]| {
+            let input = Input {
+                id: InputId::new(),
+                name: name.into(),
+                tags: vec![],
+                groups: vec![],
+                source: InputSource::SolidColor {
+                    r: rgba[0],
+                    g: rgba[1],
+                    b: rgba[2],
+                    a: rgba[3],
+                },
+            };
+            let scene = Scene {
+                id: SceneId::new(),
+                name: name.into(),
+                items: vec![SceneItem {
+                    id: SceneItemId::new(),
+                    input: input.id,
+                    transform: Transform2D::fullscreen(),
+                    z_order: 0,
+                    playback: Default::default(),
+                }],
+            };
+            (input, scene)
+        };
+        let (red, red_scene) = make_input_scene("red", [255, 0, 0, 255]);
+        let (blue, blue_scene) = make_input_scene("blue", [0, 0, 255, 255]);
+        for input in [red, blue] {
+            engine.submit_payload(Command::AddInput { input }).unwrap();
+        }
+        for scene in [red_scene.clone(), blue_scene.clone()] {
+            engine.submit_payload(Command::AddScene { scene }).unwrap();
+        }
+        engine
+            .submit_payload(Command::SetProgram {
+                unit: unit_a,
+                scene: Some(red_scene.id),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit: unit_b.id,
+                scene: Some(blue_scene.id),
+            })
+            .unwrap();
+        let output_b = Output {
+            id: OutputId::new(),
+            name: "Mix B output".into(),
+            owner: unit_b.id,
+            kind: OutputKind::Omt { url: "test".into() },
+            enabled: true,
+        };
+        engine
+            .submit_payload(Command::AddOutput {
+                output: output_b.clone(),
+            })
+            .unwrap();
+        let sink_a = Arc::new(PixelSink::new("a"));
+        let sink_b = Arc::new(PixelSink::new("b"));
+        engine.attach_output_sink(output_a, sink_a.clone()).unwrap();
+        engine
+            .attach_output_sink(output_b.id, sink_b.clone())
+            .unwrap();
+        engine.tick().unwrap();
+        assert_eq!(sink_a.pixels.lock()[0], [255, 0, 0, 255]);
+        assert_eq!(sink_b.pixels.lock()[0], [0, 0, 255, 255]);
     }
 
     #[cfg(not(feature = "wgpu-backend"))]

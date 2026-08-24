@@ -58,6 +58,11 @@ Native source adapter は専用受信 thread で vendor/network API を呼び、
 し、`InputId` で Project の論理 Input と結びます。adapter 未登録や受信前
 は Project の missing-media policy を適用し、simulator を暗黙使用しません。
 
+Output adapter は `OutputId` で Engine の sink registry へ登録します。
+各 tick は `Output.owner` の Mixing Unit Program だけを該当sinkへ送り、
+`enabled=false` と削除済みOutputは送信しません。全sinkへprimary unitを
+一律送信する経路は使用しません。
+
 - Program: drop しない。間に合わなければ last-good を cadence どおり繰り返す
 - Preview/Multiview: latest-wins
 - Recorder/Network: 独立。満杯時は自分だけ Degraded

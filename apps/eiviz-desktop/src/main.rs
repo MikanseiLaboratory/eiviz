@@ -1,7 +1,7 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    CompositorBackend, Input, InputId, InputSource, Project, Scene, SceneId, SceneItem,
-    SceneItemId, Transform2D, TransitionStyle,
+    CompositorBackend, Input, InputId, InputSource, Output, OutputId, OutputKind, Project, Scene,
+    SceneId, SceneItem, SceneItemId, Transform2D, TransitionStyle,
 };
 use eiviz_engine::Engine;
 use std::sync::Arc;
@@ -380,14 +380,35 @@ impl eframe::App for DesktopApp {
             ui.label("Program output");
             ui.text_edit_singleline(&mut self.omt_output_name);
             if ui.button("Start OMT Output").clicked() {
-                match eiviz_io_omt::OmtSink::create(
-                    self.omt_output_name.trim(),
-                    project.video.frame_rate,
-                ) {
+                let output_name = self.omt_output_name.trim().to_owned();
+                match eiviz_io_omt::OmtSink::create(&output_name, project.video.frame_rate) {
                     Ok(sink) => {
-                        self.engine.attach_sink(Arc::new(sink));
-                        self.status =
-                            format!("OMT output started: {}", self.omt_output_name.trim());
+                        let output = Output {
+                            id: OutputId::new(),
+                            name: output_name.clone(),
+                            owner: unit_id,
+                            kind: OutputKind::Omt {
+                                url: output_name.clone(),
+                            },
+                            enabled: true,
+                        };
+                        match self.engine.submit_payload(Command::AddOutput {
+                            output: output.clone(),
+                        }) {
+                            Ok(_) => {
+                                match self.engine.attach_output_sink(output.id, Arc::new(sink)) {
+                                    Ok(()) => {
+                                        self.status = format!("OMT output started: {output_name}");
+                                    }
+                                    Err(error) => {
+                                        self.status = format!("OMT output route: {error}");
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                self.status = format!("OMT output project: {error}");
+                            }
+                        }
                     }
                     Err(error) => self.status = format!("OMT output: {error}"),
                 }
