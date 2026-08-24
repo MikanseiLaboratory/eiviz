@@ -46,6 +46,9 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     // project to ExactRate; migration never opts a project into ASRC.
     // v4 persists auxiliary load shedding. Its serde default is Disabled, so
     // migration never silently authorizes Preview/Multiview degradation.
+    // v5 adds field order and color-conversion policy. Serde defaults preserve
+    // progressive scan and Exact color handling; migration never enables a
+    // conversion, tone map, or extended profile.
     project.schema_version = SCHEMA_VERSION;
     project.validate()?;
     Ok(project)
@@ -403,6 +406,22 @@ mod tests {
             migrated.auxiliary_load_shedding,
             eiviz_core::AuxiliaryLoadSheddingPolicy::Disabled
         );
+    }
+
+    #[test]
+    fn v4_migration_preserves_progressive_exact_baseline() {
+        let project = Project::new("legacy video");
+        let mut json = serde_json::to_value(project).unwrap();
+        json["schema_version"] = serde_json::json!(4);
+        json["video"].as_object_mut().unwrap().remove("field_order");
+        json["video"]
+            .as_object_mut()
+            .unwrap()
+            .remove("color_conversion");
+        let loaded: Project = serde_json::from_value(json).unwrap();
+        let migrated = migrate(loaded).unwrap();
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert!(migrated.video.is_baseline_1080p5994());
     }
 
     #[test]

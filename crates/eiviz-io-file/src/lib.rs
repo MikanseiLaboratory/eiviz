@@ -41,6 +41,8 @@ impl ImageSource {
             width: w,
             height: h,
             format: eiviz_media::PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: eiviz_core::FieldKind::Progressive,
             data: img.into_raw().into(),
             discontinuity: false,
         })

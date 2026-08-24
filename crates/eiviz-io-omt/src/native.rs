@@ -1,4 +1,4 @@
-use eiviz_core::InputId;
+use eiviz_core::{ColorMetadata, FieldKind, InputId, VideoFormat};
 use eiviz_media::{
     AdapterHealth, AudioBuffer, BoundedMetadataQueue, InputTally, MediaError, MediaSink,
     MediaSource, PixelFormat, SourceControlDiagnostics, SourceMetadata, VideoFrame,
@@ -27,6 +27,17 @@ impl OmtColorProfile {
         match self {
             Self::Bt601Limited => ColorSpace::Bt601,
             Self::Bt709Limited => ColorSpace::Bt709,
+        }
+    }
+
+    fn metadata(self) -> ColorMetadata {
+        match self {
+            Self::Bt601Limited => eiviz_core::ColorMetadata {
+                matrix: eiviz_core::ColorMatrix::Bt601,
+                range: eiviz_core::ColorRange::Limited,
+                transfer: eiviz_core::TransferFunction::Bt709,
+            },
+            Self::Bt709Limited => eiviz_core::ColorSpace::Bt709Sdr.metadata(),
         }
     }
 }
@@ -278,6 +289,12 @@ fn convert_video(
         width: frame.width,
         height: frame.height,
         format: eiviz_media::PixelFormat::Rgba8,
+        color: match frame.color_space {
+            ColorSpace::Bt601 => OmtColorProfile::Bt601Limited.metadata(),
+            ColorSpace::Bt709 => OmtColorProfile::Bt709Limited.metadata(),
+            ColorSpace::Undefined => unreachable!("rejected above"),
+        },
+        field: FieldKind::Progressive,
         data: rgba.into(),
         discontinuity: false,
     })
@@ -361,6 +378,15 @@ pub struct OmtSink {
 }
 
 impl OmtSink {
+    pub fn create_for_video_format(
+        name: impl Into<String>,
+        video: &VideoFormat,
+        config: OmtOutputConfig,
+    ) -> Result<Self, OmtError> {
+        validate_video_format(video, config.color_profile)?;
+        Self::create(name, video.frame_rate, config)
+    }
+
     pub fn create(
         name: impl Into<String>,
         frame_rate: FrameRate,
@@ -409,6 +435,17 @@ impl MediaSink for OmtSink {
     }
 
     fn push_video(&self, frame: &VideoFrame) -> eiviz_media::Result<()> {
+        if frame.color != self.config.color_profile.metadata() {
+            return Err(MediaError::Unsupported(format!(
+                "OMT output color {:?} does not match selected {:?}; implicit conversion is forbidden",
+                frame.color, self.config.color_profile
+            )));
+        }
+        if frame.field != FieldKind::Progressive {
+            return Err(MediaError::Unsupported(
+                "OMT output adapter does not support interlaced field frames".into(),
+            ));
+        }
         let (codec, stride, data, flags) = match self.config.pixel_format {
             OmtOutputPixelFormat::Bgra => (
                 openmediatransport::Codec::Bgra,
@@ -489,9 +526,11 @@ fn frame_to_bgra(frame: &VideoFrame) -> Result<Vec<u8>, OmtError> {
             .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
             .collect()),
         PixelFormat::Bgra8 => Ok(frame.data[..required].to_vec()),
-        PixelFormat::Nv12 => Err(OmtError::InvalidFrame(
-            "NV12-to-BGRA output conversion requires an explicit color profile and is not supported"
-                .into(),
+        PixelFormat::Nv12
+        | PixelFormat::P010
+        | PixelFormat::P216
+        | PixelFormat::Rgba16Float => Err(OmtError::InvalidFrame(
+            "OMT BGRA output accepts only 8-bit packed RGB; implicit format/profile conversion is not supported".into(),
         )),
     }
 }
@@ -536,8 +575,26 @@ fn rgb_from_pixel(pixel: &[u8], format: PixelFormat) -> [u8; 3] {
     match format {
         PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
         PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
-        PixelFormat::Nv12 => unreachable!("validated packed RGB format"),
+        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float => {
+            unreachable!("validated packed RGB format")
+        }
     }
+}
+
+pub fn validate_video_format(
+    video: &VideoFormat,
+    color_profile: OmtColorProfile,
+) -> Result<(), OmtError> {
+    if video.bit_depth != 8
+        || video.interlaced
+        || video.color_metadata() != color_profile.metadata()
+    {
+        return Err(OmtError::InvalidFrame(format!(
+            "OMT adapter supports 8-bit progressive {:?} only; selected project is {:?} {}-bit interlaced={}",
+            color_profile, video.color, video.bit_depth, video.interlaced
+        )));
+    }
+    Ok(())
 }
 
 fn rgb_to_studio_yuv(rgb: [u8; 3], profile: OmtColorProfile) -> (u8, u8, u8) {
@@ -599,6 +656,8 @@ mod tests {
             width: 2,
             height: 1,
             format,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: FieldKind::Progressive,
             data: data.into(),
             discontinuity: false,
         }

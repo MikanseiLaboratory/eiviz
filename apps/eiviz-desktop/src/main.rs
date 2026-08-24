@@ -3,8 +3,8 @@ use eiviz_core::{
     AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AudioRoute, AuxiliaryLoadSheddingPolicy,
     CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId, InputSource,
     Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, Project,
-    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
-    TransitionStyle, TransportProfile,
+    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, ToneMapPolicy,
+    Transform2D, TransitionStyle, TransportProfile, VideoFormat,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
@@ -394,6 +394,11 @@ impl DesktopApp {
 
     #[cfg(feature = "decklink")]
     fn connect_decklink_capture(&mut self) {
+        if let Err(error) = eiviz_io_decklink::validate_video_format(&self.engine.snapshot().video)
+        {
+            self.status = format!("DeckLink capture profile unsupported: {error}");
+            return;
+        }
         let Some(device) = self
             .decklink_capture_selected
             .and_then(|index| self.decklink_devices.get(index))
@@ -493,6 +498,11 @@ impl DesktopApp {
 
     #[cfg(feature = "decklink")]
     fn start_decklink_output(&mut self, owner: eiviz_core::MixingUnitId) {
+        if let Err(error) = eiviz_io_decklink::validate_video_format(&self.engine.snapshot().video)
+        {
+            self.status = format!("DeckLink output profile unsupported: {error}");
+            return;
+        }
         let Some(device) = self
             .decklink_playback_selected
             .and_then(|index| self.decklink_devices.get(index))
@@ -827,7 +837,13 @@ impl DesktopApp {
     fn start_ndi_output(&mut self, owner: eiviz_core::MixingUnitId) {
         let name = self.ndi_output_name.trim().to_owned();
         let project = self.engine.snapshot();
-        let mut config = eiviz_io_ndi::NdiConfig::default();
+        let mut config = match eiviz_io_ndi::NdiConfig::for_output(&project.video) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status = format!("NDI output profile unsupported: {error}");
+                return;
+            }
+        };
         if self.ndi_output_nv12 {
             if project.video.color != eiviz_core::ColorSpace::Bt709Sdr {
                 self.status =
@@ -1660,6 +1676,112 @@ impl eframe::App for DesktopApp {
             ui.heading("Capabilities");
             ui.label(format!("compositor {:?}", project.compositor));
             ui.label(self.engine.compositor_detail());
+            ui.separator();
+            ui.heading("Video profile");
+            let profiles = [
+                ("1080p59.94 SDR 8-bit (baseline)", VideoFormat::hd_5994()),
+                ("2160p59.94 SDR 8-bit", VideoFormat::uhd_5994_sdr()),
+                (
+                    "2160p59.94 HDR10 PQ 10-bit",
+                    VideoFormat::uhd_5994_hdr10_pq(),
+                ),
+                (
+                    "2160p59.94 HLG 10-bit",
+                    VideoFormat::uhd_5994_hlg(),
+                ),
+                (
+                    "1080i59.94 top-field-first",
+                    VideoFormat::hd_interlaced_5994(eiviz_core::FieldOrder::TopFieldFirst),
+                ),
+                (
+                    "1080i59.94 bottom-field-first",
+                    VideoFormat::hd_interlaced_5994(eiviz_core::FieldOrder::BottomFieldFirst),
+                ),
+            ];
+            let current_label = profiles
+                .iter()
+                .find_map(|(label, format)| (*format == project.video).then_some(*label))
+                .unwrap_or("custom");
+            let mut requested = None;
+            egui::ComboBox::from_id_salt("video-profile")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    for (label, format) in profiles {
+                        if ui.selectable_label(format == project.video, label).clicked() {
+                            requested = Some(format);
+                        }
+                    }
+                });
+            if let Some(format) = requested {
+                match self
+                    .engine
+                    .submit_payload(Command::SetVideoFormat { format })
+                {
+                    Ok(_) => self.status = "Video profile staged".into(),
+                    Err(error) => {
+                        self.status = format!("Video profile rejected (no fallback): {error}")
+                    }
+                }
+            }
+            ui.label(format!(
+                "{}x{} {:?} {}-bit cadence={} field-order={:?}",
+                project.video.width,
+                project.video.height,
+                project.video.color,
+                project.video.bit_depth,
+                project.video.frame_rate,
+                project.video.field_order
+            ));
+            let mut conversion = project.video.color_conversion;
+            let mut conversion_changed = false;
+            let mut gpu_conversion = matches!(
+                conversion,
+                eiviz_core::ColorConversionPolicy::Gpu { .. }
+            );
+            if ui
+                .checkbox(
+                    &mut gpu_conversion,
+                    "Explicit WGSL source color conversion",
+                )
+                .changed()
+            {
+                conversion_changed = true;
+                conversion = if gpu_conversion {
+                    eiviz_core::ColorConversionPolicy::Gpu {
+                        tone_map: ToneMapPolicy::Disabled,
+                    }
+                } else {
+                    eiviz_core::ColorConversionPolicy::Exact
+                };
+            }
+            if let eiviz_core::ColorConversionPolicy::Gpu { tone_map } = &mut conversion {
+                let mut hdr_to_sdr = matches!(tone_map, ToneMapPolicy::HdrToSdr { .. });
+                if ui
+                    .checkbox(&mut hdr_to_sdr, "Explicit HDR→SDR tone map")
+                    .changed()
+                {
+                    conversion_changed = true;
+                    *tone_map = if hdr_to_sdr {
+                        ToneMapPolicy::HdrToSdr {
+                            source_peak_nits: 1_000,
+                            target_nits: 100,
+                        }
+                    } else {
+                        ToneMapPolicy::Disabled
+                    };
+                }
+            }
+            if conversion_changed {
+                let mut format = project.video.clone();
+                format.color_conversion = conversion;
+                match self
+                    .engine
+                    .submit_payload(Command::SetVideoFormat { format })
+                {
+                    Ok(_) => self.status = "Explicit color policy staged".into(),
+                    Err(error) => self.status = format!("Color policy rejected: {error}"),
+                }
+            }
             let gpu_metrics = self.engine.metrics();
             ui.label(format!(
                 "GPU pass: {} ns (frame {} ns, max {}); staging readback: {} ns (max {}, count {})",
@@ -2607,9 +2729,9 @@ impl eframe::App for DesktopApp {
                     color_profile,
                     send_queue_depth: 4,
                 };
-                match eiviz_io_omt::OmtSink::create(
+                match eiviz_io_omt::OmtSink::create_for_video_format(
                     &output_name,
-                    project.video.frame_rate,
+                    &project.video,
                     config,
                 ) {
                     Ok(sink) => {

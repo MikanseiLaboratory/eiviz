@@ -4,7 +4,9 @@
 //! implementation (CI / golden frames). Optional `wgpu-backend` is a separate
 //! backend. There is no implicit switch from GPU to CPU.
 
-use eiviz_core::{MixingUnit, Project, Transform2D};
+use eiviz_core::{
+    ColorConversionPolicy, ColorMetadata, FieldKind, FieldOrder, MixingUnit, Project, Transform2D,
+};
 use eiviz_media::{PixelFormat, VideoFrame};
 use eiviz_time::MediaTime;
 use std::collections::HashMap;
@@ -24,7 +26,38 @@ pub type Result<T> = std::result::Result<T, GpuError>;
 pub struct RenderPlan {
     pub width: u32,
     pub height: u32,
+    pub output_format: PixelFormat,
+    pub color: ColorMetadata,
+    pub field_order: Option<FieldOrder>,
+    pub color_conversion: ColorConversionPolicy,
+    /// Conservative resident bytes for output, source uploads, and one
+    /// readback/staging surface. Admission compares this before activation.
+    pub vram_bytes: u64,
     pub layers: Vec<Layer>,
+}
+
+impl RenderPlan {
+    pub fn estimate_vram_bytes(
+        width: u32,
+        height: u32,
+        output_format: PixelFormat,
+        layer_count: usize,
+    ) -> u64 {
+        let surface = output_format.frame_bytes(width, height).unwrap_or(u64::MAX);
+        surface.saturating_mul(layer_count as u64 + 2)
+    }
+
+    pub fn field_at(&self, boundary_index: u64) -> FieldKind {
+        match self.field_order {
+            None => FieldKind::Progressive,
+            Some(FieldOrder::TopFieldFirst) if boundary_index.is_multiple_of(2) => FieldKind::Top,
+            Some(FieldOrder::TopFieldFirst) => FieldKind::Bottom,
+            Some(FieldOrder::BottomFieldFirst) if boundary_index.is_multiple_of(2) => {
+                FieldKind::Bottom
+            }
+            Some(FieldOrder::BottomFieldFirst) => FieldKind::Top,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -84,9 +117,25 @@ fn plan_bus(
             }
         }
     }
+    let output_format = if project.video.bit_depth > 8 {
+        PixelFormat::Rgba16Float
+    } else {
+        PixelFormat::Rgba8
+    };
+    let vram_bytes = RenderPlan::estimate_vram_bytes(
+        project.video.width,
+        project.video.height,
+        output_format,
+        layers.len(),
+    );
     RenderPlan {
         width: project.video.width,
         height: project.video.height,
+        output_format,
+        color: project.video.color_metadata(),
+        field_order: project.video.field_order,
+        color_conversion: project.video.color_conversion,
+        vram_bytes,
         layers,
     }
 }
@@ -97,6 +146,11 @@ pub fn composite(
     pts: MediaTime,
     frame_id: u64,
 ) -> VideoFrame {
+    assert_eq!(
+        plan.output_format,
+        PixelFormat::Rgba8,
+        "CpuReference accepts only the explicit 8-bit baseline"
+    );
     let mut buf = vec![0u8; plan.width as usize * plan.height as usize * 4];
     for px in buf.chunks_exact_mut(4) {
         px.copy_from_slice(&[0, 0, 0, 255]);
@@ -123,6 +177,8 @@ pub fn composite(
         width: plan.width,
         height: plan.height,
         format: PixelFormat::Rgba8,
+        color: plan.color,
+        field: plan.field_at(frame_id),
         data: Arc::<[u8]>::from(buf),
         discontinuity: false,
     }
@@ -151,6 +207,8 @@ pub fn mix_frames(
         width: a.width,
         height: a.height,
         format: PixelFormat::Rgba8,
+        color: a.color,
+        field: a.field,
         data: out.into(),
         discontinuity: false,
     }
@@ -219,6 +277,8 @@ pub fn color_bars(id: u64, pts: MediaTime, width: u32, height: u32) -> VideoFram
         width,
         height,
         format: PixelFormat::Rgba8,
+        color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+        field: FieldKind::Progressive,
         data: data.into(),
         discontinuity: false,
     }
@@ -279,6 +339,11 @@ mod tests {
         let plan = RenderPlan {
             width: 16,
             height: 16,
+            output_format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(16, 16, PixelFormat::Rgba8, 1),
             layers: vec![Layer {
                 input,
                 transform: Transform2D::fullscreen(),
@@ -301,6 +366,6 @@ mod wgpu_backend;
 
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu_backend::{
-    DeviceLossReport, SharedWgpuContext, WgpuCompositor, WgpuDiagnostics, WgpuError,
-    WgpuTextureFrame,
+    AdapterCapabilities, DeviceLossReport, SharedWgpuContext, WgpuCompositor, WgpuDiagnostics,
+    WgpuError, WgpuTextureFrame,
 };

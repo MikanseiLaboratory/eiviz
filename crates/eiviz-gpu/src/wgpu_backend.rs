@@ -6,7 +6,10 @@
 //! counted staging operation for sinks that still require [`VideoFrame`].
 
 use crate::{Layer, RenderPlan};
-use eiviz_core::{InputId, Transform2D};
+use eiviz_core::{
+    ColorConversionPolicy, ColorMatrix, ColorMetadata, ColorRange, FieldKind, InputId,
+    ToneMapPolicy, TransferFunction, Transform2D, VideoFormat,
+};
 use eiviz_media::{PixelFormat, VideoFrame};
 use eiviz_time::MediaTime;
 use std::borrow::Cow;
@@ -15,12 +18,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
-const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const SHADER: &str = r#"
 struct LayerUniform {
     rect: vec4<f32>,
     crop: vec4<f32>,
     rotation_opacity: vec4<f32>,
+    color_flags: vec4<u32>,
+    tone_map: vec4<f32>,
 };
 
 @group(0) @binding(0) var source_texture: texture_2d<f32>;
@@ -31,6 +35,42 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
 };
+
+fn decode_transfer(value: vec3<f32>, code: f32) -> vec3<f32> {
+    let v = max(value, vec3<f32>(0.0));
+    if code < 0.5 {
+        return pow(v, vec3<f32>(2.2));
+    }
+    if code < 1.5 {
+        return select(v / 4.5, pow((v + 0.099) / 1.099, vec3<f32>(1.0 / 0.45)), v >= vec3<f32>(0.081));
+    }
+    if code < 2.5 {
+        let p = pow(v, vec3<f32>(1.0 / 78.84375));
+        return pow(max((p - 0.8359375) / (18.8515625 - 18.6875 * p), vec3<f32>(0.0)), vec3<f32>(1.0 / 0.1593017578125));
+    }
+    if code < 3.5 {
+        return select((v * v) / 3.0, (exp((v - 0.55991073) / 0.17883277) + 0.28466892) / 12.0, v > vec3<f32>(0.5));
+    }
+    return v;
+}
+
+fn encode_transfer(value: vec3<f32>, code: f32) -> vec3<f32> {
+    let v = max(value, vec3<f32>(0.0));
+    if code < 0.5 {
+        return pow(v, vec3<f32>(1.0 / 2.2));
+    }
+    if code < 1.5 {
+        return select(4.5 * v, 1.099 * pow(v, vec3<f32>(0.45)) - 0.099, v >= vec3<f32>(0.018));
+    }
+    if code < 2.5 {
+        let p = pow(v, vec3<f32>(0.1593017578125));
+        return pow((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p), vec3<f32>(78.84375));
+    }
+    if code < 3.5 {
+        return select(sqrt(3.0 * v), 0.17883277 * log(12.0 * v - 0.28466892) + 0.55991073, v > vec3<f32>(1.0 / 12.0));
+    }
+    return v;
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
@@ -65,6 +105,66 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(source_texture, source_sampler, input.uv);
+    if layer.color_flags.x == 1u {
+        let yuv = color.rgb;
+        var y = yuv.x;
+        var cb = yuv.y - 0.5;
+        var cr = yuv.z - 0.5;
+        if layer.color_flags.y == 1u {
+            if (layer.color_flags.z & 8u) != 0u {
+                y = (yuv.x * 1023.0 - 64.0) / 876.0;
+                cb = (yuv.y * 1023.0 - 512.0) / 896.0;
+                cr = (yuv.z * 1023.0 - 512.0) / 896.0;
+            } else {
+                y = (yuv.x * 255.0 - 16.0) / 219.0;
+                cb = (yuv.y * 255.0 - 128.0) / 224.0;
+                cr = (yuv.z * 255.0 - 128.0) / 224.0;
+            }
+        }
+        if (layer.color_flags.z & 1u) == 0u {
+            color = vec4<f32>(
+                y + 1.5748 * cr,
+                y - 0.1873 * cb - 0.4681 * cr,
+                y + 1.8556 * cb,
+                color.a,
+            );
+        } else {
+            color = vec4<f32>(
+                y + 1.4746 * cr,
+                y - 0.1646 * cb - 0.5714 * cr,
+                y + 1.8814 * cb,
+                color.a,
+            );
+        }
+    }
+    if (layer.color_flags.z & 2u) != 0u {
+        var linear = decode_transfer(color.rgb, layer.tone_map.z);
+        let source_2020 = (layer.color_flags.z & 1u) != 0u;
+        let target_2020 = (layer.color_flags.z & 4u) != 0u;
+        if source_2020 && !target_2020 {
+            linear = mat3x3<f32>(
+                vec3<f32>(1.6605, -0.1246, -0.0182),
+                vec3<f32>(-0.5876, 1.1329, -0.1006),
+                vec3<f32>(-0.0728, -0.0083, 1.1187),
+            ) * linear;
+        } else if !source_2020 && target_2020 {
+            linear = mat3x3<f32>(
+                vec3<f32>(0.6274, 0.0691, 0.0164),
+                vec3<f32>(0.3293, 0.9195, 0.0880),
+                vec3<f32>(0.0433, 0.0114, 0.8956),
+            ) * linear;
+        }
+        color = vec4<f32>(linear, color.a);
+    }
+    if layer.color_flags.w == 1u {
+        let peak = max(layer.tone_map.x, 1.0);
+        let target = max(layer.tone_map.y, 1.0);
+        let scaled = max(color.rgb, vec3<f32>(0.0)) * peak / target;
+        color = vec4<f32>(scaled / (vec3<f32>(1.0) + scaled), color.a);
+    }
+    if (layer.color_flags.z & 2u) != 0u {
+        color = vec4<f32>(encode_transfer(color.rgb, layer.tone_map.w), color.a);
+    }
     color.a *= layer.rotation_opacity.y;
     return color;
 }
@@ -84,6 +184,10 @@ pub enum WgpuError {
     MissingSource(InputId),
     #[error("unsupported source format for input {input}: {format:?}")]
     UnsupportedFormat { input: InputId, format: PixelFormat },
+    #[error("unsupported video profile: {0}")]
+    UnsupportedProfile(String),
+    #[error("color conversion rejected for input {input}: {detail}")]
+    ColorConversion { input: InputId, detail: String },
     #[error("wgpu map readback failed: {0}")]
     Map(String),
     #[error("wgpu device was lost: {0}")]
@@ -99,6 +203,61 @@ pub struct WgpuTextureFrame {
     pub height: u32,
     pub pts: MediaTime,
     pub frame_id: u64,
+    pub format: PixelFormat,
+    pub color: ColorMetadata,
+    pub field: FieldKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdapterCapabilities {
+    pub max_texture_dimension_2d: u32,
+    pub max_buffer_size: u64,
+    pub rgba16_float_renderable: bool,
+    pub rgba16_float_filterable: bool,
+    pub rgba32_float_sampleable: bool,
+}
+
+impl AdapterCapabilities {
+    fn detect(adapter: &wgpu::Adapter) -> Self {
+        let limits = adapter.limits();
+        let rgba16 = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float);
+        let rgba32 = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba32Float);
+        Self {
+            max_texture_dimension_2d: limits.max_texture_dimension_2d,
+            max_buffer_size: limits.max_buffer_size,
+            rgba16_float_renderable: rgba16
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT),
+            rgba16_float_filterable: rgba16
+                .flags
+                .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE),
+            rgba32_float_sampleable: rgba32
+                .allowed_usages
+                .contains(wgpu::TextureUsages::TEXTURE_BINDING),
+        }
+    }
+
+    pub fn admit(&self, format: &VideoFormat) -> Result<(), WgpuError> {
+        if format.width > self.max_texture_dimension_2d
+            || format.height > self.max_texture_dimension_2d
+        {
+            return Err(WgpuError::UnsupportedProfile(format!(
+                "{}x{} exceeds adapter max texture dimension {}",
+                format.width, format.height, self.max_texture_dimension_2d
+            )));
+        }
+        if format.bit_depth == 10
+            && (!self.rgba16_float_renderable
+                || !self.rgba16_float_filterable
+                || !self.rgba32_float_sampleable)
+        {
+            return Err(WgpuError::UnsupportedProfile(
+                "10-bit/HDR requires renderable/filterable RGBA16Float and sampleable RGBA32Float"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl WgpuTextureFrame {
@@ -168,10 +327,12 @@ pub struct WgpuCompositor {
     // The headless profile owns an Instance. The injected desktop profile does not.
     _instance: Option<wgpu::Instance>,
     adapter_info: wgpu::AdapterInfo,
+    capabilities: AdapterCapabilities,
     device: wgpu::Device,
     queue: wgpu::Queue,
     bind_group_layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    pipeline_8: wgpu::RenderPipeline,
+    pipeline_16: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
     diagnostics: Arc<SharedDiagnostics>,
     latest_output: Mutex<Option<WgpuTextureFrame>>,
@@ -197,15 +358,17 @@ impl WgpuCompositor {
         if matches!(info.device_type, wgpu::DeviceType::Cpu) {
             return Err(WgpuError::NoHardwareAdapter);
         }
+        let capabilities = AdapterCapabilities::detect(&adapter);
+        let required_limits = adapter.limits();
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("eiviz-wgpu-compositor"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits,
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
             }))?;
-        Self::build(Some(instance), info, device, queue)
+        Self::build(Some(instance), info, capabilities, device, queue)
     }
 
     /// Build compositor resources on an adapter/device/queue owned by the GUI.
@@ -220,12 +383,14 @@ impl WgpuCompositor {
         if matches!(info.device_type, wgpu::DeviceType::Cpu) {
             return Err(WgpuError::NoHardwareAdapter);
         }
-        Self::build(None, info, device, queue)
+        let capabilities = AdapterCapabilities::detect(adapter);
+        Self::build(None, info, capabilities, device, queue)
     }
 
     fn build(
         instance: Option<wgpu::Instance>,
         adapter_info: wgpu::AdapterInfo,
+        capabilities: AdapterCapabilities,
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, WgpuError> {
@@ -282,30 +447,42 @@ impl WgpuCompositor {
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("eiviz-compositor-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OUTPUT_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
+        let create_pipeline = |label, format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline_8 = create_pipeline(
+            "eiviz-compositor-rgba8-pipeline",
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let pipeline_16 = capabilities.rgba16_float_renderable.then(|| {
+            create_pipeline(
+                "eiviz-compositor-rgba16f-pipeline",
+                wgpu::TextureFormat::Rgba16Float,
+            )
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("eiviz-nearest-sampler"),
@@ -323,10 +500,12 @@ impl WgpuCompositor {
         Ok(Self {
             _instance: instance,
             adapter_info,
+            capabilities,
             device,
             queue,
             bind_group_layout,
-            pipeline,
+            pipeline_8,
+            pipeline_16,
             sampler,
             diagnostics,
             latest_output: Mutex::new(None),
@@ -335,6 +514,14 @@ impl WgpuCompositor {
 
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.adapter_info.clone()
+    }
+
+    pub fn capabilities(&self) -> &AdapterCapabilities {
+        &self.capabilities
+    }
+
+    pub fn admit_video_format(&self, format: &VideoFormat) -> Result<(), WgpuError> {
+        self.capabilities.admit(format)
     }
 
     pub fn diagnostics(&self) -> WgpuDiagnostics {
@@ -415,6 +602,11 @@ impl WgpuCompositor {
                 plan.width, plan.height
             )));
         }
+        if plan.output_format == PixelFormat::Rgba16Float && self.pipeline_16.is_none() {
+            return Err(WgpuError::UnsupportedProfile(
+                "render plan requires RGBA16Float but adapter cannot render it".into(),
+            ));
+        }
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let layers = match self.prepare_layers(plan, sources) {
             Ok(layers) => layers,
@@ -422,6 +614,15 @@ impl WgpuCompositor {
                 let _ = self.device.poll(wgpu::PollType::Wait);
                 let _ = pollster::block_on(self.device.pop_error_scope());
                 return Err(error);
+            }
+        };
+        let output_texture_format = match plan.output_format {
+            PixelFormat::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
+            PixelFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+            other => {
+                return Err(WgpuError::InvalidPlan(format!(
+                    "unsupported compositor output format {other:?}"
+                )));
             }
         };
         let output = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -434,7 +635,7 @@ impl WgpuCompositor {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: OUTPUT_FORMAT,
+            format: output_texture_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -460,7 +661,14 @@ impl WgpuCompositor {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(match plan.output_format {
+                PixelFormat::Rgba8 => &self.pipeline_8,
+                PixelFormat::Rgba16Float => self
+                    .pipeline_16
+                    .as_ref()
+                    .expect("validated RGBA16Float pipeline above"),
+                _ => unreachable!("validated output format above"),
+            });
             for layer in &layers {
                 pass.set_bind_group(0, &layer.bind_group, &[]);
                 pass.draw(0..6, 0..1);
@@ -478,6 +686,9 @@ impl WgpuCompositor {
             height: plan.height,
             pts,
             frame_id,
+            format: plan.output_format,
+            color: plan.color,
+            field: plan.field_at(frame_id),
         };
         *self
             .latest_output
@@ -508,7 +719,19 @@ impl WgpuCompositor {
         );
         let _entered = span.enter();
         self.ensure_device_available()?;
-        let unpadded_bytes_per_row = frame.width * 4;
+        let bytes_per_pixel = match frame.format {
+            PixelFormat::Rgba8 => 4,
+            PixelFormat::Rgba16Float => 8,
+            other => {
+                return Err(WgpuError::InvalidPlan(format!(
+                    "unsupported readback format {other:?}"
+                )));
+            }
+        };
+        let unpadded_bytes_per_row = frame
+            .width
+            .checked_mul(bytes_per_pixel)
+            .ok_or_else(|| WgpuError::InvalidPlan("readback row byte overflow".into()))?;
         let padded_bytes_per_row = unpadded_bytes_per_row
             .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -590,7 +813,9 @@ impl WgpuCompositor {
             clock_observation: None,
             width: frame.width,
             height: frame.height,
-            format: PixelFormat::Rgba8,
+            format: frame.format,
+            color: frame.color,
+            field: frame.field,
             data: Arc::from(rgba),
             discontinuity: false,
         })
@@ -612,6 +837,11 @@ impl WgpuCompositor {
         let plan = RenderPlan {
             width: a.width,
             height: a.height,
+            output_format: a.format,
+            color: a.color,
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(a.width, a.height, a.format, 2),
             layers: vec![
                 Layer {
                     input: a_id,
@@ -638,13 +868,15 @@ impl WgpuCompositor {
             let source = sources
                 .get(&layer.input)
                 .ok_or(WgpuError::MissingSource(layer.input))?;
-            if source.format != PixelFormat::Rgba8 {
-                return Err(WgpuError::UnsupportedFormat {
-                    input: layer.input,
-                    format: source.format,
-                });
-            }
             validate_source(source, layer.input)?;
+            let upload = prepare_upload(source, layer.input)?;
+            if upload.texture_format == wgpu::TextureFormat::Rgba16Float
+                && !self.capabilities.rgba16_float_filterable
+            {
+                return Err(WgpuError::UnsupportedProfile(
+                    "P010/P216/RGBA16Float input requires filterable RGBA16Float sampling".into(),
+                ));
+            }
             let max_dimension = self.device.limits().max_texture_dimension_2d;
             if source.width > max_dimension || source.height > max_dimension {
                 return Err(WgpuError::InvalidPlan(format!(
@@ -662,7 +894,7 @@ impl WgpuCompositor {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: OUTPUT_FORMAT,
+                format: upload.texture_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -673,10 +905,10 @@ impl WgpuCompositor {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &source.data,
+                &upload.data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(source.width * 4),
+                    bytes_per_row: Some(upload.bytes_per_row),
                     rows_per_image: Some(source.height),
                 },
                 wgpu::Extent3d {
@@ -686,7 +918,7 @@ impl WgpuCompositor {
                 },
             );
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let uniform_data = layer_uniform_bytes(plan, layer)?;
+            let uniform_data = layer_uniform_bytes(plan, layer, source, upload.yuv)?;
             let uniform = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -749,25 +981,129 @@ fn validate_source(source: &VideoFrame, input: InputId) -> Result<(), WgpuError>
             "source {input} is zero-sized"
         )));
     }
-    if source.width > u32::MAX / 4 {
-        return Err(WgpuError::InvalidPlan(format!(
-            "source {input} row byte count overflows u32"
-        )));
-    }
-    let required = u64::from(source.width)
-        .checked_mul(u64::from(source.height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| WgpuError::InvalidPlan(format!("source {input} size overflow")))?;
-    if source.data.len() as u64 != required {
-        return Err(WgpuError::InvalidPlan(format!(
-            "source {input} data length {}, expected {required}",
-            source.data.len()
-        )));
-    }
+    source
+        .validate_layout()
+        .map_err(|detail| WgpuError::InvalidPlan(format!("source {input}: {detail}")))?;
     Ok(())
 }
 
-fn layer_uniform_bytes(plan: &RenderPlan, layer: &Layer) -> Result<Vec<u8>, WgpuError> {
+struct PreparedUpload {
+    texture_format: wgpu::TextureFormat,
+    bytes_per_row: u32,
+    data: Vec<u8>,
+    yuv: bool,
+}
+
+fn prepare_upload(source: &VideoFrame, input: InputId) -> Result<PreparedUpload, WgpuError> {
+    let pixels = source.width as usize * source.height as usize;
+    match source.format {
+        PixelFormat::Rgba8 => Ok(PreparedUpload {
+            texture_format: wgpu::TextureFormat::Rgba8Unorm,
+            bytes_per_row: source.width * 4,
+            data: source.data.to_vec(),
+            yuv: false,
+        }),
+        PixelFormat::Bgra8 => Ok(PreparedUpload {
+            texture_format: wgpu::TextureFormat::Bgra8Unorm,
+            bytes_per_row: source.width * 4,
+            data: source.data.to_vec(),
+            yuv: false,
+        }),
+        PixelFormat::Rgba16Float => Ok(PreparedUpload {
+            texture_format: wgpu::TextureFormat::Rgba16Float,
+            bytes_per_row: source.width * 8,
+            data: source.data.to_vec(),
+            yuv: false,
+        }),
+        PixelFormat::Nv12 => {
+            let width = source.width as usize;
+            let height = source.height as usize;
+            let uv_offset = pixels;
+            let mut rgba = Vec::with_capacity(pixels * 4);
+            for y in 0..height {
+                for x in 0..width {
+                    let uv = uv_offset + (y / 2) * width + (x & !1);
+                    rgba.extend_from_slice(&[
+                        source.data[y * width + x],
+                        source.data[uv],
+                        source.data[uv + 1],
+                        255,
+                    ]);
+                }
+            }
+            Ok(PreparedUpload {
+                texture_format: wgpu::TextureFormat::Rgba8Unorm,
+                bytes_per_row: source.width * 4,
+                data: rgba,
+                yuv: true,
+            })
+        }
+        PixelFormat::P010 | PixelFormat::P216 => {
+            let width = source.width as usize;
+            let height = source.height as usize;
+            let y_bytes = pixels * 2;
+            let mut rgba = Vec::with_capacity(pixels * 8);
+            for y in 0..height {
+                for x in 0..width {
+                    let y_code = ten_bit_word(&source.data, (y * width + x) * 2, input)?;
+                    let chroma_word = match source.format {
+                        PixelFormat::P010 => ((y / 2) * width + (x & !1)) * 2,
+                        PixelFormat::P216 => (y * width + (x & !1)) * 2,
+                        _ => unreachable!(),
+                    };
+                    let u_code = ten_bit_word(&source.data, y_bytes + chroma_word, input)?;
+                    let v_code = ten_bit_word(&source.data, y_bytes + chroma_word + 2, input)?;
+                    for value in [
+                        y_code as f32 / 1023.0,
+                        u_code as f32 / 1023.0,
+                        v_code as f32 / 1023.0,
+                        1.0,
+                    ] {
+                        rgba.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+                    }
+                }
+            }
+            Ok(PreparedUpload {
+                texture_format: wgpu::TextureFormat::Rgba16Float,
+                bytes_per_row: source.width * 8,
+                data: rgba,
+                yuv: true,
+            })
+        }
+    }
+}
+
+fn ten_bit_word(data: &[u8], offset: usize, input: InputId) -> Result<u16, WgpuError> {
+    let bytes = data.get(offset..offset + 2).ok_or_else(|| {
+        WgpuError::InvalidPlan(format!("source {input} has truncated 10-bit data"))
+    })?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]) >> 6)
+}
+
+fn f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    let mantissa = bits & 0x7f_ffff;
+    if exponent <= 0 {
+        if exponent < -10 {
+            return sign;
+        }
+        let mantissa = (mantissa | 0x80_0000) >> (1 - exponent);
+        return sign | ((mantissa + 0x1000) >> 13) as u16;
+    }
+    if exponent >= 31 {
+        return sign | 0x7c00;
+    }
+    sign | ((exponent as u16) << 10) | ((mantissa + 0x1000) >> 13) as u16
+}
+
+fn layer_uniform_bytes(
+    plan: &RenderPlan,
+    layer: &Layer,
+    source: &VideoFrame,
+    yuv: bool,
+) -> Result<Vec<u8>, WgpuError> {
     let transform = layer.transform;
     let (x, y, width, height) = if transform.pixel_space {
         (
@@ -805,11 +1141,84 @@ fn layer_uniform_bytes(plan: &RenderPlan, layer: &Layer) -> Result<Vec<u8>, Wgpu
         0.0,
         0.0,
     ];
-    let mut bytes = Vec::with_capacity(values.len() * 4);
+    let mut bytes = Vec::with_capacity(80);
     for value in values {
         bytes.extend_from_slice(&value.to_ne_bytes());
     }
+    let mismatch = source.color != plan.color;
+    let tone_map = match (mismatch, plan.color_conversion) {
+        (false, _) => None,
+        (true, ColorConversionPolicy::Exact) => {
+            return Err(WgpuError::ColorConversion {
+                input: layer.input,
+                detail: format!(
+                    "source {:?} does not match render plan {:?} and policy is Exact",
+                    source.color, plan.color
+                ),
+            });
+        }
+        (
+            true,
+            ColorConversionPolicy::Gpu {
+                tone_map: ToneMapPolicy::Disabled,
+            },
+        ) if is_hdr(source.color.transfer) && !is_hdr(plan.color.transfer) => {
+            return Err(WgpuError::ColorConversion {
+                input: layer.input,
+                detail: "HDR-to-SDR conversion requires an explicit tone-map policy".into(),
+            });
+        }
+        (
+            true,
+            ColorConversionPolicy::Gpu {
+                tone_map:
+                    ToneMapPolicy::HdrToSdr {
+                        source_peak_nits,
+                        target_nits,
+                    },
+            },
+        ) => Some((f32::from(source_peak_nits), f32::from(target_nits))),
+        (true, ColorConversionPolicy::Gpu { .. }) => None,
+    };
+    let source_2020 = source.color.matrix == ColorMatrix::Bt2020NonConstantLuminance;
+    let target_2020 = plan.color.matrix == ColorMatrix::Bt2020NonConstantLuminance;
+    let color_mode = u32::from(source_2020)
+        | (u32::from(mismatch) << 1)
+        | (u32::from(target_2020) << 2)
+        | (u32::from(source.format.bit_depth() > 8) << 3);
+    let flags = [
+        u32::from(yuv),
+        u32::from(source.color.range == ColorRange::Limited),
+        color_mode,
+        u32::from(tone_map.is_some()),
+    ];
+    for flag in flags {
+        bytes.extend_from_slice(&flag.to_ne_bytes());
+    }
+    let (source_peak, target) = tone_map.unwrap_or((0.0, 0.0));
+    for value in [
+        source_peak,
+        target,
+        transfer_code(source.color.transfer),
+        transfer_code(plan.color.transfer),
+    ] {
+        bytes.extend_from_slice(&value.to_ne_bytes());
+    }
     Ok(bytes)
+}
+
+const fn is_hdr(transfer: TransferFunction) -> bool {
+    matches!(transfer, TransferFunction::Pq | TransferFunction::Hlg)
+}
+
+const fn transfer_code(transfer: TransferFunction) -> f32 {
+    match transfer {
+        TransferFunction::Srgb => 0.0,
+        TransferFunction::Bt709 => 1.0,
+        TransferFunction::Pq => 2.0,
+        TransferFunction::Hlg => 3.0,
+        TransferFunction::Linear => 4.0,
+    }
 }
 
 #[cfg(test)]
@@ -855,6 +1264,13 @@ mod tests {
                 driver_info: String::new(),
                 backend: wgpu::Backend::Noop,
             },
+            AdapterCapabilities {
+                max_texture_dimension_2d: 8192,
+                max_buffer_size: 256 * 1024 * 1024,
+                rgba16_float_renderable: true,
+                rgba16_float_filterable: true,
+                rgba32_float_sampleable: true,
+            },
             device,
             queue,
         )
@@ -869,6 +1285,11 @@ mod tests {
         let plan = RenderPlan {
             width: 1920,
             height: 1080,
+            output_format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(1920, 1080, PixelFormat::Rgba8, 0),
             layers: vec![],
         };
         let layer = Layer {
@@ -889,7 +1310,8 @@ mod tests {
             },
             opacity: 0.5,
         };
-        let bytes = layer_uniform_bytes(&plan, &layer).unwrap();
+        let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [0, 0, 0, 255]);
+        let bytes = layer_uniform_bytes(&plan, &layer, &source, false).unwrap();
         let values = bytes
             .chunks_exact(4)
             .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
@@ -897,5 +1319,47 @@ mod tests {
         assert_eq!(&values[..4], &[0.1, 0.1, 0.5, 0.5]);
         assert_eq!(&values[4..8], &[0.1, 0.2, 0.3, 0.1]);
         assert_eq!(values[9], 0.5);
+    }
+
+    #[test]
+    fn p010_unpack_preserves_ten_bit_codes_for_shader_conversion() {
+        let words = [64_u16, 940, 64, 940, 512, 512];
+        let data = words
+            .into_iter()
+            .flat_map(|word| (word << 6).to_le_bytes())
+            .collect::<Vec<_>>();
+        let frame = VideoFrame {
+            id: 1,
+            source: None,
+            pts: MediaTime::ZERO,
+            capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
+            width: 2,
+            height: 2,
+            format: PixelFormat::P010,
+            color: eiviz_core::ColorSpace::Bt2020Pq.metadata(),
+            field: FieldKind::Progressive,
+            data: data.into(),
+            discontinuity: false,
+        };
+        let upload = prepare_upload(&frame, InputId::from_u128(1)).unwrap();
+        assert_eq!(upload.texture_format, wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(upload.data.len(), 2 * 2 * 8);
+    }
+
+    #[test]
+    fn adapter_profile_rejection_is_explicit() {
+        let capabilities = AdapterCapabilities {
+            max_texture_dimension_2d: 4096,
+            max_buffer_size: 256 * 1024 * 1024,
+            rgba16_float_renderable: false,
+            rgba16_float_filterable: false,
+            rgba32_float_sampleable: false,
+        };
+        assert!(matches!(
+            capabilities.admit(&VideoFormat::uhd_5994_hdr10_pq()),
+            Err(WgpuError::UnsupportedProfile(_))
+        ));
+        capabilities.admit(&VideoFormat::uhd_5994_sdr()).unwrap();
     }
 }

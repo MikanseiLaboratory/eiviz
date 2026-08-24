@@ -41,6 +41,9 @@ pub struct NdiConfig {
     pub output_pixel_format: NdiOutputPixelFormat,
     /// Required when output conversion crosses between RGB and YUV.
     pub output_color_profile: Option<NdiColorProfile>,
+    /// Required by production output construction. Kept optional so receive
+    /// configurations do not invent a project profile.
+    pub output_video_profile: Option<eiviz_core::VideoFormat>,
 }
 
 impl Default for NdiConfig {
@@ -53,6 +56,7 @@ impl Default for NdiConfig {
             capture_poll: Duration::from_millis(10),
             output_pixel_format: NdiOutputPixelFormat::Rgba,
             output_color_profile: None,
+            output_video_profile: None,
         }
     }
 }
@@ -75,8 +79,31 @@ impl NdiConfig {
         {
             return Some("NV12 output requires an explicit color profile");
         }
+        if let Some(video) = &self.output_video_profile
+            && validate_video_format(video).is_err()
+        {
+            return Some("NDI adapter supports only 8-bit progressive BT.709 SDR project profiles");
+        }
         None
     }
+
+    pub fn for_output(video: &eiviz_core::VideoFormat) -> Result<Self, String> {
+        validate_video_format(video)?;
+        Ok(Self {
+            output_video_profile: Some(video.clone()),
+            ..Self::default()
+        })
+    }
+}
+
+pub fn validate_video_format(video: &eiviz_core::VideoFormat) -> Result<(), String> {
+    if video.bit_depth != 8 || video.interlaced || video.color != eiviz_core::ColorSpace::Bt709Sdr {
+        return Err(format!(
+            "NDI adapter does not support {:?} {}-bit interlaced={}; only 8-bit progressive BT.709 SDR is implemented and no conversion fallback is permitted",
+            video.color, video.bit_depth, video.interlaced
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "ndi", test))]
@@ -185,7 +212,9 @@ fn packed_rgb(frame: &VideoFrame, x: usize, y: usize) -> [u8; 3] {
     match frame.format {
         PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
         PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
-        PixelFormat::Nv12 => unreachable!("validated packed RGB input"),
+        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float => {
+            unreachable!("validated packed RGB input")
+        }
     }
 }
 
@@ -272,6 +301,8 @@ mod tests {
             width: 2,
             height: 2,
             format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: eiviz_core::FieldKind::Progressive,
             data: data.into(),
             discontinuity: false,
         };

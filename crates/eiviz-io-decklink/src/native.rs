@@ -456,6 +456,8 @@ fn convert_capture_video(
         width: frame.width,
         height: frame.height,
         format: PixelFormat::Rgba8,
+        color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+        field: eiviz_core::FieldKind::Progressive,
         data: rgba.into(),
         discontinuity,
     })
@@ -691,6 +693,14 @@ impl MediaSink for DeckLinkSink {
     }
 
     fn push_video(&self, frame: &VideoFrame) -> eiviz_media::Result<()> {
+        if frame.color != eiviz_core::ColorSpace::Bt709Sdr.metadata()
+            || frame.field != eiviz_core::FieldKind::Progressive
+        {
+            return Err(MediaError::Unsupported(format!(
+                "DeckLink fixed shim requires progressive BT.709 SDR, got {:?}/{:?}",
+                frame.color, frame.field
+            )));
+        }
         self.enqueue(OutputPacket::Video(frame.clone()))
     }
 
@@ -763,9 +773,12 @@ impl PlaybackHandle {
                     .collect::<Vec<_>>();
                 bgra.as_slice()
             }
-            PixelFormat::Nv12 => {
+            PixelFormat::Nv12
+            | PixelFormat::P010
+            | PixelFormat::P216
+            | PixelFormat::Rgba16Float => {
                 return Err(DeckLinkError::InvalidFrame(
-                    "NV12 to BGRA conversion is not implemented".into(),
+                    "planar/10-bit to BGRA conversion is not implemented; profile fallback is forbidden".into(),
                 ));
             }
         };

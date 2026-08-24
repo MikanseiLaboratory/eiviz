@@ -143,6 +143,14 @@ impl RuntimeSnapshot {
     pub fn auxiliary_load_shedding_policy(&self) -> &AuxiliaryLoadSheddingPolicy {
         &self.project.auxiliary_load_shedding
     }
+
+    pub fn estimated_render_vram_bytes(&self) -> u64 {
+        self.render
+            .programs
+            .values()
+            .chain(self.render.previews.values())
+            .fold(0_u64, |total, plan| total.saturating_add(plan.vram_bytes))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -672,6 +680,11 @@ impl Runtime {
                 "snapshot sample rate {} does not match runtime {}",
                 snapshot.audio.sample_rate, self.sample_rate
             )));
+        }
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(gpu) = &self.wgpu {
+            gpu.admit_video_format(&project.video)
+                .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
         }
         self.auxiliary_load_shedding
             .synchronize(snapshot.auxiliary_load_shedding_policy());
@@ -1267,6 +1280,30 @@ impl Runtime {
                     project.video.height,
                     auxiliary_quality.multiview_resolution_divisor,
                 ),
+                output_format: if project.video.bit_depth > 8 {
+                    eiviz_media::PixelFormat::Rgba16Float
+                } else {
+                    eiviz_media::PixelFormat::Rgba8
+                },
+                color: project.video.color_metadata(),
+                field_order: project.video.field_order,
+                color_conversion: project.video.color_conversion,
+                vram_bytes: RenderPlan::estimate_vram_bytes(
+                    scaled_dimension(
+                        project.video.width,
+                        auxiliary_quality.multiview_resolution_divisor,
+                    ),
+                    scaled_dimension(
+                        project.video.height,
+                        auxiliary_quality.multiview_resolution_divisor,
+                    ),
+                    if project.video.bit_depth > 8 {
+                        eiviz_media::PixelFormat::Rgba16Float
+                    } else {
+                        eiviz_media::PixelFormat::Rgba8
+                    },
+                    layers.len(),
+                ),
                 layers,
             };
             let frame = self.composite_plan(&plan, &sources, pts)?;
@@ -1296,6 +1333,8 @@ impl Runtime {
             if matches!(input.source, InputSource::AudioDevice { .. }) {
                 let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
                 frame.source = Some(input.id);
+                frame.color = project.video.color_metadata();
+                frame.field = project.video.field_at(self.frame);
                 out.insert(input.id, frame);
                 continue;
             }
@@ -1381,6 +1420,8 @@ impl Runtime {
                 ),
             };
             generated.source = Some(input.id);
+            generated.color = project.video.color_metadata();
+            generated.field = project.video.field_at(self.frame);
             if authentic {
                 self.last_good_inputs.insert(input.id, generated.clone());
             }
@@ -1401,7 +1442,10 @@ impl Runtime {
         match project.missing_media {
             MissingMediaPolicy::Fail => Err(RuntimeError::MissingMedia(why.into())),
             MissingMediaPolicy::Slate => {
-                Ok(VideoFrame::rgba_solid(self.frame, pts, w, h, SLATE_RGBA))
+                let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, SLATE_RGBA);
+                frame.color = project.video.color_metadata();
+                frame.field = project.video.field_at(self.frame);
+                Ok(frame)
             }
             MissingMediaPolicy::LastGood => {
                 self.last_good_inputs.get(&id).cloned().ok_or_else(|| {
@@ -1441,6 +1485,8 @@ impl Runtime {
             width,
             height,
             format: eiviz_media::PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: eiviz_core::FieldKind::Progressive,
             data: data.into(),
             discontinuity: false,
         };
@@ -1665,9 +1711,21 @@ fn scaled_dimension(value: u32, divisor: u32) -> u32 {
 }
 
 fn scaled_render_plan(plan: &RenderPlan, divisor: u32) -> RenderPlan {
+    let width = scaled_dimension(plan.width, divisor);
+    let height = scaled_dimension(plan.height, divisor);
     RenderPlan {
-        width: scaled_dimension(plan.width, divisor),
-        height: scaled_dimension(plan.height, divisor),
+        width,
+        height,
+        output_format: plan.output_format,
+        color: plan.color,
+        field_order: plan.field_order,
+        color_conversion: plan.color_conversion,
+        vram_bytes: RenderPlan::estimate_vram_bytes(
+            width,
+            height,
+            plan.output_format,
+            plan.layers.len(),
+        ),
         layers: plan.layers.clone(),
     }
 }

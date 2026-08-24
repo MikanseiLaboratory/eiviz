@@ -1,6 +1,7 @@
 use eiviz_core::{
     AssetRef, AudioRoute, DeviceBinding, DomainError, Input, MixingUnit, Multiview, Output,
     OverlaySlot, Playback, Project, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
+    VideoFormat,
 };
 use eiviz_core::{
     AudioBusId, ClientId, CommandId, InputId, MixingUnitId, OutputId, OverlayId, SceneId,
@@ -58,6 +59,9 @@ pub enum Command {
     Noop,
     SetName {
         name: String,
+    },
+    SetVideoFormat {
+        format: VideoFormat,
     },
     AddInput {
         input: Input,
@@ -611,6 +615,9 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             if let Command::SetName { name } = payload {
                 project.name = name.clone();
             }
+        }
+        Command::SetVideoFormat { format } => {
+            project.video = format.clone();
         }
         Command::AddInput { input } => project.insert_input(input.clone())?,
         Command::SetInputPlayback { input, playback } => {

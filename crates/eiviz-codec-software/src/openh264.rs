@@ -205,6 +205,8 @@ impl OpenH264Decoder {
             width,
             height,
             format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: eiviz_core::FieldKind::Progressive,
             data: rgba.into(),
             discontinuity: false,
         }))

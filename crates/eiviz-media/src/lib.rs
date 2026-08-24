@@ -2,7 +2,7 @@ mod asrc;
 
 pub use asrc::{AsrcDiagnostics, AsrcError, StreamingAsrc};
 
-use eiviz_core::{InputId, Playback};
+use eiviz_core::{ColorMetadata, ColorSpace, FieldKind, InputId, Playback};
 use eiviz_time::{ClockDomain, ClockObservation, FrameRate, MediaTime};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -28,6 +28,50 @@ pub enum PixelFormat {
     Rgba8,
     Bgra8,
     Nv12,
+    /// 4:2:0 10-bit video range, stored as little-endian 16-bit words with
+    /// each 10-bit code in bits 15..6 (DXGI P010 layout).
+    P010,
+    /// 4:2:2 10-bit video range, stored as little-endian 16-bit words with
+    /// each 10-bit code in bits 15..6.
+    P216,
+    /// Linear four-channel 16-bit float GPU working/readback format.
+    Rgba16Float,
+}
+
+impl PixelFormat {
+    pub const fn bit_depth(self) -> u8 {
+        match self {
+            Self::Rgba8 | Self::Bgra8 | Self::Nv12 => 8,
+            Self::P010 | Self::P216 => 10,
+            Self::Rgba16Float => 16,
+        }
+    }
+
+    pub fn frame_bytes(self, width: u32, height: u32) -> Option<u64> {
+        let pixels = u64::from(width).checked_mul(u64::from(height))?;
+        match self {
+            Self::Rgba8 | Self::Bgra8 => pixels.checked_mul(4),
+            Self::Nv12 => {
+                if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                    return None;
+                }
+                pixels.checked_mul(3)?.checked_div(2)
+            }
+            Self::P010 => {
+                if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+                    return None;
+                }
+                pixels.checked_mul(3)
+            }
+            Self::P216 => {
+                if !width.is_multiple_of(2) {
+                    return None;
+                }
+                pixels.checked_mul(4)
+            }
+            Self::Rgba16Float => pixels.checked_mul(8),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +86,8 @@ pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
     pub format: PixelFormat,
+    pub color: ColorMetadata,
+    pub field: FieldKind,
     pub data: Arc<[u8]>,
     pub discontinuity: bool,
 }
@@ -62,19 +108,45 @@ impl VideoFrame {
             width,
             height,
             format: PixelFormat::Rgba8,
+            color: ColorSpace::Bt709Sdr.metadata(),
+            field: FieldKind::Progressive,
             data: data.into(),
             discontinuity: false,
         }
     }
 
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        assert!(
+            matches!(self.format, PixelFormat::Rgba8 | PixelFormat::Bgra8),
+            "pixel() requires an 8-bit packed RGB frame"
+        );
         let i = ((y * self.width + x) * 4) as usize;
-        [
+        let packed = [
             self.data[i],
             self.data[i + 1],
             self.data[i + 2],
             self.data[i + 3],
-        ]
+        ];
+        match self.format {
+            PixelFormat::Rgba8 => packed,
+            PixelFormat::Bgra8 => [packed[2], packed[1], packed[0], packed[3]],
+            _ => unreachable!("validated packed format"),
+        }
+    }
+
+    pub fn validate_layout(&self) -> std::result::Result<(), String> {
+        let required = self
+            .format
+            .frame_bytes(self.width, self.height)
+            .ok_or_else(|| format!("invalid {:?} dimensions", self.format))?;
+        if self.data.len() as u64 != required {
+            return Err(format!(
+                "{:?} frame has {} bytes, expected {required}",
+                self.format,
+                self.data.len()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -415,5 +487,13 @@ mod tests {
         assert_eq!(payloads, ["two", "three"]);
         assert_eq!(queue.dropped(), 1);
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn ten_bit_planar_layout_sizes_are_exact() {
+        assert_eq!(PixelFormat::P010.frame_bytes(3840, 2160), Some(24_883_200));
+        assert_eq!(PixelFormat::P216.frame_bytes(3840, 2160), Some(33_177_600));
+        assert_eq!(PixelFormat::P010.frame_bytes(1919, 1080), None);
+        assert_eq!(PixelFormat::P216.bit_depth(), 10);
     }
 }

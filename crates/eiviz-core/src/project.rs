@@ -10,7 +10,7 @@ use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,14 +101,20 @@ impl AuxiliaryLoadSheddingPolicy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoFormat {
     pub width: u32,
     pub height: u32,
+    /// Logical output cadence. For interlaced formats this is the field
+    /// cadence, so 1080i59.94 remains the exact `60000/1001` ratio.
     pub frame_rate: FrameRate,
     pub color: ColorSpace,
     pub interlaced: bool,
+    #[serde(default)]
+    pub field_order: Option<FieldOrder>,
     pub bit_depth: u8,
+    #[serde(default)]
+    pub color_conversion: ColorConversionPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +122,71 @@ pub enum ColorSpace {
     Bt709Sdr,
     Bt2020Pq,
     Bt2020Hlg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorMatrix {
+    Bt601,
+    Bt709,
+    Bt2020NonConstantLuminance,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorRange {
+    Full,
+    Limited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransferFunction {
+    Srgb,
+    Bt709,
+    Pq,
+    Hlg,
+    Linear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColorMetadata {
+    pub matrix: ColorMatrix,
+    pub range: ColorRange,
+    pub transfer: TransferFunction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FieldOrder {
+    TopFieldFirst,
+    BottomFieldFirst,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FieldKind {
+    Progressive,
+    Top,
+    Bottom,
+}
+
+/// A source color mismatch is rejected unless this policy explicitly
+/// authorizes GPU conversion. The policy never changes the Program profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorConversionPolicy {
+    #[default]
+    Exact,
+    Gpu {
+        tone_map: ToneMapPolicy,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToneMapPolicy {
+    #[default]
+    Disabled,
+    /// Deterministic extended-Reinhard HDR-to-SDR mapping. This is an
+    /// operator-selected rendering policy, not a certification claim.
+    HdrToSdr {
+        source_peak_nits: u16,
+        target_nits: u16,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,7 +237,98 @@ impl VideoFormat {
             frame_rate: eiviz_time::NTSC_5994,
             color: ColorSpace::Bt709Sdr,
             interlaced: false,
+            field_order: None,
             bit_depth: 8,
+            color_conversion: ColorConversionPolicy::Exact,
+        }
+    }
+
+    pub fn uhd_5994_sdr() -> Self {
+        Self {
+            width: 3840,
+            height: 2160,
+            ..Self::hd_5994()
+        }
+    }
+
+    pub fn uhd_5994_hdr10_pq() -> Self {
+        Self {
+            width: 3840,
+            height: 2160,
+            color: ColorSpace::Bt2020Pq,
+            bit_depth: 10,
+            ..Self::hd_5994()
+        }
+    }
+
+    pub fn uhd_5994_hlg() -> Self {
+        Self {
+            width: 3840,
+            height: 2160,
+            color: ColorSpace::Bt2020Hlg,
+            bit_depth: 10,
+            ..Self::hd_5994()
+        }
+    }
+
+    pub fn hd_interlaced_5994(order: FieldOrder) -> Self {
+        Self {
+            interlaced: true,
+            field_order: Some(order),
+            ..Self::hd_5994()
+        }
+    }
+
+    pub fn color_metadata(&self) -> ColorMetadata {
+        self.color.metadata()
+    }
+
+    pub fn field_at(&self, boundary_index: u64) -> FieldKind {
+        match self.field_order {
+            None => FieldKind::Progressive,
+            Some(FieldOrder::TopFieldFirst) if boundary_index.is_multiple_of(2) => FieldKind::Top,
+            Some(FieldOrder::TopFieldFirst) => FieldKind::Bottom,
+            Some(FieldOrder::BottomFieldFirst) if boundary_index.is_multiple_of(2) => {
+                FieldKind::Bottom
+            }
+            Some(FieldOrder::BottomFieldFirst) => FieldKind::Top,
+        }
+    }
+
+    pub fn is_baseline_1080p5994(&self) -> bool {
+        self.width == 1920
+            && self.height == 1080
+            && self.frame_rate == eiviz_time::NTSC_5994
+            && self.color == ColorSpace::Bt709Sdr
+            && !self.interlaced
+            && self.field_order.is_none()
+            && self.bit_depth == 8
+            && self.color_conversion == ColorConversionPolicy::Exact
+    }
+
+    pub fn working_bytes_per_pixel(&self) -> u64 {
+        if self.bit_depth > 8 { 8 } else { 4 }
+    }
+}
+
+impl ColorSpace {
+    pub const fn metadata(self) -> ColorMetadata {
+        match self {
+            Self::Bt709Sdr => ColorMetadata {
+                matrix: ColorMatrix::Bt709,
+                range: ColorRange::Limited,
+                transfer: TransferFunction::Bt709,
+            },
+            Self::Bt2020Pq => ColorMetadata {
+                matrix: ColorMatrix::Bt2020NonConstantLuminance,
+                range: ColorRange::Limited,
+                transfer: TransferFunction::Pq,
+            },
+            Self::Bt2020Hlg => ColorMetadata {
+                matrix: ColorMatrix::Bt2020NonConstantLuminance,
+                range: ColorRange::Limited,
+                transfer: TransferFunction::Hlg,
+            },
         }
     }
 }
@@ -229,6 +391,7 @@ impl Project {
                 "audio sample rate and channel count must be non-zero",
             ));
         }
+        self.validate_video_format()?;
         self.validate_auxiliary_load_shedding()?;
         if let AudioResamplingPolicy::Asrc { profile } = self.audio.resampling
             && (profile.target_latency_ms == 0
@@ -505,6 +668,49 @@ impl Project {
         }
         Ok(())
     }
+
+    fn validate_video_format(&self) -> Result<()> {
+        if self.video.width == 0 || self.video.height == 0 {
+            return Err(DomainError::msg("video dimensions must be non-zero"));
+        }
+        if !matches!(self.video.bit_depth, 8 | 10) {
+            return Err(DomainError::msg("video bit depth must be 8 or 10"));
+        }
+        if self.video.interlaced != self.video.field_order.is_some() {
+            return Err(DomainError::msg(
+                "interlaced video requires an explicit field order and progressive video must not have one",
+            ));
+        }
+        if matches!(
+            self.video.color,
+            ColorSpace::Bt2020Pq | ColorSpace::Bt2020Hlg
+        ) && self.video.bit_depth != 10
+        {
+            return Err(DomainError::msg(
+                "PQ and HLG project profiles require 10-bit video",
+            ));
+        }
+        if let ColorConversionPolicy::Gpu {
+            tone_map:
+                ToneMapPolicy::HdrToSdr {
+                    source_peak_nits,
+                    target_nits,
+                },
+        } = self.video.color_conversion
+            && (source_peak_nits == 0 || target_nits == 0 || target_nits >= source_peak_nits)
+        {
+            return Err(DomainError::msg(
+                "HDR-to-SDR tone mapping requires non-zero target below source peak",
+            ));
+        }
+        if self.compositor == CompositorBackend::CpuReference && !self.video.is_baseline_1080p5994()
+        {
+            return Err(DomainError::msg(
+                "CpuReference is restricted to the 1080p59.94 SDR 8-bit baseline; extended video profiles require explicit Wgpu",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<()> {
@@ -696,6 +902,69 @@ mod tests {
         let p = Project::new("demo");
         p.validate().unwrap();
         assert_eq!(p.video.frame_rate, eiviz_time::NTSC_5994);
+    }
+
+    #[test]
+    fn extended_profiles_preserve_baseline_and_exact_color_metadata() {
+        let baseline = VideoFormat::hd_5994();
+        assert!(baseline.is_baseline_1080p5994());
+        assert_eq!(
+            baseline.color_metadata(),
+            ColorMetadata {
+                matrix: ColorMatrix::Bt709,
+                range: ColorRange::Limited,
+                transfer: TransferFunction::Bt709,
+            }
+        );
+        let pq = VideoFormat::uhd_5994_hdr10_pq();
+        assert_eq!(pq.frame_rate, eiviz_time::NTSC_5994);
+        assert_eq!(pq.bit_depth, 10);
+        assert_eq!(pq.color_metadata().transfer, TransferFunction::Pq);
+        assert!(!pq.is_baseline_1080p5994());
+    }
+
+    #[test]
+    fn interlaced_field_order_is_deterministic_at_rational_cadence() {
+        let top = VideoFormat::hd_interlaced_5994(FieldOrder::TopFieldFirst);
+        assert_eq!(top.frame_rate, eiviz_time::NTSC_5994);
+        assert_eq!(top.field_at(0), FieldKind::Top);
+        assert_eq!(top.field_at(1), FieldKind::Bottom);
+        assert_eq!(top.field_at(1_000_000), FieldKind::Top);
+        let bottom = VideoFormat::hd_interlaced_5994(FieldOrder::BottomFieldFirst);
+        assert_eq!(bottom.field_at(0), FieldKind::Bottom);
+        assert_eq!(bottom.field_at(1_000_001), FieldKind::Top);
+        let time = eiviz_time::MediaTime::from_frame_index(1_000_000, top.frame_rate).unwrap();
+        assert_eq!(
+            time,
+            eiviz_time::MediaTime::new(
+                1_001_000_000,
+                eiviz_time::Rational::new(1, 60_000).unwrap(),
+            )
+        );
+    }
+
+    #[test]
+    fn invalid_hdr_and_field_profiles_are_rejected() {
+        let mut project = Project::new("invalid video");
+        project.compositor = CompositorBackend::Wgpu;
+        project.video = VideoFormat::uhd_5994_hdr10_pq();
+        project.video.bit_depth = 8;
+        assert!(
+            project
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("10-bit")
+        );
+        project.video = VideoFormat::hd_5994();
+        project.video.interlaced = true;
+        assert!(
+            project
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("field order")
+        );
     }
 
     #[test]

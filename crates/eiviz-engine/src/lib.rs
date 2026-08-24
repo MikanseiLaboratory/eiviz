@@ -76,6 +76,7 @@ pub struct AdmissionBudget {
     pub max_inputs: usize,
     pub max_units: usize,
     pub max_pixel_bytes: usize,
+    pub max_vram_bytes: u64,
 }
 
 impl Default for AdmissionBudget {
@@ -84,6 +85,7 @@ impl Default for AdmissionBudget {
             max_inputs: 4096,
             max_units: 1024,
             max_pixel_bytes: 2 * 1024 * 1024 * 1024,
+            max_vram_bytes: 2 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -337,7 +339,7 @@ impl Engine {
         #[cfg(feature = "wgpu-backend")]
         let wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
         runtime.activate_snapshot(active_snapshot.clone())?;
-        Ok(Self {
+        let engine = Self {
             inner: Mutex::new(Inner {
                 project,
                 active_snapshot,
@@ -366,7 +368,12 @@ impl Engine {
                 persistence_errors: 0,
                 last_persistence_error: None,
             }),
-        })
+        };
+        {
+            let inner = engine.inner.lock();
+            Self::admit_project(&inner, &inner.project)?;
+        }
+        Ok(engine)
     }
 
     pub fn shared(self) -> Arc<Self> {
@@ -375,6 +382,21 @@ impl Engine {
 
     pub fn set_asset_root(&self, root: impl Into<PathBuf>) {
         self.inner.lock().runtime.set_asset_root(root);
+    }
+
+    pub fn admission_budget(&self) -> AdmissionBudget {
+        self.inner.lock().budget.clone()
+    }
+
+    pub fn set_admission_budget(&self, budget: AdmissionBudget) -> Result<()> {
+        let mut inner = self.inner.lock();
+        let previous = inner.budget.clone();
+        inner.budget = budget;
+        if let Err(error) = Self::admit_project(&inner, &inner.project) {
+            inner.budget = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn ingest_asset(&self, file: &Path, asset_root: &Path) -> Result<AssetRef> {
@@ -396,9 +418,9 @@ impl Engine {
         playback: Playback,
     ) -> Result<FileIngestResult> {
         let project = self.staged_snapshot();
-        if project.video.color != eiviz_core::ColorSpace::Bt709Sdr {
+        if !project.video.is_baseline_1080p5994() {
             return Err(EngineError::Admission(
-                "H.264 software decode currently requires explicit Bt709Sdr project profile".into(),
+                "H.264/OpenH264 file ingest supports only the explicit 1080p59.94 SDR 8-bit progressive baseline; no profile conversion fallback is available".into(),
             ));
         }
         let asset = stage_asset(file, asset_root)?;
@@ -1399,9 +1421,39 @@ impl Engine {
             .len()
             .saturating_mul(p.video.width as usize)
             .saturating_mul(p.video.height as usize)
-            .saturating_mul(4);
+            .saturating_mul(p.video.working_bytes_per_pixel() as usize);
         if bytes > b.max_pixel_bytes {
-            return Err(EngineError::Admission("pixel budget".into()));
+            return Err(EngineError::Admission(format!(
+                "CPU-visible pixel budget requires {bytes} bytes, limit is {}",
+                b.max_pixel_bytes
+            )));
+        }
+        let surface = u64::from(p.video.width)
+            .saturating_mul(u64::from(p.video.height))
+            .saturating_mul(p.video.working_bytes_per_pixel());
+        let resident_surfaces = p
+            .inputs
+            .len()
+            .saturating_add(p.mixing_units.len().saturating_mul(2))
+            .saturating_add(p.multiviews.len())
+            .saturating_add(2);
+        let vram = surface.saturating_mul(resident_surfaces as u64);
+        if vram > b.max_vram_bytes {
+            return Err(EngineError::Admission(format!(
+                "render VRAM budget requires {vram} bytes for {resident_surfaces} surfaces, limit is {}",
+                b.max_vram_bytes
+            )));
+        }
+        #[cfg(feature = "wgpu-backend")]
+        if p.compositor == CompositorBackend::Wgpu {
+            let compositor = inner.wgpu_compositor.as_ref().ok_or_else(|| {
+                EngineError::Admission(
+                    "Wgpu profile selected but no admitted hardware compositor exists".into(),
+                )
+            })?;
+            compositor
+                .admit_video_format(&p.video)
+                .map_err(|error| EngineError::Admission(error.to_string()))?;
         }
         Ok(())
     }
@@ -1472,6 +1524,17 @@ fn validate_distribution_admission(inner: &Inner, project: &Project) -> Result<(
         .values()
         .filter(|output| output.enabled && output.distribution.is_some())
     {
+        if !project.video.is_baseline_1080p5994() {
+            return Err(EngineError::Admission(format!(
+                "output {} uses the baseline H.264 distribution path, which does not support {:?} {}-bit {}x{} {:?}; no profile fallback is permitted",
+                output.id,
+                project.video.color,
+                project.video.bit_depth,
+                project.video.width,
+                project.video.height,
+                project.video.field_order
+            )));
+        }
         let profile = output
             .distribution
             .as_ref()

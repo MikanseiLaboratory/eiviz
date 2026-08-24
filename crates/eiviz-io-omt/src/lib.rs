@@ -7,7 +7,7 @@ mod native;
 
 pub use native::{
     OmtColorProfile, OmtError, OmtOutputConfig, OmtOutputPixelFormat, OmtSink, OmtSource,
-    discover_sources,
+    discover_sources, validate_video_format,
 };
 
 use eiviz_media::Capability;

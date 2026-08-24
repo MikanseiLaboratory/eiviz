@@ -9,6 +9,10 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - OS: Windows x64 必須。Linux x64 / macOS arm64 は capability profile
 - 「無限」: 製品固定上限なし。実行時は admission control により拒否できる
 - 「厳密 fps」: (1) 有理数 PTS に累積丸め誤差がない (2) 認定環境で deadline/drop/xrun 基準を満たす
+- Phase 9 extended profiles are implemented but remain capability/HIL
+  profiles, not certified replacements for the 1080p59.94 baseline:
+  3840×2160p59.94 SDR, 3840×2160p59.94 BT.2020 PQ/HLG 10-bit, and
+  1920×1080i59.94 with explicit top/bottom field order.
 
 ## 機能要件
 
@@ -62,6 +66,13 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R05.4 pipeline は activation 前に prewarm する
 - R05.5 device lost 時は `missing_media` に従い slate / last-good / fail を cadence どおり適用し、再生成後に frame boundary で復帰する。CPU compositor へは落とさない
 - R05.6 compositor backend（`CpuReference` / `Wgpu`）は Project の明示フィールド。Runtime と不一致、または選択 backend が利用不能ならエラー。暗黙切替禁止（INV-10）
+- R05.7 frame は pixel format（RGBA/BGRA/NV12/P010/P216/RGBA16F）、
+  matrix、range、transfer、field kind を保持する。異なる color profile は
+  `Exact` で拒否し、Project が明示した `Gpu` policy のときだけ WGSL
+  conversion を行う。HDR→SDR はさらに明示 tone-map policy を要求する
+- R05.8 RenderPlan は working format/color/field order と conservative VRAM
+  estimate を保持する。adapter texture dimension/format feature と Engine
+  VRAM budget は activation 前に検証し、非対応 profile を hard reject する
 
 ### R06 Audio
 - R06.1 内部は planar f32
@@ -75,6 +86,10 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R07.2 DeckLink: SDK 16 shim（feature）。Audio: CPAL。Windows は WASAPI 必須、ASIO はライセンス後
 - R07.3 SDK 未導入でも core は起動し、capability 不足を表示する
 - R07.4 各 source/sink は bounded queue。遅い sink が Program を止めない
+- R07.5 adapter は実装済み pixel/color/scan profile だけを受理する。NDI/OMT
+  の 8-bit progressive BT.709 path、固定 DeckLink shim、baseline H.264/file
+  path が extended profile を扱えない場合は adapter 名と profile を含む
+  error とし、変換・別 profile・別 adapter へ fallback しない
 
 ### R08 Distribution
 - R08.1 baseline: RTMP = H.264/AAC in FLV、SRT = H.264/AAC in MPEG-TS、録画 = fragmented MP4

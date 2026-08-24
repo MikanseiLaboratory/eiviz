@@ -667,6 +667,8 @@ fn receive_video(
         width,
         height,
         format: EivizPixelFormat::Rgba8,
+        color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+        field: eiviz_core::FieldKind::Progressive,
         data: rgba.into(),
         discontinuity: false,
     })
@@ -720,6 +722,14 @@ fn send_video(
     output_pixel_format: NdiOutputPixelFormat,
     output_color_profile: Option<crate::NdiColorProfile>,
 ) -> Result<(), NdiError> {
+    if frame.color != eiviz_core::ColorSpace::Bt709Sdr.metadata()
+        || frame.field != eiviz_core::FieldKind::Progressive
+    {
+        return Err(NdiError::InvalidFrame(format!(
+            "NDI output supports progressive BT.709 SDR frames only, got color {:?} field {:?}; no conversion fallback is permitted",
+            frame.color, frame.field
+        )));
+    }
     let width = i32::try_from(frame.width)
         .map_err(|_| NdiError::InvalidFrame("video width exceeds NDI range".into()))?;
     let height = i32::try_from(frame.height)
@@ -735,9 +745,13 @@ fn send_video(
                     .chunks_exact(4)
                     .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
                     .collect(),
-                EivizPixelFormat::Nv12 => {
+                EivizPixelFormat::Nv12
+                | EivizPixelFormat::P010
+                | EivizPixelFormat::P216
+                | EivizPixelFormat::Rgba16Float => {
                     return Err(NdiError::InvalidFrame(
-                        "NV12 input cannot be implicitly interpreted as RGBA output".into(),
+                        "planar/10-bit input cannot be implicitly interpreted as RGBA output"
+                            .into(),
                     ));
                 }
             },

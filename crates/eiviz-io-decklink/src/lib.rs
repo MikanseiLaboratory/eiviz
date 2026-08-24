@@ -36,6 +36,16 @@ pub const AUDIO_TIME_SCALE: i64 = 48_000;
 pub const VIDEO_WIDTH: u32 = 1_920;
 pub const VIDEO_HEIGHT: u32 = 1_080;
 
+pub fn validate_video_format(video: &eiviz_core::VideoFormat) -> Result<(), String> {
+    if !video.is_baseline_1080p5994() {
+        return Err(format!(
+            "DeckLink SDK shim exposes only 1920x1080p59.94 BT.709 SDR 8-bit BGRA; selected {}x{} {:?} {}-bit interlaced={:?} is unsupported and will not be converted",
+            video.width, video.height, video.color, video.bit_depth, video.field_order
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceDirection {
     Capture,
@@ -365,6 +375,22 @@ mod tests {
             assert!(!capability.available);
             assert!(capability.detail.contains("not compiled"));
         }
+    }
+
+    #[test]
+    fn fixed_shim_rejects_extended_profiles_without_fallback() {
+        validate_video_format(&eiviz_core::VideoFormat::hd_5994()).unwrap();
+        assert!(
+            validate_video_format(&eiviz_core::VideoFormat::uhd_5994_sdr())
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        assert!(
+            validate_video_format(&eiviz_core::VideoFormat::hd_interlaced_5994(
+                eiviz_core::FieldOrder::TopFieldFirst,
+            ))
+            .is_err()
+        );
     }
 
     #[test]

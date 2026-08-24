@@ -5,11 +5,14 @@
 | ID | 内容 | 状態 |
 | --- | --- | --- |
 | PROFILE-1080P5994 | 1920×1080p SDR BT.709 8-bit、60000/1001、48 kHz | baseline。必須 |
-| PROFILE-2160P5994 | 3840×2160p SDR | 後続 |
-| PROFILE-HDR10 | PQ / HLG、10-bit | 後続 |
-| PROFILE-INTERLACE | 1080i59.94 field cadence | 後続 |
+| PROFILE-2160P5994 | 3840×2160p59.94 SDR 8-bit | implemented, HIL pending; not certified |
+| PROFILE-HDR10 | 3840×2160p59.94 BT.2020 PQ / HLG、10-bit | implemented with explicit WGSL policy, HIL pending; not certified |
+| PROFILE-INTERLACE | 1080i59.94 explicit field cadence/order | timing contract implemented, adapter HIL pending; not certified |
 
 未認定 profile のコード経路があっても、release では capability 表示に留めます。
+Extended-profile implementation does not change the required
+`PROFILE-1080P5994` gates or make hardware certification claims. See
+[the Phase 9 HIL matrix](hil/video-profiles.md).
 
 ## 暫定性能予算（1080p59.94）
 
