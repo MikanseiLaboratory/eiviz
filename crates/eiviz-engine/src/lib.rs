@@ -135,6 +135,11 @@ impl Engine {
         openh264_binary: &Path,
         playback: Playback,
     ) -> Result<Input> {
+        if self.snapshot().video.color != eiviz_core::ColorSpace::Bt709Sdr {
+            return Err(EngineError::Admission(
+                "H.264 software decode currently requires explicit Bt709Sdr project profile".into(),
+            ));
+        }
         let asset = stage_asset(file, asset_root)?;
         let input = Input {
             id: InputId::new(),

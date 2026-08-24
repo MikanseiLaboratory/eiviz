@@ -276,7 +276,7 @@ impl VideoFileSource {
             let sample = &self.index.samples[sample_index];
             if let Some(frame) = state
                 .decoder
-                .decode(&sample.annexb, sample_index as u64, self.id, sample.pts)
+                .decode_bt709_limited(&sample.annexb, sample_index as u64, self.id, sample.pts)
                 .map_err(|error| MediaError::Other(error.to_string()))?
             {
                 if frame.width != u32::from(self.index.width)
@@ -337,7 +337,7 @@ impl MediaSource for VideoFileSource {
 
 fn feed_preamble(decoder: &mut OpenH264Decoder, index: &H264Mp4Index, id: InputId) -> Result<()> {
     let frame = decoder
-        .decode(&index.decoder_preamble, 0, id, MediaTime::ZERO)
+        .decode_bt709_limited(&index.decoder_preamble, 0, id, MediaTime::ZERO)
         .map_err(|error| MediaError::Other(error.to_string()))?;
     if frame.is_some() {
         return Err(MediaError::Other(

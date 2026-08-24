@@ -121,7 +121,8 @@ impl OpenH264Decoder {
         })
     }
 
-    pub fn decode(
+    /// Decode using the explicitly selected SDR BT.709 limited-range profile.
+    pub fn decode_bt709_limited(
         &mut self,
         annexb: &[u8],
         id: u64,

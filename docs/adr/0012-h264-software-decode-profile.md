@@ -39,9 +39,10 @@ enabled.
 ## Limits
 
 Main/High profile, `avc3`, encrypted/fMP4 inputs, reverse playback, AAC, and
-compressed samples above the configured limit are hard errors. The current
-vertical slice applies the product's fixed limited-range BT.709 profile; MP4
-color metadata validation remains a certification blocker. They are not
+compressed samples above the configured limit are hard errors. The decoder API
+requires the explicitly selected `Bt709Sdr` Project profile and exposes the
+conversion as `decode_bt709_limited`; other Project color profiles are rejected.
+MP4 color metadata cross-validation remains a certification blocker. They are not
 silently accepted or decoded by another backend.
 
 No Cisco binary or representative conformance clip is stored in this
