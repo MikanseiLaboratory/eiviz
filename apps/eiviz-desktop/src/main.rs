@@ -1,11 +1,13 @@
 use eiviz_command::{Command, CommandEnvelope};
-#[cfg(feature = "ndi")]
+#[cfg(any(feature = "decklink", feature = "ndi"))]
 use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_core::{
     CompositorBackend, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
     MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
     Transform2D, TransitionStyle,
 };
+#[cfg(feature = "decklink")]
+use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +41,18 @@ struct DesktopApp {
     omt_output_name: String,
     omt_discovered: Vec<String>,
     omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
+    #[cfg(feature = "decklink")]
+    decklink_devices: Vec<eiviz_io_decklink::DeviceInfo>,
+    #[cfg(feature = "decklink")]
+    decklink_capture_selected: Option<usize>,
+    #[cfg(feature = "decklink")]
+    decklink_playback_selected: Option<usize>,
+    #[cfg(feature = "decklink")]
+    decklink_sources: Vec<Arc<eiviz_io_decklink::DeckLinkSource>>,
+    #[cfg(feature = "decklink")]
+    decklink_outputs: Vec<(OutputId, Arc<eiviz_io_decklink::DeckLinkSink>)>,
+    #[cfg(feature = "decklink")]
+    decklink_capability: eiviz_media::Capability,
     #[cfg(feature = "ndi")]
     ndi_discovered: Vec<eiviz_io_ndi::NdiSourceInfo>,
     #[cfg(feature = "ndi")]
@@ -134,6 +148,18 @@ impl DesktopApp {
             omt_output_name: "eiviz Program".into(),
             omt_discovered: Vec::new(),
             omt_connections: Vec::new(),
+            #[cfg(feature = "decklink")]
+            decklink_devices: Vec::new(),
+            #[cfg(feature = "decklink")]
+            decklink_capture_selected: None,
+            #[cfg(feature = "decklink")]
+            decklink_playback_selected: None,
+            #[cfg(feature = "decklink")]
+            decklink_sources: Vec::new(),
+            #[cfg(feature = "decklink")]
+            decklink_outputs: Vec::new(),
+            #[cfg(feature = "decklink")]
+            decklink_capability: eiviz_io_decklink::probe(),
             #[cfg(feature = "ndi")]
             ndi_discovered: Vec::new(),
             #[cfg(feature = "ndi")]
@@ -155,6 +181,177 @@ impl DesktopApp {
             app.connect_omt();
         }
         Ok(app)
+    }
+
+    #[cfg(feature = "decklink")]
+    fn refresh_decklink(&mut self) {
+        match eiviz_io_decklink::enumerate_devices() {
+            Ok(devices) => {
+                self.decklink_devices = devices;
+                self.decklink_capture_selected = None;
+                self.decklink_playback_selected = None;
+                self.decklink_capability = eiviz_io_decklink::probe();
+                self.status = format!(
+                    "DeckLink: {} physical device(s)",
+                    self.decklink_devices.len()
+                );
+            }
+            Err(error) => {
+                self.decklink_devices.clear();
+                self.decklink_capability = eiviz_io_decklink::probe();
+                self.status = format!("DeckLink enumeration: {error}");
+            }
+        }
+    }
+
+    #[cfg(feature = "decklink")]
+    fn connect_decklink_capture(&mut self) {
+        let Some(device) = self
+            .decklink_capture_selected
+            .and_then(|index| self.decklink_devices.get(index))
+            .cloned()
+        else {
+            self.status = "DeckLink capture: refresh and select an input".into();
+            return;
+        };
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: "decklink".into(),
+            logical_name: device.display_name.clone(),
+            last_seen_hardware_id: Some(device.persistent_id.clone()),
+        };
+        let input = Input {
+            id: InputId::new(),
+            name: format!("DeckLink {}", device.display_name),
+            tags: vec!["decklink".into(), "sdi".into(), "live".into()],
+            groups: vec![],
+            source: InputSource::DeckLink {
+                binding: binding.id,
+            },
+        };
+        let source = match eiviz_io_decklink::DeckLinkSource::open(
+            input.id,
+            &binding,
+            eiviz_io_decklink::DeckLinkConfig::default(),
+        ) {
+            Ok(source) => Arc::new(source),
+            Err(error) => {
+                self.status = format!("DeckLink capture open: {error}");
+                return;
+            }
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: input.name.clone(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        for command in [
+            Command::AddDeviceBinding {
+                binding: binding.clone(),
+            },
+            Command::AddInput {
+                input: input.clone(),
+            },
+            Command::AddScene {
+                scene: scene.clone(),
+            },
+        ] {
+            if let Err(error) = self.engine.submit_payload(command) {
+                self.status = format!("DeckLink project binding: {error}");
+                return;
+            }
+        }
+        let unit = self.engine.primary_unit();
+        if let Some(bus) = self.engine.snapshot().audio_matrix.buses.first() {
+            let route = AudioRoute {
+                input: input.id,
+                bus: bus.id,
+                mode: RouteMode::Follow { unit },
+                gain_db: 0.0,
+                muted: false,
+                solo: false,
+                delay_ms: 0.0,
+                pan: 0.0,
+            };
+            if let Err(error) = self.engine.submit_payload(Command::SetAudioRoute { route }) {
+                self.status = format!("DeckLink audio route: {error}");
+                return;
+            }
+        }
+        self.engine.attach_source(source.clone());
+        self.decklink_sources.push(source);
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("DeckLink preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("DeckLink capture started: {}", device.display_name);
+    }
+
+    #[cfg(feature = "decklink")]
+    fn start_decklink_output(&mut self, owner: eiviz_core::MixingUnitId) {
+        let Some(device) = self
+            .decklink_playback_selected
+            .and_then(|index| self.decklink_devices.get(index))
+            .cloned()
+        else {
+            self.status = "DeckLink output: refresh and select an output".into();
+            return;
+        };
+        let binding = DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: "decklink".into(),
+            logical_name: device.display_name.clone(),
+            last_seen_hardware_id: Some(device.persistent_id.clone()),
+        };
+        let name = format!("DeckLink {}", device.display_name);
+        let sink = match eiviz_io_decklink::DeckLinkSink::create(
+            name.clone(),
+            &binding,
+            eiviz_io_decklink::DeckLinkConfig::default(),
+        ) {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                self.status = format!("DeckLink output open: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddDeviceBinding {
+            binding: binding.clone(),
+        }) {
+            self.status = format!("DeckLink output binding: {error}");
+            return;
+        }
+        let output = Output {
+            id: OutputId::new(),
+            name: name.clone(),
+            owner,
+            kind: OutputKind::DeckLink {
+                binding: binding.id,
+            },
+            enabled: true,
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddOutput {
+            output: output.clone(),
+        }) {
+            self.status = format!("DeckLink output project: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.attach_output_sink(output.id, sink.clone()) {
+            self.status = format!("DeckLink output route: {error}");
+            return;
+        }
+        self.decklink_outputs.push((output.id, sink));
+        self.status = format!("DeckLink scheduled output started: {name}");
     }
 
     fn connect_omt(&mut self) {
@@ -661,7 +858,6 @@ impl eframe::App for DesktopApp {
             });
             for cap in [
                 eiviz_io_omt::probe(),
-                eiviz_io_decklink::probe(),
                 eiviz_codec_gpu_video::probe(),
             ] {
                 ui.label(format!(
@@ -673,6 +869,22 @@ impl eframe::App for DesktopApp {
                         "unavailable"
                     }
                 ));
+            }
+            #[cfg(feature = "decklink")]
+            ui.label(format!(
+                "{}: {} ({})",
+                self.decklink_capability.id,
+                if self.decklink_capability.available {
+                    "ready"
+                } else {
+                    "unavailable"
+                },
+                self.decklink_capability.detail
+            ));
+            #[cfg(not(feature = "decklink"))]
+            {
+                let capability = eiviz_io_decklink::probe();
+                ui.label(format!("{}: unavailable ({})", capability.id, capability.detail));
             }
             #[cfg(feature = "ndi")]
             ui.label(format!(
@@ -733,6 +945,101 @@ impl eframe::App for DesktopApp {
                     source.health()
                 ));
             }
+            ui.separator();
+            ui.heading("DeckLink 1080p59.94");
+            #[cfg(feature = "decklink")]
+            {
+                if ui.button("Refresh DeckLink devices").clicked() {
+                    self.refresh_decklink();
+                }
+                ui.label("Capture");
+                for (index, device) in self.decklink_devices.iter().enumerate() {
+                    if !device.supports_capture {
+                        continue;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.decklink_capture_selected == Some(index),
+                            format!("{} [{}]", device.display_name, device.persistent_id),
+                        )
+                        .clicked()
+                    {
+                        self.decklink_capture_selected = Some(index);
+                    }
+                }
+                if ui.button("Start DeckLink Capture").clicked() {
+                    self.connect_decklink_capture();
+                }
+                for source in &self.decklink_sources {
+                    let (video_drops, audio_drops) = source.dropped_frames();
+                    let detail = source
+                        .last_error()
+                        .unwrap_or_else(|| "no adapter error".into());
+                    ui.label(format!(
+                        "{}: {:?}; queue drops video={video_drops} audio={audio_drops}; {detail}",
+                        source.device().display_name,
+                        source.health()
+                    ));
+                }
+                ui.label("Scheduled program output");
+                for (index, device) in self.decklink_devices.iter().enumerate() {
+                    if !device.supports_playback {
+                        continue;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.decklink_playback_selected == Some(index),
+                            format!("{} [{}]", device.display_name, device.persistent_id),
+                        )
+                        .clicked()
+                    {
+                        self.decklink_playback_selected = Some(index);
+                    }
+                }
+                if ui.button("Start DeckLink Output").clicked() {
+                    self.start_decklink_output(unit_id);
+                }
+                let mut stop_output = None;
+                for (output_id, sink) in &self.decklink_outputs {
+                    let diagnostics = sink.diagnostics();
+                    let reference = diagnostics
+                        .reference_locked
+                        .map_or("unknown", |locked| if locked { "locked" } else { "unlocked" });
+                    let detail = sink
+                        .last_error()
+                        .unwrap_or_else(|| "no adapter error".into());
+                    ui.push_id(output_id, |ui| {
+                        ui.label(format!(
+                            "{}: {:?}; ref={reference}; buffered v={} a={}; complete={} late={} dropped={} flushed={} queue-full={}; {detail}",
+                            sink.device().display_name,
+                            sink.health(),
+                            diagnostics.buffered_video,
+                            diagnostics.buffered_audio_frames,
+                            diagnostics.completed_video,
+                            diagnostics.late_video,
+                            diagnostics.dropped_video,
+                            diagnostics.flushed_video,
+                            diagnostics.queue_rejections,
+                        ));
+                        if ui.button("Stop DeckLink Output").clicked() {
+                            stop_output = Some(*output_id);
+                        }
+                    });
+                }
+                if let Some(output_id) = stop_output {
+                    let _ = self
+                        .engine
+                        .submit_payload(Command::RemoveOutput { id: output_id });
+                    self.engine.detach_output_sink(output_id);
+                    self.decklink_outputs.retain(|(id, _)| *id != output_id);
+                    self.status = "DeckLink output stopped".into();
+                }
+            }
+            #[cfg(not(feature = "decklink"))]
+            ui.label(
+                "Build with `--features decklink` against an installed Desktop Video SDK 16. \
+                 No simulator or backend fallback is available.",
+            );
             ui.separator();
             ui.horizontal(|ui| {
                 ui.heading("NDI");

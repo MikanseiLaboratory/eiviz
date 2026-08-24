@@ -34,12 +34,16 @@ all pass:
 - Optional real NDI discovery/receive/output through `grafton-ndi` 1.0.0 and
   an installed NDI 6 SDK/runtime. Video and planar audio use bounded adapter
   workers and NDI's 100 ns timestamps. NDI interop HIL is still pending.
-- Capability stubs only for DeckLink / ASIO / gpu-video
+- Optional real Blackmagic DeckLink capture and scheduled playback through an
+  official SDK 16 C++ shim. The fixed vertical slice is 1080p59.94 BGRA with
+  48 kHz PCM, persistent device binding, bounded queues, and reference-lock /
+  completion diagnostics. DeckLink interop and genlock HIL are still pending.
+- Capability stubs only for ASIO / gpu-video
 - Portable `.eiviz` packages and crash-safe JSON save
 
 Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
 Video) is **not** claimed. See the current truth table in the implementation
-plan and [OMT HIL procedure](docs/hil/omt.md).
+plan and the [DeckLink HIL procedure](docs/hil/decklink.md).
 
 ## Build
 
@@ -59,6 +63,11 @@ EIVIZ_OPENH264_PATH=/absolute/path/to/libopenh264-2.6.0-linux64.8.so \
 # Set NDI_SDK_DIR for a nonstandard SDK location and make the runtime library
 # discoverable using the platform's documented loader mechanism.
 cargo run -p eiviz-desktop --features ndi
+
+# Explicit DeckLink profile. Desktop Video and SDK 16 must be installed.
+# The SDK remains external and is never downloaded or vendored.
+DECKLINK_SDK_DIR=/absolute/path/to/Blackmagic_DeckLink_SDK_16 \
+  cargo run -p eiviz-desktop --features decklink
 ```
 
 Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but
@@ -76,6 +85,7 @@ Requirements live in [docs/requirements.md](docs/requirements.md).
 ## License
 
 MIT for this repository. Third-party SDKs (NDI, DeckLink, ASIO, codecs) keep
-their own terms and are never compiled in by default. `grafton-ndi` is
-Apache-2.0; the separately installed NDI SDK/runtime remains subject to
-Vizrt NDI's SDK agreement. See [NOTICE](NOTICE).
+their own terms and are never compiled in by default. DeckLink builds compile
+the repository's MIT C ABI shim against a separately installed official SDK;
+the SDK headers, dispatch/interface source, driver, and tools remain under
+Blackmagic Design's terms. See [NOTICE](NOTICE).

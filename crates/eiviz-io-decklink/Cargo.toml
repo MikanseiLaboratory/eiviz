@@ -6,6 +6,16 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crossbeam-channel.workspace = true
+eiviz-core.workspace = true
 eiviz-media.workspace = true
 eiviz-time.workspace = true
 parking_lot.workspace = true
+thiserror.workspace = true
+
+[features]
+default = []
+decklink-sdk = []
+
+[build-dependencies]
+cc = "1.4.4"

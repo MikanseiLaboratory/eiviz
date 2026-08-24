@@ -859,6 +859,7 @@ dependencies = [
 name = "eiviz-io-decklink"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "eiviz-media",
  "eiviz-time",
  "parking_lot",

@@ -33,9 +33,24 @@ not link or fall back to libomt.
 
 Blackmagic DeckLink / Desktop Video
 -----------------------------------
-The Blackmagic Desktop Video SDK is proprietary. Default builds compile
-`eiviz-io-decklink` as a capability stub. Linking the official SDK requires
-accepting Blackmagic Design's SDK license.
+DeckLink, Desktop Video, and Blackmagic Design are trademarks of Blackmagic
+Design Pty. Ltd. The Blackmagic Desktop Video SDK is proprietary. Default
+builds do not compile or link SDK code and expose no simulated DeckLink
+backend.
+
+The explicit `decklink-sdk` feature compiles eiviz's MIT-licensed C ABI shim
+against an operator-installed Desktop Video SDK 16 and the official platform
+dispatch/interface source found below `DECKLINK_SDK_DIR`. SDK headers, source,
+libraries, drivers, examples, documentation, and tools are not vendored,
+downloaded, generated, or redistributed by this repository.
+
+Building, testing, or distributing DeckLink support requires accepting and
+complying with the current Blackmagic Design Desktop Video SDK license and any
+driver/runtime redistribution restrictions. Distributors must obtain the SDK
+directly from Blackmagic Design, review the license included with that exact
+SDK release, preserve required notices, and verify whether any runtime files
+may be shipped. That license, not this notice, is authoritative. See
+https://www.blackmagicdesign.com/developer/product/capture-and-playback.
 
 ASIO
 ----

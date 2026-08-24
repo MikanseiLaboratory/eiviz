@@ -25,5 +25,6 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
+decklink = ["eiviz-io-decklink/decklink-sdk"]
 ndi = ["eiviz-io-ndi/ndi"]
 wgpu-backend = ["eiviz-engine/wgpu-backend"]

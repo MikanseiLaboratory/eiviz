@@ -240,6 +240,14 @@ impl Project {
                     output.id, output.owner
                 )));
             }
+            if let crate::OutputKind::DeckLink { binding } = output.kind
+                && !self.device_bindings.contains_key(&binding)
+            {
+                return Err(DomainError::InvalidRef(format!(
+                    "output {} -> device binding {}",
+                    output.id, binding
+                )));
+            }
         }
         for view in self.multiviews.values() {
             let owner = self.mixing_units.get(&view.owner).ok_or_else(|| {
