@@ -286,6 +286,22 @@ mod tests {
     }
 
     #[test]
+    fn adapter_profile_matrix_rejects_hdr_and_interlace_without_fallback() {
+        validate_video_format(&eiviz_core::VideoFormat::uhd_5994_sdr()).unwrap();
+        assert!(
+            validate_video_format(&eiviz_core::VideoFormat::uhd_5994_hdr10_pq())
+                .unwrap_err()
+                .contains("no conversion fallback")
+        );
+        assert!(
+            validate_video_format(&eiviz_core::VideoFormat::hd_interlaced_5994(
+                eiviz_core::FieldOrder::TopFieldFirst,
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn bt709_nv12_conversion_has_expected_black_and_white_range() {
         let mut data = Vec::new();
         for _ in 0..2 {

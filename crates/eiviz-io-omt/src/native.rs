@@ -705,4 +705,29 @@ mod tests {
         assert!(frame_to_bgra(&nv12).is_err());
         assert!(frame_to_uyvy(&nv12, OmtColorProfile::Bt709Limited).is_err());
     }
+
+    #[test]
+    fn adapter_profile_matrix_is_explicit() {
+        validate_video_format(
+            &eiviz_core::VideoFormat::uhd_5994_sdr(),
+            OmtColorProfile::Bt709Limited,
+        )
+        .unwrap();
+        assert!(
+            validate_video_format(
+                &eiviz_core::VideoFormat::uhd_5994_hdr10_pq(),
+                OmtColorProfile::Bt709Limited,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_video_format(
+                &eiviz_core::VideoFormat::hd_interlaced_5994(
+                    eiviz_core::FieldOrder::BottomFieldFirst,
+                ),
+                OmtColorProfile::Bt709Limited,
+            )
+            .is_err()
+        );
+    }
 }
