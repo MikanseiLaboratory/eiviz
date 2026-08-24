@@ -111,6 +111,25 @@ impl Runtime {
         self.backend
     }
 
+    pub fn compositor_detail(&self) -> String {
+        match self.backend {
+            CompositorBackend::CpuReference => "CpuReference (explicit profile)".into(),
+            CompositorBackend::Wgpu => {
+                #[cfg(feature = "wgpu-backend")]
+                {
+                    if let Some(gpu) = &self.wgpu {
+                        let info = gpu.adapter_info();
+                        return format!(
+                            "Wgpu {} ({:?}, {:?})",
+                            info.name, info.backend, info.device_type
+                        );
+                    }
+                }
+                "Wgpu unavailable".into()
+            }
+        }
+    }
+
     pub fn set_asset_root(&mut self, root: impl Into<PathBuf>) {
         self.asset_root = Some(root.into());
         self.image_cache.clear();
@@ -210,7 +229,7 @@ impl Runtime {
             if unit.transition.remaining_frames > 0 {
                 let pv_plan = plan_preview(project, &unit);
                 let pv = self.composite_plan(&pv_plan, &sources, pts)?;
-                pg = mix_frames(&pv, &pg, unit.mix_factor(), pts, self.frame);
+                pg = self.mix_transition(&pv, &pg, unit.mix_factor(), pts)?;
             }
             let pv_plan = plan_preview(project, &unit);
             let pv = self.composite_plan(&pv_plan, &sources, pts)?;
@@ -264,6 +283,32 @@ impl Runtime {
                     })?;
                     gpu.composite(plan, sources, pts, self.frame)
                         .map_err(|e| RuntimeError::Gpu(e.to_string()))
+                }
+            }
+        }
+    }
+
+    fn mix_transition(
+        &self,
+        a: &VideoFrame,
+        b: &VideoFrame,
+        factor: f32,
+        pts: MediaTime,
+    ) -> Result<VideoFrame> {
+        match self.backend {
+            CompositorBackend::CpuReference => Ok(mix_frames(a, b, factor, pts, self.frame)),
+            CompositorBackend::Wgpu => {
+                #[cfg(not(feature = "wgpu-backend"))]
+                {
+                    Err(RuntimeError::WgpuFeatureDisabled)
+                }
+                #[cfg(feature = "wgpu-backend")]
+                {
+                    let gpu = self.wgpu.as_ref().ok_or_else(|| {
+                        RuntimeError::Gpu("wgpu compositor was not constructed".into())
+                    })?;
+                    gpu.mix(a, b, factor, pts, self.frame)
+                        .map_err(|error| RuntimeError::Gpu(error.to_string()))
                 }
             }
         }

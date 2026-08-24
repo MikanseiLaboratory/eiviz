@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 pub fn probe() -> Capability {
     Capability {
         id: "ndi".into(),
-        available: cfg!(feature = "ndi-sdk"),
+        available: false,
         detail: if cfg!(feature = "ndi-sdk") {
-            "grafton-ndi adapter compiled".into()
+            "NDI feature selected, but the adapter is not implemented; refusing to report availability".into()
         } else {
             "NDI SDK not linked; enable feature ndi-sdk on a licensed build".into()
         },
@@ -36,7 +36,7 @@ mod tests {
     use eiviz_time::MediaTime;
 
     #[test]
-    fn default_is_unavailable() {
+    fn unimplemented_adapter_never_reports_available() {
         let c = super::probe();
         assert!(!c.available);
         assert!(c.detail.contains("NDI"));

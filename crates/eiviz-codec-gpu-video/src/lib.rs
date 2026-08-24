@@ -5,9 +5,9 @@ use eiviz_media::Capability;
 pub fn probe() -> Capability {
     Capability {
         id: "gpu-video".into(),
-        available: cfg!(feature = "gpu-video"),
+        available: false,
         detail: if cfg!(feature = "gpu-video") {
-            "gpu-video 0.4 feature compiled; Vulkan Video required at runtime".into()
+            "gpu-video feature selected, but the adapter is not implemented; refusing to report availability".into()
         } else {
             "not compiled; software codec is the CI path (ADR-0002 / ADR-0009)".into()
         },
@@ -17,7 +17,7 @@ pub fn probe() -> Capability {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn default_build_does_not_enable_gpu_video() {
+    fn unimplemented_adapter_never_reports_available() {
         assert!(!super::probe().available);
     }
 }

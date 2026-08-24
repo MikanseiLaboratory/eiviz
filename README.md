@@ -12,6 +12,9 @@ all pass:
 
 - Deterministic core (`eiviz-time`, `eiviz-core`, `eiviz-command`, `eiviz-project`)
 - Explicit CpuReference compositor + virtual-clock runtime (`eiviz-gpu`, `eiviz-runtime`, `eiviz-engine`). `Wgpu` is a separate project backend, never a silent fallback.
+- The optional Wgpu backend now executes RGBA layer transform/crop/rotation,
+  alpha composition, transition mixing, and staging readback on a hardware GPU.
+  GPU HIL and device-loss recovery remain pending.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
 - Real OMT receive/output adapter through the official `libomt` C ABI
   (runtime-loaded); interop HIL is still pending
@@ -28,6 +31,9 @@ plan and [OMT HIL procedure](docs/hil/omt.md).
 rustup toolchain install 1.85
 cargo test --workspace
 cargo run -p eiviz-desktop
+
+# Explicit hardware-GPU profile. Fails if no hardware adapter is available.
+EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
 ```
 
 Windows x64 is the first-class target. Linux/macOS compile the same core.

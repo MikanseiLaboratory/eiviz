@@ -1,7 +1,7 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    Input, InputId, InputSource, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
-    TransitionStyle,
+    CompositorBackend, Input, InputId, InputSource, Project, Scene, SceneId, SceneItem,
+    SceneItemId, Transform2D, TransitionStyle,
 };
 use eiviz_engine::Engine;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "eiviz",
         native,
-        Box::new(|_cc| Ok(Box::new(DesktopApp::new()))),
+        Box::new(|_cc| Ok(Box::new(DesktopApp::new()?))),
     )
 }
 
@@ -34,8 +34,28 @@ struct DesktopApp {
 }
 
 impl DesktopApp {
-    fn new() -> Self {
-        let engine = Engine::new("Untitled").shared();
+    fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut project = Project::new("Untitled");
+        project.compositor = match std::env::var("EIVIZ_COMPOSITOR") {
+            Ok(value) if value == "wgpu" => CompositorBackend::Wgpu,
+            Ok(value) if value == "cpu-reference" => CompositorBackend::CpuReference,
+            Err(std::env::VarError::NotPresent) => CompositorBackend::CpuReference,
+            Ok(other) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unknown EIVIZ_COMPOSITOR={other}; expected wgpu or cpu-reference"),
+                )
+                .into());
+            }
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    error.to_string(),
+                )
+                .into());
+            }
+        };
+        let engine = Engine::from_project(project)?.shared();
         bootstrap(&engine);
         let mut app = Self {
             engine,
@@ -51,7 +71,7 @@ impl DesktopApp {
         if !app.omt_address.is_empty() {
             app.connect_omt();
         }
-        app
+        Ok(app)
     }
 
     fn connect_omt(&mut self) {
@@ -241,6 +261,7 @@ impl eframe::App for DesktopApp {
         egui::SidePanel::right("caps").show(ctx, |ui| {
             ui.heading("Capabilities");
             ui.label(format!("compositor {:?}", project.compositor));
+            ui.label(self.engine.compositor_detail());
             ui.label(format!("missing-media {:?}", project.missing_media));
             for cap in [
                 eiviz_io_ndi::probe(),

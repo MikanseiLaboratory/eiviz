@@ -270,18 +270,24 @@ mod tests {
 
     #[cfg(feature = "wgpu-backend")]
     #[test]
-    fn wgpu_does_not_return_cpu_pixels() {
-        use crate::wgpu_backend::{WgpuCompositor, WgpuError};
+    fn wgpu_composites_layers_or_explicitly_has_no_hardware() {
+        use crate::wgpu_backend::WgpuCompositor;
+        let input = eiviz_core::InputId::new();
         let plan = RenderPlan {
             width: 16,
             height: 16,
-            layers: vec![],
+            layers: vec![Layer {
+                input,
+                transform: Transform2D::fullscreen(),
+                opacity: 1.0,
+            }],
         };
         if let Ok(gpu) = WgpuCompositor::new() {
-            let err = gpu
-                .composite(&plan, &HashMap::new(), MediaTime::ZERO, 1)
-                .expect_err("must not substitute CPU frames");
-            assert!(matches!(err, WgpuError::NotImplemented));
+            let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [255, 0, 0, 255]);
+            let frame = gpu
+                .composite(&plan, &HashMap::from([(input, source)]), MediaTime::ZERO, 1)
+                .unwrap();
+            assert_eq!(frame.pixel(8, 8), [255, 0, 0, 255]);
         }
     }
 }

@@ -770,6 +770,7 @@ dependencies = [
  "eiviz-core",
  "eiviz-media",
  "eiviz-time",
+ "naga 24.0.0",
  "pollster",
  "thiserror 2.0.20",
  "tracing",

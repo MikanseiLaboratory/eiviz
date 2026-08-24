@@ -144,6 +144,10 @@ impl Engine {
         state_hash(&g.project)
     }
 
+    pub fn compositor_detail(&self) -> String {
+        self.inner.lock().runtime.compositor_detail()
+    }
+
     pub fn metrics(&self) -> EngineMetrics {
         let g = self.inner.lock();
         EngineMetrics {
@@ -391,6 +395,7 @@ mod tests {
         assert!(!engine.metrics().failed_outputs.is_empty());
     }
 
+    #[cfg(not(feature = "wgpu-backend"))]
     #[test]
     fn wgpu_project_does_not_construct_cpu_engine() {
         let mut project = Project::new("gpu-required");
@@ -400,6 +405,23 @@ mod tests {
             | Err(EngineError::Runtime(eiviz_runtime::RuntimeError::Gpu(_))) => {}
             Err(e) => panic!("must not substitute CPU runtime: {e}"),
             Ok(_) => panic!("must not construct an engine when Wgpu is unavailable"),
+        }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    #[test]
+    fn wgpu_project_constructs_only_with_hardware_backend() {
+        let mut project = Project::new("gpu-required");
+        project.compositor = eiviz_core::CompositorBackend::Wgpu;
+        match Engine::from_project(project) {
+            Ok(engine) => {
+                assert_eq!(
+                    engine.snapshot().compositor,
+                    eiviz_core::CompositorBackend::Wgpu
+                );
+            }
+            Err(EngineError::Runtime(eiviz_runtime::RuntimeError::Gpu(_))) => {}
+            Err(error) => panic!("unexpected Wgpu construction result: {error}"),
         }
     }
 }
