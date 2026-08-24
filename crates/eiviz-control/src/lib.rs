@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Response, Server};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +27,7 @@ pub struct WireCommand {
 pub struct ControlConfig {
     pub bind: String,
     pub require_token: Option<String>,
+    pub max_requests_per_sec: u32,
 }
 
 impl Default for ControlConfig {
@@ -32,8 +35,14 @@ impl Default for ControlConfig {
         Self {
             bind: "127.0.0.1:0".into(),
             require_token: None,
+            max_requests_per_sec: 60,
         }
     }
+}
+
+struct RateWindow {
+    started: Instant,
+    count: u32,
 }
 
 pub fn spawn_http(
@@ -43,6 +52,10 @@ pub fn spawn_http(
 ) -> std::io::Result<u16> {
     let server = Server::http(&cfg.bind).map_err(|e| std::io::Error::other(e.to_string()))?;
     let port = server.server_addr().to_ip().unwrap().port();
+    let rate = Arc::new(Mutex::new(RateWindow {
+        started: Instant::now(),
+        count: 0,
+    }));
     thread::spawn(move || {
         for mut req in server.incoming_requests() {
             if stop.load(Ordering::Relaxed) {
@@ -52,11 +65,24 @@ pub fn spawn_http(
             let method = req.method().clone();
             let mut body = String::new();
             let _ = req.as_reader().read_to_string(&mut body);
-            let resp = handle(&engine, &cfg, &method, &url, &body);
+            let resp = handle(&engine, &cfg, &method, &url, &body, &rate);
             let _ = req.respond(resp);
         }
     });
     Ok(port)
+}
+
+fn allow_request(rate: &Mutex<RateWindow>, max: u32) -> bool {
+    let mut g = rate.lock().unwrap();
+    if g.started.elapsed() >= Duration::from_secs(1) {
+        g.started = Instant::now();
+        g.count = 0;
+    }
+    if g.count >= max {
+        return false;
+    }
+    g.count += 1;
+    true
 }
 
 fn handle(
@@ -65,10 +91,24 @@ fn handle(
     method: &Method,
     url: &str,
     body: &str,
+    rate: &Mutex<RateWindow>,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
+    if url != "/v1/health" && !allow_request(rate, cfg.max_requests_per_sec) {
+        return Response::from_string("rate limited")
+            .with_status_code(429)
+            .with_header(cors);
+    }
     if url == "/v1/health" {
         return Response::from_string("ok").with_header(cors);
+    }
+    if url == "/v1/metrics" && *method == Method::Get {
+        let json = serde_json::to_string(&engine.metrics()).unwrap_or_else(|_| "{}".into());
+        return Response::from_string(json).with_header(cors);
+    }
+    if url == "/v1/events" && *method == Method::Get {
+        let json = serde_json::to_string(&engine.flight_log()).unwrap_or_else(|_| "[]".into());
+        return Response::from_string(json).with_header(cors);
     }
     if url == "/v1/project" && *method == Method::Get {
         let json = serde_json::to_string(&engine.snapshot()).unwrap_or_else(|_| "{}".into());
@@ -154,6 +194,79 @@ fn serve_tcp(engine: Arc<Engine>, mut stream: TcpStream) -> std::io::Result<()> 
     }
     Ok(())
 }
+
+#[derive(Deserialize)]
+struct DeckEvent {
+    event: Option<String>,
+    action: Option<String>,
+    command: Option<Command>,
+}
+
+pub fn spawn_streamdeck(
+    engine: Arc<Engine>,
+    bind: &str,
+    stop: Arc<AtomicBool>,
+) -> std::io::Result<u16> {
+    let listener = TcpListener::bind(bind)?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    thread::spawn(move || {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let engine = engine.clone();
+                    thread::spawn(move || {
+                        let _ = serve_streamdeck(engine, stream);
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(port)
+}
+
+fn serve_streamdeck(engine: Arc<Engine>, mut stream: TcpStream) -> std::io::Result<()> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 1024];
+    loop {
+        let n = match stream.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        buf.extend_from_slice(&tmp[..n]);
+        while let Some(idx) = buf.iter().position(|b| *b == b'\n') {
+            let line = buf.drain(..=idx).collect::<Vec<_>>();
+            let line = String::from_utf8_lossy(&line);
+            if let Ok(ev) = serde_json::from_str::<DeckEvent>(line.trim()) {
+                if let Some(cmd) = ev.command {
+                    let _ = engine.submit(CommandEnvelope::new(engine.client(), cmd));
+                } else if ev.event.as_deref() == Some("keyDown")
+                    && ev
+                        .action
+                        .as_deref()
+                        .is_some_and(|a| a.contains("take") || a.ends_with(".take"))
+                {
+                    keyboard_take(&engine);
+                }
+                let hash = engine.state_hash();
+                let _ = stream.write_all(format!("{hash}\n").as_bytes());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort MIDI listener. Default builds do not link midir (ALSA/CoreMIDI).
+/// Enable `--features midi` on a machine with the native MIDI stack.
+pub fn spawn_midi(_engine: Arc<Engine>, _stop: Arc<AtomicBool>) {}
 
 pub fn keyboard_take(engine: &Engine) {
     let unit = engine.primary_unit();

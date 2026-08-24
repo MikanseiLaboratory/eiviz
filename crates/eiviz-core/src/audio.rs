@@ -24,6 +24,9 @@ pub struct AudioRoute {
     pub muted: bool,
     pub solo: bool,
     pub delay_ms: f32,
+    /// -1.0 = full left, 0.0 = center, 1.0 = full right.
+    #[serde(default)]
+    pub pan: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

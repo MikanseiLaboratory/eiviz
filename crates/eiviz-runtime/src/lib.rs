@@ -1,13 +1,15 @@
 //! Virtual-clock media runtime. Command snapshots are applied at frame boundaries.
 
 use eiviz_core::{
-    AudioFollowPolicy, InputId, InputSource, MixingGraph, MixingUnitId, Project, RouteMode,
+    AssetId, AudioBusId, AudioFollowPolicy, InputId, InputSource, MixTap, MixingGraph,
+    MixingUnitId, Project, RouteMode,
 };
 use eiviz_gpu::{color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{AudioBuffer, BoundedSlot, QueuePolicy, VideoFrame};
-use eiviz_time::{MediaTime, VirtualClock, audio_frame_sample_span};
+use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,10 +34,16 @@ pub struct Runtime {
     frame: u64,
     sample_rate: u32,
     last_program: HashMap<MixingUnitId, VideoFrame>,
+    last_preview: HashMap<MixingUnitId, VideoFrame>,
     program_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
     preview_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
     pub metrics: TickMetrics,
     degraded_outputs: Mutex<HashMap<String, String>>,
+    asset_root: Option<PathBuf>,
+    image_cache: HashMap<AssetId, VideoFrame>,
+    delay_lines: HashMap<(InputId, AudioBusId), Vec<VecDeque<f32>>>,
+    simulated: HashMap<InputId, VideoFrame>,
+    pub peak_meters: HashMap<AudioBusId, f32>,
 }
 
 impl Runtime {
@@ -45,11 +53,26 @@ impl Runtime {
             frame: 0,
             sample_rate,
             last_program: HashMap::new(),
+            last_preview: HashMap::new(),
             program_slots: HashMap::new(),
             preview_slots: HashMap::new(),
             metrics: TickMetrics::default(),
             degraded_outputs: Mutex::new(HashMap::new()),
+            asset_root: None,
+            image_cache: HashMap::new(),
+            delay_lines: HashMap::new(),
+            simulated: HashMap::new(),
+            peak_meters: HashMap::new(),
         }
+    }
+
+    pub fn set_asset_root(&mut self, root: impl Into<PathBuf>) {
+        self.asset_root = Some(root.into());
+        self.image_cache.clear();
+    }
+
+    pub fn inject_simulated(&mut self, id: InputId, frame: VideoFrame) {
+        self.simulated.insert(id, frame);
     }
 
     pub fn frame(&self) -> u64 {
@@ -78,6 +101,10 @@ impl Runtime {
         self.last_program.get(&unit).cloned()
     }
 
+    pub fn last_preview_frame(&self, unit: MixingUnitId) -> Option<VideoFrame> {
+        self.last_preview.get(&unit).cloned()
+    }
+
     pub fn mark_output_failed(&self, name: &str, reason: impl Into<String>) {
         self.degraded_outputs
             .lock()
@@ -94,14 +121,18 @@ impl Runtime {
 
     pub fn tick(&mut self, project: &mut Project) -> Result<TickResult> {
         MixingGraph::assert_acyclic(project).map_err(|e| RuntimeError::Other(e.to_string()))?;
+        let order = MixingGraph::topological_order(project)
+            .map_err(|e| RuntimeError::Other(e.to_string()))?;
         let pts = MediaTime::from_frame_index(self.frame, project.video.frame_rate)
             .map_err(|e| RuntimeError::Other(e.to_string()))?;
         self.clock.seek_frame(self.frame, project.video.frame_rate);
-        let sources = generate_sources(project, pts, self.frame);
+        let mut sources = self.generate_sources(project, pts);
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
-        let units: Vec<_> = project.mixing_units.values().cloned().collect();
-        for mut unit in units {
+        for unit_id in order {
+            let Some(mut unit) = project.mixing_units.get(&unit_id).cloned() else {
+                continue;
+            };
             if unit.transition.remaining_frames > 0 {
                 unit.tick_transition();
                 if let Some(live) = project.mixing_units.get_mut(&unit.id) {
@@ -109,6 +140,7 @@ impl Runtime {
                     live.program.scene = unit.program.scene;
                 }
             }
+            fill_mixfeeds(project, &mut sources, &programs, &previews);
             let pg_plan = plan_program(project, &unit);
             let mut pg = composite(&pg_plan, &sources, pts, self.frame);
             if unit.transition.remaining_frames > 0 {
@@ -123,18 +155,20 @@ impl Runtime {
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
             let _ = self.preview_slot(unit.id).push(pv.clone());
             self.last_program.insert(unit.id, pg.clone());
+            self.last_preview.insert(unit.id, pv.clone());
             programs.insert(unit.id, pg);
             previews.insert(unit.id, pv);
         }
         let (sample_index, sample_count) =
             audio_frame_sample_span(self.frame, self.sample_rate, project.video.frame_rate)
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
-        let audio = mix_audio(
+        let (audio, meters) = self.mix_audio(
             project,
             sample_index,
             sample_count as usize,
             self.sample_rate,
         );
+        self.peak_meters = meters.clone();
         self.metrics.frame = self.frame;
         self.frame += 1;
         Ok(TickResult {
@@ -142,7 +176,183 @@ impl Runtime {
             programs,
             previews,
             audio,
+            peak_meters: meters,
         })
+    }
+
+    fn generate_sources(
+        &mut self,
+        project: &Project,
+        pts: MediaTime,
+    ) -> HashMap<InputId, VideoFrame> {
+        let mut out = HashMap::new();
+        let w = project.video.width.clamp(16, 1920);
+        let h = project.video.height.clamp(16, 1080);
+        for input in project.inputs.values() {
+            if let Some(sim) = self.simulated.get(&input.id) {
+                let mut f = sim.clone();
+                f.pts = pts;
+                f.source = Some(input.id);
+                out.insert(input.id, f);
+                continue;
+            }
+            let mut generated = match &input.source {
+                InputSource::ColorBars => color_bars(self.frame, pts, w, h),
+                InputSource::SolidColor { r, g, b, a } => {
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [*r, *g, *b, *a])
+                }
+                InputSource::Image { asset } => self.load_image(project, *asset, pts, w, h),
+                InputSource::Video { asset, playback } => {
+                    let mut frame = self.load_image(project, *asset, pts, w, h);
+                    if !playback.playing {
+                        frame.discontinuity = false;
+                    }
+                    frame
+                }
+                InputSource::Ndi { .. }
+                | InputSource::Omt { .. }
+                | InputSource::DeckLink { .. }
+                | InputSource::AudioDevice { .. } => {
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [16, 16, 16, 255])
+                }
+                InputSource::MixFeed { .. } => {
+                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255])
+                }
+            };
+            generated.source = Some(input.id);
+            out.insert(input.id, generated);
+        }
+        out
+    }
+
+    fn load_image(
+        &mut self,
+        project: &Project,
+        asset: AssetId,
+        pts: MediaTime,
+        w: u32,
+        h: u32,
+    ) -> VideoFrame {
+        if let Some(cached) = self.image_cache.get(&asset) {
+            let mut f = cached.clone();
+            f.pts = pts;
+            f.id = self.frame;
+            return f;
+        }
+        let Some(meta) = project.assets.get(&asset) else {
+            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
+        };
+        if meta.missing {
+            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
+        }
+        let Some(root) = &self.asset_root else {
+            return VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]);
+        };
+        let path = root.join(&meta.relative_path);
+        match decode_rgba(&path) {
+            Some((width, height, data)) => {
+                let frame = VideoFrame {
+                    id: self.frame,
+                    source: None,
+                    pts,
+                    capture_domain: ClockDomain::SourceMedia,
+                    width,
+                    height,
+                    format: eiviz_media::PixelFormat::Rgba8,
+                    data: data.into(),
+                    discontinuity: false,
+                };
+                self.image_cache.insert(asset, frame.clone());
+                frame
+            }
+            None => VideoFrame::rgba_solid(self.frame, pts, w, h, [48, 0, 0, 255]),
+        }
+    }
+
+    fn mix_audio(
+        &mut self,
+        project: &Project,
+        sample_index: u64,
+        frames: usize,
+        sample_rate: u32,
+    ) -> (AudioBuffer, HashMap<AudioBusId, f32>) {
+        let ch = project.audio.channels.max(1) as usize;
+        let mut mixed =
+            AudioBuffer::silence(sample_index, sample_rate, project.audio.channels, frames);
+        for route in &project.audio_matrix.routes {
+            let follow_active = match route.mode {
+                RouteMode::Manual => true,
+                RouteMode::Follow { unit } => {
+                    let Some(u) = project.mixing_units.get(&unit) else {
+                        continue;
+                    };
+                    match u.audio_follow {
+                        AudioFollowPolicy::Off => false,
+                        AudioFollowPolicy::Program => {
+                            MixingGraph::input_visible_on_program(project, unit, route.input)
+                        }
+                        AudioFollowPolicy::ProgramAndPreview => {
+                            MixingGraph::input_visible_on_program(project, unit, route.input)
+                                || MixingGraph::input_visible_on_preview(project, unit, route.input)
+                        }
+                    }
+                }
+            };
+            let gain = project
+                .audio_matrix
+                .effective_linear_gain(route, follow_active);
+            if gain == 0.0 {
+                continue;
+            }
+            let delay = ((route.delay_ms.max(0.0) / 1000.0) * sample_rate as f32).round() as usize;
+            let lines = self
+                .delay_lines
+                .entry((route.input, route.bus))
+                .or_insert_with(|| vec![VecDeque::new(); ch]);
+            while lines.len() < ch {
+                lines.push(VecDeque::new());
+            }
+            let pan = route.pan.clamp(-1.0, 1.0);
+            let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+            let g_l = angle.cos() * std::f32::consts::SQRT_2;
+            let g_r = angle.sin() * std::f32::consts::SQRT_2;
+            for n in 0..frames {
+                let t = (sample_index + n as u64) as f32 / sample_rate as f32;
+                let s = (2.0 * std::f32::consts::PI * 1000.0 * t).sin() * gain * 0.1;
+                #[allow(clippy::needless_range_loop)]
+                for c in 0..ch {
+                    let g = if ch >= 2 {
+                        if c == 0 {
+                            g_l
+                        } else if c == 1 {
+                            g_r
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
+                    lines[c].push_back(s * g);
+                    let out = if lines[c].len() > delay {
+                        lines[c].pop_front().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    mixed.planes[c][n] += out;
+                }
+            }
+        }
+        let mut meters = HashMap::new();
+        for bus in &project.audio_matrix.buses {
+            let mut peak = 0.0f32;
+            for plane in &mixed.planes {
+                for s in plane {
+                    peak = peak.max(s.abs());
+                }
+            }
+            meters.insert(bus.id, peak);
+        }
+        (mixed, meters)
     }
 }
 
@@ -152,79 +362,42 @@ pub struct TickResult {
     pub programs: HashMap<MixingUnitId, VideoFrame>,
     pub previews: HashMap<MixingUnitId, VideoFrame>,
     pub audio: AudioBuffer,
+    pub peak_meters: HashMap<AudioBusId, f32>,
 }
 
-fn generate_sources(project: &Project, pts: MediaTime, frame: u64) -> HashMap<InputId, VideoFrame> {
-    let mut out = HashMap::new();
-    let w = project.video.width.clamp(16, 1920);
-    let h = project.video.height.clamp(16, 1080);
+fn fill_mixfeeds(
+    project: &Project,
+    sources: &mut HashMap<InputId, VideoFrame>,
+    programs: &HashMap<MixingUnitId, VideoFrame>,
+    previews: &HashMap<MixingUnitId, VideoFrame>,
+) {
     for input in project.inputs.values() {
-        let mut generated = match &input.source {
-            InputSource::ColorBars => color_bars(frame, pts, w, h),
-            InputSource::SolidColor { r, g, b, a } => {
-                VideoFrame::rgba_solid(frame, pts, w, h, [*r, *g, *b, *a])
+        if let InputSource::MixFeed { unit, tap } = input.source {
+            let frame = match tap {
+                MixTap::Program => programs.get(&unit),
+                MixTap::Preview => previews.get(&unit),
+            };
+            if let Some(src) = frame {
+                let mut f = src.clone();
+                f.source = Some(input.id);
+                sources.insert(input.id, f);
             }
-            InputSource::Image { .. } | InputSource::Video { .. } => {
-                VideoFrame::rgba_solid(frame, pts, w, h, [32, 32, 32, 255])
-            }
-            InputSource::Ndi { .. }
-            | InputSource::Omt { .. }
-            | InputSource::DeckLink { .. }
-            | InputSource::AudioDevice { .. } => {
-                VideoFrame::rgba_solid(frame, pts, w, h, [16, 16, 16, 255])
-            }
-            InputSource::MixFeed { .. } => VideoFrame::rgba_solid(frame, pts, w, h, [0, 0, 0, 255]),
-        };
-        generated.source = Some(input.id);
-        out.insert(input.id, generated);
+        }
     }
-    out
 }
 
-fn mix_audio(project: &Project, sample_index: u64, frames: usize, sample_rate: u32) -> AudioBuffer {
-    let mut mixed = AudioBuffer::silence(sample_index, sample_rate, project.audio.channels, frames);
-    for route in &project.audio_matrix.routes {
-        let follow_active = match route.mode {
-            RouteMode::Manual => true,
-            RouteMode::Follow { unit } => {
-                let Some(u) = project.mixing_units.get(&unit) else {
-                    continue;
-                };
-                match u.audio_follow {
-                    AudioFollowPolicy::Off => false,
-                    AudioFollowPolicy::Program => {
-                        MixingGraph::input_visible_on_program(project, unit, route.input)
-                    }
-                    AudioFollowPolicy::ProgramAndPreview => {
-                        MixingGraph::input_visible_on_program(project, unit, route.input)
-                            || MixingGraph::input_visible_on_preview(project, unit, route.input)
-                    }
-                }
-            }
-        };
-        let gain = project
-            .audio_matrix
-            .effective_linear_gain(route, follow_active);
-        if gain == 0.0 {
-            continue;
-        }
-        for n in 0..frames {
-            let t = (sample_index + n as u64) as f32 / sample_rate as f32;
-            let s = (2.0 * std::f32::consts::PI * 1000.0 * t).sin() * gain * 0.1;
-            for ch in 0..mixed.channels as usize {
-                mixed.planes[ch][n] += s;
-            }
-        }
-    }
-    mixed
+fn decode_rgba(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::open(path).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    Some((w, h, img.into_raw()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use eiviz_core::{
-        AudioRoute, Input, InputSource, MixingUnitId, RouteMode, Scene, SceneItem, Transform2D,
-        TransitionStyle,
+        AudioRoute, Input, InputSource, MixingUnit, MixingUnitId, RouteMode, Scene, SceneItem,
+        Transform2D, TransitionStyle,
     };
     use eiviz_core::{InputId, SceneId, SceneItemId};
 
@@ -268,6 +441,7 @@ mod tests {
             muted: false,
             solo: false,
             delay_ms: 0.0,
+            pan: 0.0,
         });
         (p, iid, sid, unit)
     }
@@ -287,6 +461,7 @@ mod tests {
             .iter()
             .fold(0.0f32, |a, x| a.max(x.abs()));
         assert!(peak > 0.01, "audio follow should unmute on take");
+        assert!(after.peak_meters.values().any(|m| *m > 0.01));
     }
 
     #[test]
@@ -299,6 +474,84 @@ mod tests {
         }
         assert_eq!(rt.frame(), 10);
         assert!(!rt.failed_outputs().is_empty());
+        let _ = unit;
+    }
+
+    #[test]
+    fn mixfeed_nested_program_is_not_black() {
+        let mut p = Project::new("dag");
+        let a = *p.mixing_units.keys().next().unwrap();
+        let b_unit = MixingUnit::new("Mix 2");
+        let b = b_unit.id;
+        p.mixing_units.insert(b, b_unit);
+        let red = Input {
+            id: InputId::new(),
+            name: "red".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::SolidColor {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        };
+        let feed = Input {
+            id: InputId::new(),
+            name: "feed-a".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::MixFeed {
+                unit: a,
+                tap: MixTap::Program,
+            },
+        };
+        let scene_a = Scene {
+            id: SceneId::new(),
+            name: "a".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: red.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let scene_b = Scene {
+            id: SceneId::new(),
+            name: "b".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: feed.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        p.inputs.insert(red.id, red);
+        p.inputs.insert(feed.id, feed);
+        p.scenes.insert(scene_a.id, scene_a.clone());
+        p.scenes.insert(scene_b.id, scene_b.clone());
+        p.mixing_units.get_mut(&a).unwrap().program.scene = Some(scene_a.id);
+        p.mixing_units.get_mut(&b).unwrap().program.scene = Some(scene_b.id);
+        p.validate().unwrap();
+        let mut rt = Runtime::new(48000);
+        let tick = rt.tick(&mut p).unwrap();
+        assert_eq!(tick.programs[&a].pixel(8, 8), [255, 0, 0, 255]);
+        assert_eq!(tick.programs[&b].pixel(8, 8), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn delay_line_silences_first_buffer() {
+        let (mut p, _, _, unit) = setup();
+        p.audio_matrix.routes[0].mode = RouteMode::Manual;
+        p.audio_matrix.routes[0].delay_ms = 1000.0;
+        let mut rt = Runtime::new(48000);
+        let first = rt.tick(&mut p).unwrap();
+        let peak = first.audio.planes[0]
+            .iter()
+            .fold(0.0f32, |a, x| a.max(x.abs()));
+        assert!(peak < 1e-6, "1s delay must zero the first 59.94 frame");
         let _ = unit;
     }
 }

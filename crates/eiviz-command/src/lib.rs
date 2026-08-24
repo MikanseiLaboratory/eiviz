@@ -409,6 +409,11 @@ impl CommandEnvelope {
             payload,
         }
     }
+
+    pub fn with_coalesce_key(mut self, key: impl Into<String>) -> Self {
+        self.coalesce_key = Some(key.into());
+        self
+    }
 }
 
 #[cfg(test)]

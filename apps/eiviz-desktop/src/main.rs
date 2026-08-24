@@ -1,4 +1,4 @@
-use eiviz_command::Command;
+use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
     Input, InputId, InputSource, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
     TransitionStyle,
@@ -25,6 +25,8 @@ struct DesktopApp {
     engine: Arc<Engine>,
     status: String,
     selected_scene: Option<SceneId>,
+    save_path: String,
+    drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
 }
 
 impl DesktopApp {
@@ -35,6 +37,8 @@ impl DesktopApp {
             engine,
             status: "ready".into(),
             selected_scene: None,
+            save_path: "project.json".into(),
+            drag_item: None,
         }
     }
 }
@@ -104,7 +108,7 @@ impl eframe::App for DesktopApp {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("eiviz");
-                if ui.button("TAKE").clicked() {
+                if ui.button("TAKE").clicked() || ui.input(|i| i.key_pressed(egui::Key::Space)) {
                     if let Some(u) = &unit {
                         let _ = self.engine.submit_payload(Command::Take {
                             unit: u.id,
@@ -120,6 +124,25 @@ impl eframe::App for DesktopApp {
                 }
                 ui.label(format!("rev {}", self.engine.revision()));
                 ui.label(&self.status);
+            });
+            ui.horizontal(|ui| {
+                ui.label("path");
+                ui.text_edit_singleline(&mut self.save_path);
+                if ui.button("Save").clicked() {
+                    match self.engine.save(std::path::Path::new(&self.save_path)) {
+                        Ok(()) => self.status = "saved".into(),
+                        Err(e) => self.status = format!("save: {e}"),
+                    }
+                }
+                if ui.button("Load").clicked() {
+                    match Engine::load(std::path::Path::new(&self.save_path)) {
+                        Ok(loaded) => {
+                            self.engine = loaded.shared();
+                            self.status = "loaded".into();
+                        }
+                        Err(e) => self.status = format!("load: {e}"),
+                    }
+                }
             });
         });
 
@@ -177,33 +200,117 @@ impl eframe::App for DesktopApp {
                 ui.separator();
                 ui.label(format!("PRV {:?}", u.preview.scene));
                 ui.label(format!("PGM {:?}", u.program.scene));
+                ui.heading("Overlays");
+                for overlay in &u.overlays {
+                    let mut on = overlay.enabled;
+                    if ui.checkbox(&mut on, &overlay.name).changed() {
+                        let _ = self.engine.submit_payload(Command::SetOverlayEnabled {
+                            unit: u.id,
+                            overlay: overlay.id,
+                            enabled: on,
+                        });
+                    }
+                }
             }
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Program / Preview");
-            if let Some(frame) = self.engine.last_program(unit_id) {
-                let w = 480u32;
-                let h = 270u32;
-                let mut img = vec![0u8; (w * h * 4) as usize];
-                for y in 0..h {
-                    for x in 0..w {
-                        let sx = x * frame.width / w;
-                        let sy = y * frame.height / h;
-                        let px = frame.pixel(sx, sy);
-                        let i = ((y * w + x) * 4) as usize;
-                        img[i..i + 4].copy_from_slice(&px);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label("Program");
+                    show_frame(ui, self.engine.last_program(unit_id), "pgm");
+                });
+                ui.vertical(|ui| {
+                    ui.label("Preview");
+                    let preview_resp = show_frame(ui, self.engine.last_preview(unit_id), "prv");
+                    if let (Some(resp), Some(_u), Some(scene_id)) =
+                        (preview_resp, unit.as_ref(), u_preview_scene(&unit))
+                    {
+                        if let Some(scene) = project.scenes.get(&scene_id) {
+                            self.handle_preview_pointer(ui, &resp, scene, unit_id);
+                        }
                     }
-                }
-                let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
-                let tex = ui.ctx().load_texture("pgm", color, Default::default());
-                ui.image(&tex);
-            } else {
-                ui.label("No program frame yet");
-            }
+                });
+            });
             ui.separator();
-            ui.label("Mouse: select a scene on the left, then TAKE. All edits go through CommandEnvelope.");
+            ui.label("Mouse: drag on Preview to move a SceneItem (UpdateTransform). Space = TAKE.");
         });
         ctx.request_repaint();
+    }
+}
+
+fn u_preview_scene(unit: &Option<eiviz_core::MixingUnit>) -> Option<SceneId> {
+    unit.as_ref().and_then(|u| u.preview.scene)
+}
+
+fn show_frame(
+    ui: &mut egui::Ui,
+    frame: Option<eiviz_media::VideoFrame>,
+    id: &str,
+) -> Option<egui::Response> {
+    let Some(frame) = frame else {
+        ui.label("No frame yet");
+        return None;
+    };
+    let w = 480u32;
+    let h = 270u32;
+    let mut img = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let sx = x * frame.width / w;
+            let sy = y * frame.height / h;
+            let px = frame.pixel(sx, sy);
+            let i = ((y * w + x) * 4) as usize;
+            img[i..i + 4].copy_from_slice(&px);
+        }
+    }
+    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
+    let tex = ui.ctx().load_texture(id, color, Default::default());
+    Some(ui.image(&tex))
+}
+
+impl DesktopApp {
+    fn handle_preview_pointer(
+        &mut self,
+        ui: &egui::Ui,
+        resp: &egui::Response,
+        scene: &Scene,
+        _unit: eiviz_core::MixingUnitId,
+    ) {
+        let Some(pos) = resp.hover_pos() else {
+            return;
+        };
+        let rect = resp.rect;
+        let nx = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        let ny = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            if let Some(item) = scene
+                .hit_test(nx, ny)
+                .and_then(|id| scene.items.iter().find(|it| it.id == id))
+            {
+                self.drag_item = Some((scene.id, item.id, nx, ny, item.transform));
+            }
+        }
+        if ui.input(|i| i.pointer.primary_down()) {
+            if let Some((sid, iid, ox, oy, base)) = self.drag_item {
+                let mut xf = base;
+                xf.x = (base.x + (nx - ox)).clamp(-1.0, 1.0);
+                xf.y = (base.y + (ny - oy)).clamp(-1.0, 1.0);
+                let env = CommandEnvelope::new(
+                    self.engine.client(),
+                    Command::UpdateTransform {
+                        scene: sid,
+                        item: iid,
+                        transform: xf,
+                    },
+                )
+                .with_coalesce_key(format!("xf-{iid}"));
+                let _ = self.engine.submit(env);
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            self.drag_item = None;
+        }
     }
 }

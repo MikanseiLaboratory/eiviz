@@ -13,6 +13,7 @@ eiviz-media.workspace = true
 eiviz-project.workspace = true
 eiviz-runtime.workspace = true
 eiviz-time.workspace = true
+eiviz-io-stream.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,7 +1,17 @@
+mod bitstream;
+mod flv;
+mod fmp4;
+mod h264;
+mod mpegts;
+
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
-/// Software fallback: wrap RGBA as a private "raw" AU so muxers can still
-/// fan-out without Vulkan Video. Not a legal H.264 bitstream.
+pub use flv::{flv_avc_nalu, flv_avc_sequence_header, flv_header};
+pub use fmp4::FragmentedMp4;
+pub use h264::{encode_idr, extract_sps_pps, split_annexb};
+pub use mpegts::{pat, pes_video, pmt};
+
+/// Legacy private AU used when a caller needs a non-H.264 dump.
 pub fn wrap_raw(frame: &VideoFrame) -> EncodedAccessUnit {
     let mut bytes = Vec::with_capacity(16 + frame.data.len());
     bytes.extend_from_slice(b"RAW0");
@@ -33,5 +43,23 @@ mod tests {
         let au = wrap_raw(&f);
         assert!(is_raw(&au));
         assert!(au.keyframe);
+    }
+
+    #[test]
+    fn h264_annexb_starts_with_start_code() {
+        let f = VideoFrame::rgba_solid(1, MediaTime::ZERO, 16, 16, [20, 40, 80, 255]);
+        let au = encode_idr(&f);
+        assert!(au.bytes.starts_with(&[0, 0, 0, 1]));
+        let (sps, pps) = extract_sps_pps(&au);
+        assert!(!sps.is_empty() && !pps.is_empty());
+        let mut mp4 = FragmentedMp4::new(60000, 16, 16, &sps, &pps);
+        mp4.write_sample(&au, 1001);
+        assert!(mp4.bytes.windows(4).any(|w| w == b"ftyp"));
+        assert!(mp4.bytes.windows(4).any(|w| w == b"moof"));
+        let flv = flv_header();
+        assert_eq!(&flv[..3], b"FLV");
+        let ts = pat();
+        assert_eq!(ts[0], 0x47);
+        assert_eq!(ts.len(), 188);
     }
 }

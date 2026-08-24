@@ -1,0 +1,51 @@
+Third-party software notices
+============================
+
+eiviz itself is MIT-licensed. Native SDKs are optional, feature-gated, and
+never vendored into the default build. Operators must obtain their own
+licenses before enabling the corresponding Cargo features.
+
+NDI
+---
+NDI is a trademark of Vizrt NDI AB. The NDI SDK is proprietary. Default
+builds compile `eiviz-io-ndi` without linking the SDK and report the
+capability as unavailable. Enabling `ndi-sdk` requires a valid NDI SDK
+license from Vizrt and compliance with the NDI SDK license agreement.
+
+OMT (Open Media Transport)
+--------------------------
+OMT native libraries, if used, remain under their upstream license. Default
+builds do not link libomt.
+
+Blackmagic DeckLink / Desktop Video
+-----------------------------------
+The Blackmagic Desktop Video SDK is proprietary. Default builds compile
+`eiviz-io-decklink` as a capability stub. Linking the official SDK requires
+accepting Blackmagic Design's SDK license.
+
+ASIO
+----
+ASIO is a trademark and technology of Steinberg Media Technologies GmbH.
+An ASIO adapter is not linked in default builds. Shipping ASIO support
+requires a Steinberg ASIO license or an alternative GPLv3-compatible path
+that is kept out of the MIT binary.
+
+H.264 / AVC
+-----------
+The software encoder in `eiviz-codec-software` emits Baseline I_PCM access
+units for tests and fallback recording. Product distributions that encode
+or decode AVC in the field may require MPEG-LA / Via LA patent licenses.
+AAC encoding is not included in the default tree; PCM or a separately
+licensed encoder must be used until an AAC adapter is certified.
+
+gpu-video
+---------
+The optional `eiviz-codec-gpu-video` crate may depend on gpu-video 0.4.x
+(MIT) behind a feature flag. It is not compiled into the default GUI path
+so wgpu 24 (egui) and wgpu 29 (gpu-video) cannot collide.
+
+GStreamer / FFmpeg
+------------------
+Neither GStreamer nor FFmpeg is a default dependency. If a distribution
+enables those adapters, their LGPL/GPL obligations apply to that build
+only and must be documented in the shipping SBOM.

@@ -739,6 +739,7 @@ dependencies = [
  "eiviz-io-decklink",
  "eiviz-io-ndi",
  "eiviz-io-omt",
+ "eiviz-media",
  "tracing",
  "tracing-subscriber",
 ]
@@ -749,6 +750,7 @@ version = "0.1.0"
 dependencies = [
  "eiviz-command",
  "eiviz-core",
+ "eiviz-io-stream",
  "eiviz-media",
  "eiviz-project",
  "eiviz-runtime",
@@ -785,6 +787,8 @@ name = "eiviz-io-decklink"
 version = "0.1.0"
 dependencies = [
  "eiviz-media",
+ "eiviz-time",
+ "parking_lot",
 ]
 
 [[package]]
@@ -804,6 +808,8 @@ name = "eiviz-io-ndi"
 version = "0.1.0"
 dependencies = [
  "eiviz-media",
+ "eiviz-time",
+ "parking_lot",
 ]
 
 [[package]]
@@ -811,6 +817,8 @@ name = "eiviz-io-omt"
 version = "0.1.0"
 dependencies = [
  "eiviz-media",
+ "eiviz-time",
+ "parking_lot",
 ]
 
 [[package]]
@@ -818,6 +826,7 @@ name = "eiviz-io-stream"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "eiviz-codec-software",
  "eiviz-media",
  "eiviz-time",
  "thiserror 2.0.20",
@@ -855,6 +864,7 @@ dependencies = [
  "eiviz-gpu",
  "eiviz-media",
  "eiviz-time",
+ "image",
  "parking_lot",
  "thiserror 2.0.20",
  "tracing",

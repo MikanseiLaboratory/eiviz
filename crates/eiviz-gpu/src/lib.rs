@@ -265,3 +265,9 @@ mod tests {
         assert_eq!(frame.pixel(frame.width - 1, frame.height - 1)[0], 255);
     }
 }
+
+#[cfg(feature = "wgpu-backend")]
+mod wgpu_backend;
+
+#[cfg(feature = "wgpu-backend")]
+pub use wgpu_backend::WgpuCompositor;

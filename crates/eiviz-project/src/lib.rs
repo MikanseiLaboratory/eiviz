@@ -151,6 +151,40 @@ pub fn ingest_asset(project: &mut Project, file: &Path, dest_root: &Path) -> Res
     Ok(asset)
 }
 
+pub fn autosave_path(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf();
+    p.set_extension("autosave.json");
+    p
+}
+
+pub fn save_autosave(project: &Project, path: &Path) -> Result<()> {
+    save_atomic(project, &autosave_path(path))
+}
+
+pub fn recover_autosave(path: &Path) -> Result<Option<Project>> {
+    let auto = autosave_path(path);
+    if auto.exists() {
+        Ok(Some(load(&auto)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn append_journal(path: &Path, revision: u64, hash: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| ProjectError::Io(e.to_string()))?;
+    }
+    let line = format!("{revision} {hash}\n");
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| ProjectError::Io(e.to_string()))?;
+    f.write_all(line.as_bytes())
+        .map_err(|e| ProjectError::Io(e.to_string()))?;
+    Ok(())
+}
+
 pub fn project_dir_name(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
@@ -185,5 +219,13 @@ mod tests {
         export_portable(&p, &pkg, &dir).unwrap();
         let imported = import_portable(&pkg, &dir.join("imported")).unwrap();
         assert_eq!(imported.id, p.id);
+
+        save_autosave(&p, &path).unwrap();
+        let recovered = recover_autosave(&path).unwrap().unwrap();
+        assert_eq!(recovered.id, p.id);
+        let journal = dir.join("journal.jsonl");
+        append_journal(&journal, 1, "abc").unwrap();
+        let j = fs::read_to_string(&journal).unwrap();
+        assert!(j.contains("abc"));
     }
 }

@@ -12,6 +12,7 @@ eiviz-command.workspace = true
 eiviz-control.workspace = true
 eiviz-core.workspace = true
 eiviz-engine.workspace = true
+eiviz-media.workspace = true
 eiviz-io-audio.workspace = true
 eiviz-io-decklink.workspace = true
 eiviz-io-ndi.workspace = true

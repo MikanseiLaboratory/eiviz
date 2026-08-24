@@ -65,6 +65,51 @@ impl MixingGraph {
         };
         scene_uses(project, u.preview.scene, input)
     }
+
+    /// Kahn topological order. Producers appear before consumers of MixFeed.
+    pub fn topological_order(project: &Project) -> Result<Vec<MixingUnitId>, DomainError> {
+        Self::assert_acyclic(project)?;
+        let edges = Self::edges(project);
+        let mut indeg: HashMap<MixingUnitId, usize> = project
+            .mixing_units
+            .keys()
+            .copied()
+            .map(|k| (k, 0usize))
+            .collect();
+        let mut adj: HashMap<MixingUnitId, Vec<MixingUnitId>> = HashMap::new();
+        for (src, dst) in edges {
+            adj.entry(src).or_default().push(dst);
+            *indeg.entry(dst).or_default() += 1;
+            indeg.entry(src).or_default();
+        }
+        let mut ready: Vec<MixingUnitId> = indeg
+            .iter()
+            .filter(|(_, d)| **d == 0)
+            .map(|(k, _)| *k)
+            .collect();
+        ready.sort();
+        let mut out = Vec::with_capacity(indeg.len());
+        let mut i = 0;
+        while i < ready.len() {
+            let n = ready[i];
+            i += 1;
+            out.push(n);
+            if let Some(next) = adj.get(&n) {
+                let mut unlocked = Vec::new();
+                for d in next {
+                    if let Some(e) = indeg.get_mut(d) {
+                        *e = e.saturating_sub(1);
+                        if *e == 0 {
+                            unlocked.push(*d);
+                        }
+                    }
+                }
+                unlocked.sort();
+                ready.extend(unlocked);
+            }
+        }
+        Ok(out)
+    }
 }
 
 fn scene_uses(project: &Project, scene: Option<crate::SceneId>, input: InputId) -> bool {
