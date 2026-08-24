@@ -384,7 +384,7 @@ fn redact_after_prefix_case_insensitive(output: &mut String, prefix: &str, termi
         let value_end = output[value_start..]
             .find(|character| terminators.contains(&character))
             .map_or(output.len(), |offset| value_start + offset);
-        if value_start == value_end || output[value_start..value_end] == "<redacted>" {
+        if value_start == value_end || &output[value_start..value_end] == "<redacted>" {
             search_from = value_end.max(value_start.saturating_add(1));
             if search_from >= output.len() {
                 break;
