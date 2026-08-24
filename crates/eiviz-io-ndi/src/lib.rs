@@ -133,7 +133,7 @@ fn push_latest<T>(
 
 #[cfg(any(feature = "ndi", test))]
 fn frame_to_nv12(frame: &VideoFrame, profile: NdiColorProfile) -> Result<Vec<u8>, String> {
-    if frame.width % 2 != 0 || frame.height % 2 != 0 {
+    if !frame.width.is_multiple_of(2) || !frame.height.is_multiple_of(2) {
         return Err("NV12 output requires even width and height".into());
     }
     if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {

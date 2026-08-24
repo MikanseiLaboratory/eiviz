@@ -497,7 +497,7 @@ fn frame_to_bgra(frame: &VideoFrame) -> Result<Vec<u8>, OmtError> {
 }
 
 fn frame_to_uyvy(frame: &VideoFrame, profile: OmtColorProfile) -> Result<Vec<u8>, OmtError> {
-    if frame.width % 2 != 0 {
+    if !frame.width.is_multiple_of(2) {
         return Err(OmtError::InvalidFrame(
             "UYVY output requires an even frame width".into(),
         ));
@@ -523,9 +523,9 @@ fn frame_to_uyvy(frame: &VideoFrame, profile: OmtColorProfile) -> Result<Vec<u8>
         let (y0, u0, v0) = rgb_to_studio_yuv(first, profile);
         let (y1, u1, v1) = rgb_to_studio_yuv(second, profile);
         uyvy.extend_from_slice(&[
-            ((u0 as u16 + u1 as u16 + 1) / 2) as u8,
+            (u0 as u16 + u1 as u16).div_ceil(2) as u8,
             y0,
-            ((v0 as u16 + v1 as u16 + 1) / 2) as u8,
+            (v0 as u16 + v1 as u16).div_ceil(2) as u8,
             y1,
         ]);
     }
