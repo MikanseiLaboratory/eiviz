@@ -709,6 +709,7 @@ dependencies = [
 name = "eiviz-codec-software"
 version = "0.1.0"
 dependencies = [
+ "eiviz-core",
  "eiviz-media",
  "eiviz-time",
  "openh264-sys2",
