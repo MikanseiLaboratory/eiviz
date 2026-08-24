@@ -1,7 +1,8 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    CompositorBackend, Input, InputId, InputSource, Output, OutputId, OutputKind, Project, Scene,
-    SceneId, SceneItem, SceneItemId, Transform2D, TransitionStyle,
+    CompositorBackend, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
+    MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
+    Transform2D, TransitionStyle,
 };
 use eiviz_engine::Engine;
 use std::sync::Arc;
@@ -233,6 +234,27 @@ fn bootstrap(engine: &Engine) {
         unit,
         scene: Some(scene_a.id),
     });
+    let _ = engine.submit_payload(Command::AddMultiview {
+        view: Multiview {
+            id: MultiviewId::new(),
+            name: "Mix 1 PRV / PGM".into(),
+            owner: unit,
+            columns: 2,
+            rows: 1,
+            tiles: vec![
+                MultiviewTile {
+                    column: 0,
+                    row: 0,
+                    source: MultiviewSource::Preview(unit),
+                },
+                MultiviewTile {
+                    column: 1,
+                    row: 0,
+                    source: MultiviewSource::Program(unit),
+                },
+            ],
+        },
+    });
 }
 
 impl eframe::App for DesktopApp {
@@ -452,6 +474,12 @@ impl eframe::App for DesktopApp {
             });
             ui.separator();
             ui.label("Mouse: drag on Preview to move a SceneItem (UpdateTransform). Space = TAKE.");
+            for multiview in project.multiviews.values() {
+                ui.separator();
+                ui.heading(format!("Multiview: {}", multiview.name));
+                let texture_id = format!("multiview-{}", multiview.id);
+                show_frame(ui, self.engine.last_multiview(multiview.id), &texture_id);
+            }
         });
         ctx.request_repaint();
     }

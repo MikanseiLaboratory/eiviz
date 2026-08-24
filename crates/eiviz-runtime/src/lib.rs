@@ -2,9 +2,10 @@
 
 use eiviz_core::{
     AssetId, AudioBusId, AudioFollowPolicy, CompositorBackend, InputId, InputSource,
-    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, Project, RouteMode,
+    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Project,
+    RouteMode, Transform2D,
 };
-use eiviz_gpu::{RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
+use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{AudioBuffer, BoundedSlot, MediaSource, QueuePolicy, VideoFrame};
 use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
@@ -50,9 +51,11 @@ pub struct Runtime {
     backend: CompositorBackend,
     last_program: HashMap<MixingUnitId, VideoFrame>,
     last_preview: HashMap<MixingUnitId, VideoFrame>,
+    last_multiview: HashMap<MultiviewId, VideoFrame>,
     last_good_inputs: HashMap<InputId, VideoFrame>,
     program_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
     preview_slots: HashMap<MixingUnitId, Arc<BoundedSlot<VideoFrame>>>,
+    multiview_slots: HashMap<MultiviewId, Arc<BoundedSlot<VideoFrame>>>,
     pub metrics: TickMetrics,
     degraded_outputs: Mutex<HashMap<String, String>>,
     asset_root: Option<PathBuf>,
@@ -91,9 +94,11 @@ impl Runtime {
             backend,
             last_program: HashMap::new(),
             last_preview: HashMap::new(),
+            last_multiview: HashMap::new(),
             last_good_inputs: HashMap::new(),
             program_slots: HashMap::new(),
             preview_slots: HashMap::new(),
+            multiview_slots: HashMap::new(),
             metrics: TickMetrics::default(),
             degraded_outputs: Mutex::new(HashMap::new()),
             asset_root: None,
@@ -182,6 +187,10 @@ impl Runtime {
         self.last_preview.get(&unit).cloned()
     }
 
+    pub fn last_multiview_frame(&self, view: MultiviewId) -> Option<VideoFrame> {
+        self.last_multiview.get(&view).cloned()
+    }
+
     pub fn mark_output_failed(&self, name: &str, reason: impl Into<String>) {
         self.degraded_outputs
             .lock()
@@ -242,6 +251,7 @@ impl Runtime {
             programs.insert(unit.id, pg);
             previews.insert(unit.id, pv);
         }
+        let multiviews = self.render_multiviews(project, &sources, &programs, &previews, pts)?;
         let (sample_index, sample_count) =
             audio_frame_sample_span(self.frame, self.sample_rate, project.video.frame_rate)
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
@@ -258,6 +268,7 @@ impl Runtime {
             pts,
             programs,
             previews,
+            multiviews,
             audio,
             peak_meters: meters,
         })
@@ -312,6 +323,75 @@ impl Runtime {
                 }
             }
         }
+    }
+
+    fn render_multiviews(
+        &mut self,
+        project: &Project,
+        input_sources: &HashMap<InputId, VideoFrame>,
+        programs: &HashMap<MixingUnitId, VideoFrame>,
+        previews: &HashMap<MixingUnitId, VideoFrame>,
+        pts: MediaTime,
+    ) -> Result<HashMap<MultiviewId, VideoFrame>> {
+        let mut rendered = HashMap::new();
+        for view in project.multiviews.values() {
+            let mut sources = input_sources.clone();
+            let mut layers = Vec::with_capacity(view.tiles.len());
+            let mut synthetic = u128::MAX;
+            for tile in &view.tiles {
+                let input = match tile.source {
+                    MultiviewSource::Black => continue,
+                    MultiviewSource::Input(input) => input,
+                    MultiviewSource::Program(unit) => {
+                        let frame = programs.get(&unit).ok_or_else(|| {
+                            RuntimeError::Other(format!(
+                                "multiview {} missing Program for {}",
+                                view.id, unit
+                            ))
+                        })?;
+                        let id = next_synthetic_input(&sources, &mut synthetic)?;
+                        sources.insert(id, frame.clone());
+                        id
+                    }
+                    MultiviewSource::Preview(unit) => {
+                        let frame = previews.get(&unit).ok_or_else(|| {
+                            RuntimeError::Other(format!(
+                                "multiview {} missing Preview for {}",
+                                view.id, unit
+                            ))
+                        })?;
+                        let id = next_synthetic_input(&sources, &mut synthetic)?;
+                        sources.insert(id, frame.clone());
+                        id
+                    }
+                };
+                layers.push(Layer {
+                    input,
+                    transform: Transform2D {
+                        x: tile.column as f32 / view.columns as f32,
+                        y: tile.row as f32 / view.rows as f32,
+                        width: 1.0 / view.columns as f32,
+                        height: 1.0 / view.rows as f32,
+                        ..Transform2D::default()
+                    },
+                    opacity: 1.0,
+                });
+            }
+            let plan = RenderPlan {
+                width: project.video.width,
+                height: project.video.height,
+                layers,
+            };
+            let frame = self.composite_plan(&plan, &sources, pts)?;
+            self.multiview_slots
+                .entry(view.id)
+                .or_insert_with(|| Arc::new(BoundedSlot::new("multiview", QueuePolicy::LatestWins)))
+                .push(frame.clone())
+                .map_err(|error| RuntimeError::Other(error.to_string()))?;
+            self.last_multiview.insert(view.id, frame.clone());
+            rendered.insert(view.id, frame);
+        }
+        Ok(rendered)
     }
 
     fn generate_sources(
@@ -591,8 +671,24 @@ pub struct TickResult {
     pub pts: MediaTime,
     pub programs: HashMap<MixingUnitId, VideoFrame>,
     pub previews: HashMap<MixingUnitId, VideoFrame>,
+    pub multiviews: HashMap<MultiviewId, VideoFrame>,
     pub audio: AudioBuffer,
     pub peak_meters: HashMap<AudioBusId, f32>,
+}
+
+fn next_synthetic_input(
+    sources: &HashMap<InputId, VideoFrame>,
+    cursor: &mut u128,
+) -> Result<InputId> {
+    loop {
+        let id = InputId::from_u128(*cursor);
+        *cursor = (*cursor)
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::Other("synthetic multiview id exhausted".into()))?;
+        if !sources.contains_key(&id) {
+            return Ok(id);
+        }
+    }
 }
 
 fn fill_mixfeeds(
@@ -626,8 +722,8 @@ fn decode_rgba(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
 mod tests {
     use super::*;
     use eiviz_core::{
-        AudioRoute, Input, InputSource, MixingUnit, MixingUnitId, RouteMode, Scene, SceneItem,
-        Transform2D, TransitionStyle,
+        AudioRoute, Input, InputSource, MixingUnit, MixingUnitId, Multiview, MultiviewId,
+        MultiviewSource, MultiviewTile, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
     };
     use eiviz_core::{InputId, SceneId, SceneItemId};
 
@@ -906,5 +1002,78 @@ mod tests {
         assert_eq!(tick.programs[&unit].pixel(8, 8), [7, 8, 9, 255]);
         assert!(tick.audio.planes[0].iter().any(|sample| *sample > 0.4));
         assert!(tick.audio.planes[1].iter().any(|sample| *sample < -0.2));
+    }
+
+    #[test]
+    fn multiview_renders_input_preview_and_program_tiles() {
+        let (mut p, iid, sid, unit) = setup();
+        let blue = Input {
+            id: InputId::new(),
+            name: "blue".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::SolidColor {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 255,
+            },
+        };
+        let blue_scene = Scene {
+            id: SceneId::new(),
+            name: "blue".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: blue.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        p.inputs.insert(blue.id, blue.clone());
+        p.scenes.insert(blue_scene.id, blue_scene.clone());
+        p.mixing_units.get_mut(&unit).unwrap().program.scene = Some(sid);
+        p.mixing_units.get_mut(&unit).unwrap().preview.scene = Some(blue_scene.id);
+        let view = Multiview {
+            id: MultiviewId::new(),
+            name: "three-up".into(),
+            owner: unit,
+            columns: 3,
+            rows: 1,
+            tiles: vec![
+                MultiviewTile {
+                    column: 0,
+                    row: 0,
+                    source: MultiviewSource::Input(iid),
+                },
+                MultiviewTile {
+                    column: 1,
+                    row: 0,
+                    source: MultiviewSource::Program(unit),
+                },
+                MultiviewTile {
+                    column: 2,
+                    row: 0,
+                    source: MultiviewSource::Preview(unit),
+                },
+            ],
+        };
+        p.multiviews.insert(view.id, view.clone());
+        p.mixing_units
+            .get_mut(&unit)
+            .unwrap()
+            .multiviews
+            .push(view.id);
+        p.validate().unwrap();
+        let mut rt = Runtime::new(48_000);
+        let tick = rt.tick(&mut p).unwrap();
+        let frame = &tick.multiviews[&view.id];
+        assert_eq!(frame.pixel(100, 100), [255, 0, 0, 255]);
+        assert_eq!(frame.pixel(800, 100), [255, 0, 0, 255]);
+        assert_eq!(frame.pixel(1500, 100), [0, 0, 255, 255]);
+        assert_eq!(
+            rt.last_multiview_frame(view.id).unwrap().pixel(1500, 100),
+            [0, 0, 255, 255]
+        );
     }
 }

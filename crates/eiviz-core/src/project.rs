@@ -3,7 +3,7 @@ use crate::graph::MixingGraph;
 use crate::ids::*;
 use crate::input::{DeviceBinding, Input};
 use crate::mixing::MixingUnit;
-use crate::output::{Multiview, Output};
+use crate::output::{Multiview, MultiviewSource, Output};
 use crate::scene::Scene;
 use crate::{DomainError, Result};
 use eiviz_time::FrameRate;
@@ -184,6 +184,69 @@ impl Project {
                     _ => {}
                 }
             }
+            for multiview_id in &unit.multiviews {
+                match self.multiviews.get(multiview_id) {
+                    None => return Err(DomainError::UnknownId(multiview_id.to_string())),
+                    Some(view) if view.owner != unit.id => {
+                        return Err(DomainError::msg("multiview owner mismatch"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for view in self.multiviews.values() {
+            if !self.mixing_units.contains_key(&view.owner) {
+                return Err(DomainError::InvalidRef(format!(
+                    "multiview {} owner {}",
+                    view.id, view.owner
+                )));
+            }
+            if view.columns == 0 || view.rows == 0 {
+                return Err(DomainError::msg("multiview grid must be non-zero"));
+            }
+            let capacity = view
+                .columns
+                .checked_mul(view.rows)
+                .ok_or_else(|| DomainError::Capacity("multiview grid overflow".into()))?;
+            if view.tiles.len() > capacity as usize {
+                return Err(DomainError::Capacity(format!(
+                    "multiview {} has too many tiles",
+                    view.id
+                )));
+            }
+            let mut coordinates = std::collections::BTreeSet::new();
+            for tile in &view.tiles {
+                if tile.column >= view.columns || tile.row >= view.rows {
+                    return Err(DomainError::InvalidRef(format!(
+                        "multiview {} tile ({},{}) outside {}x{}",
+                        view.id, tile.column, tile.row, view.columns, view.rows
+                    )));
+                }
+                if !coordinates.insert((tile.column, tile.row)) {
+                    return Err(DomainError::DuplicateId(format!(
+                        "multiview {} tile ({},{})",
+                        view.id, tile.column, tile.row
+                    )));
+                }
+                match tile.source {
+                    MultiviewSource::Black => {}
+                    MultiviewSource::Input(input) if self.inputs.contains_key(&input) => {}
+                    MultiviewSource::Preview(unit) | MultiviewSource::Program(unit)
+                        if self.mixing_units.contains_key(&unit) => {}
+                    MultiviewSource::Input(input) => {
+                        return Err(DomainError::InvalidRef(format!(
+                            "multiview {} input {}",
+                            view.id, input
+                        )));
+                    }
+                    MultiviewSource::Preview(unit) | MultiviewSource::Program(unit) => {
+                        return Err(DomainError::InvalidRef(format!(
+                            "multiview {} unit {}",
+                            view.id, unit
+                        )));
+                    }
+                }
+            }
         }
         MixingGraph::assert_acyclic(self)?;
         Ok(())
@@ -312,5 +375,44 @@ mod tests {
         let loaded: Project = serde_json::from_value(v).unwrap();
         assert_eq!(loaded.compositor, CompositorBackend::CpuReference);
         assert_eq!(loaded.missing_media, MissingMediaPolicy::Slate);
+    }
+
+    #[test]
+    fn multiview_rejects_duplicate_and_out_of_grid_tiles() {
+        let mut p = Project::new("multiview");
+        let unit = *p.mixing_units.keys().next().unwrap();
+        let view = Multiview {
+            id: MultiviewId::new(),
+            name: "bad".into(),
+            owner: unit,
+            columns: 2,
+            rows: 1,
+            tiles: vec![
+                crate::MultiviewTile {
+                    column: 0,
+                    row: 0,
+                    source: MultiviewSource::Black,
+                },
+                crate::MultiviewTile {
+                    column: 0,
+                    row: 0,
+                    source: MultiviewSource::Black,
+                },
+            ],
+        };
+        p.multiviews.insert(view.id, view.clone());
+        p.mixing_units
+            .get_mut(&unit)
+            .unwrap()
+            .multiviews
+            .push(view.id);
+        assert!(matches!(p.validate(), Err(DomainError::DuplicateId(_))));
+
+        p.multiviews.get_mut(&view.id).unwrap().tiles = vec![crate::MultiviewTile {
+            column: 2,
+            row: 0,
+            source: MultiviewSource::Black,
+        }];
+        assert!(matches!(p.validate(), Err(DomainError::InvalidRef(_))));
     }
 }

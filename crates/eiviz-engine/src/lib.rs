@@ -1,5 +1,5 @@
 use eiviz_command::{Command, CommandAck, CommandEnvelope, Sequencer, state_hash};
-use eiviz_core::{ClientId, MixingUnitId, OutputId, Project};
+use eiviz_core::{ClientId, MixingUnitId, MultiviewId, OutputId, Project};
 use eiviz_media::{MediaSink, MediaSource, VideoFrame};
 use eiviz_project::{append_journal, load, save_atomic, save_autosave};
 use eiviz_runtime::{Runtime, TickResult};
@@ -297,6 +297,10 @@ impl Engine {
 
     pub fn last_preview(&self, unit: MixingUnitId) -> Option<VideoFrame> {
         self.inner.lock().runtime.last_preview_frame(unit)
+    }
+
+    pub fn last_multiview(&self, view: MultiviewId) -> Option<VideoFrame> {
+        self.inner.lock().runtime.last_multiview_frame(view)
     }
 
     pub fn mark_output_failed(&self, name: &str, reason: impl Into<String>) {

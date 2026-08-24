@@ -18,6 +18,8 @@ all pass:
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
 - Desktop starts the localhost HTTP Command API on `127.0.0.1:8090` and TCP
   JSON-lines API on `127.0.0.1:8091`. Set `EIVIZ_CONTROL=off` to disable.
+- Mixing Units expose rendered multi-tile Multiview frames for Input, Preview,
+  and Program sources; the desktop bootstraps a PRV/PGM two-up view.
 - Real OMT receive/output adapter through the official `libomt` C ABI
   (runtime-loaded); interop HIL is still pending
 - Capability stubs only for NDI / DeckLink / ASIO / gpu-video
