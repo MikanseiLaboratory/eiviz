@@ -1,160 +1,149 @@
-//! Isolated record/stream sinks. A slow or failed sink never blocks Program.
+//! Encoded distribution fan-out, muxers, and network transports.
+//!
+//! This crate does not pretend the in-tree I_PCM test encoder or PCM audio are
+//! production H.264/AAC. Product activation requires an explicitly registered
+//! H.264 Annex-B encoder and raw AAC-LC encoder with exact profile names.
 
-use crc32fast::Hasher;
-use eiviz_media::{AudioBuffer, MediaError, MediaSink, Result, VideoFrame};
-use eiviz_time::MediaTime;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Mutex;
+mod fanout;
+mod recording;
+mod rtmp;
+mod srt;
 
-pub struct RecordingSink {
-    file: Mutex<File>,
-    name: String,
-    failed: Mutex<Option<String>>,
+pub use fanout::{
+    EncodedFanout, EncodedSink, SinkDiagnostics, SinkState, WorkerRecovery,
+};
+pub use recording::{FragmentedMp4Sink, RecoveryReport, recover_fragmented_mp4};
+pub use rtmp::{RtmpEndpoint, RtmpPublisher};
+pub use srt::SrtMpegTsPublisher;
+
+use eiviz_core::{
+    AacEncoderProfile, DistributionProfile, H264EncoderProfile, Output, OutputKind,
+    TransportProfile,
+};
+use eiviz_media::{Capability, MediaError, MediaSink, Result};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EncoderCapabilities {
+    pub h264_annexb_adapters: BTreeSet<String>,
+    pub raw_aac_lc_adapters: BTreeSet<String>,
 }
 
-impl RecordingSink {
-    pub fn create(path: PathBuf) -> Result<Self> {
-        let mut file = File::create(&path).map_err(|e| MediaError::Other(e.to_string()))?;
-        file.write_all(b"EIVZREC1")
-            .map_err(|e| MediaError::Other(e.to_string()))?;
-        Ok(Self {
-            file: Mutex::new(file),
-            name: path.display().to_string(),
-            failed: Mutex::new(None),
-        })
-    }
-
-    pub fn failed_reason(&self) -> Option<String> {
-        self.failed.lock().unwrap().clone()
-    }
-
-    fn write_packet(&self, kind: u8, pts: MediaTime, payload: &[u8]) -> Result<()> {
-        if self.failed.lock().unwrap().is_some() {
-            return Err(MediaError::Disconnected(self.name.clone()));
+impl EncoderCapabilities {
+    pub fn validate(&self, profile: &DistributionProfile) -> Result<()> {
+        match &profile.video {
+            H264EncoderProfile::CiscoOpenH26426 { .. } => {
+                return Err(MediaError::Unsupported(
+                    "Cisco OpenH264 2.6.0 decode is integrated, but its production encoder is not; the I_PCM test encoder is not a substitute".into(),
+                ));
+            }
+            H264EncoderProfile::ExternalAnnexB { adapter, .. }
+                if !self.h264_annexb_adapters.contains(adapter) =>
+            {
+                return Err(MediaError::Unsupported(format!(
+                    "selected H.264 Annex-B encoder adapter {adapter:?} is unavailable"
+                )));
+            }
+            H264EncoderProfile::ExternalAnnexB { .. } => {}
         }
-        let mut h = Hasher::new();
-        h.update(payload);
-        let crc = h.finalize();
-        let mut hdr = Vec::new();
-        hdr.push(kind);
-        hdr.extend_from_slice(&pts.ticks().to_le_bytes());
-        hdr.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        hdr.extend_from_slice(&crc.to_le_bytes());
-        let mut g = self.file.lock().unwrap();
-        if g.write_all(&hdr).is_err() || g.write_all(payload).is_err() {
-            *self.failed.lock().unwrap() = Some("write failed".into());
-            return Err(MediaError::Disconnected(self.name.clone()));
+        match &profile.audio {
+            AacEncoderProfile::FdkAacLc { .. } => {
+                return Err(MediaError::Unsupported(
+                    "FDK AAC is not compiled; its upstream license has no patent grant and requires a separately reviewed distribution profile".into(),
+                ));
+            }
+            AacEncoderProfile::ExternalRawAacLc { adapter, .. }
+                if !self.raw_aac_lc_adapters.contains(adapter) =>
+            {
+                return Err(MediaError::Unsupported(format!(
+                    "selected raw AAC-LC encoder adapter {adapter:?} is unavailable"
+                )));
+            }
+            AacEncoderProfile::ExternalRawAacLc { .. } => {}
         }
-        let _ = g.flush();
         Ok(())
     }
 }
 
-impl MediaSink for RecordingSink {
-    fn name(&self) -> &str {
-        &self.name
-    }
+pub fn capabilities() -> Vec<Capability> {
+    vec![
+        Capability {
+            id: "distribution-fanout-mux".into(),
+            available: true,
+            detail:
+                "shared encoded-AU fanout, H.264/AAC FLV, MPEG-TS, and fragmented MP4 framing"
+                    .into(),
+        },
+        Capability {
+            id: "distribution-rtmp".into(),
+            available: true,
+            detail: "pure-Rust RTMP publisher transport; real-server HIL pending".into(),
+        },
+        Capability {
+            id: "distribution-srt".into(),
+            available: true,
+            detail: "pure-Rust srt-tokio caller transport; real-server/loss HIL pending".into(),
+        },
+        Capability {
+            id: "distribution-h264-encoder".into(),
+            available: false,
+            detail: "no production H.264 encoder adapter is compiled; I_PCM is test-only".into(),
+        },
+        Capability {
+            id: "distribution-aac-encoder".into(),
+            available: false,
+            detail: "no production AAC encoder adapter is compiled".into(),
+        },
+    ]
+}
 
-    fn push_video(&self, frame: &VideoFrame) -> Result<()> {
-        self.write_packet(1, frame.pts, &frame.data)
-    }
-
-    fn push_audio(&self, audio: &AudioBuffer) -> Result<()> {
-        let mut bytes = Vec::new();
-        for s in &audio.planes[0] {
-            bytes.extend_from_slice(&s.to_le_bytes());
-        }
-        self.write_packet(2, MediaTime::ZERO, &bytes)
+pub fn sink_for_output(output: &Output) -> Result<Box<dyn EncodedSink>> {
+    let profile = output.distribution.as_ref().ok_or_else(|| {
+        MediaError::Unsupported("distribution output has no explicit profile".into())
+    })?;
+    match (&output.kind, &profile.transport) {
+        (
+            OutputKind::Rtmp { url },
+            TransportProfile::RtmpPublish {
+                connect_timeout_ms,
+                ..
+            },
+        ) => Ok(Box::new(RtmpPublisher::new(
+            url,
+            Duration::from_millis(*connect_timeout_ms),
+        )?)),
+        (
+            OutputKind::Srt { url },
+            TransportProfile::SrtCallerMpegTs {
+                latency_ms,
+                stream_id,
+            },
+        ) => Ok(Box::new(SrtMpegTsPublisher::new(
+            url,
+            stream_id.clone(),
+            Duration::from_millis((*latency_ms).into()),
+            Duration::from_secs(5),
+        )?)),
+        (
+            OutputKind::Mp4 { path },
+            TransportProfile::FragmentedMp4 {
+                recover_incomplete_tail,
+                ..
+            },
+        ) => Ok(Box::new(FragmentedMp4Sink::new(
+            path.into(),
+            *recover_incomplete_tail,
+        ))),
+        _ => Err(MediaError::Unsupported(
+            "output kind and transport profile do not match".into(),
+        )),
     }
 }
 
-/// Minimal RTMP handshake writer used in protocol tests (C0/C1).
-pub fn rtmp_c0c1() -> Vec<u8> {
-    let mut v = vec![0x03];
-    v.extend_from_slice(&[0u8; 4]); // time
-    v.extend_from_slice(&[0u8; 4]);
-    v.extend_from_slice(&[0xA5; 1528]);
-    v
-}
-
-/// Fragmented MP4 recorder. Encode/mux failures stay local to this sink.
-pub struct Fmp4RecordingSink {
-    name: String,
-    inner: Mutex<Fmp4Inner>,
-    failed: Mutex<Option<String>>,
-}
-
-struct Fmp4Inner {
-    file: File,
-    mux: Option<eiviz_codec_software::FragmentedMp4>,
-}
-
-impl Fmp4RecordingSink {
-    pub fn create(path: PathBuf) -> Result<Self> {
-        let file = File::create(&path).map_err(|e| MediaError::Other(e.to_string()))?;
-        Ok(Self {
-            name: path.display().to_string(),
-            inner: Mutex::new(Fmp4Inner { file, mux: None }),
-            failed: Mutex::new(None),
-        })
-    }
-
-    pub fn failed_reason(&self) -> Option<String> {
-        self.failed.lock().unwrap().clone()
-    }
-
-    fn mark_failed(&self, reason: impl Into<String>) -> MediaError {
-        let reason = reason.into();
-        *self.failed.lock().unwrap() = Some(reason.clone());
-        MediaError::Disconnected(format!("{}: {reason}", self.name))
-    }
-}
-
-impl MediaSink for Fmp4RecordingSink {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn push_video(&self, frame: &VideoFrame) -> Result<()> {
-        if self.failed.lock().unwrap().is_some() {
-            return Err(MediaError::Disconnected(self.name.clone()));
-        }
-        let au = eiviz_codec_software::encode_idr(frame);
-        let (sps, pps) = eiviz_codec_software::extract_sps_pps(&au);
-        let mut g = self.inner.lock().unwrap();
-        if g.mux.is_none() {
-            g.mux = Some(eiviz_codec_software::FragmentedMp4::new(
-                60000,
-                frame.width as u16,
-                frame.height as u16,
-                &sps,
-                &pps,
-            ));
-        }
-        let bytes = if let Some(mux) = g.mux.as_mut() {
-            mux.write_sample(&au, 1001);
-            let bytes = mux.bytes.clone();
-            mux.bytes.clear();
-            bytes
-        } else {
-            Vec::new()
-        };
-        if g.file.write_all(&bytes).is_err() {
-            drop(g);
-            return Err(self.mark_failed("disk write failed"));
-        }
-        let _ = g.file.flush();
-        Ok(())
-    }
-
-    fn push_audio(&self, _audio: &AudioBuffer) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// Always-failing sink used to prove Program isolation.
+/// Always-failing raw sink used to prove that legacy Program outputs remain
+/// isolated from adapter failures.
 pub struct FailingSink {
     name: String,
 }
@@ -170,52 +159,85 @@ impl MediaSink for FailingSink {
         &self.name
     }
 
-    fn push_video(&self, _frame: &VideoFrame) -> Result<()> {
+    fn push_video(&self, _frame: &eiviz_media::VideoFrame) -> Result<()> {
         Err(MediaError::Disconnected(self.name.clone()))
     }
 
-    fn push_audio(&self, _audio: &AudioBuffer) -> Result<()> {
+    fn push_audio(&self, _audio: &eiviz_media::AudioBuffer) -> Result<()> {
         Err(MediaError::Disconnected(self.name.clone()))
     }
 }
 
-pub fn flv_file_header() -> Vec<u8> {
-    eiviz_codec_software::flv_header()
+pub fn attach_profiled_sink(
+    fanout: &EncodedFanout,
+    output: &Output,
+    encoders: &EncoderCapabilities,
+) -> Result<()> {
+    let profile = output.distribution.as_ref().ok_or_else(|| {
+        MediaError::Unsupported("distribution output has no explicit profile".into())
+    })?;
+    encoders.validate(profile)?;
+    let sink = sink_for_output(output)?;
+    fanout.add_sink(
+        sink,
+        profile.queue_capacity,
+        WorkerRecovery {
+            initial_delay: Duration::from_millis(profile.reconnect.initial_delay_ms),
+            max_delay: Duration::from_millis(profile.reconnect.max_delay_ms),
+            max_attempts: profile.reconnect.max_attempts,
+        },
+    )
 }
 
-pub fn mpegts_pat() -> [u8; 188] {
-    eiviz_codec_software::pat()
+/// Test adapters can register exact names without making them implicit
+/// production defaults.
+pub fn registered_capabilities(
+    h264: impl IntoIterator<Item = String>,
+    aac: impl IntoIterator<Item = String>,
+) -> Arc<EncoderCapabilities> {
+    Arc::new(EncoderCapabilities {
+        h264_annexb_adapters: h264.into_iter().collect(),
+        raw_aac_lc_adapters: aac.into_iter().collect(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eiviz_time::MediaTime;
+    use eiviz_core::{
+        AacEncoderProfile, DistributionProfile, H264EncoderProfile, ReconnectProfile,
+    };
 
-    #[test]
-    fn recording_writes_magic_and_survives_frame() {
-        let path = std::env::temp_dir().join(format!("rec-{}.eivizbin", std::process::id()));
-        let sink = RecordingSink::create(path.clone()).unwrap();
-        let frame = VideoFrame::rgba_solid(1, MediaTime::ZERO, 2, 2, [1, 2, 3, 255]);
-        sink.push_video(&frame).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(&bytes[..8], b"EIVZREC1");
-        assert_eq!(rtmp_c0c1()[0], 0x03);
-        assert_eq!(rtmp_c0c1().len(), 1537);
+    fn profile() -> DistributionProfile {
+        DistributionProfile {
+            video: H264EncoderProfile::CiscoOpenH26426 {
+                bitrate_bps: 8_000_000,
+                keyframe_interval_frames: 120,
+                level_idc: 42,
+            },
+            audio: AacEncoderProfile::FdkAacLc {
+                bitrate_bps: 192_000,
+                sample_rate: 48_000,
+                channels: 2,
+            },
+            transport: TransportProfile::RtmpPublish {
+                chunk_size: 4096,
+                connect_timeout_ms: 2_000,
+            },
+            queue_capacity: 128,
+            reconnect: ReconnectProfile {
+                initial_delay_ms: 100,
+                max_delay_ms: 5_000,
+                max_attempts: 0,
+            },
+        }
     }
 
     #[test]
-    fn fmp4_sink_writes_ftyp_and_failed_sink_does_not_panic() {
-        let path = std::env::temp_dir().join(format!("rec-{}.mp4", std::process::id()));
-        let sink = Fmp4RecordingSink::create(path.clone()).unwrap();
-        let frame = VideoFrame::rgba_solid(2, MediaTime::ZERO, 16, 16, [10, 20, 30, 255]);
-        sink.push_video(&frame).unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        assert!(bytes.windows(4).any(|w| w == b"ftyp"));
-        assert!(bytes.windows(4).any(|w| w == b"moof"));
-        let fail = FailingSink::new("aux");
-        assert!(fail.push_video(&frame).is_err());
-        assert_eq!(&flv_file_header()[..3], b"FLV");
-        assert_eq!(mpegts_pat()[0], 0x47);
+    fn unavailable_product_encoders_hard_fail() {
+        let error = EncoderCapabilities::default()
+            .validate(&profile())
+            .unwrap_err();
+        assert!(error.to_string().contains("I_PCM test encoder"));
     }
 }

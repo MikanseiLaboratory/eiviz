@@ -2,9 +2,10 @@ use eiviz_command::{Command, CommandEnvelope};
 #[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
 use eiviz_core::{AudioRoute, RouteMode};
 use eiviz_core::{
-    CompositorBackend, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
-    MultiviewTile, Output, OutputId, OutputKind, Project, Scene, SceneId, SceneItem, SceneItemId,
-    Transform2D, TransitionStyle,
+    AacEncoderProfile, CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId,
+    InputSource, Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId,
+    OutputKind, Project, ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId,
+    Transform2D, TransitionStyle, TransportProfile,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
@@ -37,6 +38,9 @@ struct DesktopApp {
     video_path: String,
     openh264_path: String,
     portable_path: String,
+    rtmp_url: String,
+    srt_url: String,
+    recording_path: String,
     omt_address: String,
     omt_output_name: String,
     omt_discovered: Vec<String>,
@@ -158,6 +162,9 @@ impl DesktopApp {
             video_path: String::new(),
             openh264_path: std::env::var("EIVIZ_OPENH264_PATH").unwrap_or_default(),
             portable_path: "project.eiviz".into(),
+            rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
+            srt_url: "srt://127.0.0.1:9000".into(),
+            recording_path: "recording.mp4".into(),
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
             omt_output_name: "eiviz Program".into(),
             omt_discovered: Vec::new(),
@@ -367,6 +374,7 @@ impl DesktopApp {
                 binding: binding.id,
             },
             enabled: true,
+            distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
             output: output.clone(),
@@ -641,6 +649,7 @@ impl DesktopApp {
             owner,
             kind: OutputKind::Ndi { name: name.clone() },
             enabled: true,
+            distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
             output: output.clone(),
@@ -818,6 +827,7 @@ impl DesktopApp {
                 binding: binding.id,
             },
             enabled: true,
+            distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
             output: output.clone(),
@@ -831,6 +841,79 @@ impl DesktopApp {
         }
         self.audio_outputs.push((output.id, sink));
         self.status = format!("Audio output started: {}", device.display_name);
+    }
+
+    fn configure_distribution(&mut self, transport_name: &str, owner: eiviz_core::MixingUnitId) {
+        let (name, kind, transport) = match transport_name {
+            "rtmp" => (
+                "RTMP Program".to_owned(),
+                OutputKind::Rtmp {
+                    url: self.rtmp_url.trim().to_owned(),
+                },
+                TransportProfile::RtmpPublish {
+                    chunk_size: 4096,
+                    connect_timeout_ms: 5_000,
+                },
+            ),
+            "srt" => (
+                "SRT Program".to_owned(),
+                OutputKind::Srt {
+                    url: self.srt_url.trim().to_owned(),
+                },
+                TransportProfile::SrtCallerMpegTs {
+                    latency_ms: 120,
+                    stream_id: None,
+                },
+            ),
+            "mp4" => (
+                "Fragmented MP4 Program".to_owned(),
+                OutputKind::Mp4 {
+                    path: self.recording_path.trim().to_owned(),
+                },
+                TransportProfile::FragmentedMp4 {
+                    segment_duration_ms: 2_000,
+                    recover_incomplete_tail: true,
+                },
+            ),
+            _ => {
+                self.status = format!("unknown distribution transport {transport_name}");
+                return;
+            }
+        };
+        let output = Output {
+            id: OutputId::new(),
+            name,
+            owner,
+            kind,
+            enabled: false,
+            distribution: Some(DistributionProfile {
+                video: H264EncoderProfile::CiscoOpenH26426 {
+                    bitrate_bps: 8_000_000,
+                    keyframe_interval_frames: 120,
+                    level_idc: 42,
+                },
+                audio: AacEncoderProfile::FdkAacLc {
+                    bitrate_bps: 192_000,
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                transport,
+                queue_capacity: 256,
+                reconnect: ReconnectProfile {
+                    initial_delay_ms: 250,
+                    max_delay_ms: 10_000,
+                    max_attempts: 0,
+                },
+            }),
+        };
+        match self.engine.configure_distribution_output(output) {
+            Ok(_) => {
+                self.status = format!(
+                    "{transport_name} mapping saved stopped; start will hard-fail until explicit H.264/AAC encoders are available"
+                )
+            }
+            Err(error) => self.status = format!("{transport_name} mapping: {error}"),
+        }
     }
 }
 
@@ -1075,6 +1158,18 @@ impl eframe::App for DesktopApp {
                     }
                 ));
             }
+            for capability in self.engine.distribution_capabilities() {
+                ui.label(format!(
+                    "{}: {} ({})",
+                    capability.id,
+                    if capability.available {
+                        "ready"
+                    } else {
+                        "unavailable"
+                    },
+                    capability.detail
+                ));
+            }
             #[cfg(feature = "decklink")]
             ui.label(format!(
                 "{}: {} ({})",
@@ -1115,6 +1210,73 @@ impl eframe::App for DesktopApp {
                     },
                     cap.detail
                 ));
+            }
+            ui.separator();
+            ui.heading("Distribution");
+            ui.label(
+                "Explicit baseline: H.264 Annex-B + raw AAC-LC. Mappings are created stopped; unavailable encoders hard-fail on Start.",
+            );
+            ui.label("RTMP H.264/AAC in FLV");
+            ui.text_edit_singleline(&mut self.rtmp_url);
+            if ui.button("Add stopped RTMP mapping").clicked() {
+                self.configure_distribution("rtmp", unit_id);
+            }
+            ui.label("SRT H.264/AAC in MPEG-TS");
+            ui.text_edit_singleline(&mut self.srt_url);
+            if ui.button("Add stopped SRT mapping").clicked() {
+                self.configure_distribution("srt", unit_id);
+            }
+            ui.label("Fragmented MP4 recording");
+            ui.text_edit_singleline(&mut self.recording_path);
+            if ui.button("Add stopped fMP4 mapping").clicked() {
+                self.configure_distribution("mp4", unit_id);
+            }
+            let distribution_metrics = self.engine.metrics().distribution_outputs;
+            let mut remove_distribution = None;
+            for output in project
+                .outputs
+                .values()
+                .filter(|output| output.distribution.is_some())
+            {
+                let diagnostic = distribution_metrics
+                    .iter()
+                    .find(|diagnostic| diagnostic.output_id == output.id.to_string());
+                ui.push_id(output.id, |ui| {
+                    ui.label(format!(
+                        "{}: {} — {}",
+                        output.name,
+                        diagnostic.map_or("unknown", |value| value.state.as_str()),
+                        diagnostic.map_or("no diagnostics", |value| value.detail.as_str())
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button("Start").clicked() {
+                            match self.engine.set_distribution_enabled(output.id, true) {
+                                Ok(_) => self.status = format!("{} started", output.name),
+                                Err(error) => {
+                                    self.status = format!("{} not started: {error}", output.name)
+                                }
+                            }
+                        }
+                        if ui.button("Stop").clicked() {
+                            match self.engine.set_distribution_enabled(output.id, false) {
+                                Ok(_) => self.status = format!("{} stopped", output.name),
+                                Err(error) => self.status = format!("stop {}: {error}", output.name),
+                            }
+                        }
+                        if ui.button("Remove").clicked() {
+                            remove_distribution = Some(output.id);
+                        }
+                    });
+                });
+            }
+            if let Some(output) = remove_distribution {
+                match self
+                    .engine
+                    .submit_payload(Command::RemoveOutput { id: output })
+                {
+                    Ok(_) => self.status = "distribution mapping removed".into(),
+                    Err(error) => self.status = format!("remove distribution mapping: {error}"),
+                }
             }
             ui.separator();
             ui.heading("Audio I/O");
@@ -1494,6 +1656,7 @@ impl eframe::App for DesktopApp {
                                 url: output_name.clone(),
                             },
                             enabled: true,
+                            distribution: None,
                         };
                         match self.engine.submit_payload(Command::AddOutput {
                             output: output.clone(),

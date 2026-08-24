@@ -108,8 +108,26 @@ pub struct EncodedAccessUnit {
     pub pts: MediaTime,
     pub dts: Option<MediaTime>,
     pub keyframe: bool,
-    pub bytes: Vec<u8>,
+    /// Shared immutable payload. Fan-out clones the `Arc`, not the encoded
+    /// bytes, so every sink receives the same encode result.
+    pub bytes: Arc<[u8]>,
     pub kind: EncodedKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedStreamConfig {
+    /// Annex-B SPS NAL without a start code.
+    pub h264_sps: Arc<[u8]>,
+    /// Annex-B PPS NAL without a start code.
+    pub h264_pps: Arc<[u8]>,
+    /// MPEG-4 AudioSpecificConfig for AAC-LC.
+    pub aac_audio_specific_config: Arc<[u8]>,
+    pub video_width: u16,
+    pub video_height: u16,
+    pub video_timescale: u32,
+    pub video_sample_duration: u32,
+    pub audio_sample_rate: u32,
+    pub audio_channels: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

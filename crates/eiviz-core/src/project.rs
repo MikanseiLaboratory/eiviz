@@ -132,6 +132,7 @@ impl Project {
             owner: unit.id,
             kind: crate::OutputKind::ProgramWindow,
             enabled: true,
+            distribution: None,
         };
         let mut unit = unit;
         unit.outputs.push(output.id);
@@ -249,6 +250,7 @@ impl Project {
                     output.id, binding
                 )));
             }
+            validate_distribution_output(output, &self.audio)?;
         }
         for view in self.multiviews.values() {
             let owner = self.mixing_units.get(&view.owner).ok_or_else(|| {
@@ -342,6 +344,104 @@ impl Project {
             .get_mut(&id)
             .ok_or_else(|| DomainError::UnknownId(id.to_string()))
     }
+}
+
+fn validate_distribution_output(output: &Output, audio: &AudioFormat) -> Result<()> {
+    use crate::{AacEncoderProfile, OutputKind, TransportProfile};
+
+    let expected_transport = match &output.kind {
+        OutputKind::Rtmp { url } => {
+            validate_endpoint(url, "rtmp://", "RTMP")?;
+            Some("rtmp")
+        }
+        OutputKind::Srt { url } => {
+            validate_endpoint(url, "srt://", "SRT")?;
+            Some("srt")
+        }
+        OutputKind::Mp4 { path } => {
+            if path.trim().is_empty() {
+                return Err(DomainError::msg("MP4 output path must not be empty"));
+            }
+            Some("mp4")
+        }
+        _ => None,
+    };
+
+    match (expected_transport, &output.distribution) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(DomainError::msg(format!(
+                "non-distribution output {} must not have a distribution profile",
+                output.id
+            )));
+        }
+        (Some(kind), None) => {
+            return Err(DomainError::msg(format!(
+                "{kind} output {} requires an explicit codec and transport profile",
+                output.id
+            )));
+        }
+        (Some(_), Some(_)) => {}
+    }
+
+    let profile = output.distribution.as_ref().expect("checked above");
+    if profile.queue_capacity == 0 {
+        return Err(DomainError::msg("distribution queue capacity must be non-zero"));
+    }
+    if profile.reconnect.initial_delay_ms == 0
+        || profile.reconnect.max_delay_ms < profile.reconnect.initial_delay_ms
+    {
+        return Err(DomainError::msg(
+            "invalid reconnect delay range for distribution output",
+        ));
+    }
+    let (sample_rate, channels) = match &profile.audio {
+        AacEncoderProfile::FdkAacLc {
+            sample_rate,
+            channels,
+            ..
+        }
+        | AacEncoderProfile::ExternalRawAacLc {
+            sample_rate,
+            channels,
+            ..
+        } => (*sample_rate, *channels),
+    };
+    if sample_rate != audio.sample_rate || channels != audio.channels {
+        return Err(DomainError::msg(format!(
+            "distribution AAC profile {sample_rate} Hz/{channels} ch does not match project {} Hz/{} ch",
+            audio.sample_rate, audio.channels
+        )));
+    }
+    let transport_matches = matches!(
+        (&output.kind, &profile.transport),
+        (
+            OutputKind::Rtmp { .. },
+            TransportProfile::RtmpPublish { .. }
+        ) | (
+            OutputKind::Srt { .. },
+            TransportProfile::SrtCallerMpegTs { .. }
+        ) | (
+            OutputKind::Mp4 { .. },
+            TransportProfile::FragmentedMp4 { .. }
+        )
+    );
+    if !transport_matches {
+        return Err(DomainError::msg(format!(
+            "output {} transport profile does not match its output kind",
+            output.id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_endpoint(value: &str, scheme: &str, label: &str) -> Result<()> {
+    if !value.starts_with(scheme) || value.len() == scheme.len() {
+        return Err(DomainError::msg(format!(
+            "{label} endpoint must use explicit {scheme} URL"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_playback(playback: &Playback) -> Result<()> {

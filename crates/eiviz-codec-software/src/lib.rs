@@ -7,13 +7,18 @@ mod openh264;
 
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
-pub use flv::{flv_avc_nalu, flv_avc_sequence_header, flv_header};
+pub use flv::{
+    aac_raw_payload, aac_sequence_header_payload, avc_nalu_payload, avc_sequence_header_payload,
+    flv_aac_raw, flv_aac_sequence_header, flv_avc_nalu, flv_avc_sequence_header, flv_header,
+};
 pub use fmp4::FragmentedMp4;
 pub use h264::{
     AvccError, avcc_parameter_sets_to_annexb, avcc_sample_to_annexb, encode_idr, extract_sps_pps,
     split_annexb,
 };
-pub use mpegts::{pat, pes_video, pmt};
+pub use mpegts::{
+    AUDIO_PID, PMT_PID, VIDEO_PID, media_time_90k, pat, pes_aac, pes_video, pmt,
+};
 pub use openh264::{OpenH264Decoder, OpenH264Error};
 
 /// Legacy private AU used when a caller needs a non-H.264 dump.
@@ -27,7 +32,7 @@ pub fn wrap_raw(frame: &VideoFrame) -> EncodedAccessUnit {
         pts: frame.pts,
         dts: Some(frame.pts),
         keyframe: true,
-        bytes,
+        bytes: bytes.into(),
         kind: EncodedKind::Avc,
     }
 }

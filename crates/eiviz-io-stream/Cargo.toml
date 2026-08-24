@@ -11,3 +11,9 @@ eiviz-time.workspace = true
 eiviz-codec-software.workspace = true
 thiserror.workspace = true
 crc32fast.workspace = true
+rml_rtmp = "0.8.0"
+bytes = "1.12.1"
+futures = "0.3.34"
+srt-tokio = "0.4.4"
+tokio = { version = "1.53.1", features = ["rt", "net", "time"] }
+crossbeam-channel.workspace = true

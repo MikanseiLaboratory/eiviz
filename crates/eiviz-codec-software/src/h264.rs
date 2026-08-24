@@ -126,7 +126,7 @@ pub fn encode_idr(frame: &VideoFrame) -> EncodedAccessUnit {
         pts: frame.pts,
         dts: Some(frame.pts),
         keyframe: true,
-        bytes,
+        bytes: bytes.into(),
         kind: EncodedKind::Avc,
     }
 }

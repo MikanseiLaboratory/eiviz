@@ -33,6 +33,8 @@ pub enum EngineError {
     UnknownOutput(OutputId),
     #[error("output {0} is not an audio-device output")]
     NotAudioOutput(OutputId),
+    #[error("output {0} is not a distribution output")]
+    NotDistributionOutput(OutputId),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -72,6 +74,16 @@ pub struct EngineMetrics {
     pub failed_outputs: Vec<(String, String)>,
     pub peak_meters: Vec<(String, f32)>,
     pub audio_devices: Vec<EngineAudioDiagnostics>,
+    pub distribution_outputs: Vec<DistributionOutputDiagnostics>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DistributionOutputDiagnostics {
+    pub output_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub state: String,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -113,6 +125,7 @@ impl Engine {
     }
 
     pub fn from_project(project: Project) -> Result<Self> {
+        validate_enabled_distribution_outputs(&project)?;
         let runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -281,7 +294,47 @@ impl Engine {
                 .into_iter()
                 .map(EngineAudioDiagnostics::from)
                 .collect(),
+            distribution_outputs: distribution_diagnostics(&g.project),
         }
+    }
+
+    pub fn distribution_capabilities(&self) -> Vec<eiviz_media::Capability> {
+        eiviz_io_stream::capabilities()
+    }
+
+    /// Persist an explicit output mapping in the stopped state. Starting it is
+    /// a separate operation so an unavailable codec never mutates the project
+    /// into a falsely-running state.
+    pub fn configure_distribution_output(&self, mut output: eiviz_core::Output) -> Result<CommandAck> {
+        if output.distribution.is_none()
+            || !matches!(
+                output.kind,
+                OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. }
+            )
+        {
+            return Err(EngineError::NotDistributionOutput(output.id));
+        }
+        output.enabled = false;
+        self.submit_payload(Command::AddOutput { output })
+    }
+
+    pub fn set_distribution_enabled(&self, output: OutputId, enabled: bool) -> Result<CommandAck> {
+        let snapshot = self.snapshot();
+        let configured = snapshot
+            .outputs
+            .get(&output)
+            .ok_or(EngineError::UnknownOutput(output))?;
+        let profile = configured
+            .distribution
+            .as_ref()
+            .ok_or(EngineError::NotDistributionOutput(output))?;
+        if enabled {
+            eiviz_io_stream::EncoderCapabilities::default().validate(profile)?;
+        }
+        self.submit_payload(Command::SetOutputEnabled {
+            id: output,
+            enabled,
+        })
     }
 
     pub fn flight_log(&self) -> Vec<FlightEvent> {
@@ -437,6 +490,7 @@ impl Engine {
     }
 
     fn replace_project(&self, project: Project, asset_root: Option<PathBuf>) -> Result<()> {
+        validate_enabled_distribution_outputs(&project)?;
         let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
         if let Some(root) = asset_root {
             runtime.set_asset_root(root);
@@ -488,6 +542,45 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+fn validate_enabled_distribution_outputs(project: &Project) -> Result<()> {
+    let capabilities = eiviz_io_stream::EncoderCapabilities::default();
+    for output in project.outputs.values().filter(|output| output.enabled) {
+        if let Some(profile) = &output.distribution {
+            capabilities.validate(profile)?;
+        }
+    }
+    Ok(())
+}
+
+fn distribution_diagnostics(project: &Project) -> Vec<DistributionOutputDiagnostics> {
+    let capabilities = eiviz_io_stream::EncoderCapabilities::default();
+    project
+        .outputs
+        .values()
+        .filter_map(|output| {
+            let profile = output.distribution.as_ref()?;
+            let capability = capabilities.validate(profile);
+            Some(DistributionOutputDiagnostics {
+                output_id: output.id.to_string(),
+                name: output.name.clone(),
+                enabled: output.enabled,
+                state: if output.enabled {
+                    if capability.is_ok() {
+                        "configured".into()
+                    } else {
+                        "unsupported".into()
+                    }
+                } else {
+                    "stopped".into()
+                },
+                detail: capability
+                    .err()
+                    .map_or_else(|| "explicit encoder profile available".into(), |error| error.to_string()),
+            })
+        })
+        .collect()
 }
 
 impl From<AudioIoDiagnostics> for EngineAudioDiagnostics {
@@ -697,6 +790,7 @@ mod tests {
             owner: unit_b.id,
             kind: OutputKind::Omt { url: "test".into() },
             enabled: true,
+            distribution: None,
         };
         engine
             .submit_payload(Command::AddOutput {
