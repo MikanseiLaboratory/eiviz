@@ -16,6 +16,8 @@ all pass:
   alpha composition, transition mixing, and staging readback on a hardware GPU.
   GPU HIL and device-loss recovery remain pending.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
+- Desktop starts the localhost HTTP Command API on `127.0.0.1:8090` and TCP
+  JSON-lines API on `127.0.0.1:8091`. Set `EIVIZ_CONTROL=off` to disable.
 - Real OMT receive/output adapter through the official `libomt` C ABI
   (runtime-loaded); interop HIL is still pending
 - Capability stubs only for NDI / DeckLink / ASIO / gpu-video
@@ -35,6 +37,10 @@ cargo run -p eiviz-desktop
 # Explicit hardware-GPU profile. Fails if no hardware adapter is available.
 EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
 ```
+
+Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but
+only loopback addresses are accepted until remote authorization is implemented.
+`EIVIZ_CONTROL_TOKEN` protects HTTP commands; TCP remains localhost-only.
 
 Windows x64 is the first-class target. Linux/macOS compile the same core.
 MSRV is 1.85; the repo `rust-toolchain.toml` pins the CI/dev toolchain.

@@ -5,6 +5,7 @@ use eiviz_core::{
 };
 use eiviz_engine::Engine;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -30,6 +31,9 @@ struct DesktopApp {
     omt_output_name: String,
     omt_discovered: Vec<String>,
     omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
+    control_stop: Arc<AtomicBool>,
+    http_port: Option<u16>,
+    tcp_port: Option<u16>,
     drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
 }
 
@@ -57,6 +61,45 @@ impl DesktopApp {
         };
         let engine = Engine::from_project(project)?.shared();
         bootstrap(&engine);
+        let control_stop = Arc::new(AtomicBool::new(false));
+        let control_enabled = std::env::var("EIVIZ_CONTROL").as_deref() != Ok("off");
+        let (http_port, tcp_port) = if control_enabled {
+            let max_requests_per_sec = std::env::var("EIVIZ_CONTROL_RATE")
+                .unwrap_or_else(|_| "60".into())
+                .parse::<u32>()
+                .map_err(|error| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("invalid EIVIZ_CONTROL_RATE: {error}"),
+                    )
+                })?;
+            let http_port = eiviz_control::spawn_http(
+                engine.clone(),
+                eiviz_control::ControlConfig {
+                    bind: std::env::var("EIVIZ_HTTP_BIND")
+                        .unwrap_or_else(|_| "127.0.0.1:8090".into()),
+                    require_token: std::env::var("EIVIZ_CONTROL_TOKEN")
+                        .ok()
+                        .filter(|token| !token.is_empty()),
+                    max_requests_per_sec,
+                },
+                control_stop.clone(),
+            )?;
+            let tcp_result = eiviz_control::spawn_tcp(
+                engine.clone(),
+                &std::env::var("EIVIZ_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:8091".into()),
+                control_stop.clone(),
+            );
+            match tcp_result {
+                Ok(tcp_port) => (Some(http_port), Some(tcp_port)),
+                Err(error) => {
+                    control_stop.store(true, Ordering::Release);
+                    return Err(error.into());
+                }
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
             engine,
             status: "ready".into(),
@@ -66,6 +109,9 @@ impl DesktopApp {
             omt_output_name: "eiviz Program".into(),
             omt_discovered: Vec::new(),
             omt_connections: Vec::new(),
+            control_stop,
+            http_port,
+            tcp_port,
             drag_item: None,
         };
         if !app.omt_address.is_empty() {
@@ -263,6 +309,12 @@ impl eframe::App for DesktopApp {
             ui.label(format!("compositor {:?}", project.compositor));
             ui.label(self.engine.compositor_detail());
             ui.label(format!("missing-media {:?}", project.missing_media));
+            ui.label(match (self.http_port, self.tcp_port) {
+                (Some(http), Some(tcp)) => {
+                    format!("control localhost HTTP :{http} / TCP :{tcp}")
+                }
+                _ => "control disabled".into(),
+            });
             for cap in [
                 eiviz_io_ndi::probe(),
                 eiviz_io_omt::probe(),
@@ -381,6 +433,12 @@ impl eframe::App for DesktopApp {
             ui.label("Mouse: drag on Preview to move a SceneItem (UpdateTransform). Space = TAKE.");
         });
         ctx.request_repaint();
+    }
+}
+
+impl Drop for DesktopApp {
+    fn drop(&mut self) {
+        self.control_stop.store(true, Ordering::Release);
     }
 }
 
