@@ -1,6 +1,6 @@
 # ADR-0011 Unify compositor and egui wgpu generation
 
-- Status: Proposed — version change requires approval
+- Status: Accepted
 - Date: 2026-08-24
 
 ## Context
@@ -14,19 +14,43 @@ The compositor is functional with explicit staging readback, but this does not
 satisfy R05.1 (one Device/Queue owner per physical GPU), cannot share output
 textures with egui, and adds an avoidable GPU→CPU→GPU transfer.
 
-## Proposed decision
+## Decision
 
-Unify the direct compositor dependency with eframe's wgpu generation, then
-inject eframe's render-state Device/Queue into `WgpuCompositor` instead of
-creating a second device. Keep the headless constructor only for output workers
-and HIL tools that do not run eframe.
+Pin the direct compositor dependency to exact wgpu 25.0.2, the generation
+resolved by eframe/egui-wgpu 0.32.3. Desktop constructs `WgpuCompositor` with
+the adapter, cloned Device handle, and cloned Queue handle from
+`CreationContext::wgpu_render_state`; these clones refer to the same logical
+device and queue. Desktop never invokes the headless device constructor.
 
-This requires changing the pinned direct wgpu version and adapting its API. It
-must not be performed silently. Until approved and implemented:
+`WgpuCompositor::new_headless_hardware` remains available only for processes
+without eframe and for HIL. It requests a high-performance adapter, rejects
+CPU-type adapters, and has no CPU fallback.
 
-- Wgpu composition is `Runtime wired`, not `Certified`.
-- staging readback is explicit and measured as a known copy;
-- no zero-copy or single-device claim is made.
+Compositor output is exposed as `WgpuTextureFrame`. Runtime keeps stream-specific
+Program, Preview, and Multiview texture slots, and desktop registers those
+texture views with egui-wgpu's native texture registry. This removes the
+GPU→CPU→GUI GPU preview transfer. The existing media graph still requires
+`VideoFrame` for software/network/hardware sinks and mixfeed construction, so
+those explicit staging readbacks remain and increment `gpu_readbacks`.
+
+wgpu 25 device-loss callbacks populate diagnostics and subsequent compositor
+operations fail explicitly. Automatic device recreation is **not implemented**:
+eframe owns an injected desktop device and must recreate its render state before
+a new compositor can be injected. No recovery or certification claim is made.
+
+## Verification
+
+- `cargo tree -p eiviz-desktop --features wgpu-backend -i wgpu` must resolve one
+  node only: `wgpu v25.0.2`, shared by eframe, egui-wgpu, and eiviz-gpu.
+- CI executes that command as the version-singleton gate.
+- naga 25 validates WGSL without hardware.
+- a wgpu noop device exercises injected-device pipeline construction without
+  requesting an adapter or second device.
+- hardware feature tests remain conditional and explicitly skip when no
+  hardware adapter is available.
+
+This implements dependency and desktop device unification. It does not certify
+the HIL scenarios in `docs/hil/gpu.md`.
 
 ## Alternatives
 

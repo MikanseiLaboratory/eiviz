@@ -20,4 +20,5 @@ default = []
 wgpu-backend = ["dep:wgpu", "dep:pollster"]
 
 [dev-dependencies]
-naga = { version = "24.0.0", features = ["wgsl-in"] }
+naga = { version = "25.0.1", features = ["wgsl-in"] }
+wgpu = { workspace = true, features = ["noop"] }

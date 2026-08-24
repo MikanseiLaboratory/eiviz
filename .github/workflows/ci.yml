@@ -52,5 +52,7 @@ jobs:
         run: cargo test --workspace
       - name: test hardware GPU feature wiring
         run: cargo test -p eiviz-gpu --features wgpu-backend
+      - name: verify desktop wgpu version singleton
+        run: cargo tree -p eiviz-desktop --features wgpu-backend -i wgpu
       - name: check desktop GPU feature wiring
         run: cargo check -p eiviz-desktop --features wgpu-backend

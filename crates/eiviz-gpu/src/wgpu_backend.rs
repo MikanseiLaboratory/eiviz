@@ -1,8 +1,9 @@
-//! Explicit wgpu 24 compositor. **No CPU fallback.**
+//! Explicit wgpu 25 compositor. **No CPU fallback.**
 //!
 //! A hardware adapter is required. Every layer is sampled and alpha-composited
-//! by a WGSL render pipeline. Readback is an explicit staging operation for the
-//! current CPU-frame sink contract; it never calls the CPU reference compositor.
+//! by a WGSL render pipeline. The desktop injects eframe's adapter/device/queue
+//! and can display [`WgpuTextureFrame`] directly. Readback remains an explicit,
+//! counted staging operation for sinks that still require [`VideoFrame`].
 
 use crate::{Layer, RenderPlan};
 use eiviz_core::{InputId, Transform2D};
@@ -10,7 +11,8 @@ use eiviz_media::{PixelFormat, VideoFrame};
 use eiviz_time::MediaTime;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -84,20 +86,93 @@ pub enum WgpuError {
     UnsupportedFormat { input: InputId, format: PixelFormat },
     #[error("wgpu map readback failed: {0}")]
     Map(String),
+    #[error("wgpu device was lost: {0}")]
+    DeviceLost(String),
+}
+
+/// A compositor result that remains on the shared GPU device.
+#[derive(Clone, Debug)]
+pub struct WgpuTextureFrame {
+    texture: Arc<wgpu::Texture>,
+    view: Arc<wgpu::TextureView>,
+    pub width: u32,
+    pub height: u32,
+    pub pts: MediaTime,
+    pub frame_id: u64,
+}
+
+impl WgpuTextureFrame {
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceLossReport {
+    pub reason: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WgpuDiagnostics {
+    pub readbacks: u64,
+    pub device_loss: Option<DeviceLossReport>,
+    /// Device recreation is owned by the caller that supplied the device.
+    pub automatic_recovery: bool,
+}
+
+#[derive(Default)]
+struct SharedDiagnostics {
+    readbacks: AtomicU64,
+    device_loss: Mutex<Option<DeviceLossReport>>,
+}
+
+/// Cloneable handles for lazily constructing the compositor on a GUI-owned
+/// adapter/device/queue. Keeping this context does not select the Wgpu backend.
+#[derive(Clone, Debug)]
+pub struct SharedWgpuContext {
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl SharedWgpuContext {
+    pub fn new(adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Self {
+        Self {
+            adapter,
+            device,
+            queue,
+        }
+    }
+
+    pub fn create_compositor(&self) -> Result<WgpuCompositor, WgpuError> {
+        WgpuCompositor::from_shared_device(&self.adapter, self.device.clone(), self.queue.clone())
+    }
 }
 
 pub struct WgpuCompositor {
-    _instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
+    // The headless profile owns an Instance. The injected desktop profile does not.
+    _instance: Option<wgpu::Instance>,
+    adapter_info: wgpu::AdapterInfo,
     device: wgpu::Device,
     queue: wgpu::Queue,
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    diagnostics: Arc<SharedDiagnostics>,
+    latest_output: Mutex<Option<WgpuTextureFrame>>,
 }
 
 impl WgpuCompositor {
-    pub fn new() -> Result<Self, WgpuError> {
+    /// Construct a separate hardware-only device for headless workers and HIL.
+    ///
+    /// GUI applications must use [`Self::from_shared_device`] so eframe and the
+    /// compositor do not create two logical devices for one physical GPU.
+    pub fn new_headless_hardware() -> Result<Self, WgpuError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -107,20 +182,54 @@ impl WgpuCompositor {
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .ok_or(WgpuError::NoHardwareAdapter)?;
+        .map_err(|_| WgpuError::NoHardwareAdapter)?;
         let info = adapter.get_info();
         if matches!(info.device_type, wgpu::DeviceType::Cpu) {
             return Err(WgpuError::NoHardwareAdapter);
         }
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("eiviz-wgpu-compositor"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))?;
+                trace: wgpu::Trace::Off,
+            }))?;
+        Self::build(Some(instance), info, device, queue)
+    }
+
+    /// Build compositor resources on an adapter/device/queue owned by the GUI.
+    ///
+    /// This is the required desktop path for `CreationContext::wgpu_render_state`.
+    pub fn from_shared_device(
+        adapter: &wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Self, WgpuError> {
+        let info = adapter.get_info();
+        if matches!(info.device_type, wgpu::DeviceType::Cpu) {
+            return Err(WgpuError::NoHardwareAdapter);
+        }
+        Self::build(None, info, device, queue)
+    }
+
+    fn build(
+        instance: Option<wgpu::Instance>,
+        adapter_info: wgpu::AdapterInfo,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Self, WgpuError> {
+        let diagnostics = Arc::new(SharedDiagnostics::default());
+        let device_loss = diagnostics.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            *device_loss
+                .device_loss
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(DeviceLossReport {
+                reason: format!("{reason:?}"),
+                message,
+            });
+        });
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("eiviz-layer-layout"),
@@ -196,27 +305,63 @@ impl WgpuCompositor {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let _ = device.poll(wgpu::Maintain::Wait);
+        let _ = device.poll(wgpu::PollType::Wait);
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
             return Err(WgpuError::Validation(error.to_string()));
         }
         Ok(Self {
             _instance: instance,
-            adapter,
+            adapter_info,
             device,
             queue,
             bind_group_layout,
             pipeline,
             sampler,
+            diagnostics,
+            latest_output: Mutex::new(None),
         })
     }
 
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
-        self.adapter.get_info()
+        self.adapter_info.clone()
     }
 
-    /// Composite all layers on the selected hardware GPU, then explicitly read
-    /// the result back for the current `VideoFrame` sink contract.
+    pub fn diagnostics(&self) -> WgpuDiagnostics {
+        WgpuDiagnostics {
+            readbacks: self.diagnostics.readbacks.load(Ordering::Relaxed),
+            device_loss: self
+                .diagnostics
+                .device_loss
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            automatic_recovery: false,
+        }
+    }
+
+    /// Most recently submitted compositor texture. Runtime code snapshots this
+    /// into stream-specific slots immediately after each composition.
+    pub fn latest_output(&self) -> Option<WgpuTextureFrame> {
+        self.latest_output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn ensure_device_available(&self) -> Result<(), WgpuError> {
+        if let Some(loss) = self.diagnostics().device_loss {
+            return Err(WgpuError::DeviceLost(format!(
+                "{}: {}",
+                loss.reason, loss.message
+            )));
+        }
+        Ok(())
+    }
+
+    /// Composite and explicitly read back for a sink that requires `VideoFrame`.
+    ///
+    /// GUI preview code should use [`Self::composite_texture`] and register its
+    /// texture view with egui instead of performing a GPU→CPU→GUI GPU round trip.
     pub fn composite(
         &self,
         plan: &RenderPlan,
@@ -224,6 +369,19 @@ impl WgpuCompositor {
         pts: MediaTime,
         frame_id: u64,
     ) -> Result<VideoFrame, WgpuError> {
+        let texture = self.composite_texture(plan, sources, pts, frame_id)?;
+        self.readback(&texture)
+    }
+
+    /// Composite all layers and retain the output on the shared GPU device.
+    pub fn composite_texture(
+        &self,
+        plan: &RenderPlan,
+        sources: &HashMap<InputId, VideoFrame>,
+        pts: MediaTime,
+        frame_id: u64,
+    ) -> Result<WgpuTextureFrame, WgpuError> {
+        self.ensure_device_available()?;
         validate_plan(plan)?;
         let max_dimension = self.device.limits().max_texture_dimension_2d;
         if plan.width > max_dimension || plan.height > max_dimension {
@@ -236,7 +394,7 @@ impl WgpuCompositor {
         let layers = match self.prepare_layers(plan, sources) {
             Ok(layers) => layers,
             Err(error) => {
-                let _ = self.device.poll(wgpu::Maintain::Wait);
+                let _ = self.device.poll(wgpu::PollType::Wait);
                 let _ = pollster::block_on(self.device.pop_error_scope());
                 return Err(error);
             }
@@ -256,17 +414,6 @@ impl WgpuCompositor {
             view_formats: &[],
         });
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
-        let unpadded_bytes_per_row = plan.width * 4;
-        let padded_bytes_per_row = unpadded_bytes_per_row
-            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback_size = u64::from(padded_bytes_per_row) * u64::from(plan.height);
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("eiviz-compositor-readback"),
-            size: readback_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -294,9 +441,49 @@ impl WgpuCompositor {
                 pass.draw(0..6, 0..1);
             }
         }
+        self.queue.submit(Some(encoder.finish()));
+        let _ = self.device.poll(wgpu::PollType::Wait);
+        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+            return Err(WgpuError::Validation(error.to_string()));
+        }
+        let frame = WgpuTextureFrame {
+            texture: Arc::new(output),
+            view: Arc::new(output_view),
+            width: plan.width,
+            height: plan.height,
+            pts,
+            frame_id,
+        };
+        *self
+            .latest_output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(frame.clone());
+        Ok(frame)
+    }
+
+    /// Counted GPU staging readback for CPU-frame sinks.
+    pub fn readback(&self, frame: &WgpuTextureFrame) -> Result<VideoFrame, WgpuError> {
+        self.ensure_device_available()?;
+        let unpadded_bytes_per_row = frame.width * 4;
+        let padded_bytes_per_row = unpadded_bytes_per_row
+            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let readback_size = u64::from(padded_bytes_per_row) * u64::from(frame.height);
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-compositor-readback"),
+            size: readback_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz-compositor-readback-encoder"),
+            });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &output,
+                texture: frame.texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -306,22 +493,23 @@ impl WgpuCompositor {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(plan.height),
+                    rows_per_image: Some(frame.height),
                 },
             },
             wgpu::Extent3d {
-                width: plan.width,
-                height: plan.height,
+                width: frame.width,
+                height: frame.height,
                 depth_or_array_layers: 1,
             },
         );
+        self.diagnostics.readbacks.fetch_add(1, Ordering::Relaxed);
         self.queue.submit(Some(encoder.finish()));
         let slice = readback.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
-        let _ = self.device.poll(wgpu::Maintain::Wait);
+        let _ = self.device.poll(wgpu::PollType::Wait);
         let map_result = receiver
             .recv()
             .map_err(|error| WgpuError::Map(error.to_string()))?
@@ -332,19 +520,19 @@ impl WgpuCompositor {
             return Err(WgpuError::Validation(error.to_string()));
         }
         let mapped = slice.get_mapped_range();
-        let mut rgba = Vec::with_capacity(unpadded_bytes_per_row as usize * plan.height as usize);
+        let mut rgba = Vec::with_capacity(unpadded_bytes_per_row as usize * frame.height as usize);
         for row in mapped.chunks_exact(padded_bytes_per_row as usize) {
             rgba.extend_from_slice(&row[..unpadded_bytes_per_row as usize]);
         }
         drop(mapped);
         readback.unmap();
         Ok(VideoFrame {
-            id: frame_id,
+            id: frame.frame_id,
             source: None,
-            pts,
+            pts: frame.pts,
             capture_domain: eiviz_time::ClockDomain::Virtual,
-            width: plan.width,
-            height: plan.height,
+            width: frame.width,
+            height: frame.height,
             format: PixelFormat::Rgba8,
             data: Arc::from(rgba),
             discontinuity: false,
@@ -584,10 +772,39 @@ mod tests {
 
     #[test]
     fn hardware_adapter_or_explicit_error() {
-        match WgpuCompositor::new() {
+        match WgpuCompositor::new_headless_hardware() {
             Ok(_) | Err(WgpuError::NoHardwareAdapter) | Err(WgpuError::Device(_)) => {}
             Err(other) => panic!("unexpected {other}"),
         }
+    }
+
+    #[test]
+    fn injected_device_path_builds_without_requesting_another_device() {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
+            label: Some("eiviz-injected-device-test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        });
+        let compositor = WgpuCompositor::build(
+            None,
+            wgpu::AdapterInfo {
+                name: "injected-noop".into(),
+                vendor: 0,
+                device: 0,
+                device_type: wgpu::DeviceType::Other,
+                driver: "noop".into(),
+                driver_info: String::new(),
+                backend: wgpu::Backend::Noop,
+            },
+            device,
+            queue,
+        )
+        .unwrap();
+        assert_eq!(compositor.adapter_info().name, "injected-noop");
+        assert_eq!(compositor.diagnostics().readbacks, 0);
+        assert!(!compositor.diagnostics().automatic_recovery);
     }
 
     #[test]

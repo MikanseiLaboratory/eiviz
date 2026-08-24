@@ -10,6 +10,7 @@ description = "Composition root for sequencer, runtime, and persistence"
 eiviz-command.workspace = true
 eiviz-codec-software.workspace = true
 eiviz-core.workspace = true
+eiviz-gpu = { workspace = true, optional = true }
 eiviz-io-file.workspace = true
 eiviz-media.workspace = true
 eiviz-project.workspace = true
@@ -24,7 +25,7 @@ tracing.workspace = true
 
 [features]
 default = []
-wgpu-backend = ["eiviz-runtime/wgpu-backend"]
+wgpu-backend = ["eiviz-runtime/wgpu-backend", "dep:eiviz-gpu"]
 
 [dev-dependencies]
 image.workspace = true

@@ -50,4 +50,5 @@ OMT の具体的な未実施シナリオは [hil/omt.md](hil/omt.md) を参照�
 `OMT-HIL-01..10` が未実施のため、OMT および Phase 5 は未完了です。
 
 GPU の未実施シナリオは [hil/gpu.md](hil/gpu.md) を参照してください。
-`GPU-HIL-01..07` と ADR-0011 の単一Device統合が未完了のため、Phase 2 は未完了です。
+ADR-0011 の desktop 単一Device/Queue統合は実装済みです。ただし
+`GPU-HIL-01..07`（特に device recreation と soak）が未実施のため、Phase 2 は未完了です。

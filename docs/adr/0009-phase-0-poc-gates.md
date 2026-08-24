@@ -14,7 +14,7 @@
 | Smelter 本体 | 非同梱。ライセンスゲート未通過 |
 | gpu-video 0.4.0 | optional adapter。既定実行経路にしない |
 | compositor | 明示 `CpuReference` と `Wgpu`。CI は CpuReference profile（fallback ではない） |
-| GUI | egui 0.32 / wgpu 24 |
+| GUI | egui 0.32 / exact wgpu 25.0.2; shared desktop Device/Queue (ADR-0011) |
 | file media | image + Shiguredo MP4 + explicit dynamic OpenH264 2.6 profile |
 | OMT | pure-Rust openmediatransport-rs/vmx-rs。実機interopはHIL |
 | NDI/DeckLink/Audio | 実adapterをfeature隔離。SDK/device HIL pending |

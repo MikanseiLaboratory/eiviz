@@ -5,6 +5,8 @@ use eiviz_codec_software::{
 use eiviz_command::{
     Command, CommandAck, CommandEnvelope, Sequencer, SequencerDiagnostics, state_hash,
 };
+#[cfg(feature = "wgpu-backend")]
+use eiviz_core::CompositorBackend;
 use eiviz_core::{
     AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
     MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
@@ -90,6 +92,9 @@ pub struct EngineMetrics {
     pub audio_devices: Vec<EngineAudioDiagnostics>,
     pub audio_resamplers: Vec<EngineAsrcDiagnostics>,
     pub distribution_outputs: Vec<DistributionOutputDiagnostics>,
+    pub gpu_readbacks: u64,
+    pub gpu_device_loss: Option<String>,
+    pub gpu_automatic_recovery: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -153,6 +158,10 @@ struct Inner {
     active_snapshot: Arc<RuntimeSnapshot>,
     sequencer: Sequencer,
     runtime: Runtime,
+    #[cfg(feature = "wgpu-backend")]
+    wgpu_compositor: Option<Arc<eiviz_gpu::WgpuCompositor>>,
+    #[cfg(feature = "wgpu-backend")]
+    wgpu_context: Option<eiviz_gpu::SharedWgpuContext>,
     client: ClientId,
     budget: AdmissionBudget,
     flight: VecDeque<FlightEvent>,
@@ -198,9 +207,71 @@ impl Engine {
         pending_capacity: usize,
         idempotency_capacity: usize,
     ) -> Result<Self> {
+        Self::from_project_with_runtime(
+            project,
+            pending_capacity,
+            idempotency_capacity,
+            #[cfg(feature = "wgpu-backend")]
+            None,
+            #[cfg(feature = "wgpu-backend")]
+            None,
+        )
+    }
+
+    /// Construct a desktop engine that reuses eframe's compositor device.
+    #[cfg(feature = "wgpu-backend")]
+    pub fn from_project_with_wgpu(
+        project: Project,
+        compositor: Arc<eiviz_gpu::WgpuCompositor>,
+    ) -> Result<Self> {
+        Self::from_project_with_runtime(project, 4096, 16_384, Some(compositor), None)
+    }
+
+    /// Keep eframe's shared context and construct a compositor only if the
+    /// project explicitly selects Wgpu.
+    #[cfg(feature = "wgpu-backend")]
+    pub fn from_project_with_wgpu_context(
+        project: Project,
+        context: eiviz_gpu::SharedWgpuContext,
+    ) -> Result<Self> {
+        Self::from_project_with_runtime(project, 4096, 16_384, None, Some(context))
+    }
+
+    fn from_project_with_runtime(
+        project: Project,
+        pending_capacity: usize,
+        idempotency_capacity: usize,
+        #[cfg(feature = "wgpu-backend")] shared_wgpu: Option<Arc<eiviz_gpu::WgpuCompositor>>,
+        #[cfg(feature = "wgpu-backend")] wgpu_context: Option<eiviz_gpu::SharedWgpuContext>,
+    ) -> Result<Self> {
         validate_enabled_distribution_outputs(&project)?;
         let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
+        #[cfg(feature = "wgpu-backend")]
+        let mut runtime =
+            match project.compositor {
+                CompositorBackend::CpuReference => {
+                    Runtime::with_backend(project.audio.sample_rate, project.compositor)?
+                }
+                CompositorBackend::Wgpu => {
+                    let compositor =
+                        if let Some(compositor) = &shared_wgpu {
+                            compositor.clone()
+                        } else if let Some(context) = &wgpu_context {
+                            Arc::new(context.create_compositor().map_err(|error| {
+                                eiviz_runtime::RuntimeError::Gpu(error.to_string())
+                            })?)
+                        } else {
+                            Arc::new(eiviz_gpu::WgpuCompositor::new_headless_hardware().map_err(
+                                |error| eiviz_runtime::RuntimeError::Gpu(error.to_string()),
+                            )?)
+                        };
+                    Runtime::with_wgpu_compositor(project.audio.sample_rate, compositor)?
+                }
+            };
+        #[cfg(not(feature = "wgpu-backend"))]
         let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
+        #[cfg(feature = "wgpu-backend")]
+        let wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
         runtime.activate_snapshot(active_snapshot.clone())?;
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -208,6 +279,10 @@ impl Engine {
                 active_snapshot,
                 sequencer: Sequencer::with_capacities(pending_capacity, idempotency_capacity),
                 runtime,
+                #[cfg(feature = "wgpu-backend")]
+                wgpu_compositor,
+                #[cfg(feature = "wgpu-backend")]
+                wgpu_context,
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
                 flight: VecDeque::with_capacity(FLIGHT_CAP),
@@ -395,6 +470,8 @@ impl Engine {
 
     pub fn metrics(&self) -> EngineMetrics {
         let g = self.inner.lock();
+        #[cfg(feature = "wgpu-backend")]
+        let gpu = g.runtime.wgpu_diagnostics();
         let mut audio_devices = g.runtime.audio_source_diagnostics();
         audio_devices.extend(g.audio_sinks.values().map(|sink| sink.diagnostics()));
         let mut audio_resamplers = g
@@ -436,6 +513,21 @@ impl Engine {
                 .collect(),
             audio_resamplers,
             distribution_outputs: distribution_diagnostics(&g),
+            #[cfg(feature = "wgpu-backend")]
+            gpu_readbacks: gpu.as_ref().map_or(0, |value| value.readbacks),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_readbacks: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_device_loss: gpu
+                .as_ref()
+                .and_then(|value| value.device_loss.as_ref())
+                .map(|loss| format!("{}: {}", loss.reason, loss.message)),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_device_loss: None,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_automatic_recovery: gpu.as_ref().is_some_and(|value| value.automatic_recovery),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_automatic_recovery: false,
         }
     }
 
@@ -812,6 +904,34 @@ impl Engine {
     fn replace_project(&self, project: Project, asset_root: Option<PathBuf>) -> Result<()> {
         validate_enabled_distribution_outputs(&project)?;
         let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
+        #[cfg(feature = "wgpu-backend")]
+        let (shared_wgpu, wgpu_context) = {
+            let inner = self.inner.lock();
+            (inner.wgpu_compositor.clone(), inner.wgpu_context.clone())
+        };
+        #[cfg(feature = "wgpu-backend")]
+        let mut runtime =
+            match project.compositor {
+                CompositorBackend::CpuReference => {
+                    Runtime::with_backend(project.audio.sample_rate, project.compositor)?
+                }
+                CompositorBackend::Wgpu => {
+                    let compositor =
+                        if let Some(compositor) = &shared_wgpu {
+                            compositor.clone()
+                        } else if let Some(context) = &wgpu_context {
+                            Arc::new(context.create_compositor().map_err(|error| {
+                                eiviz_runtime::RuntimeError::Gpu(error.to_string())
+                            })?)
+                        } else {
+                            Arc::new(eiviz_gpu::WgpuCompositor::new_headless_hardware().map_err(
+                                |error| eiviz_runtime::RuntimeError::Gpu(error.to_string()),
+                            )?)
+                        };
+                    Runtime::with_wgpu_compositor(project.audio.sample_rate, compositor)?
+                }
+            };
+        #[cfg(not(feature = "wgpu-backend"))]
         let mut runtime = Runtime::with_backend(project.audio.sample_rate, project.compositor)?;
         if let Some(root) = asset_root {
             runtime.set_asset_root(root);
@@ -820,6 +940,11 @@ impl Engine {
         let mut inner = self.inner.lock();
         inner.project = project;
         inner.active_snapshot = active_snapshot;
+        #[cfg(feature = "wgpu-backend")]
+        {
+            inner.wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
+            inner.wgpu_context = wgpu_context;
+        }
         inner.runtime = runtime;
         let command_limits = inner.sequencer.diagnostics();
         inner.sequencer = Sequencer::with_capacities(
@@ -844,6 +969,21 @@ impl Engine {
 
     pub fn last_multiview(&self, view: MultiviewId) -> Option<VideoFrame> {
         self.inner.lock().runtime.last_multiview_frame(view)
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_program_texture(&self, unit: MixingUnitId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.inner.lock().runtime.last_program_texture(unit)
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_preview_texture(&self, unit: MixingUnitId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.inner.lock().runtime.last_preview_texture(unit)
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_multiview_texture(&self, view: MultiviewId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.inner.lock().runtime.last_multiview_texture(view)
     }
 
     pub fn mark_output_failed(&self, name: &str, reason: impl Into<String>) {

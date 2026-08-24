@@ -12,6 +12,7 @@ eiviz-command.workspace = true
 eiviz-control.workspace = true
 eiviz-core.workspace = true
 eiviz-engine.workspace = true
+eiviz-gpu = { workspace = true, optional = true }
 eiviz-media.workspace = true
 eiviz-io-audio.workspace = true
 eiviz-io-decklink.workspace = true
@@ -27,7 +28,7 @@ tracing-subscriber.workspace = true
 default = []
 decklink = ["eiviz-io-decklink/decklink-sdk"]
 ndi = ["eiviz-io-ndi/ndi"]
-wgpu-backend = ["eiviz-engine/wgpu-backend"]
+wgpu-backend = ["eiviz-engine/wgpu-backend", "dep:eiviz-gpu"]
 audio-cpal = ["eiviz-io-audio/cpal"]
 audio-pipewire = ["audio-cpal", "eiviz-io-audio/pipewire"]
 # Separate distribution profile: requires an operator-installed Steinberg ASIO SDK.

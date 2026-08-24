@@ -16,6 +16,11 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "wgpu-backend")]
+type ConfiguredWgpu = Option<Arc<eiviz_gpu::WgpuCompositor>>;
+#[cfg(not(feature = "wgpu-backend"))]
+type ConfiguredWgpu = ();
+
 /// Configured missing-media slate. Not a fake camera or decoded still.
 pub const SLATE_RGBA: [u8; 4] = [32, 32, 48, 255];
 
@@ -153,7 +158,13 @@ pub struct Runtime {
     active_snapshot: Option<Arc<RuntimeSnapshot>>,
     transitions: HashMap<MixingUnitId, TransitionRuntime>,
     #[cfg(feature = "wgpu-backend")]
-    wgpu: Option<eiviz_gpu::WgpuCompositor>,
+    wgpu: ConfiguredWgpu,
+    #[cfg(feature = "wgpu-backend")]
+    program_textures: HashMap<MixingUnitId, eiviz_gpu::WgpuTextureFrame>,
+    #[cfg(feature = "wgpu-backend")]
+    preview_textures: HashMap<MixingUnitId, eiviz_gpu::WgpuTextureFrame>,
+    #[cfg(feature = "wgpu-backend")]
+    multiview_textures: HashMap<MultiviewId, eiviz_gpu::WgpuTextureFrame>,
 }
 
 #[derive(Clone, Debug)]
@@ -174,14 +185,34 @@ impl Runtime {
         #[cfg(feature = "wgpu-backend")]
         let wgpu = match backend {
             CompositorBackend::CpuReference => None,
-            CompositorBackend::Wgpu => Some(
-                eiviz_gpu::WgpuCompositor::new().map_err(|e| RuntimeError::Gpu(e.to_string()))?,
-            ),
+            CompositorBackend::Wgpu => Some(Arc::new(
+                eiviz_gpu::WgpuCompositor::new_headless_hardware()
+                    .map_err(|e| RuntimeError::Gpu(e.to_string()))?,
+            )),
         };
         #[cfg(not(feature = "wgpu-backend"))]
-        if matches!(backend, CompositorBackend::Wgpu) {
-            return Err(RuntimeError::WgpuFeatureDisabled);
-        }
+        let wgpu = {
+            if matches!(backend, CompositorBackend::Wgpu) {
+                return Err(RuntimeError::WgpuFeatureDisabled);
+            }
+        };
+        Self::with_configured_wgpu(sample_rate, backend, wgpu)
+    }
+
+    /// Construct the desktop runtime around eframe's already-created device.
+    #[cfg(feature = "wgpu-backend")]
+    pub fn with_wgpu_compositor(
+        sample_rate: u32,
+        compositor: Arc<eiviz_gpu::WgpuCompositor>,
+    ) -> Result<Self> {
+        Self::with_configured_wgpu(sample_rate, CompositorBackend::Wgpu, Some(compositor))
+    }
+
+    fn with_configured_wgpu(
+        sample_rate: u32,
+        backend: CompositorBackend,
+        wgpu: ConfiguredWgpu,
+    ) -> Result<Self> {
         Ok(Self {
             clock: VirtualClock::new(),
             frame: 0,
@@ -207,6 +238,12 @@ impl Runtime {
             transitions: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
             wgpu,
+            #[cfg(feature = "wgpu-backend")]
+            program_textures: HashMap::new(),
+            #[cfg(feature = "wgpu-backend")]
+            preview_textures: HashMap::new(),
+            #[cfg(feature = "wgpu-backend")]
+            multiview_textures: HashMap::new(),
         })
     }
 
@@ -308,6 +345,52 @@ impl Runtime {
 
     pub fn last_multiview_frame(&self, view: MultiviewId) -> Option<VideoFrame> {
         self.last_multiview.get(&view).cloned()
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_program_texture(&self, unit: MixingUnitId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.program_textures.get(&unit).cloned()
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_preview_texture(&self, unit: MixingUnitId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.preview_textures.get(&unit).cloned()
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn last_multiview_texture(&self, view: MultiviewId) -> Option<eiviz_gpu::WgpuTextureFrame> {
+        self.multiview_textures.get(&view).cloned()
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn wgpu_diagnostics(&self) -> Option<eiviz_gpu::WgpuDiagnostics> {
+        self.wgpu.as_ref().map(|gpu| gpu.diagnostics())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    pub fn wgpu_compositor(&self) -> Option<Arc<eiviz_gpu::WgpuCompositor>> {
+        self.wgpu.clone()
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn capture_program_texture(&mut self, unit: MixingUnitId) {
+        if let Some(texture) = self.wgpu.as_ref().and_then(|gpu| gpu.latest_output()) {
+            self.program_textures.insert(unit, texture);
+        }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn capture_preview_texture(&mut self, unit: MixingUnitId) {
+        if let Some(texture) = self.wgpu.as_ref().and_then(|gpu| gpu.latest_output()) {
+            self.preview_textures.insert(unit, texture);
+        }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn capture_multiview_texture(&mut self, view: MultiviewId) {
+        if let Some(texture) = self.wgpu.as_ref().and_then(|gpu| gpu.latest_output()) {
+            self.multiview_textures.insert(view, texture);
+        }
     }
 
     pub fn mark_output_failed(&self, name: &str, reason: impl Into<String>) {
@@ -427,12 +510,16 @@ impl Runtime {
                     live.remaining_frames -= 1;
                 }
             }
+            #[cfg(feature = "wgpu-backend")]
+            self.capture_program_texture(unit.id);
             let pv_plan = snapshot
                 .render
                 .previews
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
             let pv = self.composite_plan(pv_plan, &sources, pts)?;
+            #[cfg(feature = "wgpu-backend")]
+            self.capture_preview_texture(unit.id);
             self.program_slot(unit.id)
                 .push(pg.clone())
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
@@ -575,6 +662,8 @@ impl Runtime {
                 layers,
             };
             let frame = self.composite_plan(&plan, &sources, pts)?;
+            #[cfg(feature = "wgpu-backend")]
+            self.capture_multiview_texture(view.id);
             self.multiview_slots
                 .entry(view.id)
                 .or_insert_with(|| Arc::new(BoundedSlot::new("multiview", QueuePolicy::LatestWins)))

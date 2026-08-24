@@ -282,12 +282,13 @@ mod tests {
                 opacity: 1.0,
             }],
         };
-        if let Ok(gpu) = WgpuCompositor::new() {
+        if let Ok(gpu) = WgpuCompositor::new_headless_hardware() {
             let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [255, 0, 0, 255]);
             let frame = gpu
                 .composite(&plan, &HashMap::from([(input, source)]), MediaTime::ZERO, 1)
                 .unwrap();
             assert_eq!(frame.pixel(8, 8), [255, 0, 0, 255]);
+            assert_eq!(gpu.diagnostics().readbacks, 1);
         }
     }
 }
@@ -296,4 +297,7 @@ mod tests {
 mod wgpu_backend;
 
 #[cfg(feature = "wgpu-backend")]
-pub use wgpu_backend::{WgpuCompositor, WgpuError};
+pub use wgpu_backend::{
+    DeviceLossReport, SharedWgpuContext, WgpuCompositor, WgpuDiagnostics, WgpuError,
+    WgpuTextureFrame,
+};

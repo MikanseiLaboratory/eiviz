@@ -44,8 +44,53 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "eiviz",
         native,
-        Box::new(|_cc| Ok(Box::new(DesktopApp::new()?))),
+        Box::new(|cc| Ok(Box::new(DesktopApp::new(cc)?))),
     )
+}
+
+#[cfg(feature = "wgpu-backend")]
+struct WgpuPreviewBridge {
+    render_state: eframe::egui_wgpu::RenderState,
+    textures: std::collections::HashMap<String, egui::TextureId>,
+}
+
+#[cfg(feature = "wgpu-backend")]
+impl WgpuPreviewBridge {
+    fn new(render_state: eframe::egui_wgpu::RenderState) -> Self {
+        Self {
+            render_state,
+            textures: std::collections::HashMap::new(),
+        }
+    }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        frame: eiviz_gpu::WgpuTextureFrame,
+    ) -> egui::Response {
+        let texture_id = if let Some(texture_id) = self.textures.get(key).copied() {
+            self.render_state
+                .renderer
+                .write()
+                .update_egui_texture_from_wgpu_texture(
+                    &self.render_state.device,
+                    frame.view(),
+                    eframe::wgpu::FilterMode::Linear,
+                    texture_id,
+                );
+            texture_id
+        } else {
+            let texture_id = self.render_state.renderer.write().register_native_texture(
+                &self.render_state.device,
+                frame.view(),
+                eframe::wgpu::FilterMode::Linear,
+            );
+            self.textures.insert(key.to_owned(), texture_id);
+            texture_id
+        };
+        ui.image((texture_id, egui::vec2(480.0, 270.0)))
+    }
 }
 
 struct DesktopApp {
@@ -120,10 +165,16 @@ struct DesktopApp {
     #[cfg(feature = "midi")]
     midi_handle: Option<eiviz_control::MidiHandle>,
     drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
+    #[cfg(feature = "wgpu-backend")]
+    wgpu_preview: WgpuPreviewBridge,
 }
 
 impl DesktopApp {
-    fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        #[cfg(not(feature = "wgpu-backend"))]
+        let _ = cc;
         let mut project = Project::new("Untitled");
         project.compositor = match std::env::var("EIVIZ_COMPOSITOR") {
             Ok(value) if value == "wgpu" => CompositorBackend::Wgpu,
@@ -144,6 +195,19 @@ impl DesktopApp {
                 .into());
             }
         };
+        #[cfg(feature = "wgpu-backend")]
+        let render_state = cc.wgpu_render_state.clone().ok_or_else(|| {
+            std::io::Error::other("wgpu-backend requires eframe CreationContext::wgpu_render_state")
+        })?;
+        #[cfg(feature = "wgpu-backend")]
+        let wgpu_context = eiviz_gpu::SharedWgpuContext::new(
+            render_state.adapter.clone(),
+            render_state.device.clone(),
+            render_state.queue.clone(),
+        );
+        #[cfg(feature = "wgpu-backend")]
+        let engine = Engine::from_project_with_wgpu_context(project, wgpu_context)?.shared();
+        #[cfg(not(feature = "wgpu-backend"))]
         let engine = Engine::from_project(project)?.shared();
         bootstrap(&engine);
         let control_stop = Arc::new(AtomicBool::new(false));
@@ -247,6 +311,8 @@ impl DesktopApp {
             #[cfg(feature = "midi")]
             midi_handle: None,
             drag_item: None,
+            #[cfg(feature = "wgpu-backend")]
+            wgpu_preview: WgpuPreviewBridge::new(render_state),
         };
         if !app.omt_address.is_empty() {
             app.connect_omt();
@@ -1028,6 +1094,43 @@ impl DesktopApp {
             Err(error) => self.status = format!("{transport_name} mapping: {error}"),
         }
     }
+
+    fn show_program_frame(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_program_texture(unit) {
+            return Some(self.wgpu_preview.show(ui, "pgm", texture));
+        }
+        show_frame(ui, self.engine.last_program(unit), "pgm")
+    }
+
+    fn show_preview_frame(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_preview_texture(unit) {
+            return Some(self.wgpu_preview.show(ui, "prv", texture));
+        }
+        show_frame(ui, self.engine.last_preview(unit), "prv")
+    }
+
+    fn show_multiview_frame(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: MultiviewId,
+        texture_id: &str,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_multiview_texture(view) {
+            return Some(self.wgpu_preview.show(ui, texture_id, texture));
+        }
+        show_frame(ui, self.engine.last_multiview(view), texture_id)
+    }
 }
 
 fn bootstrap(engine: &Engine) {
@@ -1250,6 +1353,20 @@ impl eframe::App for DesktopApp {
             ui.heading("Capabilities");
             ui.label(format!("compositor {:?}", project.compositor));
             ui.label(self.engine.compositor_detail());
+            let gpu_metrics = self.engine.metrics();
+            ui.label(format!(
+                "GPU staging readbacks: {} (VideoFrame sinks only)",
+                gpu_metrics.gpu_readbacks
+            ));
+            if let Some(loss) = &gpu_metrics.gpu_device_loss {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    format!(
+                        "GPU device lost: {loss}; automatic recovery={}",
+                        gpu_metrics.gpu_automatic_recovery
+                    ),
+                );
+            }
             ui.label(format!("missing-media {:?}", project.missing_media));
             ui.label(match self.control_ports {
                 Some(ports) => format!(
@@ -1985,11 +2102,11 @@ impl eframe::App for DesktopApp {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label("Program");
-                    show_frame(ui, self.engine.last_program(unit_id), "pgm");
+                    self.show_program_frame(ui, unit_id);
                 });
                 ui.vertical(|ui| {
                     ui.label("Preview");
-                    let preview_resp = show_frame(ui, self.engine.last_preview(unit_id), "prv");
+                    let preview_resp = self.show_preview_frame(ui, unit_id);
                     if let (Some(resp), Some(_u), Some(scene_id)) =
                         (preview_resp, unit.as_ref(), u_preview_scene(&unit))
                     {
@@ -2005,7 +2122,7 @@ impl eframe::App for DesktopApp {
                 ui.separator();
                 ui.heading(format!("Multiview: {}", multiview.name));
                 let texture_id = format!("multiview-{}", multiview.id);
-                show_frame(ui, self.engine.last_multiview(multiview.id), &texture_id);
+                self.show_multiview_frame(ui, multiview.id, &texture_id);
             }
         });
         ctx.request_repaint();

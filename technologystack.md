@@ -5,8 +5,8 @@
 | コンポーネント | 版 | 備考 |
 |---|---|---|
 | Rust | 1.97.0 MSRV / CI 1.98 + MSRV check | edition 2024 |
-| wgpu（eiviz-gpu直接依存） | 24.0.5 | 合成は `Project.compositor` で明示選択（ADR-0010） |
-| egui / eframe | 0.32.3 | `egui-wgpu`はwgpu 25.0.2を推移依存。現在compositorとDevice共有不可（ADR-0011） |
+| wgpu（eiviz-gpu直接依存） | =25.0.2 | eframe render_state と同一 Device/Queue。headless/HIL のみ別 device（ADR-0011） |
+| egui / eframe | 0.32.3 | `egui-wgpu`のnative texture registryでcompositor outputを直接表示 |
 | serde / serde_json | 1.0.219 / 1.0.143 | 永続化・制御面 |
 | uuid | 1.18.1 | v7 IDs |
 | image | 0.25.6 | PNG/JPEG 入力 |
