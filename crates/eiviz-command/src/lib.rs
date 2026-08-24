@@ -1,7 +1,7 @@
 use eiviz_core::{
-    AssetRef, AudioRoute, DeviceBinding, DomainError, Input, MixingUnit, Multiview, Output,
-    OverlaySlot, Playback, Project, RouteMode, Scene, SceneItem, Transform2D, TransitionStyle,
-    VideoFormat,
+    AssetRef, AudioFollowPolicy, AudioRoute, DeviceBinding, DomainError, Input, MixingUnit,
+    Multiview, Output, OverlaySlot, Playback, Project, RouteMode, Scene, SceneItem, Transform2D,
+    TransitionStyle, VideoFormat,
 };
 use eiviz_core::{
     AudioBusId, ClientId, CommandId, DeviceBindingId, InputId, MixingUnitId, OutputId, OverlayId,
@@ -133,6 +133,10 @@ pub enum Command {
         unit: MixingUnitId,
         overlay: OverlayId,
         scene: Option<SceneId>,
+    },
+    SetAudioFollow {
+        unit: MixingUnitId,
+        policy: AudioFollowPolicy,
     },
     AddOutput {
         output: Output,
@@ -741,9 +745,12 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             enabled,
         } => {
             let u = project.mixing_unit_mut(*unit)?;
-            if let Some(slot) = u.overlays.iter_mut().find(|o| o.id == *overlay) {
-                slot.enabled = *enabled;
-            }
+            let slot = u
+                .overlays
+                .iter_mut()
+                .find(|o| o.id == *overlay)
+                .ok_or_else(|| DomainError::UnknownId(overlay.to_string()))?;
+            slot.enabled = *enabled;
         }
         Command::SetOverlayScene {
             unit,
@@ -751,9 +758,15 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             scene,
         } => {
             let u = project.mixing_unit_mut(*unit)?;
-            if let Some(slot) = u.overlays.iter_mut().find(|o| o.id == *overlay) {
-                slot.scene = *scene;
-            }
+            let slot = u
+                .overlays
+                .iter_mut()
+                .find(|o| o.id == *overlay)
+                .ok_or_else(|| DomainError::UnknownId(overlay.to_string()))?;
+            slot.scene = *scene;
+        }
+        Command::SetAudioFollow { unit, policy } => {
+            project.mixing_unit_mut(*unit)?.audio_follow = *policy;
         }
         Command::AddOutput { output } => {
             let owner = output.owner;
@@ -1090,5 +1103,170 @@ mod tests {
         assert!(sequencer.apply(&mut project, stale).is_err());
         assert_eq!(project, committed);
         assert_eq!(sequencer.revision(), 1);
+    }
+
+    #[test]
+    fn unknown_overlay_commands_are_rejected() {
+        let mut project = Project::new("overlay");
+        let unit = *project.mixing_units.keys().next().unwrap();
+        let mut sequencer = Sequencer::default();
+        let missing = OverlayId::new();
+        let err = sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    ClientId::new(),
+                    Command::SetOverlayEnabled {
+                        unit,
+                        overlay: missing,
+                        enabled: true,
+                    },
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::Domain(DomainError::UnknownId(_))
+        ));
+        let err = sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    ClientId::new(),
+                    Command::SetOverlayScene {
+                        unit,
+                        overlay: missing,
+                        scene: None,
+                    },
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::Domain(DomainError::UnknownId(_))
+        ));
+    }
+
+    #[test]
+    fn mix_take_and_audio_follow_apply_through_commands() {
+        let mut project = Project::new("mix");
+        let unit = *project.mixing_units.keys().next().unwrap();
+        let input = Input {
+            id: InputId::new(),
+            name: "bars".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::ColorBars,
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "cam".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        let overlay = OverlaySlot {
+            id: OverlayId::new(),
+            name: "dsk".into(),
+            scene: Some(scene.id),
+            enabled: false,
+            z_order: 0,
+        };
+        let client = ClientId::new();
+        let mut sequencer = Sequencer::default();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(client, Command::AddInput { input }),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::AddScene {
+                        scene: scene.clone(),
+                    },
+                ),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::AddOverlay {
+                        unit,
+                        overlay: overlay.clone(),
+                    },
+                ),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetPreview {
+                        unit,
+                        scene: Some(scene.id),
+                    },
+                ),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::Take {
+                        unit,
+                        swap: false,
+                        style: TransitionStyle::Mix,
+                        duration_frames: 12,
+                    },
+                ),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetOverlayEnabled {
+                        unit,
+                        overlay: overlay.id,
+                        enabled: true,
+                    },
+                ),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetAudioFollow {
+                        unit,
+                        policy: AudioFollowPolicy::ProgramAndPreview,
+                    },
+                ),
+            )
+            .unwrap();
+        let mixing = &project.mixing_units[&unit];
+        assert_eq!(mixing.program.scene, Some(scene.id));
+        assert_eq!(mixing.transition.style, TransitionStyle::Mix);
+        assert_eq!(mixing.transition.duration_frames, 12);
+        assert_eq!(mixing.transition.remaining_frames, 12);
+        assert!(mixing.overlays[0].enabled);
+        assert_eq!(
+            mixing.audio_follow,
+            AudioFollowPolicy::ProgramAndPreview
+        );
     }
 }

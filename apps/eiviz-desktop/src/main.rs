@@ -1,15 +1,17 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AudioRoute, AuxiliaryLoadSheddingPolicy,
-    CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId, InputSource,
-    Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind,
-    OutputVideoSource, Project, ReconnectProfile, RouteMode, Scene, SceneId, SceneItem,
-    SceneItemId, ToneMapPolicy, Transform2D, TransitionStyle, TransportProfile, VideoFormat,
+    AacEncoderProfile, AsrcProfile, AudioFollowPolicy, AudioResamplingPolicy, AudioRoute,
+    AuxiliaryLoadSheddingPolicy, CompositorBackend, DistributionProfile, H264EncoderProfile, Input,
+    InputId, InputSource, MixTap, MixingUnit, MixingUnitId, Multiview, MultiviewId, MultiviewSource,
+    MultiviewTile, Output, OutputId, OutputKind, OutputVideoSource, OverlayId, OverlaySlot, Project,
+    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, ToneMapPolicy, Transform2D,
+    TransitionStyle, TransportProfile, VideoFormat,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
 use eiviz_operations::{CapabilityEntry, EvidenceState};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -37,7 +39,8 @@ fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size([1600.0, 900.0])
+            .with_min_inner_size([1100.0, 700.0])
             .with_title("eiviz"),
         ..Default::default()
     };
@@ -63,13 +66,12 @@ impl WgpuPreviewBridge {
         }
     }
 
-    fn show(
+    fn native_texture_id(
         &mut self,
-        ui: &mut egui::Ui,
         key: &str,
         frame: eiviz_gpu::WgpuTextureFrame,
-    ) -> egui::Response {
-        let texture_id = if let Some(texture_id) = self.textures.get(key).copied() {
+    ) -> egui::TextureId {
+        if let Some(texture_id) = self.textures.get(key).copied() {
             self.render_state
                 .renderer
                 .write()
@@ -88,15 +90,67 @@ impl WgpuPreviewBridge {
             );
             self.textures.insert(key.to_owned(), texture_id);
             texture_id
-        };
-        ui.image((texture_id, egui::vec2(480.0, 270.0)))
+        }
     }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        frame: eiviz_gpu::WgpuTextureFrame,
+        fill: bool,
+    ) -> egui::Response {
+        let size = if fill {
+            ui.available_size()
+        } else {
+            fit_monitor_size(ui.available_size())
+        };
+        self.show_at(ui, key, frame, size)
+    }
+
+    fn show_at(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        frame: eiviz_gpu::WgpuTextureFrame,
+        size: egui::Vec2,
+    ) -> egui::Response {
+        let texture_id = self.native_texture_id(key, frame);
+        ui.image((texture_id, size))
+    }
+}
+
+fn fit_monitor_size(available: egui::Vec2) -> egui::Vec2 {
+    let width = available.x.max(16.0);
+    let height = available.y.max(9.0);
+    let aspect = 16.0 / 9.0;
+    if width / height > aspect {
+        egui::vec2(height * aspect, height)
+    } else {
+        egui::vec2(width, width / aspect)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum OutputWindow {
+    Preview(MixingUnitId),
+    Program(MixingUnitId),
+    Multiview(MultiviewId),
+    Input(InputId),
 }
 
 struct DesktopApp {
     engine: Arc<Engine>,
     status: String,
+    selected_unit: MixingUnitId,
     selected_scene: Option<SceneId>,
+    cut_duration_frames: u32,
+    cut_swap: bool,
+    mix_duration_frames: u32,
+    mix_swap: bool,
+    overlay_name_draft: String,
+    mixfeed_source: Option<MixingUnitId>,
+    mixfeed_preview_tap: bool,
     save_path: String,
     asset_root: String,
     image_path: String,
@@ -177,6 +231,130 @@ struct DesktopApp {
     drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
     #[cfg(feature = "wgpu-backend")]
     wgpu_preview: WgpuPreviewBridge,
+    settings_open: bool,
+    logs_open: bool,
+    switcher_windows: BTreeSet<MixingUnitId>,
+    output_windows: BTreeSet<OutputWindow>,
+    layout_audit: LayoutAudit,
+}
+
+struct LayoutAudit {
+    enabled: bool,
+    frames: u32,
+    screenshot_requested: bool,
+    written: bool,
+    bottom: Option<egui::Rect>,
+    input_pane: Option<egui::Rect>,
+    audio_pane: Option<egui::Rect>,
+    tile: Option<egui::Rect>,
+    cut: Option<egui::Rect>,
+    mix: Option<egui::Rect>,
+    meter_labels: Vec<String>,
+}
+
+impl LayoutAudit {
+    fn from_env() -> Self {
+        Self {
+            enabled: std::env::var("EIVIZ_LAYOUT_AUDIT").is_ok(),
+            frames: 0,
+            screenshot_requested: false,
+            written: false,
+            bottom: None,
+            input_pane: None,
+            audio_pane: None,
+            tile: None,
+            cut: None,
+            mix: None,
+            meter_labels: Vec::new(),
+        }
+    }
+
+    fn failures(&self) -> Vec<String> {
+        let mut fail = Vec::new();
+        match self.tile {
+            Some(tile) => {
+                if tile.height() > 240.0 {
+                    fail.push(format!(
+                        "input tile height {:.0}px > 240 (wrapped row stretched to pane)",
+                        tile.height()
+                    ));
+                }
+                if tile.height() < 140.0 {
+                    fail.push(format!(
+                        "input tile height {:.0}px < 140 (collapsed)",
+                        tile.height()
+                    ));
+                }
+                if !(200.0..=280.0).contains(&tile.width()) {
+                    fail.push(format!(
+                        "input tile width {:.0}px outside 200-280",
+                        tile.width()
+                    ));
+                }
+            }
+            None => fail.push("input tile rect missing".into()),
+        }
+        match (self.cut, self.mix) {
+            (Some(cut), Some(mix)) => {
+                if mix.top() + 1.0 < cut.bottom() {
+                    fail.push("CUT and MIX overlap vertically; expected stacked cards".into());
+                }
+                if (cut.left() - mix.left()).abs() > 24.0 {
+                    fail.push("CUT and MIX are not in the same column".into());
+                }
+            }
+            _ => fail.push("transition card rects missing".into()),
+        }
+        match (self.input_pane, self.audio_pane, self.bottom) {
+            (Some(input), Some(audio), Some(bottom)) => {
+                if input.height() + 16.0 < bottom.height() {
+                    fail.push("input pane does not fill bottom row height".into());
+                }
+                if audio.width() < 140.0 {
+                    fail.push(format!(
+                        "audio mixer width {:.0}px is too narrow",
+                        audio.width()
+                    ));
+                }
+                if input.right() > audio.left() + 8.0 && input.left() < audio.right() {
+                    fail.push("input list and audio mixer overlap".into());
+                }
+            }
+            _ => fail.push("bottom pane rects missing".into()),
+        }
+        for label in &self.meter_labels {
+            if label.len() >= 32 && label.contains('-') {
+                fail.push(format!("meter label looks like a UUID: {label}"));
+            }
+        }
+        fail
+    }
+
+    fn write_report(&self) -> std::io::Result<()> {
+        let path = std::path::Path::new("target/eiviz-layout-audit.txt");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let fail = self.failures();
+        let mut out = String::new();
+        out.push_str(&format!("frames={}\n", self.frames));
+        out.push_str(&format!("bottom={:?}\n", self.bottom));
+        out.push_str(&format!("input_pane={:?}\n", self.input_pane));
+        out.push_str(&format!("audio_pane={:?}\n", self.audio_pane));
+        out.push_str(&format!("tile={:?}\n", self.tile));
+        out.push_str(&format!("cut={:?}\n", self.cut));
+        out.push_str(&format!("mix={:?}\n", self.mix));
+        out.push_str(&format!("meter_labels={:?}\n", self.meter_labels));
+        if fail.is_empty() {
+            out.push_str("RESULT=PASS\n");
+        } else {
+            out.push_str("RESULT=FAIL\n");
+            for item in fail {
+                out.push_str(&format!("- {item}\n"));
+            }
+        }
+        std::fs::write(path, out)
+    }
 }
 
 enum RecoveryPrompt {
@@ -357,10 +535,19 @@ impl DesktopApp {
         } else {
             None
         };
+        let selected_unit = engine.primary_unit();
         let mut app = Self {
             engine,
             status: "ready".into(),
+            selected_unit,
             selected_scene: None,
+            cut_duration_frames: 0,
+            cut_swap: false,
+            mix_duration_frames: 15,
+            mix_swap: false,
+            overlay_name_draft: "DSK 1".into(),
+            mixfeed_source: None,
+            mixfeed_preview_tap: false,
             save_path,
             asset_root: "eiviz-assets".into(),
             image_path: String::new(),
@@ -441,11 +628,138 @@ impl DesktopApp {
             drag_item: None,
             #[cfg(feature = "wgpu-backend")]
             wgpu_preview: WgpuPreviewBridge::new(render_state),
+            settings_open: false,
+            logs_open: false,
+            switcher_windows: BTreeSet::new(),
+            output_windows: BTreeSet::new(),
+            layout_audit: LayoutAudit::from_env(),
         };
         if !app.omt_address.is_empty() {
             app.connect_omt();
         }
         Ok(app)
+    }
+
+    fn active_unit(&self) -> MixingUnitId {
+        let project = self.engine.snapshot();
+        if project.mixing_units.contains_key(&self.selected_unit) {
+            self.selected_unit
+        } else {
+            self.engine.primary_unit()
+        }
+    }
+
+    fn submit(&mut self, command: Command) {
+        match self.engine.submit_payload(command) {
+            Ok(_) => self.status = format!("rev {}", self.engine.revision()),
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn take_command(&self, style: TransitionStyle) -> Command {
+        let (swap, duration_frames) = match style {
+            TransitionStyle::Cut => (self.cut_swap, self.cut_duration_frames),
+            TransitionStyle::Mix => (self.mix_swap, self.mix_duration_frames.max(1)),
+        };
+        Command::Take {
+            unit: self.active_unit(),
+            swap,
+            style,
+            duration_frames,
+        }
+    }
+
+    fn add_mixing_unit(&mut self) {
+        let index = self.engine.snapshot().mixing_units.len() + 1;
+        let unit = MixingUnit::new(format!("Mix {index}"));
+        let id = unit.id;
+        self.submit(Command::AddMixingUnit { unit });
+        if self.status.starts_with("rev ") {
+            self.selected_unit = id;
+        }
+    }
+
+    fn add_overlay(&mut self) {
+        let unit = self.active_unit();
+        let name = self.overlay_name_draft.trim();
+        let name = if name.is_empty() {
+            "Overlay".to_owned()
+        } else {
+            name.to_owned()
+        };
+        let overlay = OverlaySlot {
+            id: OverlayId::new(),
+            name,
+            scene: self.selected_scene,
+            enabled: false,
+            z_order: self
+                .engine
+                .snapshot()
+                .mixing_units
+                .get(&unit)
+                .map(|u| u.overlays.len() as i32)
+                .unwrap_or(0),
+        };
+        self.submit(Command::AddOverlay { unit, overlay });
+    }
+
+    fn add_mix_feed(&mut self) {
+        let dest = self.active_unit();
+        let Some(source) = self.mixfeed_source else {
+            self.status = "select a source mixing unit for MixFeed".into();
+            return;
+        };
+        if source == dest {
+            self.status = "MixFeed cannot target the same mixing unit".into();
+            return;
+        }
+        let project = self.engine.snapshot();
+        let Some(source_unit) = project.mixing_units.get(&source) else {
+            self.status = "MixFeed source mixing unit is missing".into();
+            return;
+        };
+        let tap = if self.mixfeed_preview_tap {
+            MixTap::Preview
+        } else {
+            MixTap::Program
+        };
+        let tap_label = match tap {
+            MixTap::Program => "PGM",
+            MixTap::Preview => "PRV",
+        };
+        let input = Input {
+            id: InputId::new(),
+            name: format!("{} {tap_label}", source_unit.name),
+            tags: vec!["mixfeed".into()],
+            groups: vec![],
+            source: InputSource::MixFeed { unit: source, tap },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: format!("{} {tap_label}", source_unit.name),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        self.selected_scene = Some(scene.id);
+        self.submit(Command::AddInput { input });
+        if !self.status.starts_with("rev ") {
+            return;
+        }
+        self.submit(Command::AddScene {
+            scene: scene.clone(),
+        });
+        if !self.status.starts_with("rev ") {
+            return;
+        }
+        self.submit(Command::SetPreview {
+            unit: dest,
+            scene: Some(scene.id),
+        });
     }
 
     #[cfg(feature = "decklink")]
@@ -577,7 +891,7 @@ impl DesktopApp {
                 return;
             }
         }
-        let unit = self.engine.primary_unit();
+        let unit = self.active_unit();
         if let Some(bus) = self.engine.snapshot().audio_matrix.buses.first() {
             let route = AudioRoute {
                 input: input.id,
@@ -730,7 +1044,7 @@ impl DesktopApp {
             },
         );
         self.omt_connections.push(source);
-        let unit = self.engine.primary_unit();
+        let unit = self.active_unit();
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
             scene: Some(scene.id),
@@ -780,7 +1094,7 @@ impl DesktopApp {
             self.status = format!("image scene: {error}");
             return;
         }
-        let unit = self.engine.primary_unit();
+        let unit = self.active_unit();
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
             scene: Some(scene.id),
@@ -830,7 +1144,7 @@ impl DesktopApp {
             self.status = format!("video scene: {error}");
             return;
         }
-        let unit = self.engine.primary_unit();
+        let unit = self.active_unit();
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
             scene: Some(scene.id),
@@ -915,7 +1229,7 @@ impl DesktopApp {
             self.status = format!("NDI scene: {error}");
             return;
         }
-        let unit = self.engine.primary_unit();
+        let unit = self.active_unit();
         if let Some(bus) = self.engine.snapshot().audio_matrix.buses.first() {
             let route = AudioRoute {
                 input: input.id,
@@ -1240,12 +1554,7 @@ impl DesktopApp {
                     note: self.midi_take_note,
                     minimum_velocity: 1,
                 },
-                command: Command::Take {
-                    unit: self.engine.primary_unit(),
-                    swap: false,
-                    style: TransitionStyle::Cut,
-                    duration_frames: 0,
-                },
+                command: self.take_command(TransitionStyle::Cut),
             }],
             queue_capacity: 128,
         };
@@ -1297,11 +1606,44 @@ impl DesktopApp {
         ui: &mut egui::Ui,
         unit: eiviz_core::MixingUnitId,
     ) -> Option<egui::Response> {
+        self.show_program_frame_filled(ui, unit, "pgm", false)
+    }
+
+    fn show_program_frame_filled(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+        fill: bool,
+    ) -> Option<egui::Response> {
         #[cfg(feature = "wgpu-backend")]
         if let Some(texture) = self.engine.last_program_texture(unit) {
-            return Some(self.wgpu_preview.show(ui, "pgm", texture));
+            return Some(self.wgpu_preview.show(ui, key, texture, fill));
         }
-        show_frame(ui, self.engine.last_program(unit), "pgm")
+        show_frame(ui, self.engine.last_program(unit), key, fill)
+    }
+
+    fn show_program_frame_as(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+    ) -> Option<egui::Response> {
+        self.show_program_frame_filled(ui, unit, key, false)
+    }
+
+    fn show_program_frame_at(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+        size: egui::Vec2,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_program_texture(unit) {
+            return Some(self.wgpu_preview.show_at(ui, key, texture, size));
+        }
+        show_frame_at(ui, self.engine.last_program(unit), key, size)
     }
 
     fn show_preview_frame(
@@ -1309,24 +1651,623 @@ impl DesktopApp {
         ui: &mut egui::Ui,
         unit: eiviz_core::MixingUnitId,
     ) -> Option<egui::Response> {
-        #[cfg(feature = "wgpu-backend")]
-        if let Some(texture) = self.engine.last_preview_texture(unit) {
-            return Some(self.wgpu_preview.show(ui, "prv", texture));
-        }
-        show_frame(ui, self.engine.last_preview(unit), "prv")
+        self.show_preview_frame_filled(ui, unit, "prv", false)
     }
 
-    fn show_multiview_frame(
+    fn show_preview_frame_filled(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+        fill: bool,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_preview_texture(unit) {
+            return Some(self.wgpu_preview.show(ui, key, texture, fill));
+        }
+        show_frame(ui, self.engine.last_preview(unit), key, fill)
+    }
+
+    fn show_preview_frame_as(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+    ) -> Option<egui::Response> {
+        self.show_preview_frame_filled(ui, unit, key, false)
+    }
+
+    fn show_preview_frame_at(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: eiviz_core::MixingUnitId,
+        key: &str,
+        size: egui::Vec2,
+    ) -> Option<egui::Response> {
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(texture) = self.engine.last_preview_texture(unit) {
+            return Some(self.wgpu_preview.show_at(ui, key, texture, size));
+        }
+        show_frame_at(ui, self.engine.last_preview(unit), key, size)
+    }
+
+    fn show_multiview_frame_filled(
         &mut self,
         ui: &mut egui::Ui,
         view: MultiviewId,
         texture_id: &str,
+        fill: bool,
     ) -> Option<egui::Response> {
         #[cfg(feature = "wgpu-backend")]
         if let Some(texture) = self.engine.last_multiview_texture(view) {
-            return Some(self.wgpu_preview.show(ui, texture_id, texture));
+            return Some(self.wgpu_preview.show(ui, texture_id, texture, fill));
         }
-        show_frame(ui, self.engine.last_multiview(view), texture_id)
+        show_frame(ui, self.engine.last_multiview(view), texture_id, fill)
+    }
+
+    fn draw_monitor_chrome(
+        ui: &mut egui::Ui,
+        title: &str,
+        color: egui::Color32,
+        add_contents: impl FnOnce(&mut egui::Ui),
+    ) {
+        egui::Frame::group(ui.style())
+            .inner_margin(4.0)
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                ui.colored_label(color, title);
+                add_contents(ui);
+            });
+    }
+
+    fn draw_audio_meters(&mut self, ui: &mut egui::Ui, project: &Project) {
+        ui.colored_label(egui::Color32::from_rgb(60, 160, 90), "Audio Mixer");
+        let meters = self.engine.metrics().peak_meters;
+        self.layout_audit.meter_labels = project
+            .audio_matrix
+            .buses
+            .iter()
+            .map(|bus| bus.name.clone())
+            .collect();
+        let strip_h = (ui.available_height() - 4.0).max(120.0);
+        let (meter_rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), strip_h), egui::Sense::hover());
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(meter_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Min)),
+            |ui| {
+                ui.set_clip_rect(meter_rect);
+                egui::ScrollArea::horizontal()
+                    .id_salt("audio-mixer-strips")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_min_height(strip_h);
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(strip_h);
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            for bus in &project.audio_matrix.buses {
+                                let peak = meters
+                                    .iter()
+                                    .find(|(name, _)| name == &bus.id.to_string())
+                                    .map(|(_, peak)| *peak)
+                                    .unwrap_or(0.0);
+                                draw_peak_meter(ui, &bus.name, peak, strip_h);
+                            }
+                        });
+                    });
+            },
+        );
+    }
+
+    fn draw_transition_column(&mut self, ui: &mut egui::Ui, unit: &eiviz_core::MixingUnit) {
+        ui.heading("Transition");
+        egui::ScrollArea::vertical()
+            .id_salt("transition-column")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 8.0;
+
+                let cut = egui::Frame::group(ui.style())
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical(|ui| {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 40.0],
+                                    egui::Button::new("CUT"),
+                                )
+                                .clicked()
+                            {
+                                self.submit(self.take_command(TransitionStyle::Cut));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Duration (frames)");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.cut_duration_frames)
+                                        .range(0..=300)
+                                        .speed(1.0),
+                                );
+                            });
+                            ui.checkbox(&mut self.cut_swap, "SWAP");
+                        });
+                    });
+                self.layout_audit.cut = Some(cut.response.rect);
+
+                let mix = egui::Frame::group(ui.style())
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical(|ui| {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 40.0],
+                                    egui::Button::new("MIX"),
+                                )
+                                .clicked()
+                            {
+                                self.submit(self.take_command(TransitionStyle::Mix));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Duration (frames)");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.mix_duration_frames)
+                                        .range(1..=300)
+                                        .speed(1.0),
+                                );
+                            });
+                            ui.checkbox(&mut self.mix_swap, "SWAP");
+                        });
+                    });
+                self.layout_audit.mix = Some(mix.response.rect);
+
+                ui.separator();
+                ui.label("Overlays");
+                for (index, overlay) in unit.overlays.iter().enumerate() {
+                    let mut on = overlay.enabled;
+                    if ui
+                        .selectable_label(on, format!("{} {}", index + 1, overlay.name))
+                        .clicked()
+                    {
+                        on = !overlay.enabled;
+                        self.submit(Command::SetOverlayEnabled {
+                            unit: unit.id,
+                            overlay: overlay.id,
+                            enabled: on,
+                        });
+                    }
+                }
+            });
+    }
+
+    fn draw_input_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: MixingUnitId,
+        unit: Option<&eiviz_core::MixingUnit>,
+    ) {
+        ui.heading("Inputs");
+        const TILE_W: f32 = 232.0;
+        const PREVIEW_H: f32 = 130.0;
+        const TILE_H: f32 = PREVIEW_H + 62.0;
+        egui::ScrollArea::vertical()
+            .id_salt("input-grid")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            ui.horizontal_wrapped(|ui| {
+                for input in project.inputs.values() {
+                    let scene_id = scene_id_for_input(project, input.id);
+                    let on_preview = unit
+                        .and_then(|u| u.preview.scene)
+                        .is_some_and(|id| Some(id) == scene_id);
+                    let on_program = unit
+                        .and_then(|u| u.program.scene)
+                        .is_some_and(|id| Some(id) == scene_id);
+                    let desired = egui::vec2(TILE_W + 14.0, TILE_H);
+                    let (rect, tile_resp) =
+                        ui.allocate_exact_size(desired, egui::Sense::hover());
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(rect)
+                            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                        |ui| {
+                            ui.set_clip_rect(rect);
+                            egui::Frame::group(ui.style())
+                                .inner_margin(6.0)
+                                .show(ui, |ui| {
+                                    ui.set_width(TILE_W);
+                                    ui.set_max_size(egui::vec2(TILE_W, TILE_H));
+                                    ui.label(&input.name);
+                                    ui.allocate_ui(egui::vec2(TILE_W, PREVIEW_H), |ui| {
+                                        ui.set_min_size(egui::vec2(TILE_W, PREVIEW_H));
+                                        ui.set_max_size(egui::vec2(TILE_W, PREVIEW_H));
+                                        if on_program {
+                                            let _ = self.show_program_frame_at(
+                                                ui,
+                                                unit_id,
+                                                &format!("tile-pgm-{}", input.id),
+                                                egui::vec2(TILE_W, PREVIEW_H),
+                                            );
+                                        } else if on_preview {
+                                            let _ = self.show_preview_frame_at(
+                                                ui,
+                                                unit_id,
+                                                &format!("tile-prv-{}", input.id),
+                                                egui::vec2(TILE_W, PREVIEW_H),
+                                            );
+                                        } else {
+                                            ui.weak("off-air");
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .add_enabled(
+                                                scene_id.is_some(),
+                                                egui::Button::new("PRV"),
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Some(scene) = scene_id {
+                                                self.selected_scene = Some(scene);
+                                                self.submit(Command::SetPreview {
+                                                    unit: unit_id,
+                                                    scene: Some(scene),
+                                                });
+                                            }
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                scene_id.is_some(),
+                                                egui::Button::new("CUT"),
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Some(scene) = scene_id {
+                                                self.selected_scene = Some(scene);
+                                                self.submit(Command::SetProgram {
+                                                    unit: unit_id,
+                                                    scene: Some(scene),
+                                                });
+                                            }
+                                        }
+                                        if ui.button("FS").clicked() {
+                                            self.output_windows
+                                                .insert(OutputWindow::Input(input.id));
+                                        }
+                                        if let InputSource::Video { playback, .. } =
+                                            &input.source
+                                        {
+                                            let mut updated = playback.clone();
+                                            if ui
+                                                .button(if playback.playing {
+                                                    "Pause"
+                                                } else {
+                                                    "Play"
+                                                })
+                                                .clicked()
+                                            {
+                                                updated.playing = !playback.playing;
+                                                match self
+                                                    .engine
+                                                    .set_video_playback(input.id, updated)
+                                                {
+                                                    Ok(_) => {
+                                                        self.status = format!(
+                                                            "video playback: {}",
+                                                            input.name
+                                                        )
+                                                    }
+                                                    Err(error) => {
+                                                        self.status = format!(
+                                                            "video playback: {error}"
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                });
+                        },
+                    );
+                    if self.layout_audit.tile.is_none() {
+                        self.layout_audit.tile = Some(tile_resp.rect);
+                    }
+                }
+            });
+        });
+    }
+
+    fn draw_logs(&self, ui: &mut egui::Ui) {
+        ui.heading("Logs");
+        ui.label(&self.status);
+        egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+            for event in self.engine.flight_log().iter().rev().take(300).rev() {
+                ui.monospace(format!(
+                    "{} {} {} {}",
+                    event.sequence, event.subsystem, event.kind, event.monotonic_nanos
+                ));
+            }
+        });
+    }
+
+    fn draw_output_window(&mut self, ui: &mut egui::Ui, target: OutputWindow, project: &Project) {
+        ui.set_min_size(ui.available_size());
+        match target {
+            OutputWindow::Preview(unit) => {
+                let _ = self.show_preview_frame_filled(ui, unit, &format!("fs-prv-{unit}"), true);
+            }
+            OutputWindow::Program(unit) => {
+                let _ = self.show_program_frame_filled(ui, unit, &format!("fs-pgm-{unit}"), true);
+            }
+            OutputWindow::Multiview(id) => {
+                let _ = self.show_multiview_frame_filled(ui, id, &format!("fs-mv-{id}"), true);
+            }
+            OutputWindow::Input(id) => {
+                if let Some(scene) = scene_id_for_input(project, id) {
+                    if let Some(unit) = project
+                        .mixing_units
+                        .values()
+                        .find(|u| u.program.scene == Some(scene) || u.preview.scene == Some(scene))
+                    {
+                        if unit.program.scene == Some(scene) {
+                            let _ = self.show_program_frame_filled(
+                                ui,
+                                unit.id,
+                                &format!("fs-input-pgm-{id}"),
+                                true,
+                            );
+                        } else {
+                            let _ = self.show_preview_frame_filled(
+                                ui,
+                                unit.id,
+                                &format!("fs-input-prv-{id}"),
+                                true,
+                            );
+                        }
+                    } else {
+                        ui.label("Input is not on Preview or Program of any mixing unit");
+                    }
+                } else {
+                    ui.label("No scene references this input");
+                }
+            }
+        }
+    }
+
+    fn show_aux_viewports(
+        &mut self,
+        ctx: &egui::Context,
+        project: &Project,
+        unit: Option<&eiviz_core::MixingUnit>,
+    ) {
+        if self.logs_open {
+            let mut close = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("eiviz-logs"),
+                egui::ViewportBuilder::default()
+                    .with_title("eiviz Logs")
+                    .with_inner_size([720.0, 480.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| self.draw_logs(ui));
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.logs_open = false;
+            }
+        }
+
+        let extra_units: Vec<MixingUnitId> = self.switcher_windows.iter().copied().collect();
+        for extra in extra_units {
+            let mut close = false;
+            let title = project
+                .mixing_units
+                .get(&extra)
+                .map(|u| format!("Switcher — {}", u.name))
+                .unwrap_or_else(|| "Switcher".into());
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(("eiviz-switcher", extra)),
+                egui::ViewportBuilder::default()
+                    .with_title(title)
+                    .with_inner_size([1280.0, 800.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        self.draw_switcher_surface(ui, project, extra);
+                    });
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.switcher_windows.remove(&extra);
+            }
+        }
+
+        let outputs: Vec<OutputWindow> = self.output_windows.iter().copied().collect();
+        for target in outputs {
+            let mut close = false;
+            let title = match target {
+                OutputWindow::Preview(_) => "eiviz Preview",
+                OutputWindow::Program(_) => "eiviz Program",
+                OutputWindow::Multiview(_) => "eiviz Multiview",
+                OutputWindow::Input(_) => "eiviz Input",
+            };
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(format!("{target:?}")),
+                egui::ViewportBuilder::default()
+                    .with_title(title)
+                    .with_fullscreen(true)
+                    .with_decorations(false),
+                |ctx, _class| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            ui.expand_to_include_rect(ui.max_rect());
+                            self.draw_output_window(ui, target, project);
+                        });
+                    if ctx.input(|i| {
+                        i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                    }) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.output_windows.remove(&target);
+            }
+        }
+
+        let _ = unit;
+    }
+
+    fn draw_switcher_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: MixingUnitId,
+    ) {
+        let unit = project.mixing_units.get(&unit_id).cloned();
+        let remaining = ui.available_size();
+        let bottom_h = (remaining.y * 0.38).clamp(240.0, 380.0);
+        let audio_w = (remaining.x * 0.22).clamp(168.0, 260.0);
+        let trans_w = 180.0;
+
+        egui::TopBottomPanel::bottom("switcher-bottom")
+            .resizable(false)
+            .exact_height(bottom_h)
+            .show_inside(ui, |ui| {
+                self.layout_audit.bottom = Some(ui.max_rect());
+                egui::SidePanel::right("switcher-audio")
+                    .resizable(false)
+                    .exact_width(audio_w)
+                    .show_inside(ui, |ui| {
+                        self.layout_audit.audio_pane = Some(ui.max_rect());
+                        self.draw_audio_meters(ui, project);
+                    });
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    self.layout_audit.input_pane = Some(ui.max_rect());
+                    self.draw_input_grid(ui, project, unit_id, unit.as_ref());
+                });
+            });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let top_w = ui.available_width();
+            let monitor_w = ((top_w - trans_w) / 2.0).max(160.0);
+            egui::SidePanel::left("switcher-preview")
+                .resizable(false)
+                .exact_width(monitor_w)
+                .show_inside(ui, |ui| {
+                    let title = unit
+                        .as_ref()
+                        .and_then(|u| {
+                            u.preview
+                                .scene
+                                .and_then(|id| project.scenes.get(&id).map(|s| s.name.clone()))
+                        })
+                        .unwrap_or_default();
+                    let header = if title.is_empty() {
+                        "Preview".into()
+                    } else {
+                        format!("Preview  {title}")
+                    };
+                    Self::draw_monitor_chrome(
+                        ui,
+                        &header,
+                        egui::Color32::from_rgb(210, 130, 40),
+                        |ui| {
+                            let preview = self.show_preview_frame(ui, unit_id);
+                            if let (Some(resp), Some(u), Some(scene_id)) =
+                                (preview, unit.as_ref(), unit.as_ref().and_then(|u| u.preview.scene))
+                            {
+                                if let Some(scene) = project.scenes.get(&scene_id) {
+                                    self.handle_preview_pointer(ui, &resp, scene, unit_id);
+                                }
+                                let _ = u;
+                            }
+                        },
+                    );
+                });
+            egui::SidePanel::right("switcher-program")
+                .resizable(false)
+                .exact_width(monitor_w)
+                .show_inside(ui, |ui| {
+                    let title = unit
+                        .as_ref()
+                        .and_then(|u| {
+                            u.program
+                                .scene
+                                .and_then(|id| project.scenes.get(&id).map(|s| s.name.clone()))
+                        })
+                        .unwrap_or_default();
+                    let header = if title.is_empty() {
+                        "Program".into()
+                    } else {
+                        format!("Program  {title}")
+                    };
+                    Self::draw_monitor_chrome(
+                        ui,
+                        &header,
+                        egui::Color32::from_rgb(50, 160, 80),
+                        |ui| {
+                            let _ = self.show_program_frame(ui, unit_id);
+                        },
+                    );
+                });
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                if let Some(unit) = unit.as_ref() {
+                    self.draw_transition_column(ui, unit);
+                }
+            });
+        });
+    }
+
+    fn consume_layout_audit_events(&mut self, ctx: &egui::Context) {
+        if !self.layout_audit.enabled {
+            return;
+        }
+        let shots: Vec<std::sync::Arc<egui::ColorImage>> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        for image in shots {
+            let path = std::path::Path::new("target/eiviz-layout-audit.png");
+            match write_layout_png(&image, path) {
+                Ok(()) => tracing::info!("layout audit screenshot {}", path.display()),
+                Err(error) => tracing::error!("layout audit screenshot: {error}"),
+            }
+            if let Err(error) = self.layout_audit.write_report() {
+                tracing::error!("layout audit report: {error}");
+            }
+            self.layout_audit.written = true;
+        }
+    }
+
+    fn tick_layout_audit(&mut self, ctx: &egui::Context) {
+        if !self.layout_audit.enabled {
+            return;
+        }
+        self.layout_audit.frames += 1;
+        if self.layout_audit.frames == 45 && !self.layout_audit.screenshot_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                egui::UserData::default(),
+            ));
+            self.layout_audit.screenshot_requested = true;
+            if let Err(error) = self.layout_audit.write_report() {
+                tracing::error!("layout audit report: {error}");
+            }
+        }
     }
 }
 
@@ -1650,6 +2591,7 @@ fn bootstrap(engine: &Engine) {
 impl eframe::App for DesktopApp {
     #[allow(clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.consume_layout_audit_events(ctx);
         if let Err(error) = self.engine.tick() {
             self.status = format!("Engine boundary failed: {error}");
             if matches!(
@@ -1662,7 +2604,10 @@ impl eframe::App for DesktopApp {
             }
         }
         let project = self.engine.snapshot();
-        let unit_id = self.engine.primary_unit();
+        if !project.mixing_units.contains_key(&self.selected_unit) {
+            self.selected_unit = self.engine.primary_unit();
+        }
+        let unit_id = self.selected_unit;
         let unit = project.mixing_units.get(&unit_id).cloned();
         #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
         let mut device_reassignment = None;
@@ -1743,26 +2688,65 @@ impl eframe::App for DesktopApp {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("eiviz");
-                if ui.button("TAKE").clicked() || ui.input(|i| i.key_pressed(egui::Key::Space)) {
-                    if let Some(u) = &unit {
-                        let _ = self.engine.submit_payload(Command::Take {
-                            unit: u.id,
-                            swap: false,
-                            style: TransitionStyle::Cut,
-                            duration_frames: 0,
-                        });
-                        self.status = format!("TAKE rev {}", self.engine.revision());
+                ui.separator();
+                ui.label("Mixing Unit");
+                let unit_name = unit
+                    .as_ref()
+                    .map(|u| u.name.clone())
+                    .unwrap_or_else(|| "(none)".into());
+                egui::ComboBox::from_id_salt("header-mixing-unit")
+                    .selected_text(unit_name)
+                    .show_ui(ui, |ui| {
+                        for candidate in project.mixing_units.values() {
+                            ui.selectable_value(
+                                &mut self.selected_unit,
+                                candidate.id,
+                                &candidate.name,
+                            );
+                        }
+                    });
+                if ui.button("Add Mixing Unit").clicked() {
+                    self.add_mixing_unit();
+                }
+                if ui.button("Switcher window").clicked() {
+                    self.switcher_windows.insert(unit_id);
+                }
+                ui.separator();
+                ui.menu_button("Fullscreen", |ui| {
+                    if ui.button("This unit Preview").clicked() {
+                        self.output_windows
+                            .insert(OutputWindow::Preview(unit_id));
+                        ui.close();
                     }
+                    if ui.button("This unit Program").clicked() {
+                        self.output_windows
+                            .insert(OutputWindow::Program(unit_id));
+                        ui.close();
+                    }
+                    for view in project.multiviews.values() {
+                        if ui.button(format!("Multiview {}", view.name)).clicked() {
+                            self.output_windows
+                                .insert(OutputWindow::Multiview(view.id));
+                            ui.close();
+                        }
+                    }
+                    for input in project.inputs.values() {
+                        if ui.button(format!("Input {}", input.name)).clicked() {
+                            self.output_windows.insert(OutputWindow::Input(input.id));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button("CUT").clicked() || ui.input(|i| i.key_pressed(egui::Key::Space)) {
+                    self.submit(self.take_command(TransitionStyle::Cut));
                 }
-                if ui.button("Tick").clicked() {
-                    let _ = self.engine.tick();
-                }
-                ui.label(format!("rev {}", self.engine.revision()));
-                ui.label(&self.status);
-            });
-            ui.horizontal(|ui| {
+                ui.label(format!("{:?}", project.compositor));
+                ui.separator();
                 ui.label("path");
-                ui.text_edit_singleline(&mut self.save_path);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.save_path).desired_width(180.0),
+                );
                 if ui.button("Save").clicked() {
                     match self.engine.save(std::path::Path::new(&self.save_path)) {
                         Ok(()) => {
@@ -1780,151 +2764,146 @@ impl eframe::App for DesktopApp {
                         Ok(()) => {
                             self.engine.set_autosave_path(&self.save_path);
                             self.selected_scene = None;
+                            self.selected_unit = self.engine.primary_unit();
                             self.asset_diagnostics = self.engine.asset_diagnostics();
                             self.status = "loaded".into();
                         }
                         Err(e) => self.status = format!("load: {e}"),
                     }
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("asset root");
-                ui.text_edit_singleline(&mut self.asset_root);
-                if ui.button("Verify asset paths + SHA-256").clicked() {
-                    self.refresh_asset_diagnostics();
-                }
-                ui.label("image");
-                ui.text_edit_singleline(&mut self.image_path);
-                if ui.button("Add Image").clicked() {
-                    self.add_image();
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("H.264/AAC MP4");
-                ui.text_edit_singleline(&mut self.video_path);
-                ui.label("Cisco OpenH264 2.6.0 binary");
-                ui.text_edit_singleline(&mut self.openh264_path);
-            });
-            ui.horizontal(|ui| {
-                ui.label("License-reviewed FDK AAC binary (required when MP4 has AAC)");
-                ui.text_edit_singleline(&mut self.fdk_aac_path);
-                if ui.button("Add File Media").clicked() {
-                    self.add_video();
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("portable");
-                ui.text_edit_singleline(&mut self.portable_path);
-                if ui.button("Export .eiviz").clicked() {
-                    match self.engine.export_portable(
-                        std::path::Path::new(&self.portable_path),
-                        std::path::Path::new(&self.asset_root),
-                    ) {
-                        Ok(()) => self.status = "portable exported".into(),
-                        Err(error) => self.status = format!("portable export: {error}"),
-                    }
-                }
-                if ui.button("Import .eiviz").clicked() {
-                    match self.engine.import_portable_into(
-                        std::path::Path::new(&self.portable_path),
-                        std::path::Path::new(&self.asset_root),
-                    ) {
-                        Ok(()) => {
-                            self.selected_scene = None;
-                            self.asset_diagnostics = self.engine.asset_diagnostics();
-                            self.status = "portable imported".into();
-                        }
-                        Err(error) => self.status = format!("portable import: {error}"),
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("capability report");
-                ui.text_edit_singleline(&mut self.capability_report_path);
-                if ui.button("Export capabilities").clicked() {
-                    match self.engine.export_capability_report(
-                        std::path::Path::new(&self.capability_report_path),
-                        desktop_capabilities(),
-                    ) {
-                        Ok(()) => self.status = "capability report exported".into(),
-                        Err(error) => self.status = format!("capability report: {error}"),
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("flight recorder");
-                ui.text_edit_singleline(&mut self.diagnostics_export_path);
-                if ui.button("Export diagnostics").clicked() {
-                    match self
-                        .engine
-                        .export_flight_recorder(std::path::Path::new(&self.diagnostics_export_path))
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .selectable_label(self.settings_open, "Settings")
+                        .clicked()
                     {
-                        Ok(()) => self.status = "flight recorder exported".into(),
-                        Err(error) => self.status = format!("flight recorder: {error}"),
+                        self.settings_open = !self.settings_open;
                     }
-                }
-                ui.label("crash report");
-                ui.text_edit_singleline(&mut self.crash_report_path);
-                if ui.button("Export crash snapshot").clicked() {
-                    match self.engine.export_crash_report(
-                        std::path::Path::new(&self.crash_report_path),
-                        "manual diagnostic snapshot",
-                        desktop_capabilities(),
-                    ) {
-                        Ok(()) => self.status = "crash diagnostic snapshot exported".into(),
-                        Err(error) => self.status = format!("crash report: {error}"),
+                    if ui.selectable_label(self.logs_open, "Logs").clicked() {
+                        self.logs_open = !self.logs_open;
                     }
-                }
+                    ui.label(format!("rev {}", self.engine.revision()));
+                    ui.label(&self.status);
+                });
             });
         });
 
-        egui::SidePanel::left("inputs").show(ctx, |ui| {
-            ui.heading("Inputs");
-            for input in project.inputs.values() {
-                ui.label(format!("{} [{}]", input.name, input.tags.join(",")));
-                if let InputSource::Video { playback, .. } = &input.source {
-                    let mut updated = playback.clone();
-                    let mut changed = false;
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(if playback.playing { "Pause" } else { "Play" })
-                            .clicked()
-                        {
-                            updated.playing = !playback.playing;
-                            changed = true;
-                        }
-                        changed |= ui.checkbox(&mut updated.loop_playback, "Loop").changed();
-                        ui.label("seek us");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut updated.position_us).speed(1_000.0))
-                            .changed();
-                    });
-                    if changed {
-                        match self.engine.set_video_playback(input.id, updated) {
-                            Ok(_) => self.status = format!("video playback: {}", input.name),
-                            Err(error) => self.status = format!("video playback: {error}"),
-                        }
-                    }
-                }
-            }
-            ui.separator();
-            ui.heading("Scenes");
-            for scene in project.scenes.values() {
-                let selected = Some(scene.id) == self.selected_scene;
-                if ui.selectable_label(selected, &scene.name).clicked() {
-                    self.selected_scene = Some(scene.id);
-                    if let Some(u) = &unit {
-                        let _ = self.engine.submit_payload(Command::SetPreview {
-                            unit: u.id,
-                            scene: Some(scene.id),
-                        });
-                    }
-                }
-            }
-        });
-
-        egui::SidePanel::right("caps").show(ctx, |ui| {
-            ui.heading("Capabilities");
+        if self.settings_open {
+            let mut close_settings = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("eiviz-settings"),
+                egui::ViewportBuilder::default()
+                    .with_title("eiviz Settings")
+                    .with_inner_size([980.0, 780.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.heading("Media ingest");
+                            ui.horizontal(|ui| {
+                                ui.label("asset root");
+                                ui.text_edit_singleline(&mut self.asset_root);
+                                if ui.button("Verify asset paths + SHA-256").clicked() {
+                                    self.refresh_asset_diagnostics();
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("image");
+                                ui.text_edit_singleline(&mut self.image_path);
+                                if ui.button("Add Image").clicked() {
+                                    self.add_image();
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("H.264/AAC MP4");
+                                ui.text_edit_singleline(&mut self.video_path);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Cisco OpenH264 2.6.0 binary");
+                                ui.text_edit_singleline(&mut self.openh264_path);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("License-reviewed FDK AAC binary");
+                                ui.text_edit_singleline(&mut self.fdk_aac_path);
+                                if ui.button("Add File Media").clicked() {
+                                    self.add_video();
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("portable");
+                                ui.text_edit_singleline(&mut self.portable_path);
+                                if ui.button("Export .eiviz").clicked() {
+                                    match self.engine.export_portable(
+                                        std::path::Path::new(&self.portable_path),
+                                        std::path::Path::new(&self.asset_root),
+                                    ) {
+                                        Ok(()) => self.status = "portable exported".into(),
+                                        Err(error) => {
+                                            self.status = format!("portable export: {error}")
+                                        }
+                                    }
+                                }
+                                if ui.button("Import .eiviz").clicked() {
+                                    match self.engine.import_portable_into(
+                                        std::path::Path::new(&self.portable_path),
+                                        std::path::Path::new(&self.asset_root),
+                                    ) {
+                                        Ok(()) => {
+                                            self.selected_scene = None;
+                                            self.asset_diagnostics = self.engine.asset_diagnostics();
+                                            self.status = "portable imported".into();
+                                        }
+                                        Err(error) => {
+                                            self.status = format!("portable import: {error}")
+                                        }
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("capability report");
+                                ui.text_edit_singleline(&mut self.capability_report_path);
+                                if ui.button("Export capabilities").clicked() {
+                                    match self.engine.export_capability_report(
+                                        std::path::Path::new(&self.capability_report_path),
+                                        desktop_capabilities(),
+                                    ) {
+                                        Ok(()) => self.status = "capability report exported".into(),
+                                        Err(error) => {
+                                            self.status = format!("capability report: {error}")
+                                        }
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("flight recorder");
+                                ui.text_edit_singleline(&mut self.diagnostics_export_path);
+                                if ui.button("Export diagnostics").clicked() {
+                                    match self.engine.export_flight_recorder(std::path::Path::new(
+                                        &self.diagnostics_export_path,
+                                    )) {
+                                        Ok(()) => self.status = "flight recorder exported".into(),
+                                        Err(error) => {
+                                            self.status = format!("flight recorder: {error}")
+                                        }
+                                    }
+                                }
+                                ui.label("crash report");
+                                ui.text_edit_singleline(&mut self.crash_report_path);
+                                if ui.button("Export crash snapshot").clicked() {
+                                    match self.engine.export_crash_report(
+                                        std::path::Path::new(&self.crash_report_path),
+                                        "manual diagnostic snapshot",
+                                        desktop_capabilities(),
+                                    ) {
+                                        Ok(()) => {
+                                            self.status = "crash diagnostic snapshot exported".into()
+                                        }
+                                        Err(error) => {
+                                            self.status = format!("crash report: {error}")
+                                        }
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            ui.heading("Capabilities");
             ui.label(format!("compositor {:?}", project.compositor));
             ui.label(self.engine.compositor_detail());
             ui.separator();
@@ -3209,55 +4188,136 @@ impl eframe::App for DesktopApp {
             }
             if let Some(u) = &unit {
                 ui.separator();
+                ui.heading("Mixing Unit");
+                egui::ComboBox::from_id_salt("selected-mixing-unit")
+                    .selected_text(&u.name)
+                    .show_ui(ui, |ui| {
+                        for candidate in project.mixing_units.values() {
+                            ui.selectable_value(
+                                &mut self.selected_unit,
+                                candidate.id,
+                                &candidate.name,
+                            );
+                        }
+                    });
+                if ui.button("Add Mixing Unit").clicked() {
+                    self.add_mixing_unit();
+                }
                 ui.label(format!("PRV {:?}", u.preview.scene));
                 ui.label(format!("PGM {:?}", u.program.scene));
-                ui.heading("Overlays");
-                for overlay in &u.overlays {
-                    let mut on = overlay.enabled;
-                    if ui.checkbox(&mut on, &overlay.name).changed() {
-                        let _ = self.engine.submit_payload(Command::SetOverlayEnabled {
-                            unit: u.id,
-                            overlay: overlay.id,
-                            enabled: on,
-                        });
-                    }
-                }
-            }
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Program / Preview");
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label("Program");
-                    self.show_program_frame(ui, unit_id);
-                });
-                ui.vertical(|ui| {
-                    ui.label("Preview");
-                    let preview_resp = self.show_preview_frame(ui, unit_id);
-                    if let (Some(resp), Some(_u), Some(scene_id)) =
-                        (preview_resp, unit.as_ref(), u_preview_scene(&unit))
-                    {
-                        if let Some(scene) = project.scenes.get(&scene_id) {
-                            self.handle_preview_pointer(ui, &resp, scene, unit_id);
+                ui.heading("Audio Follow");
+                ui.horizontal(|ui| {
+                    for (label, policy) in [
+                        ("Off", AudioFollowPolicy::Off),
+                        ("Program", AudioFollowPolicy::Program),
+                        ("Program+Preview", AudioFollowPolicy::ProgramAndPreview),
+                    ] {
+                        if ui
+                            .selectable_label(u.audio_follow == policy, label)
+                            .clicked()
+                        {
+                            self.submit(Command::SetAudioFollow {
+                                unit: u.id,
+                                policy,
+                            });
                         }
                     }
                 });
-            });
-            ui.separator();
-            ui.label("Mouse: drag on Preview to move a SceneItem (UpdateTransform). Space = TAKE.");
-            for multiview in project.multiviews.values() {
-                ui.separator();
-                ui.heading(format!("Multiview: {}", multiview.name));
-                let texture_id = format!("multiview-{}", multiview.id);
-                self.show_multiview_frame(ui, multiview.id, &texture_id);
+                ui.heading("Overlays");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.overlay_name_draft);
+                    if ui.button("Add Overlay").clicked() {
+                        self.add_overlay();
+                    }
+                });
+                for overlay in &u.overlays {
+                    ui.push_id(overlay.id, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut on = overlay.enabled;
+                            if ui.checkbox(&mut on, &overlay.name).changed() {
+                                self.submit(Command::SetOverlayEnabled {
+                                    unit: u.id,
+                                    overlay: overlay.id,
+                                    enabled: on,
+                                });
+                            }
+                            let mut assigned = overlay.scene;
+                            egui::ComboBox::from_id_salt(format!("overlay-scene-{}", overlay.id))
+                                .selected_text(match assigned {
+                                    Some(id) => project
+                                        .scenes
+                                        .get(&id)
+                                        .map(|scene| scene.name.clone())
+                                        .unwrap_or_else(|| id.to_string()),
+                                    None => "(none)".into(),
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut assigned, None, "(none)");
+                                    for scene in project.scenes.values() {
+                                        ui.selectable_value(
+                                            &mut assigned,
+                                            Some(scene.id),
+                                            &scene.name,
+                                        );
+                                    }
+                                });
+                            if assigned != overlay.scene {
+                                self.submit(Command::SetOverlayScene {
+                                    unit: u.id,
+                                    overlay: overlay.id,
+                                    scene: assigned,
+                                });
+                            }
+                        });
+                    });
+                }
+                ui.heading("MixFeed");
+                ui.label("Route another mixing unit's Program/Preview into this unit, then TAKE that scene.");
+                let source_label = self
+                    .mixfeed_source
+                    .and_then(|id| project.mixing_units.get(&id).map(|unit| unit.name.clone()))
+                    .unwrap_or_else(|| "(select source)".into());
+                egui::ComboBox::from_id_salt("mixfeed-source")
+                    .selected_text(source_label)
+                    .show_ui(ui, |ui| {
+                        for candidate in project.mixing_units.values() {
+                            if candidate.id == u.id {
+                                continue;
+                            }
+                            ui.selectable_value(
+                                &mut self.mixfeed_source,
+                                Some(candidate.id),
+                                &candidate.name,
+                            );
+                        }
+                    });
+                ui.checkbox(&mut self.mixfeed_preview_tap, "Use source Preview");
+                if ui.button("Add MixFeed scene").clicked() {
+                    self.add_mix_feed();
+                }
+                            }
+                        });
+                    });
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close_settings = true;
+                    }
+                },
+            );
+            if close_settings {
+                self.settings_open = false;
             }
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.draw_switcher_surface(ui, &project, unit_id);
         });
+        self.show_aux_viewports(ctx, &project, unit.as_ref());
         #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
         if let Some((binding, hardware_id, logical_name)) = device_reassignment {
             self.reassign_device_binding(binding, hardware_id, logical_name);
         }
-        ctx.request_repaint();
+        self.tick_layout_audit(ctx);
+        ctx.request_repaint_after(std::time::Duration::from_millis(17));
     }
 }
 
@@ -3267,34 +4327,127 @@ impl Drop for DesktopApp {
     }
 }
 
-fn u_preview_scene(unit: &Option<eiviz_core::MixingUnit>) -> Option<SceneId> {
-    unit.as_ref().and_then(|u| u.preview.scene)
+fn scene_id_for_input(project: &Project, input: InputId) -> Option<SceneId> {
+    project.scenes.values().find_map(|scene| {
+        scene
+            .items
+            .iter()
+            .any(|item| item.input == input)
+            .then_some(scene.id)
+    })
+}
+
+fn draw_peak_meter(ui: &mut egui::Ui, name: &str, peak: f32, strip_h: f32) {
+    let strip_w = 52.0;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(strip_w, strip_h.max(80.0)), egui::Sense::hover());
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        |ui| {
+            ui.set_clip_rect(rect);
+            ui.add(egui::Label::new(egui::RichText::new(name).small().strong()).truncate());
+            let meter_h = (ui.available_height() - 4.0).max(48.0);
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(22.0, meter_h), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(bar, 2.0, egui::Color32::from_gray(55));
+            let level = peak.clamp(0.0, 1.0);
+            let fill = egui::Rect::from_min_max(
+                egui::pos2(bar.left(), bar.bottom() - bar.height() * level),
+                bar.right_bottom(),
+            );
+            let color = if level > 0.95 {
+                egui::Color32::from_rgb(200, 50, 50)
+            } else if level > 0.8 {
+                egui::Color32::from_rgb(200, 170, 40)
+            } else {
+                egui::Color32::from_rgb(50, 170, 80)
+            };
+            ui.painter().rect_filled(fill, 2.0, color);
+        },
+    );
 }
 
 fn show_frame(
     ui: &mut egui::Ui,
     frame: Option<eiviz_media::VideoFrame>,
     id: &str,
+    fill: bool,
 ) -> Option<egui::Response> {
     let Some(frame) = frame else {
         ui.label("No frame yet");
         return None;
     };
-    let w = 480u32;
-    let h = 270u32;
-    let mut img = vec![0u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let sx = x * frame.width / w;
-            let sy = y * frame.height / h;
+    let display = if fill {
+        ui.available_size()
+    } else {
+        fit_monitor_size(ui.available_size())
+    };
+    let blit_w = display.x.round().clamp(16.0, 1920.0) as u32;
+    let blit_h = display.y.round().clamp(9.0, 1080.0) as u32;
+    let mut img = vec![0u8; (blit_w * blit_h * 4) as usize];
+    for y in 0..blit_h {
+        for x in 0..blit_w {
+            let sx = x * frame.width / blit_w;
+            let sy = y * frame.height / blit_h;
             let px = frame.pixel(sx, sy);
-            let i = ((y * w + x) * 4) as usize;
+            let i = ((y * blit_w + x) * 4) as usize;
             img[i..i + 4].copy_from_slice(&px);
         }
     }
-    let color = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &img);
+    let color =
+        egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
     let tex = ui.ctx().load_texture(id, color, Default::default());
-    Some(ui.image(&tex))
+    Some(ui.image((tex.id(), display)))
+}
+
+fn show_frame_at(
+    ui: &mut egui::Ui,
+    frame: Option<eiviz_media::VideoFrame>,
+    id: &str,
+    size: egui::Vec2,
+) -> Option<egui::Response> {
+    let Some(frame) = frame else {
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 2.0, egui::Color32::from_gray(24));
+        return Some(response);
+    };
+    let blit_w = size.x.round().clamp(16.0, 1920.0) as u32;
+    let blit_h = size.y.round().clamp(9.0, 1080.0) as u32;
+    let mut img = vec![0u8; (blit_w * blit_h * 4) as usize];
+    for y in 0..blit_h {
+        for x in 0..blit_w {
+            let sx = x * frame.width / blit_w;
+            let sy = y * frame.height / blit_h;
+            let px = frame.pixel(sx, sy);
+            let i = ((y * blit_w + x) * 4) as usize;
+            img[i..i + 4].copy_from_slice(&px);
+        }
+    }
+    let color =
+        egui::ColorImage::from_rgba_unmultiplied([blit_w as usize, blit_h as usize], &img);
+    let tex = ui.ctx().load_texture(id, color, Default::default());
+    Some(ui.image((tex.id(), size)))
+}
+
+fn write_layout_png(image: &egui::ColorImage, path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
+    for pixel in &image.pixels {
+        rgba.extend_from_slice(&pixel.to_array());
+    }
+    image::save_buffer(
+        path,
+        &rgba,
+        image.size[0] as u32,
+        image.size[1] as u32,
+        image::ExtendedColorType::Rgba8,
+    )
+    .map_err(|error| error.to_string())
 }
 
 impl DesktopApp {

@@ -1164,8 +1164,10 @@ dependencies = [
  "eiviz-operations",
  "eiviz-project",
  "eiviz-time",
+ "image",
  "tracing",
  "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]

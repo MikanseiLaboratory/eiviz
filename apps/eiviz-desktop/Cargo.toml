@@ -23,6 +23,10 @@ eiviz-io-ndi.workspace = true
 eiviz-io-omt.workspace = true
 eframe.workspace = true
 egui.workspace = true
+# egui-wgpu 0.32 disables wgpu default features (WGSL only). Desktop still
+# creates an eframe wgpu Instance, so platform backends must be unified in.
+wgpu.workspace = true
+image.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
