@@ -176,6 +176,7 @@ mod tests {
 
     #[test]
     fn local_srt_listener_receives_mpegts_avc_and_aac_pids() {
+        let _network_guard = crate::NETWORK_TEST_LOCK.lock().unwrap();
         let reservation = UdpSocket::bind("127.0.0.1:0").unwrap();
         let port = reservation.local_addr().unwrap().port();
         drop(reservation);

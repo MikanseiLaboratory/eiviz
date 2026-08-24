@@ -11,6 +11,9 @@ mod recording;
 mod rtmp;
 mod srt;
 
+#[cfg(test)]
+pub(crate) static NETWORK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use fanout::{EncodedFanout, EncodedSink, SinkDiagnostics, SinkState, WorkerRecovery};
 pub use recording::{FragmentedMp4Sink, RecoveryReport, recover_fragmented_mp4};
 pub use rtmp::{RtmpEndpoint, RtmpPublisher};

@@ -386,6 +386,7 @@ mod tests {
 
     #[test]
     fn local_server_receives_avc_and_aac_rtmp_messages() {
+        let _network_guard = crate::NETWORK_TEST_LOCK.lock().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (result_tx, result_rx) = mpsc::channel();
