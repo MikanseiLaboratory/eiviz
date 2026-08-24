@@ -29,12 +29,16 @@ all pass:
 - Desktop can ingest PNG/JPEG files into the content-addressed asset store,
   create a fullscreen Preview scene, and export/import portable `.eiviz`
   packages without replacing the running control-server Engine instance.
-- Desktop can ingest the constrained H.264 MP4 profile through an explicit
-  end-user-installed Cisco OpenH264 2.6.0 binary path, decode I420 to BT.709
-  limited-range RGBA, and play/pause/seek/loop. There is no decoder fallback.
-  A Linux x64 smoke test passed with Cisco's hash-verified binary and a
-  generated Constrained Baseline clip; representative conformance and
-  certification HIL remain pending.
+- Desktop can ingest constrained H.264 video-only or H.264/AAC-LC MP4 through
+  explicit end-user-installed Cisco OpenH264 2.6.0 and, when AAC is present,
+  license-reviewed FDK AAC binary paths. Shiguredo MP4 supplies `avc1`,
+  `mp4a`/`esds` AudioSpecificConfig, sample timing, and exposed edit-list
+  priming. A coordinated source resets both decoders on seek/loop and publishes
+  video and planar audio on one presentation timeline. ExactRate rejects AAC
+  rate mismatch; only the persisted ASRC policy permits conversion to project
+  rate. AAC is never dropped or replaced when FDK is absent. Desktop reports
+  video-only versus A/V admission. A Linux x64 OpenH264 video smoke test passed;
+  representative A/V, conformance, and cross-platform HIL remain pending.
 - Real OMT receive/output through pure-Rust `openmediatransport-rs` / `vmx-rs`;
   interop HIL is still pending
 - Optional real NDI discovery/receive/output through `grafton-ndi` 1.0.0 and
@@ -70,6 +74,7 @@ Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
 Video, audio devices, RTMP, and SRT) is **not** claimed. See the current truth table in
 the implementation plan, the [DeckLink HIL procedure](docs/hil/decklink.md),
 the [audio HIL procedure](docs/hil/audio.md), and the
+[file-media HIL procedure](docs/hil/file-media.md), and the
 [distribution HIL procedure](docs/hil/distribution.md). Operational export,
 recovery semantics, and SBOM generation are documented in
 [operations](docs/operations.md).
@@ -88,11 +93,17 @@ EIVIZ_COMPOSITOR=wgpu cargo run -p eiviz-desktop --features wgpu-backend
 EIVIZ_OPENH264_PATH=/absolute/path/to/libopenh264-2.6.0-linux64.8.so \
   cargo run -p eiviz-desktop
 
-# Distribution additionally requires an operator-provided FDK AAC shared
-# library whose license/patent profile has been reviewed for that deployment.
+# H.264/AAC file ingest and distribution require an operator-provided FDK AAC
+# shared library whose license/patent profile has been reviewed for deployment.
 EIVIZ_OPENH264_PATH=/absolute/path/to/cisco/libopenh264-2.6.0.so \
 EIVIZ_FDK_AAC_PATH=/absolute/path/to/libfdk-aac.so \
   cargo run -p eiviz-desktop
+
+# Opt-in real-binary A/V file HIL (ignored by default).
+EIVIZ_FILE_HIL_OPENH264=/absolute/path/to/cisco/libopenh264-2.6.0.so \
+EIVIZ_FILE_HIL_FDK_AAC=/absolute/path/to/libfdk-aac.so \
+EIVIZ_FILE_HIL_MP4=/absolute/path/to/representative-avc-aac.mp4 \
+  cargo test -p eiviz-io-file decodes_real_h264_aac_mp4_with_explicit_binaries -- --ignored
 
 # Explicit NDI profile. NDI 6 SDK headers and runtime must already be installed.
 # Set NDI_SDK_DIR for a nonstandard SDK location and make the runtime library

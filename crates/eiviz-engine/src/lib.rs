@@ -66,6 +66,12 @@ pub struct EngineSourceControlDiagnostics {
 }
 
 #[derive(Clone, Debug)]
+pub struct FileIngestResult {
+    pub input: Input,
+    pub status: eiviz_io_file::FileMediaStatus,
+}
+
+#[derive(Clone, Debug)]
 pub struct AdmissionBudget {
     pub max_inputs: usize,
     pub max_units: usize,
@@ -380,7 +386,60 @@ impl Engine {
         Ok(asset)
     }
 
-    /// Stages an MP4, validates the explicit Cisco binary, and attaches its real decoder source.
+    /// Stages an MP4 and attaches explicit H.264 plus optional required AAC decoding.
+    pub fn ingest_file(
+        &self,
+        file: &Path,
+        asset_root: &Path,
+        openh264_binary: &Path,
+        fdk_aac_binary: Option<&Path>,
+        playback: Playback,
+    ) -> Result<FileIngestResult> {
+        let project = self.staged_snapshot();
+        if project.video.color != eiviz_core::ColorSpace::Bt709Sdr {
+            return Err(EngineError::Admission(
+                "H.264 software decode currently requires explicit Bt709Sdr project profile".into(),
+            ));
+        }
+        let asset = stage_asset(file, asset_root)?;
+        let source = Arc::new(eiviz_io_file::FileMediaSource::open(
+            InputId::new(),
+            &asset_root.join(&asset.relative_path),
+            openh264_binary,
+            fdk_aac_binary,
+            project.audio.sample_rate,
+            project.audio.resampling,
+            playback.clone(),
+        )?);
+        let status = source.status().clone();
+        let input = Input {
+            id: source.id(),
+            name: asset.original_name.clone(),
+            tags: match &status {
+                eiviz_io_file::FileMediaStatus::VideoOnly => {
+                    vec!["video".into(), "h264".into()]
+                }
+                eiviz_io_file::FileMediaStatus::AudioVideo { .. } => {
+                    vec!["video".into(), "audio".into(), "h264".into(), "aac".into()]
+                }
+            },
+            groups: vec![],
+            source: InputSource::Video {
+                asset: asset.id,
+                playback,
+            },
+        };
+        self.submit_payload(Command::AddAsset { asset })?;
+        self.submit_payload(Command::AddInput {
+            input: input.clone(),
+        })?;
+        self.set_asset_root(asset_root.to_path_buf());
+        self.attach_source(source, SourceClockPolicy::ExactCorrelation);
+        Ok(FileIngestResult { input, status })
+    }
+
+    /// Compatibility entry point for video-only MP4. AAC presence is a hard
+    /// error because no explicit AAC backend is supplied.
     pub fn ingest_video(
         &self,
         file: &Path,
@@ -388,35 +447,9 @@ impl Engine {
         openh264_binary: &Path,
         playback: Playback,
     ) -> Result<Input> {
-        if self.staged_snapshot().video.color != eiviz_core::ColorSpace::Bt709Sdr {
-            return Err(EngineError::Admission(
-                "H.264 software decode currently requires explicit Bt709Sdr project profile".into(),
-            ));
-        }
-        let asset = stage_asset(file, asset_root)?;
-        let input = Input {
-            id: InputId::new(),
-            name: asset.original_name.clone(),
-            tags: vec!["video".into(), "h264".into()],
-            groups: vec![],
-            source: InputSource::Video {
-                asset: asset.id,
-                playback: playback.clone(),
-            },
-        };
-        let source = Arc::new(eiviz_io_file::VideoFileSource::open(
-            input.id,
-            &asset_root.join(&asset.relative_path),
-            openh264_binary,
-            playback,
-        )?);
-        self.submit_payload(Command::AddAsset { asset })?;
-        self.submit_payload(Command::AddInput {
-            input: input.clone(),
-        })?;
-        self.set_asset_root(asset_root.to_path_buf());
-        self.attach_source(source, SourceClockPolicy::ExactCorrelation);
-        Ok(input)
+        Ok(self
+            .ingest_file(file, asset_root, openh264_binary, None, playback)?
+            .input)
     }
 
     pub fn set_video_playback(&self, input: InputId, playback: Playback) -> Result<CommandAck> {

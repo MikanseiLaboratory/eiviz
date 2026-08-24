@@ -16,6 +16,7 @@ eiviz-gpu = { workspace = true, optional = true }
 eiviz-media.workspace = true
 eiviz-operations.workspace = true
 eiviz-project.workspace = true
+eiviz-io-file.workspace = true
 eiviz-io-audio.workspace = true
 eiviz-io-decklink.workspace = true
 eiviz-io-ndi.workspace = true

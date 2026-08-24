@@ -1,5 +1,8 @@
+mod audio;
+mod timeline;
 mod video;
 
+pub use audio::{AacMp4Index, AacSample, FileMediaSource, FileMediaStatus};
 pub use video::{H264Mp4Index, H264Sample, VideoFileSource};
 
 use eiviz_core::InputId;

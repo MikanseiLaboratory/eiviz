@@ -1,3 +1,4 @@
+mod aac;
 #[cfg(test)]
 mod bitstream;
 mod encoder;
@@ -9,6 +10,7 @@ mod openh264;
 
 use eiviz_media::{EncodedAccessUnit, EncodedKind, VideoFrame};
 
+pub use aac::{AacDecoderError, AacLcConfig, FdkAacDecoder};
 pub use encoder::{
     DynamicEncoderFactory, EncoderDiagnostics, EncoderSessionRequest, ProgramEncoder,
     ProgramEncoderFactory,

@@ -1,13 +1,11 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AuxiliaryLoadSheddingPolicy,
+    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AudioRoute, AuxiliaryLoadSheddingPolicy,
     CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId, InputSource,
     Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, Project,
-    ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId, Transform2D, TransitionStyle,
-    TransportProfile,
+    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
+    TransitionStyle, TransportProfile,
 };
-#[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
-use eiviz_core::{AudioRoute, RouteMode};
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
@@ -671,18 +669,22 @@ impl DesktopApp {
             self.status = "video ingest: enter an explicit Cisco OpenH264 2.6.0 binary path".into();
             return;
         }
-        let input = match self.engine.ingest_video(
+        let fdk_path = (!self.fdk_aac_path.trim().is_empty())
+            .then(|| std::path::Path::new(self.fdk_aac_path.trim()));
+        let ingest = match self.engine.ingest_file(
             std::path::Path::new(self.video_path.trim()),
             std::path::Path::new(self.asset_root.trim()),
             std::path::Path::new(self.openh264_path.trim()),
+            fdk_path,
             Default::default(),
         ) {
-            Ok(input) => input,
+            Ok(ingest) => ingest,
             Err(error) => {
-                self.status = format!("video ingest: {error}");
+                self.status = format!("file ingest: {error}");
                 return;
             }
         };
+        let input = ingest.input;
         let scene = Scene {
             id: SceneId::new(),
             name: input.name.clone(),
@@ -708,8 +710,28 @@ impl DesktopApp {
             self.status = format!("video preview: {error}");
             return;
         }
+        if matches!(
+            &ingest.status,
+            eiviz_io_file::FileMediaStatus::AudioVideo { .. }
+        ) && let Some(bus) = self.engine.snapshot().audio_matrix.buses.first()
+        {
+            let route = AudioRoute {
+                input: input.id,
+                bus: bus.id,
+                mode: RouteMode::Follow { unit },
+                gain_db: 0.0,
+                muted: false,
+                solo: false,
+                delay_ms: 0.0,
+                pan: 0.0,
+            };
+            if let Err(error) = self.engine.submit_payload(Command::SetAudioRoute { route }) {
+                self.status = format!("file AAC route: {error}");
+                return;
+            }
+        }
         self.selected_scene = Some(scene.id);
-        self.status = format!("video ready: {}", scene.name);
+        self.status = format!("file ready: {} — {}", scene.name, ingest.status);
     }
 
     #[cfg(feature = "ndi")]
@@ -1512,11 +1534,15 @@ impl eframe::App for DesktopApp {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("H.264 MP4");
+                ui.label("H.264/AAC MP4");
                 ui.text_edit_singleline(&mut self.video_path);
                 ui.label("Cisco OpenH264 2.6.0 binary");
                 ui.text_edit_singleline(&mut self.openh264_path);
-                if ui.button("Add Video").clicked() {
+            });
+            ui.horizontal(|ui| {
+                ui.label("License-reviewed FDK AAC binary (required when MP4 has AAC)");
+                ui.text_edit_singleline(&mut self.fdk_aac_path);
+                if ui.button("Add File Media").clicked() {
                     self.add_video();
                 }
             });

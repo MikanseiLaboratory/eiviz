@@ -81,13 +81,14 @@ Cisco's binary license. Compiling OpenH264 source does not receive Cisco's
 binary patent coverage and is not the selected profile. Product distributions
 that encode or decode AVC may still require additional patent review.
 
-The AAC-LC adapter dynamically loads an explicitly selected FDK AAC shared
-library through the upstream encoder C ABI. No FDK binary or source is included
-in this repository. FDK AAC's bespoke upstream license grants no patent rights;
-operators and distributors must review that exact binary, its provenance, and
-all applicable patent/license obligations before enabling the profile. Missing
-or rejected FDK binaries are hard errors; PCM and test bytes are never used as
-AAC substitutes.
+The AAC-LC encode and file-decode adapters dynamically load an explicitly
+selected FDK AAC shared library through the upstream raw-access-unit C ABIs.
+No FDK binary or source is included in this repository. FDK AAC's bespoke
+upstream license grants no patent rights; operators and distributors must
+review that exact binary, its provenance, and all applicable patent/license
+obligations before enabling either profile. Missing or rejected FDK binaries
+are hard errors; AAC is not dropped, and PCM/test bytes or another codec are
+never used as substitutes.
 
 RTMP / SRT
 ----------
