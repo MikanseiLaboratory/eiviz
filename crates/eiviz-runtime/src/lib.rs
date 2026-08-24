@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn slow_sink_does_not_stop_program() {
-        let (mut p, _, _, unit) = setup();
+        let (p, _, _, unit) = setup();
         let mut rt = Runtime::new(48000);
         rt.mark_output_failed("rtmp-primary", "connection reset");
         for _ in 0..10 {
