@@ -1,6 +1,4 @@
-use eiviz_command::{
-    Command, CommandEnvelope, Sequencer, COMMAND_ENVELOPE_VERSION, state_hash,
-};
+use eiviz_command::{COMMAND_ENVELOPE_VERSION, Command, CommandEnvelope, Sequencer, state_hash};
 use eiviz_core::{
     ClientId, CommandId, Input, InputId, InputSource, MixTap, MixingUnit, MixingUnitId, Project,
     Scene, SceneId, SceneItem, SceneItemId, Transform2D,
@@ -220,7 +218,10 @@ fn run_main() -> Result<()> {
         );
         return Ok(());
     }
-    if args.first().is_some_and(|arg| arg == "--help" || arg == "-h") {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--help" || arg == "-h")
+    {
         print_help();
         return Ok(());
     }
@@ -243,10 +244,7 @@ fn run_main() -> Result<()> {
     let memory = consolidate_memory_samples(&tests);
     tests.push(memory);
 
-    let outcome = if tests
-        .iter()
-        .any(|test| test.status == TestStatus::Failed)
-    {
+    let outcome = if tests.iter().any(|test| test.status == TestStatus::Failed) {
         TestStatus::Failed
     } else {
         TestStatus::Passed
@@ -356,10 +354,9 @@ fn run_timing_soak(config: &Config) -> Result<TestEvidence> {
     let frames = seconds.saturating_mul(60_000) / 1_001;
     let end = MediaTime::from_frame_index(frames, NTSC_5994)?;
     let samples = audio_sample_index(frames, 48_000, NTSC_5994)?;
-    let video_nanos = (i128::from(end.ticks())
-        * i128::from(end.timebase().numerator())
-        * 1_000_000_000)
-        / i128::from(end.timebase().denominator());
+    let video_nanos =
+        (i128::from(end.ticks()) * i128::from(end.timebase().numerator()) * 1_000_000_000)
+            / i128::from(end.timebase().denominator());
     let audio_nanos = i128::from(samples) * 1_000_000_000 / 48_000;
     let av_drift_nanos = (audio_nanos - video_nanos).unsigned_abs() as u64;
 
@@ -367,9 +364,12 @@ fn run_timing_soak(config: &Config) -> Result<TestEvidence> {
         RunMode::Virtual => (0, 0, 0),
         RunMode::Wall => run_wall_clock(config.wall_seconds),
     };
-    test.measurements.insert("equivalent_seconds".into(), json!(seconds));
-    test.measurements.insert("equivalent_frames".into(), json!(frames));
-    test.measurements.insert("audio_samples".into(), json!(samples));
+    test.measurements
+        .insert("equivalent_seconds".into(), json!(seconds));
+    test.measurements
+        .insert("equivalent_frames".into(), json!(frames));
+    test.measurements
+        .insert("audio_samples".into(), json!(samples));
     test.measurements
         .insert("av_drift_nanos".into(), json!(av_drift_nanos));
     test.measurements
@@ -466,12 +466,7 @@ fn run_max_graph(config: &Config) -> Result<TestEvidence> {
         .insert("admitted_units".into(), json!(config.graph_units));
     test.measurements
         .insert("estimated_render_vram_bytes".into(), json!(vram));
-    test.assert(
-        "maximum_graph_valid",
-        json!(true),
-        json!(true),
-        true,
-    );
+    test.assert("maximum_graph_valid", json!(true), json!(true), true);
     test.assert(
         "one_beyond_budget_rejected",
         json!(rejected),
@@ -621,7 +616,8 @@ fn execute_command_log(
     commands: &[CommandEnvelope],
     replay: bool,
 ) -> Result<(usize, String, usize, usize)> {
-    let mut sequencer = Sequencer::with_capacities(commands.len(), commands.len().saturating_mul(2));
+    let mut sequencer =
+        Sequencer::with_capacities(commands.len(), commands.len().saturating_mul(2));
     for command in commands {
         sequencer.stage(baseline, command.clone(), MediaTime::ZERO)?;
     }
@@ -867,30 +863,178 @@ fn generate_matrix(json_path: &Path, markdown_path: &Path) -> Result<()> {
 }
 
 fn trace_entries() -> Vec<TraceEntry> {
+    type TraceDefinition<'a> = (
+        &'a str,
+        &'a [&'a str],
+        &'a [&'a str],
+        &'a str,
+        &'a [&'a str],
+    );
+
     let evidence = "target/certification/evidence.json";
-    let maps: [(&str, &[&str], &[&str], &str, &[&str]); 22] = [
-        ("R01", &["eiviz-project::tests", "packaging/tests"], &["FILE-HIL-01"], "pending", &["target/certification/project"]),
-        ("R02", &["eiviz-core::project::tests", "CERT-MAX-ADMITTED-GRAPH"], &[], "not_applicable", &[evidence]),
-        ("R03", &["eiviz-core::graph::tests", "CERT-MAX-ADMITTED-GRAPH"], &[], "not_applicable", &[evidence]),
-        ("R04", &["CERT-TIMING-SOAK", "eiviz-time::tests"], &["TIME-HIL-01..08"], "pending", &[evidence, "target/certification/hil/timing"]),
-        ("R05", &["CERT-MAX-ADMITTED-GRAPH", "eiviz-runtime::tests"], &["GPU-HIL-01..08"], "pending", &[evidence, "target/certification/hil/gpu"]),
-        ("R06", &["CERT-TIMING-SOAK", "eiviz-media::asrc::tests"], &["AUDIO-HIL"], "pending", &[evidence, "target/certification/hil/audio"]),
-        ("R07", &["CERT-FAULT-NIC-OUTAGE", "adapter contract tests"], &["NDI-HIL", "OMT-HIL-01..10", "DECKLINK-HIL"], "pending", &[evidence, "target/certification/hil/io"]),
-        ("R08", &["CERT-FAULT-SINK", "CERT-FAULT-DISK-FULL", "CERT-FAULT-NIC-OUTAGE"], &["DIST-HIL"], "pending", &[evidence, "target/certification/hil/distribution"]),
-        ("R09", &["CERT-COMMAND-FLOOD-REPLAY"], &["CONTROL-HIL"], "pending", &[evidence, "target/certification/hil/control"]),
-        ("R10", &["CERT-TIMING-SOAK", "CERT-MEMORY-QUEUE-HIGH-WATER"], &["GPU-HIL", "TIME-HIL", "AUDIO-HIL"], "pending", &[evidence]),
-        ("R11", &["CI MSRV/fmt/clippy/test", "packaging/tests"], &["WINDOWS-RELEASE-HIL"], "pending", &["target/certification", "target/package"]),
-        ("AC-01", &["eiviz-project round_trip"], &["FILE-HIL-01"], "pending", &["target/certification/project"]),
-        ("AC-02", &["eiviz-project migration tests"], &[], "not_applicable", &["target/certification/project"]),
-        ("AC-03", &["CERT-TIMING-SOAK"], &["TIME-HIL-01"], "pending", &[evidence]),
-        ("AC-04", &["CERT-MAX-ADMITTED-GRAPH", "mixing_graph_rejects_cycle"], &[], "not_applicable", &[evidence]),
-        ("AC-05", &["take_changes_program_pixels_on_same_boundary"], &["AUDIO-HIL"], "pending", &["target/certification/runtime"]),
-        ("AC-06", &["CERT-FAULT-SINK", "CERT-FAULT-DISK-FULL", "CERT-FAULT-NIC-OUTAGE"], &["DIST-HIL"], "pending", &[evidence]),
-        ("AC-07", &["CERT-COMMAND-FLOOD-REPLAY"], &[], "not_applicable", &[evidence]),
-        ("AC-08", &["CERT-MAX-ADMITTED-GRAPH", "CERT-GPU-DEVICE-LOSS"], &["GPU-HIL"], "pending", &[evidence]),
-        ("AC-09", &["CERT-TIMING-SOAK"], &["24H-WALL-SOAK"], "pending", &[evidence, "target/certification/manual/24h"]),
-        ("AC-10", &["CERT-TIMING-SOAK"], &["TIME-HIL-06", "AUDIO-HIL"], "pending", &[evidence, "target/certification/hil/timing"]),
-        ("AC-11", &["adapter contract tests"], &["NDI-HIL", "OMT-HIL", "DECKLINK-HIL"], "pending", &["target/certification/hil/interop"]),
+    let maps: [TraceDefinition<'_>; 22] = [
+        (
+            "R01",
+            &["eiviz-project::tests", "packaging/tests"],
+            &["FILE-HIL-01"],
+            "pending",
+            &["target/certification/project"],
+        ),
+        (
+            "R02",
+            &["eiviz-core::project::tests", "CERT-MAX-ADMITTED-GRAPH"],
+            &[],
+            "not_applicable",
+            &[evidence],
+        ),
+        (
+            "R03",
+            &["eiviz-core::graph::tests", "CERT-MAX-ADMITTED-GRAPH"],
+            &[],
+            "not_applicable",
+            &[evidence],
+        ),
+        (
+            "R04",
+            &["CERT-TIMING-SOAK", "eiviz-time::tests"],
+            &["TIME-HIL-01..08"],
+            "pending",
+            &[evidence, "target/certification/hil/timing"],
+        ),
+        (
+            "R05",
+            &["CERT-MAX-ADMITTED-GRAPH", "eiviz-runtime::tests"],
+            &["GPU-HIL-01..08"],
+            "pending",
+            &[evidence, "target/certification/hil/gpu"],
+        ),
+        (
+            "R06",
+            &["CERT-TIMING-SOAK", "eiviz-media::asrc::tests"],
+            &["AUDIO-HIL"],
+            "pending",
+            &[evidence, "target/certification/hil/audio"],
+        ),
+        (
+            "R07",
+            &["CERT-FAULT-NIC-OUTAGE", "adapter contract tests"],
+            &["NDI-HIL", "OMT-HIL-01..10", "DECKLINK-HIL"],
+            "pending",
+            &[evidence, "target/certification/hil/io"],
+        ),
+        (
+            "R08",
+            &[
+                "CERT-FAULT-SINK",
+                "CERT-FAULT-DISK-FULL",
+                "CERT-FAULT-NIC-OUTAGE",
+            ],
+            &["DIST-HIL"],
+            "pending",
+            &[evidence, "target/certification/hil/distribution"],
+        ),
+        (
+            "R09",
+            &["CERT-COMMAND-FLOOD-REPLAY"],
+            &["CONTROL-HIL"],
+            "pending",
+            &[evidence, "target/certification/hil/control"],
+        ),
+        (
+            "R10",
+            &["CERT-TIMING-SOAK", "CERT-MEMORY-QUEUE-HIGH-WATER"],
+            &["GPU-HIL", "TIME-HIL", "AUDIO-HIL"],
+            "pending",
+            &[evidence],
+        ),
+        (
+            "R11",
+            &["CI MSRV/fmt/clippy/test", "packaging/tests"],
+            &["WINDOWS-RELEASE-HIL"],
+            "pending",
+            &["target/certification", "target/package"],
+        ),
+        (
+            "AC-01",
+            &["eiviz-project round_trip"],
+            &["FILE-HIL-01"],
+            "pending",
+            &["target/certification/project"],
+        ),
+        (
+            "AC-02",
+            &["eiviz-project migration tests"],
+            &[],
+            "not_applicable",
+            &["target/certification/project"],
+        ),
+        (
+            "AC-03",
+            &["CERT-TIMING-SOAK"],
+            &["TIME-HIL-01"],
+            "pending",
+            &[evidence],
+        ),
+        (
+            "AC-04",
+            &["CERT-MAX-ADMITTED-GRAPH", "mixing_graph_rejects_cycle"],
+            &[],
+            "not_applicable",
+            &[evidence],
+        ),
+        (
+            "AC-05",
+            &["take_changes_program_pixels_on_same_boundary"],
+            &["AUDIO-HIL"],
+            "pending",
+            &["target/certification/runtime"],
+        ),
+        (
+            "AC-06",
+            &[
+                "CERT-FAULT-SINK",
+                "CERT-FAULT-DISK-FULL",
+                "CERT-FAULT-NIC-OUTAGE",
+            ],
+            &["DIST-HIL"],
+            "pending",
+            &[evidence],
+        ),
+        (
+            "AC-07",
+            &["CERT-COMMAND-FLOOD-REPLAY"],
+            &[],
+            "not_applicable",
+            &[evidence],
+        ),
+        (
+            "AC-08",
+            &["CERT-MAX-ADMITTED-GRAPH", "CERT-GPU-DEVICE-LOSS"],
+            &["GPU-HIL"],
+            "pending",
+            &[evidence],
+        ),
+        (
+            "AC-09",
+            &["CERT-TIMING-SOAK"],
+            &["24H-WALL-SOAK"],
+            "pending",
+            &[evidence, "target/certification/manual/24h"],
+        ),
+        (
+            "AC-10",
+            &["CERT-TIMING-SOAK"],
+            &["TIME-HIL-06", "AUDIO-HIL"],
+            "pending",
+            &[evidence, "target/certification/hil/timing"],
+        ),
+        (
+            "AC-11",
+            &["adapter contract tests"],
+            &["NDI-HIL", "OMT-HIL", "DECKLINK-HIL"],
+            "pending",
+            &["target/certification/hil/interop"],
+        ),
     ];
     maps.into_iter()
         .map(
