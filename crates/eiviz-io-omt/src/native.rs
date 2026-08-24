@@ -550,7 +550,7 @@ fn rgb_to_studio_yuv(rgb: [u8; 3], profile: OmtColorProfile) -> (u8, u8, u8) {
         ),
         OmtColorProfile::Bt709Limited => (
             ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16,
-            ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128,
+            ((-26 * r - 87 * g + 113 * b + 128) >> 8) + 128,
             ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128,
         ),
     };

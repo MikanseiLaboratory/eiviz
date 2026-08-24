@@ -195,7 +195,7 @@ fn rgb_to_bt709_limited(rgb: [u8; 3], profile: NdiColorProfile) -> (u8, u8, u8) 
         NdiColorProfile::Bt709Limited => {
             let [r, g, b] = rgb.map(i32::from);
             let y = ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-            let u = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
+            let u = ((-26 * r - 87 * g + 113 * b + 128) >> 8) + 128;
             let v = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
             (
                 y.clamp(16, 235) as u8,
