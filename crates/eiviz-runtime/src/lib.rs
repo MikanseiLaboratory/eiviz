@@ -378,7 +378,7 @@ impl Runtime {
         let mut sources = self.generate_sources(project, pts)?;
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
-        for unit_id in snapshot.render.order.iter().copied() {
+        for &unit_id in snapshot.render.order.iter() {
             let Some(unit) = project.mixing_units.get(&unit_id) else {
                 continue;
             };
@@ -388,7 +388,7 @@ impl Runtime {
                 .programs
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
-            let mut pg = self.composite_plan(&pg_plan, &sources, pts)?;
+            let mut pg = self.composite_plan(pg_plan, &sources, pts)?;
             if let Some(transition) = self.transitions.get(&unit_id).cloned() {
                 let from = self.composite_plan(&transition.from, &sources, pts)?;
                 let elapsed = transition
@@ -408,7 +408,7 @@ impl Runtime {
                 .previews
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
-            let pv = self.composite_plan(&pv_plan, &sources, pts)?;
+            let pv = self.composite_plan(pv_plan, &sources, pts)?;
             self.program_slot(unit.id)
                 .push(pg.clone())
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
