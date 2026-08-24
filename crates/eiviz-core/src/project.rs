@@ -3,14 +3,14 @@ use crate::graph::MixingGraph;
 use crate::ids::*;
 use crate::input::{DeviceBinding, Input, InputSource, Playback};
 use crate::mixing::MixingUnit;
-use crate::output::{Multiview, MultiviewSource, Output};
+use crate::output::{Multiview, MultiviewSource, Output, OutputVideoSource};
 use crate::scene::Scene;
 use crate::{DomainError, Result};
 use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -379,6 +379,7 @@ impl Project {
             id: OutputId::new(),
             name: "Program Window".into(),
             owner: unit.id,
+            video_source: OutputVideoSource::Program,
             kind: crate::OutputKind::ProgramWindow,
             enabled: true,
             distribution: None,
@@ -506,6 +507,20 @@ impl Project {
                     "output {} missing from owner {}",
                     output.id, output.owner
                 )));
+            }
+            if let OutputVideoSource::Multiview(view_id) = output.video_source {
+                let view = self.multiviews.get(&view_id).ok_or_else(|| {
+                    DomainError::InvalidRef(format!(
+                        "output {} -> multiview {}",
+                        output.id, view_id
+                    ))
+                })?;
+                if view.owner != output.owner {
+                    return Err(DomainError::InvalidRef(format!(
+                        "output {} and multiview {} must share owner {}",
+                        output.id, view_id, output.owner
+                    )));
+                }
             }
             if let crate::OutputKind::DeckLink { binding }
             | crate::OutputKind::AudioDevice { binding } = output.kind
@@ -1072,6 +1087,9 @@ mod tests {
         v.as_object_mut().unwrap().remove("missing_media");
         v.as_object_mut().unwrap().remove("auxiliary_load_shedding");
         v["audio"].as_object_mut().unwrap().remove("resampling");
+        for output in v["outputs"].as_object_mut().unwrap().values_mut() {
+            output.as_object_mut().unwrap().remove("video_source");
+        }
         let loaded: Project = serde_json::from_value(v).unwrap();
         assert_eq!(loaded.compositor, CompositorBackend::CpuReference);
         assert_eq!(loaded.missing_media, MissingMediaPolicy::Slate);
@@ -1080,6 +1098,12 @@ mod tests {
             AuxiliaryLoadSheddingPolicy::Disabled
         );
         assert_eq!(loaded.audio.resampling, AudioResamplingPolicy::ExactRate);
+        assert!(
+            loaded
+                .outputs
+                .values()
+                .all(|output| output.video_source == OutputVideoSource::Program)
+        );
     }
 
     #[test]
@@ -1143,6 +1167,7 @@ mod tests {
             id: OutputId::new(),
             name: "RTMP".into(),
             owner,
+            video_source: OutputVideoSource::Program,
             kind: crate::OutputKind::Rtmp {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },

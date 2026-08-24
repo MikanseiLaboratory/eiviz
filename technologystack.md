@@ -17,7 +17,7 @@
 | zip | 4.3.x | portable `.eiviz` |
 | tiny_http / tungstenite | 0.12.0 / 0.30.0 | authenticated HTTP + WebSocket control API |
 | midir | 0.11.0 | optional `midi` feature。WinMM/CoreMIDI/ALSA native input only |
-| gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
+| gpu-video | 非採用 | 公開版は wgpu 29、eiviz は単一 wgpu 25。fake capabilityを削除（ADR-0015） |
 | Smelter | 非同梱 | ADR-0002 |
 | openmediatransport-rs | git rev 2a0a9d31 | Pure Rust OMT、MIT、HIL pending |
 | grafton-ndi | 1.0.0 exact | Apache-2.0 wrapper。NDI 6 SDK headers/runtimeは別途必要。`ndi` feature、HIL pending |

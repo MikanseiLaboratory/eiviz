@@ -1,8 +1,10 @@
 use eiviz_core::{AssetId, AssetRef, MissingMediaPolicy, Project, SCHEMA_VERSION};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
+use std::path::Component;
 use std::path::{Path, PathBuf};
 use zip::{ZipArchive, ZipWriter};
 
@@ -128,6 +130,8 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     // v5 adds field order and color-conversion policy. Serde defaults preserve
     // progressive scan and Exact color handling; migration never enables a
     // conversion, tone map, or extended profile.
+    // v6 makes each Output's video source explicit. Older outputs retain the
+    // owning Mixing Unit's Program feed; migration never selects a Multiview.
     project.schema_version = SCHEMA_VERSION;
     project.validate()?;
     Ok(project)
@@ -184,7 +188,13 @@ pub fn export_portable(project: &Project, dest: &Path, asset_root: &Path) -> Res
         if asset.missing {
             continue;
         }
-        let src = asset_root.join(&asset.relative_path);
+        let relative = safe_relative_path(&asset.relative_path).ok_or_else(|| {
+            ProjectError::Package(format!(
+                "asset {} has unsafe relative path {:?}",
+                asset.original_name, asset.relative_path
+            ))
+        })?;
+        let src = asset_root.join(relative);
         let bytes =
             fs::read(&src).map_err(|e| ProjectError::Io(format!("missing asset {src:?}: {e}")))?;
         let actual = hash_bytes(&bytes);
@@ -205,37 +215,110 @@ pub fn export_portable(project: &Project, dest: &Path, asset_root: &Path) -> Res
 }
 
 pub fn import_portable(package: &Path, dest_dir: &Path) -> Result<Project> {
-    fs::create_dir_all(dest_dir).map_err(|e| ProjectError::Io(e.to_string()))?;
+    import_portable_with_writer(package, dest_dir, |path, bytes| fs::write(path, bytes))
+}
+
+fn import_portable_with_writer(
+    package: &Path,
+    dest_dir: &Path,
+    mut write_asset: impl FnMut(&Path, &[u8]) -> std::io::Result<()>,
+) -> Result<Project> {
     let file = File::open(package).map_err(|e| ProjectError::Io(e.to_string()))?;
     let mut zip = ZipArchive::new(file).map_err(|e| ProjectError::Package(e.to_string()))?;
     let mut project: Option<Project> = None;
+    let mut assets = BTreeMap::<String, Vec<u8>>::new();
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
             .map_err(|e| ProjectError::Package(e.to_string()))?;
         let name = entry.name().to_string();
+        if entry.is_dir() {
+            return Err(ProjectError::Package(format!(
+                "unexpected directory entry {name:?}"
+            )));
+        }
         let mut buf = Vec::new();
         entry
             .read_to_end(&mut buf)
             .map_err(|e| ProjectError::Io(e.to_string()))?;
         if name == "project.json" {
+            if project.is_some() {
+                return Err(ProjectError::Package("duplicate project.json entry".into()));
+            }
             project = Some(migrate(serde_json::from_slice(&buf)?)?);
-        } else if let Some(hash) = name.strip_prefix("assets/") {
-            let path = dest_dir.join("assets").join(hash);
-            fs::create_dir_all(path.parent().unwrap())
-                .map_err(|e| ProjectError::Io(e.to_string()))?;
-            fs::write(&path, buf).map_err(|e| ProjectError::Io(e.to_string()))?;
+        } else if let Some(hash) = portable_asset_hash(&name) {
+            if hash_bytes(&buf) != hash {
+                return Err(ProjectError::Package(format!(
+                    "portable asset {hash} content hash mismatch"
+                )));
+            }
+            if assets.insert(hash.to_owned(), buf).is_some() {
+                return Err(ProjectError::Package(format!(
+                    "duplicate portable asset {hash}"
+                )));
+            }
+        } else {
+            return Err(ProjectError::Package(format!(
+                "unsafe or unexpected package entry {name:?}"
+            )));
         }
     }
     let mut project = project.ok_or_else(|| ProjectError::Package("no project.json".into()))?;
+    let expected = project
+        .assets
+        .values()
+        .filter(|asset| !asset.missing)
+        .map(|asset| asset.sha256_hex.as_str())
+        .collect::<BTreeSet<_>>();
+    if let Some(hash) = expected
+        .iter()
+        .find(|hash| !assets.contains_key(**hash))
+        .copied()
+    {
+        return Err(ProjectError::Package(format!(
+            "portable package is missing asset {hash}"
+        )));
+    }
+    if let Some(hash) = assets.keys().find(|hash| !expected.contains(hash.as_str())) {
+        return Err(ProjectError::Package(format!(
+            "portable package contains unreferenced asset {hash}"
+        )));
+    }
+    fs::create_dir_all(dest_dir).map_err(|e| ProjectError::Io(e.to_string()))?;
+    let asset_dir = dest_dir.join("assets");
+    fs::create_dir_all(&asset_dir).map_err(|e| ProjectError::Io(e.to_string()))?;
+    for (hash, bytes) in &assets {
+        write_asset(&asset_dir.join(hash), bytes).map_err(|e| ProjectError::Io(e.to_string()))?;
+    }
     for asset in project.assets.values_mut() {
-        let p = dest_dir.join("assets").join(&asset.sha256_hex);
         asset.relative_path = format!("assets/{}", asset.sha256_hex);
-        asset.missing = !p.exists();
+        asset.missing = !assets.contains_key(&asset.sha256_hex);
     }
     project.validate()?;
     save_atomic(&project, &dest_dir.join("project.json"))?;
     Ok(project)
+}
+
+fn portable_asset_hash(name: &str) -> Option<&str> {
+    let hash = name.strip_prefix("assets/")?;
+    (hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(hash)
+}
+
+fn safe_relative_path(value: &str) -> Option<PathBuf> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(path.to_path_buf())
 }
 
 pub fn ingest_asset(project: &mut Project, file: &Path, dest_root: &Path) -> Result<AssetRef> {
@@ -438,6 +521,7 @@ mod tests {
             id: eiviz_core::OutputId::new(),
             name: "legacy RTMP".into(),
             owner,
+            video_source: eiviz_core::OutputVideoSource::Program,
             kind: eiviz_core::OutputKind::Rtmp {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },
@@ -544,6 +628,121 @@ mod tests {
         assert!(matches!(error, ProjectError::Io(_)));
         assert!(root.is_dir());
         assert!(!root.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn portable_corruption_and_truncation_are_deterministic_and_never_panic() {
+        let root = std::env::temp_dir().join(format!("eiviz-portable-fuzz-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let valid = root.join("valid.eiviz");
+        export_portable(&Project::new("fuzz seed"), &valid, &root).unwrap();
+        let seed = fs::read(&valid).unwrap();
+
+        for (case, end) in [0, 1, seed.len() / 4, seed.len() / 2, seed.len() - 1]
+            .into_iter()
+            .enumerate()
+        {
+            let path = root.join(format!("truncate-{case}.eiviz"));
+            fs::write(&path, &seed[..end]).unwrap();
+            let result = std::panic::catch_unwind(|| {
+                import_portable(&path, &root.join(format!("truncate-{case}")))
+            });
+            assert!(result.is_ok(), "truncation case {case} panicked");
+            assert!(
+                result.unwrap().is_err(),
+                "truncation case {case} was accepted"
+            );
+        }
+
+        for offset in (0..seed.len()).step_by(97) {
+            let mut mutated = seed.clone();
+            mutated[offset] ^= 0xa5;
+            let path = root.join(format!("mutate-{offset}.eiviz"));
+            fs::write(&path, mutated).unwrap();
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let _ = import_portable(&path, &root.join(format!("mutate-{offset}")));
+                })
+                .is_ok(),
+                "mutation at byte {offset} panicked"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn portable_import_rejects_path_traversal_and_hash_spoofing() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-portable-traversal-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let package = root.join("traversal.eiviz");
+        let file = File::create(&package).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("project.json", options).unwrap();
+        zip.write_all(&serde_json::to_vec(&Project::new("safe")).unwrap())
+            .unwrap();
+        zip.start_file("assets/../../escaped", options).unwrap();
+        zip.write_all(b"owned").unwrap();
+        zip.finish().unwrap();
+
+        let error = import_portable(&package, &root.join("dest")).unwrap_err();
+        assert!(error.to_string().contains("unsafe or unexpected"));
+        assert!(!root.join("escaped").exists());
+
+        let mut project = Project::new("unsafe export");
+        let asset = AssetRef {
+            id: eiviz_core::AssetId::new(),
+            original_name: "escape".into(),
+            sha256_hex: hash_bytes(b"owned"),
+            relative_path: "../escaped".into(),
+            missing: false,
+        };
+        project.assets.insert(asset.id, asset);
+        fs::write(root.join("escaped"), b"owned").unwrap();
+        assert!(
+            export_portable(&project, &root.join("unsafe.eiviz"), &root)
+                .unwrap_err()
+                .to_string()
+                .contains("unsafe relative path")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn portable_import_propagates_injected_disk_write_failure_without_manifest() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-portable-disk-full-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).unwrap();
+        let bytes = b"asset bytes";
+        let hash = hash_bytes(bytes);
+        fs::write(root.join("assets/source"), bytes).unwrap();
+        let mut project = Project::new("disk failure");
+        let asset = AssetRef {
+            id: eiviz_core::AssetId::new(),
+            original_name: "source".into(),
+            sha256_hex: hash,
+            relative_path: "assets/source".into(),
+            missing: false,
+        };
+        project.assets.insert(asset.id, asset);
+        let package = root.join("portable.eiviz");
+        export_portable(&project, &package, &root).unwrap();
+        let destination = root.join("destination");
+
+        let error = import_portable_with_writer(&package, &destination, |_path, _bytes| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "injected disk full",
+            ))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("injected disk full"));
+        assert!(!destination.join("project.json").exists());
         let _ = fs::remove_dir_all(root);
     }
 

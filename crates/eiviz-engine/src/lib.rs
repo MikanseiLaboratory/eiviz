@@ -9,7 +9,8 @@ use eiviz_command::{
 use eiviz_core::CompositorBackend;
 use eiviz_core::{
     AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
-    MixingGraph, MixingUnitId, MultiviewId, Output, OutputId, OutputKind, Playback, Project,
+    MixingGraph, MixingUnitId, MultiviewId, Output, OutputId, OutputKind, OutputVideoSource,
+    Playback, Project,
 };
 use eiviz_io_stream::{EncodedFanout, EncoderCapabilities, SinkDiagnostics};
 use eiviz_media::{
@@ -276,6 +277,7 @@ struct Inner {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EncodingProfileKey {
     owner: MixingUnitId,
+    source: OutputVideoSource,
     video: H264EncoderProfile,
     audio: AacEncoderProfile,
 }
@@ -1254,7 +1256,7 @@ impl Engine {
         let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
         let mut distribution_errors = Vec::new();
         for profile in distribution_profiles {
-            let Some(video) = result.programs.get(&profile.owner) else {
+            let Some(video) = routed_video_frame(&result, profile.owner, profile.source) else {
                 continue;
             };
             let session = g
@@ -1301,18 +1303,18 @@ impl Engine {
                 sink = sink.name()
             );
             let _entered = span.enter();
-            let Some((enabled, owner)) = g
+            let Some((enabled, owner, source)) = g
                 .project
                 .outputs
                 .get(&output_id)
-                .map(|output| (output.enabled, output.owner))
+                .map(|output| (output.enabled, output.owner, output.video_source))
             else {
                 continue;
             };
             if !enabled {
                 continue;
             }
-            if let Some(frame) = result.programs.get(&owner) {
+            if let Some(frame) = routed_video_frame(&result, owner, source) {
                 if let Err(e) = sink.push_video(frame) {
                     tracing::error!(error = %e, "video output push failed");
                     g.runtime.mark_output_failed(sink.name(), e.to_string());
@@ -1800,6 +1802,17 @@ fn current_boundary_time(inner: &Inner) -> Result<eiviz_time::MediaTime> {
         .map_err(|error| EngineError::Admission(format!("media boundary overflow: {error}")))
 }
 
+fn routed_video_frame(
+    result: &TickResult,
+    owner: MixingUnitId,
+    source: OutputVideoSource,
+) -> Option<&VideoFrame> {
+    match source {
+        OutputVideoSource::Program => result.programs.get(&owner),
+        OutputVideoSource::Multiview(view) => result.multiviews.get(&view),
+    }
+}
+
 fn validate_distribution_admission(inner: &Inner, project: &Project) -> Result<()> {
     for output in project
         .outputs
@@ -1905,6 +1918,7 @@ fn encoding_profile_key(output: &Output) -> Result<EncodingProfileKey> {
         .ok_or(EngineError::NotDistributionOutput(output.id))?;
     Ok(EncodingProfileKey {
         owner: output.owner,
+        source: output.video_source,
         video: profile.video.clone(),
         audio: profile.audio.clone(),
     })
@@ -2781,6 +2795,7 @@ mod tests {
             id: OutputId::new(),
             name: "Mix B output".into(),
             owner: unit_b.id,
+            video_source: OutputVideoSource::Program,
             kind: OutputKind::Omt { url: "test".into() },
             enabled: true,
             distribution: None,
@@ -2799,6 +2814,56 @@ mod tests {
         engine.tick().unwrap();
         assert_eq!(sink_a.pixels.lock()[0], [255, 0, 0, 255]);
         assert_eq!(sink_b.pixels.lock()[0], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn output_registry_routes_whole_multiview_to_individual_media_sink() {
+        let engine = Engine::new("multiview route");
+        let owner = engine.primary_unit();
+        let view = eiviz_core::Multiview {
+            id: MultiviewId::new(),
+            name: "black then program".into(),
+            owner,
+            columns: 2,
+            rows: 1,
+            tiles: vec![
+                eiviz_core::MultiviewTile {
+                    column: 0,
+                    row: 0,
+                    source: eiviz_core::MultiviewSource::Black,
+                },
+                eiviz_core::MultiviewTile {
+                    column: 1,
+                    row: 0,
+                    source: eiviz_core::MultiviewSource::Program(owner),
+                },
+            ],
+        };
+        engine
+            .submit_payload(Command::AddMultiview { view: view.clone() })
+            .unwrap();
+        let output = Output {
+            id: OutputId::new(),
+            name: "multiview OMT".into(),
+            owner,
+            video_source: OutputVideoSource::Multiview(view.id),
+            kind: OutputKind::Omt {
+                url: "test-multiview".into(),
+            },
+            enabled: true,
+            distribution: None,
+        };
+        engine
+            .submit_payload(Command::AddOutput {
+                output: output.clone(),
+            })
+            .unwrap();
+        let sink = Arc::new(PixelSink::new("multiview"));
+        engine.attach_output_sink(output.id, sink.clone()).unwrap();
+        let tick = engine.tick().unwrap();
+
+        assert_eq!(sink.pixels.lock()[0], [0, 0, 0, 255]);
+        assert_eq!(tick.multiviews[&view.id].pixel(0, 0), [0, 0, 0, 255]);
     }
 
     #[test]
@@ -2927,6 +2992,7 @@ mod tests {
             id: OutputId::new(),
             name: format!("record {}", path.display()),
             owner: engine.primary_unit(),
+            video_source: OutputVideoSource::Program,
             kind: OutputKind::Mp4 {
                 path: path.display().to_string(),
             },
@@ -2998,6 +3064,7 @@ mod tests {
             id: OutputId::new(),
             name: "RTMP".into(),
             owner: engine.primary_unit(),
+            video_source: OutputVideoSource::Program,
             kind: OutputKind::Rtmp {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },

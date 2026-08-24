@@ -21,7 +21,6 @@ eiviz-io-audio.workspace = true
 eiviz-io-decklink.workspace = true
 eiviz-io-ndi.workspace = true
 eiviz-io-omt.workspace = true
-eiviz-codec-gpu-video.workspace = true
 eframe.workspace = true
 egui.workspace = true
 tracing.workspace = true
@@ -37,3 +36,8 @@ audio-pipewire = ["audio-cpal", "eiviz-io-audio/pipewire"]
 # Separate distribution profile: requires an operator-installed Steinberg ASIO SDK.
 audio-asio = ["audio-cpal", "eiviz-io-audio/asio"]
 midi = ["eiviz-control/midi"]
+
+[dev-dependencies]
+eiviz-codec-software.workspace = true
+eiviz-io-stream.workspace = true
+eiviz-time.workspace = true

@@ -927,9 +927,74 @@ fn resident_memory_bytes() -> Option<u64> {
     {
         let statm = fs::read_to_string("/proc/self/statm").ok()?;
         let resident_pages = statm.split_whitespace().nth(1)?.parse::<u64>().ok()?;
-        Some(resident_pages.saturating_mul(4_096))
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        (page_size > 0).then(|| resident_pages.saturating_mul(page_size as u64))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem::{size_of, zeroed};
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { zeroed() };
+        counters.cb = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).ok()?;
+        let success =
+            unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, counters.cb) };
+        (success != 0).then(|| counters.WorkingSetSize as u64)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        #[repr(C)]
+        struct TimeValue {
+            seconds: i32,
+            microseconds: i32,
+        }
+        #[repr(C)]
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time: TimeValue,
+            system_time: TimeValue,
+            policy: i32,
+            suspend_count: i32,
+        }
+        unsafe extern "C" {
+            fn mach_task_self() -> u32;
+            fn task_info(target: u32, flavor: u32, info: *mut i32, count: *mut u32) -> i32;
+        }
+        const MACH_TASK_BASIC_INFO: u32 = 20;
+        let mut info = MachTaskBasicInfo {
+            virtual_size: 0,
+            resident_size: 0,
+            resident_size_max: 0,
+            user_time: TimeValue {
+                seconds: 0,
+                microseconds: 0,
+            },
+            system_time: TimeValue {
+                seconds: 0,
+                microseconds: 0,
+            },
+            policy: 0,
+            suspend_count: 0,
+        };
+        let mut count =
+            u32::try_from(std::mem::size_of::<MachTaskBasicInfo>() / std::mem::size_of::<i32>())
+                .ok()?;
+        let status = unsafe {
+            task_info(
+                mach_task_self(),
+                MACH_TASK_BASIC_INFO,
+                (&raw mut info).cast(),
+                &raw mut count,
+            )
+        };
+        (status == 0).then_some(info.resident_size)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         None
     }
@@ -979,7 +1044,10 @@ fn trace_entries() -> Vec<TraceEntry> {
     let maps: [TraceDefinition<'_>; 23] = [
         (
             "R01",
-            &["eiviz-project::tests", "packaging/tests"],
+            &[
+                "eiviz-project corruption/truncation/path traversal/disk-write tests",
+                "packaging/tests",
+            ],
             &["FILE-HIL-01"],
             "pending",
             &["target/certification/project"],
@@ -993,7 +1061,11 @@ fn trace_entries() -> Vec<TraceEntry> {
         ),
         (
             "R03",
-            &["eiviz-core::graph::tests", "CERT-MAX-ADMITTED-GRAPH"],
+            &[
+                "eiviz-core::graph::tests",
+                "output_registry_routes_whole_multiview_to_individual_media_sink",
+                "CERT-MAX-ADMITTED-GRAPH",
+            ],
             &[],
             "not_applicable",
             &[evidence],
@@ -1018,7 +1090,11 @@ fn trace_entries() -> Vec<TraceEntry> {
         ),
         (
             "R06",
-            &["CERT-TIMING-SOAK", "eiviz-media::asrc::tests"],
+            &[
+                "CERT-TIMING-SOAK",
+                "eiviz-media::asrc::tests",
+                "check-audio-callbacks.py",
+            ],
             &["AUDIO-HIL"],
             "pending",
             &[evidence, "target/certification/hil/audio"],
@@ -1036,6 +1112,7 @@ fn trace_entries() -> Vec<TraceEntry> {
                 "CERT-FAULT-SINK",
                 "CERT-FAULT-DISK-FULL",
                 "CERT-FAULT-NIC-OUTAGE",
+                "desktop_mapping_reaches_engine_mock_encoder_and_two_fanout_sinks",
             ],
             &["DIST-HIL"],
             "pending",
@@ -1050,21 +1127,31 @@ fn trace_entries() -> Vec<TraceEntry> {
         ),
         (
             "R10",
-            &["CERT-TIMING-SOAK", "CERT-MEMORY-QUEUE-HIGH-WATER"],
+            &[
+                "CERT-TIMING-SOAK",
+                "CERT-MEMORY-QUEUE-HIGH-WATER (Linux/Windows/macOS APIs)",
+            ],
             &["GPU-HIL", "TIME-HIL", "AUDIO-HIL"],
             "pending",
             &[evidence],
         ),
         (
             "R11",
-            &["CI MSRV/fmt/clippy/test", "packaging/tests"],
+            &[
+                "CI MSRV/fmt/clippy/test",
+                "CI Miri/AddressSanitizer/Loom",
+                "packaging/tests",
+            ],
             &["WINDOWS-RELEASE-HIL"],
             "pending",
             &["target/certification", "target/package"],
         ),
         (
             "AC-01",
-            &["eiviz-project round_trip"],
+            &[
+                "eiviz-project round_trip",
+                "portable_corruption_and_truncation_are_deterministic_and_never_panic",
+            ],
             &["FILE-HIL-01"],
             "pending",
             &["target/certification/project"],
@@ -1103,6 +1190,7 @@ fn trace_entries() -> Vec<TraceEntry> {
                 "CERT-FAULT-SINK",
                 "CERT-FAULT-DISK-FULL",
                 "CERT-FAULT-NIC-OUTAGE",
+                "desktop_mapping_reaches_engine_mock_encoder_and_two_fanout_sinks",
             ],
             &["DIST-HIL"],
             "pending",

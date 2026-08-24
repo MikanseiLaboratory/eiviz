@@ -23,7 +23,7 @@
    - Desktop は asset の解決 path、期待 SHA-256、実 SHA-256、適用 policy を表示する。
      path 不在または hash 不一致を別名・同名ファイルで置換しない。
 3. **Codec / audio device / I/O も同じ。**
-   - software encode と gpu-video、WASAPI と ASIO は別の明示 profile / feature。選択した側が使えなければエラーまたは capability 不足表示であり、他方へ黙って乗り換えない。
+   - software/external encode、WASAPI、ASIO は別の明示 profile / feature。選択した側が使えなければエラーまたは capability 不足表示であり、他方へ黙って乗り換えない。互換実装のないgpu-videoはcapabilityとして表示しない（ADR-0015）。
    - DeviceBinding は列挙済み hardware ID だけで解決する。表示名検索は行わない。
      再割当は versioned `UpdateDeviceBinding` command が old/new ID を一境界で更新する。
 4. **Stream Deck ロジックは本リポジトリに置かない。**

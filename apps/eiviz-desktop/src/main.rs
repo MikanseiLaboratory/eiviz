@@ -2,9 +2,9 @@ use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
     AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, AudioRoute, AuxiliaryLoadSheddingPolicy,
     CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId, InputSource,
-    Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, Project,
-    ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId, ToneMapPolicy,
-    Transform2D, TransitionStyle, TransportProfile, VideoFormat,
+    Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId, OutputKind,
+    OutputVideoSource, Project, ReconnectProfile, RouteMode, Scene, SceneId, SceneItem,
+    SceneItemId, ToneMapPolicy, Transform2D, TransitionStyle, TransportProfile, VideoFormat,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
@@ -112,6 +112,7 @@ struct DesktopApp {
     rtmp_url: String,
     srt_url: String,
     recording_path: String,
+    output_multiview: Option<MultiviewId>,
     omt_address: String,
     omt_output_name: String,
     omt_output_uyvy: bool,
@@ -190,7 +191,80 @@ enum RecoveryPrompt {
     },
 }
 
+fn desktop_distribution_output(
+    transport_name: &str,
+    endpoint: &str,
+    owner: eiviz_core::MixingUnitId,
+    video_source: OutputVideoSource,
+) -> Result<Output, String> {
+    let (name, kind, transport) = match transport_name {
+        "rtmp" => (
+            "RTMP output".to_owned(),
+            OutputKind::Rtmp {
+                url: endpoint.to_owned(),
+            },
+            TransportProfile::RtmpPublish {
+                chunk_size: 4096,
+                connect_timeout_ms: 5_000,
+            },
+        ),
+        "srt" => (
+            "SRT output".to_owned(),
+            OutputKind::Srt {
+                url: endpoint.to_owned(),
+            },
+            TransportProfile::SrtCallerMpegTs {
+                latency_ms: 120,
+                stream_id: None,
+                connect_timeout_ms: 5_000,
+            },
+        ),
+        "mp4" => (
+            "Fragmented MP4 output".to_owned(),
+            OutputKind::Mp4 {
+                path: endpoint.to_owned(),
+            },
+            TransportProfile::FragmentedMp4 {
+                recover_incomplete_tail: true,
+            },
+        ),
+        _ => return Err(format!("unknown distribution transport {transport_name}")),
+    };
+    Ok(Output {
+        id: OutputId::new(),
+        name,
+        owner,
+        video_source,
+        kind,
+        enabled: false,
+        distribution: Some(DistributionProfile {
+            video: H264EncoderProfile::CiscoOpenH26426 {
+                bitrate_bps: 8_000_000,
+                keyframe_interval_frames: 120,
+                level_idc: 42,
+            },
+            audio: AacEncoderProfile::FdkAacLc {
+                bitrate_bps: 192_000,
+                sample_rate: 48_000,
+                channels: 2,
+            },
+            transport,
+            queue_capacity: 256,
+            reconnect: ReconnectProfile {
+                initial_delay_ms: 250,
+                max_delay_ms: 10_000,
+                max_attempts: 0,
+            },
+        }),
+    })
+}
+
 impl DesktopApp {
+    fn selected_output_source(&self) -> OutputVideoSource {
+        self.output_multiview
+            .map_or(OutputVideoSource::Program, OutputVideoSource::Multiview)
+    }
+
     fn new(
         cc: &eframe::CreationContext<'_>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -302,6 +376,7 @@ impl DesktopApp {
             rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
             srt_url: "srt://127.0.0.1:9000".into(),
             recording_path: "recording.mp4".into(),
+            output_multiview: None,
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
             omt_output_name: "eiviz Program".into(),
             omt_output_uyvy: false,
@@ -581,6 +656,7 @@ impl DesktopApp {
             id: OutputId::new(),
             name: name.clone(),
             owner,
+            video_source: self.selected_output_source(),
             kind: OutputKind::DeckLink {
                 binding: binding.id,
             },
@@ -906,6 +982,7 @@ impl DesktopApp {
             id: OutputId::new(),
             name: name.clone(),
             owner,
+            video_source: self.selected_output_source(),
             kind: OutputKind::Ndi { name: name.clone() },
             enabled: true,
             distribution: None,
@@ -1104,6 +1181,7 @@ impl DesktopApp {
             id: OutputId::new(),
             name: name.clone(),
             owner,
+            video_source: OutputVideoSource::Program,
             kind: OutputKind::AudioDevice {
                 binding: binding.id,
             },
@@ -1186,67 +1264,23 @@ impl DesktopApp {
     }
 
     fn configure_distribution(&mut self, transport_name: &str, owner: eiviz_core::MixingUnitId) {
-        let (name, kind, transport) = match transport_name {
-            "rtmp" => (
-                "RTMP Program".to_owned(),
-                OutputKind::Rtmp {
-                    url: self.rtmp_url.trim().to_owned(),
-                },
-                TransportProfile::RtmpPublish {
-                    chunk_size: 4096,
-                    connect_timeout_ms: 5_000,
-                },
-            ),
-            "srt" => (
-                "SRT Program".to_owned(),
-                OutputKind::Srt {
-                    url: self.srt_url.trim().to_owned(),
-                },
-                TransportProfile::SrtCallerMpegTs {
-                    latency_ms: 120,
-                    stream_id: None,
-                    connect_timeout_ms: 5_000,
-                },
-            ),
-            "mp4" => (
-                "Fragmented MP4 Program".to_owned(),
-                OutputKind::Mp4 {
-                    path: self.recording_path.trim().to_owned(),
-                },
-                TransportProfile::FragmentedMp4 {
-                    recover_incomplete_tail: true,
-                },
-            ),
-            _ => {
-                self.status = format!("unknown distribution transport {transport_name}");
+        let endpoint = match transport_name {
+            "rtmp" => self.rtmp_url.trim(),
+            "srt" => self.srt_url.trim(),
+            "mp4" => self.recording_path.trim(),
+            _ => "",
+        };
+        let output = match desktop_distribution_output(
+            transport_name,
+            endpoint,
+            owner,
+            self.selected_output_source(),
+        ) {
+            Ok(output) => output,
+            Err(error) => {
+                self.status = error;
                 return;
             }
-        };
-        let output = Output {
-            id: OutputId::new(),
-            name,
-            owner,
-            kind,
-            enabled: false,
-            distribution: Some(DistributionProfile {
-                video: H264EncoderProfile::CiscoOpenH26426 {
-                    bitrate_bps: 8_000_000,
-                    keyframe_interval_frames: 120,
-                    level_idc: 42,
-                },
-                audio: AacEncoderProfile::FdkAacLc {
-                    bitrate_bps: 192_000,
-                    sample_rate: 48_000,
-                    channels: 2,
-                },
-                transport,
-                queue_capacity: 256,
-                reconnect: ReconnectProfile {
-                    initial_delay_ms: 250,
-                    max_delay_ms: 10_000,
-                    max_attempts: 0,
-                },
-            }),
         };
         match self.engine.configure_distribution_output(output) {
             Ok(_) => {
@@ -1293,6 +1327,168 @@ impl DesktopApp {
             return Some(self.wgpu_preview.show(ui, texture_id, texture));
         }
         show_frame(ui, self.engine.last_multiview(view), texture_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eiviz_codec_software::{
+        EncoderDiagnostics, EncoderSessionRequest, ProgramEncoder, ProgramEncoderFactory,
+    };
+    use eiviz_io_stream::EncoderCapabilities;
+    use eiviz_media::{
+        AudioBuffer, EncodedAccessUnit, EncodedKind, EncodedStreamConfig, VideoFrame,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct SmokeFactory {
+        encodes: Arc<AtomicU64>,
+    }
+
+    struct SmokeEncoder {
+        config: EncodedStreamConfig,
+        encodes: Arc<AtomicU64>,
+    }
+
+    impl ProgramEncoderFactory for SmokeFactory {
+        fn create(
+            &self,
+            _request: &EncoderSessionRequest,
+        ) -> eiviz_media::Result<Box<dyn ProgramEncoder>> {
+            Ok(Box::new(SmokeEncoder {
+                config: EncodedStreamConfig {
+                    h264_sps: vec![0x67, 66, 0, 31].into(),
+                    h264_pps: vec![0x68, 0].into(),
+                    aac_audio_specific_config: vec![0x11, 0x90].into(),
+                    video_width: 1920,
+                    video_height: 1080,
+                    video_timescale: 60_000,
+                    video_sample_duration: 1001,
+                    audio_sample_rate: 48_000,
+                    audio_channels: 2,
+                },
+                encodes: self.encodes.clone(),
+            }))
+        }
+
+        fn description(&self) -> String {
+            "desktop smoke mock".into()
+        }
+    }
+
+    impl ProgramEncoder for SmokeEncoder {
+        fn stream_config(&self) -> &EncodedStreamConfig {
+            &self.config
+        }
+
+        fn encode(
+            &mut self,
+            video: &VideoFrame,
+            _audio: &AudioBuffer,
+        ) -> eiviz_media::Result<Vec<Arc<EncodedAccessUnit>>> {
+            self.encodes.fetch_add(1, Ordering::Relaxed);
+            Ok(vec![
+                Arc::new(EncodedAccessUnit {
+                    pts: video.pts,
+                    dts: Some(video.pts),
+                    keyframe: true,
+                    bytes: vec![0, 0, 0, 1, 0x65, 1].into(),
+                    kind: EncodedKind::Avc,
+                }),
+                Arc::new(EncodedAccessUnit {
+                    pts: video.pts,
+                    dts: Some(video.pts),
+                    keyframe: false,
+                    bytes: vec![0x21, 0x10].into(),
+                    kind: EncodedKind::Aac,
+                }),
+            ])
+        }
+
+        fn request_idr(&mut self) -> eiviz_media::Result<()> {
+            Ok(())
+        }
+
+        fn diagnostics(&self) -> EncoderDiagnostics {
+            EncoderDiagnostics {
+                video_backend: "desktop-smoke-avc".into(),
+                audio_backend: "desktop-smoke-aac".into(),
+                video_frames: self.encodes.load(Ordering::Relaxed),
+                keyframes: self.encodes.load(Ordering::Relaxed),
+                audio_access_units: self.encodes.load(Ordering::Relaxed),
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_mapping_reaches_engine_mock_encoder_and_two_fanout_sinks() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-desktop-fanout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let engine = Engine::new("desktop distribution smoke");
+        let encodes = Arc::new(AtomicU64::new(0));
+        engine
+            .install_distribution_encoder_factory(
+                Arc::new(SmokeFactory {
+                    encodes: encodes.clone(),
+                }),
+                EncoderCapabilities::dynamic_openh264_fdk(),
+            )
+            .unwrap();
+        let output_a = desktop_distribution_output(
+            "mp4",
+            root.join("a.mp4").to_str().unwrap(),
+            engine.primary_unit(),
+            OutputVideoSource::Program,
+        )
+        .unwrap();
+        let output_b = desktop_distribution_output(
+            "mp4",
+            root.join("b.mp4").to_str().unwrap(),
+            engine.primary_unit(),
+            OutputVideoSource::Program,
+        )
+        .unwrap();
+        for output in [&output_a, &output_b] {
+            engine
+                .configure_distribution_output(output.clone())
+                .unwrap();
+            engine.set_distribution_enabled(output.id, true).unwrap();
+        }
+
+        engine.tick().unwrap();
+        for _ in 0..100 {
+            if engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .filter(|diagnostic| diagnostic.sent >= 2)
+                .count()
+                == 2
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(encodes.load(Ordering::Relaxed), 1);
+        let diagnostics = engine.metrics().distribution_outputs;
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.sent >= 2)
+                .count(),
+            2
+        );
+        for output in [&output_a, &output_b] {
+            engine.set_distribution_enabled(output.id, false).unwrap();
+        }
+        engine.tick().unwrap();
+        assert!(root.join("a.mp4").metadata().unwrap().len() > 0);
+        assert!(root.join("b.mp4").metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
@@ -1346,12 +1542,6 @@ fn desktop_capabilities() -> Vec<CapabilityEntry> {
             EvidenceState::HilPending,
         ));
     }
-    capabilities.push(capability_entry(
-        eiviz_codec_gpu_video::probe(),
-        false,
-        false,
-        EvidenceState::HilPending,
-    ));
     let midi = eiviz_control::midi_capability();
     capabilities.push(CapabilityEntry {
         id: "midi".into(),
@@ -2178,6 +2368,36 @@ impl eframe::App for DesktopApp {
                 ));
             }
             ui.separator();
+            ui.heading("Video output routing");
+            let selected_source = self
+                .output_multiview
+                .and_then(|id| project.multiviews.get(&id))
+                .map_or("Program", |view| view.name.as_str());
+            egui::ComboBox::from_id_salt("video-output-source")
+                .selected_text(selected_source)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(self.output_multiview.is_none(), "Program")
+                        .clicked()
+                    {
+                        self.output_multiview = None;
+                    }
+                    for view in project.multiviews.values().filter(|view| view.owner == unit_id) {
+                        if ui
+                            .selectable_label(
+                                self.output_multiview == Some(view.id),
+                                format!("Multiview: {}", view.name),
+                            )
+                            .clicked()
+                        {
+                            self.output_multiview = Some(view.id);
+                        }
+                    }
+                });
+            ui.label(
+                "The selection applies independently to new NDI, OMT, DeckLink, RTMP, SRT, and MP4 outputs.",
+            );
+            ui.separator();
             ui.heading("Distribution");
             ui.label(
                 "Explicit baseline: hash/version-verified Cisco OpenH264 2.6.0 + raw FDK AAC-LC. FDK's upstream license grants no patent rights; use only a reviewed binary. No fallback.",
@@ -2961,6 +3181,7 @@ impl eframe::App for DesktopApp {
                             id: OutputId::new(),
                             name: output_name.clone(),
                             owner: unit_id,
+                            video_source: self.selected_output_source(),
                             kind: OutputKind::Omt {
                                 url: output_name.clone(),
                             },

@@ -12,7 +12,7 @@
 | 項目 | 結果 |
 | --- | --- |
 | Smelter 本体 | 非同梱。ライセンスゲート未通過 |
-| gpu-video 0.4.0 | optional adapter。既定実行経路にしない |
+| gpu-video 0.4.0 | 非採用。wgpu 29 と単一 wgpu 25 は共有不能、stub削除（ADR-0015） |
 | compositor | 明示 `CpuReference` と `Wgpu`。CI は CpuReference profile（fallback ではない） |
 | GUI | egui 0.32 / exact wgpu 25.0.2; shared desktop Device/Queue (ADR-0011) |
 | file media | image + Shiguredo MP4 + explicit dynamic OpenH264 2.6 profile |

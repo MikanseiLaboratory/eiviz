@@ -18,7 +18,6 @@ members = [
     "crates/eiviz-io-decklink",
     "crates/eiviz-io-audio",
     "crates/eiviz-io-stream",
-    "crates/eiviz-codec-gpu-video",
     "crates/eiviz-codec-software",
     "crates/eiviz-certification",
 ]
@@ -49,7 +48,6 @@ eiviz-io-omt = { path = "crates/eiviz-io-omt" }
 eiviz-io-decklink = { path = "crates/eiviz-io-decklink" }
 eiviz-io-audio = { path = "crates/eiviz-io-audio" }
 eiviz-io-stream = { path = "crates/eiviz-io-stream" }
-eiviz-codec-gpu-video = { path = "crates/eiviz-codec-gpu-video" }
 eiviz-codec-software = { path = "crates/eiviz-codec-software" }
 eiviz-certification = { path = "crates/eiviz-certification" }
 crossbeam-channel = "0.5.15"

@@ -65,8 +65,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test default profile
         run: cargo test --workspace
+      - name: audio realtime callback static guard
+        run: python3 scripts/check-audio-callbacks.py
       - name: deterministic certification smoke
-        if: runner.os == 'Linux'
         run: >-
           cargo run -p eiviz-certification --
           --mode virtual
@@ -99,3 +100,36 @@ jobs:
       - name: packaging policy and rollback tests
         if: runner.os == 'Linux'
         run: python3 packaging/tests/test_packaging.py
+
+  loom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - name: model fanout recovery ordering
+        run: cargo test -p eiviz-io-stream loom_recovery_generation_is_observed_before_recovery_flag
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Miri deterministic core
+        run: cargo miri test -p eiviz-time -p eiviz-core
+
+  sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: AddressSanitizer portable persistence and timing
+        env:
+          RUSTFLAGS: -D warnings -Zsanitizer=address
+          RUSTDOCFLAGS: -D warnings -Zsanitizer=address
+        run: >-
+          cargo test -p eiviz-project -p eiviz-time
+          --target x86_64-unknown-linux-gnu

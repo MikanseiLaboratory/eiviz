@@ -30,7 +30,8 @@ all pass:
   device selection plus channel-message mapping to versioned envelopes. The
   default build has no MIDI listener or no-op substitute.
 - Mixing Units expose rendered multi-tile Multiview frames for Input, Preview,
-  and Program sources; the desktop bootstraps a PRV/PGM two-up view.
+  and Program sources. Every NDI/OMT/DeckLink/distribution Output independently
+  selects the owning Unit's Program or a whole Multiview in Desktop.
 - Desktop can ingest PNG/JPEG files into the content-addressed asset store,
   create a fullscreen Preview scene, and export/import portable `.eiviz`
   packages without replacing the running control-server Engine instance.
@@ -76,10 +77,16 @@ all pass:
 - Structured operational spans/metrics, a bounded 45-second redacted flight
   recorder, and crash reports containing recent diagnostics plus project hash
 - Portable `.eiviz` packages, crash-safe JSON save, and explicit Desktop
-  autosave recover/discard startup UX
+  autosave recover/discard startup UX. Deterministic corruption, truncation,
+  path-traversal/hash-spoof, and injected disk-write failure tests run in CI.
+- Audio callback regions are statically guarded against allocation, blocking,
+  I/O, synchronous logging, and panic primitives. CI also runs portable Loom,
+  Miri, and AddressSanitizer subsets. Certification resident memory uses Linux,
+  Windows, and macOS platform APIs.
 
-Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
-Video, audio devices, RTMP, and SRT) is **not** claimed. See the current truth table in
+Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, audio
+devices, RTMP, and SRT) is **not** claimed. gpu-video is not a capability
+because its wgpu generation cannot share the unified device (ADR-0015). See the current truth table in
 the implementation plan, the [DeckLink HIL procedure](docs/hil/decklink.md),
 the [audio HIL procedure](docs/hil/audio.md), and the
 [file-media HIL procedure](docs/hil/file-media.md), and the

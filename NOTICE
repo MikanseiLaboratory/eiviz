@@ -98,12 +98,6 @@ interoperability certification; real-server and loss testing remains required.
 The SRT implementation is independent from Haivision's MPL-2.0 reference
 library and does not link `libsrt`.
 
-gpu-video
----------
-The optional `eiviz-codec-gpu-video` crate may depend on gpu-video 0.4.x
-(MIT) behind a feature flag. It is not compiled into the default GUI path
-so wgpu 24 (egui) and wgpu 29 (gpu-video) cannot collide.
-
 GStreamer / FFmpeg
 ------------------
 Neither GStreamer nor FFmpeg is a dependency. If a future distribution enables

@@ -555,4 +555,29 @@ mod tests {
         assert!(diagnostics[0].dropped >= 3);
         assert!(diagnostics[0].reconnects >= 1);
     }
+
+    #[test]
+    fn loom_recovery_generation_is_observed_before_recovery_flag() {
+        loom::model(|| {
+            use loom::sync::Arc as LoomArc;
+            use loom::sync::atomic::{AtomicBool as LoomBool, AtomicUsize as LoomUsize};
+            use loom::thread;
+
+            let generation = LoomArc::new(LoomUsize::new(0));
+            let recovery = LoomArc::new(LoomBool::new(false));
+            let producer_generation = generation.clone();
+            let producer_recovery = recovery.clone();
+            let producer = thread::spawn(move || {
+                producer_generation.fetch_add(1, loom::sync::atomic::Ordering::AcqRel);
+                producer_recovery.store(true, loom::sync::atomic::Ordering::Release);
+            });
+            let consumer = thread::spawn(move || {
+                if recovery.load(loom::sync::atomic::Ordering::Acquire) {
+                    assert!(generation.load(loom::sync::atomic::Ordering::Acquire) > 0);
+                }
+            });
+            producer.join().unwrap();
+            consumer.join().unwrap();
+        });
+    }
 }

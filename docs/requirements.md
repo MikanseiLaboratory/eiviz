@@ -39,8 +39,11 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R03.3 TAKE は 1 つの logical frame boundary で原子的に確定する
 - R03.4 Unit 出力を別 Unit の Input にできる。接続は DAG。閉路は拒否
 - R03.5 Overlay は順序付き slot。実体は Scene 参照とし SceneItem 合成を再利用する
-- R03.6 Unit ごとに複数 Output、複数 Multiview を 1:N で所有できる
-- R03.7 Multiview タイルは Input / Preview / Program を表示できる
+- R03.6 Unit ごとに複数 Output、複数 Multiview を 1:N で所有できる。各 Output は
+  owner の Program または owner の Multiview 全体を明示選択し、OutputKind ごとの
+  MediaSink/encode fanout へ独立 route する
+- R03.7 Multiview タイルは Input / Preview / Program を表示できる。要件は
+  Multiview 全体の出力であり、個別 tile crop output は baseline scope に含めない
 
 ### R04 Timing
 - R04.1 フレームレートは有理数。59.94 は常に `60000/1001`
@@ -87,7 +90,8 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R06.2 Audio Bus / Matrix。gain / pan / mute / solo / delay
 - R06.3 route は `Manual` または `Follow(MixingUnit)`。manual mute が最優先
 - R06.4 TAKE 時の follow 切替は映像と同じ logical boundary
-- R06.5 サンプルレート差は ASRC。callback 内 allocation / blocking / I/O 禁止
+- R06.5 サンプルレート差は ASRC。callback 内 allocation / blocking / I/O 禁止。
+  marker付き callback region と変換kernelを静的CI guardで検査する
 
 ### R07 I/O
 - R07.1 NDI: exact `grafton-ndi` 1.0.0（`ndi` feature）でdiscovery/receive/send、RGBA映像、planar f32音声、100 ns timestamp変換、bounded worker/queueを実装する。OMT: pure-Rust `openmediatransport-rs`でdiscovery/receive/send、VMX1映像、FPA1音声、timestamp、tally/metadata、reconnectを実装する。いずれも別protocolやsimulatorへ切り替えない
@@ -101,7 +105,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 
 ### R08 Distribution
 - R08.1 baseline: RTMP = H.264/AAC in FLV、SRT = H.264/AAC in MPEG-TS、録画 = fragmented MP4
-- R08.2 同一 encode 結果を fan-out できる
+- R08.2 Program または明示 Multiview source の同一 encode 結果を fan-out できる
 - R08.3 disk full / 切断時も Program を停止しない。MP4 は異常終了後に回復可能とする
 
 ### R09 Command
@@ -115,6 +119,8 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 ### R10 Operations
 - R10.1 structured log、metrics、30–60 秒 flight recorder、frame id 追跡
 - R10.2 deadline slack、drop/repeat、A/V drift、queue high-water、xrun、GPU pass time、device loss を計測する
+- R10.3 certification process の resident memory は Linux `/proc` page size、
+  Windows `GetProcessMemoryInfo`、macOS Mach `task_info` で取得する
 
 ### R11 Portability / Security
 - R11.1 Windows x64 を必須 gate

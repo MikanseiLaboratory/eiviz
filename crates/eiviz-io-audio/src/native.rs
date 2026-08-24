@@ -658,6 +658,7 @@ where
         .build_input_stream::<T, _, _>(
             config,
             move |data, info| {
+                // realtime-callback-start: cpal-input
                 let frames = data.len() / channels;
                 let first_sample_index = data_diagnostics
                     .device_frames
@@ -692,8 +693,9 @@ where
                         callback_nanos,
                         capture_nanos,
                     })
-                    .expect("capacity checked before bounded write");
+                    .ok();
                 enqueue_input_samples(data, &mut samples);
+                // realtime-callback-end: cpal-input
             },
             move |error| error_diagnostics.stream_error(error),
             None,
@@ -745,6 +747,7 @@ where
         .build_output_stream::<T, _, _>(
             config,
             move |data, info| {
+                // realtime-callback-start: cpal-output
                 let frames = data.len() / channels;
                 let first_sample_index = data_diagnostics
                     .device_frames
@@ -773,6 +776,7 @@ where
                         .health
                         .store(HEALTH_DEGRADED, Ordering::Release);
                 }
+                // realtime-callback-end: cpal-output
             },
             move |error| error_diagnostics.stream_error(error),
             None,
@@ -784,18 +788,19 @@ fn instant_nanos(instant: cpal::StreamInstant) -> u64 {
     u64::try_from(instant.as_nanos()).unwrap_or(u64::MAX)
 }
 
+// realtime-callback-start: input-sample-kernel
 fn enqueue_input_samples<T>(data: &[T], samples: &mut Producer<f32>)
 where
     T: Copy,
     f32: FromSample<T>,
 {
     for sample in data {
-        samples
-            .push(f32::from_sample(*sample))
-            .expect("capacity checked before bounded write");
+        let _ = samples.push(f32::from_sample(*sample));
     }
 }
+// realtime-callback-end: input-sample-kernel
 
+// realtime-callback-start: output-sample-kernel
 fn dequeue_output_samples<T>(data: &mut [T], samples: &mut Consumer<f32>, underflow: &mut bool)
 where
     T: Sample + FromSample<f32>,
@@ -810,6 +815,7 @@ where
         }
     }
 }
+// realtime-callback-end: output-sample-kernel
 
 fn backend_error(error: cpal::Error) -> AudioError {
     AudioError::Backend(error.to_string())

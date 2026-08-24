@@ -44,6 +44,9 @@ Extended-profile implementation does not change the required
 `eiviz-certification` は software-testable gate の構造化 JSON 証跡を生成します。
 証跡には requirement ID、commit、OS/kernel、architecture、Rust version、
 profile、test ID、assertion、memory/queue high-water、artifact path を記録します。
+Resident memory は Linux `/proc/self/statm` + runtime page size、Windows
+`GetProcessMemoryInfo`、macOS Mach `task_info(MACH_TASK_BASIC_INFO)` から取得し、
+3 OS の deterministic smoke で `Skipped` にしません。
 
 ```sh
 # CI と同じ短い決定論 smoke。24 h 分の全boundaryをsleepせず有理数で監査する
@@ -69,6 +72,11 @@ multi-client flood/replay hash、sink/disk-full/NIC-outage isolation、
 memory/queue high-water を高速に検査します。Wall mode は同じ gate に実時間の
 deadline observation を追加します。既定 artifact は
 `target/certification/evidence.json` です。
+
+Public CI は portable project corruption/truncation/path traversal/disk-write
+fault、audio callback static guard、Loom recovery ordering、Miri deterministic
+core、Linux AddressSanitizer persistence/timing subset も実行します。これらは
+software evidence であり HIL pass ではありません。
 
 GPU device loss は simulation で合格にしません。private runner が実 hardware
 へ device-loss を注入した場合だけ、`evidence_source` が

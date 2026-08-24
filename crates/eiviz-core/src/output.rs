@@ -6,6 +6,10 @@ pub struct Output {
     pub id: OutputId,
     pub name: String,
     pub owner: MixingUnitId,
+    /// Video routed to this sink. Older projects default to the owning unit's
+    /// Program feed; no source is inferred from the sink kind.
+    #[serde(default)]
+    pub video_source: OutputVideoSource,
     pub kind: OutputKind,
     pub enabled: bool,
     /// Required for distribution outputs. Kept separate from `kind` so old
@@ -13,6 +17,13 @@ pub struct Output {
     /// instead of silently receiving a codec default.
     #[serde(default)]
     pub distribution: Option<DistributionProfile>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OutputVideoSource {
+    #[default]
+    Program,
+    Multiview(MultiviewId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

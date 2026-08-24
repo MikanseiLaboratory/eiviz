@@ -14,7 +14,7 @@ eiviz/
     eiviz-engine/         # 合成ルート
     eiviz-control/        # HTTP / TCP Command API（Stream Deck 固有ロジックなし）
     eiviz-io-*            # ファイル / NDI / OMT / DeckLink / audio / stream
-    eiviz-codec-*         # software + gpu-video 隔離
+    eiviz-codec-software/ # 明示software/external encoder contract
   docs/                   # 要件・ADR・認定
   technologystack.md
   directorystructure.md

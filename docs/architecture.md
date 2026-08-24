@@ -25,6 +25,13 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
                     Preview / NDI / OMT / DeckLink / RTMP / SRT / MP4
 ```
 
+各 `Output` は `OutputVideoSource::Program` または
+`OutputVideoSource::Multiview(id)` を永続化します。Engine は同じ source selector
+を direct `MediaSink` と encode session key の両方へ適用するため、NDI/OMT/
+DeckLink/RTMP/SRT/MP4 は OutputKind ごとに独立して Program または Multiview
+全体を受け取ります。baseline 要件は Multiview 全体の出力であり、tile 単体 crop
+は要求していません。
+
 ## クレート境界
 
 | crate | 責任 | 禁則 |
