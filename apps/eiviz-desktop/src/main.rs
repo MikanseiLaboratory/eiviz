@@ -1,9 +1,9 @@
 use eiviz_command::{Command, CommandEnvelope};
 use eiviz_core::{
-    AacEncoderProfile, CompositorBackend, DistributionProfile, H264EncoderProfile, Input, InputId,
-    InputSource, Multiview, MultiviewId, MultiviewSource, MultiviewTile, Output, OutputId,
-    OutputKind, Project, ReconnectProfile, Scene, SceneId, SceneItem, SceneItemId, Transform2D,
-    TransitionStyle, TransportProfile,
+    AacEncoderProfile, AsrcProfile, AudioResamplingPolicy, CompositorBackend, DistributionProfile,
+    H264EncoderProfile, Input, InputId, InputSource, Multiview, MultiviewId, MultiviewSource,
+    MultiviewTile, Output, OutputId, OutputKind, Project, ReconnectProfile, Scene, SceneId,
+    SceneItem, SceneItemId, Transform2D, TransitionStyle, TransportProfile,
 };
 #[cfg(any(feature = "decklink", feature = "ndi", feature = "audio-cpal"))]
 use eiviz_core::{AudioRoute, RouteMode};
@@ -767,7 +767,13 @@ impl DesktopApp {
             channels: project.audio.channels,
             ..Default::default()
         };
-        let source = match eiviz_io_audio::CpalInput::open(input.id, &binding, backend, config) {
+        let source = match eiviz_io_audio::CpalInput::open_with_policy(
+            input.id,
+            &binding,
+            backend,
+            config,
+            project.audio.resampling,
+        ) {
             Ok(source) => Arc::new(source),
             Err(error) => {
                 self.status = format!("Audio input open: {error}");
@@ -807,8 +813,12 @@ impl DesktopApp {
             return;
         }
         self.engine.attach_source(source.clone());
+        let device_rate = source.stream_config().sample_rate;
         self.audio_inputs.push((input.id, source));
-        self.status = format!("Audio input started: {}", device.display_name);
+        self.status = format!(
+            "Audio input started: {} at {} Hz (project {} Hz, {:?})",
+            device.display_name, device_rate, project.audio.sample_rate, project.audio.resampling
+        );
     }
 
     #[cfg(feature = "audio-cpal")]
@@ -842,7 +852,13 @@ impl DesktopApp {
             ..Default::default()
         };
         let name = format!("Audio {}", device.display_name);
-        let sink = match eiviz_io_audio::CpalOutput::open(&name, &binding, backend, config) {
+        let sink = match eiviz_io_audio::CpalOutput::open_with_policy(
+            &name,
+            &binding,
+            backend,
+            config,
+            project.audio.resampling,
+        ) {
             Ok(sink) => Arc::new(sink),
             Err(error) => {
                 self.status = format!("Audio output open: {error}");
@@ -875,8 +891,12 @@ impl DesktopApp {
             self.status = format!("Audio output attachment: {error}");
             return;
         }
+        let device_rate = sink.stream_config().sample_rate;
         self.audio_outputs.push((output.id, sink));
-        self.status = format!("Audio output started: {}", device.display_name);
+        self.status = format!(
+            "Audio output started: {} at {} Hz (project {} Hz, {:?})",
+            device.display_name, device_rate, project.audio.sample_rate, project.audio.resampling
+        );
     }
 
     #[cfg(feature = "midi")]
@@ -1426,6 +1446,60 @@ impl eframe::App for DesktopApp {
             }
             ui.separator();
             ui.heading("Audio I/O");
+            ui.label(format!(
+                "Project: {} Hz / {} ch; policy {:?}",
+                project.audio.sample_rate, project.audio.channels, project.audio.resampling
+            ));
+            ui.horizontal(|ui| {
+                let policies = [
+                    ("ExactRate", AudioResamplingPolicy::ExactRate),
+                    (
+                        "ASRC Broadcast",
+                        AudioResamplingPolicy::Asrc {
+                            profile: AsrcProfile::broadcast(),
+                        },
+                    ),
+                    (
+                        "ASRC Mastering",
+                        AudioResamplingPolicy::Asrc {
+                            profile: AsrcProfile::mastering(),
+                        },
+                    ),
+                ];
+                for (label, policy) in policies {
+                    if ui
+                        .selectable_label(project.audio.resampling == policy, label)
+                        .clicked()
+                    {
+                        match self
+                            .engine
+                            .submit_payload(Command::SetAudioResampling { policy })
+                        {
+                            Ok(_) => self.status = format!("Audio resampling selected: {label}"),
+                            Err(error) => {
+                                self.status = format!("Audio resampling policy: {error}")
+                            }
+                        }
+                    }
+                }
+            });
+            ui.label("Rate conversion is disabled under ExactRate; a mismatch is a hard error.");
+            let audio_metrics = self.engine.metrics();
+            for diagnostic in &audio_metrics.audio_resamplers {
+                ui.label(format!(
+                    "ASRC {}: {}→{} Hz ratio={:.9} drift={:+.1} ppm buffer={}/{} under={} over={} reset={}",
+                    diagnostic.endpoint,
+                    diagnostic.input_rate,
+                    diagnostic.output_rate,
+                    diagnostic.ratio,
+                    diagnostic.drift_ppm,
+                    diagnostic.buffered_frames,
+                    diagnostic.buffer_capacity_frames,
+                    diagnostic.queue_underflows,
+                    diagnostic.queue_overflows,
+                    diagnostic.discontinuities,
+                ));
+            }
             #[cfg(feature = "audio-cpal")]
             {
                 ui.label(

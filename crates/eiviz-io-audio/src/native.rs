@@ -7,10 +7,10 @@ use cpal::{
     BufferSize, Device, ErrorKind, FromSample, Host, Sample, SampleFormat, SizedSample,
     StreamConfig,
 };
-use eiviz_core::{DeviceBinding, InputId};
+use eiviz_core::{AudioResamplingPolicy, DeviceBinding, InputId};
 use eiviz_media::{
     AdapterHealth, AudioBuffer, AudioCaptureTimestamp, AudioIoDiagnostics, AudioSink, MediaError,
-    MediaSource, VideoFrame,
+    MediaSource, StreamingAsrc, VideoFrame,
 };
 use eiviz_time::{FrameRate, MediaTime};
 use parking_lot::Mutex;
@@ -84,6 +84,7 @@ impl SharedDiagnostics {
             last_callback_nanos: self.last_callback_nanos.load(Ordering::Relaxed),
             last_device_nanos: self.last_device_nanos.load(Ordering::Relaxed),
             last_error,
+            asrc: None,
         }
     }
 }
@@ -174,13 +175,34 @@ impl CpalInput {
         backend: AudioBackend,
         config: AudioStreamConfig,
     ) -> Result<Self> {
+        Self::open_with_policy(
+            id,
+            binding,
+            backend,
+            config,
+            AudioResamplingPolicy::ExactRate,
+        )
+    }
+
+    pub fn open_with_policy(
+        id: InputId,
+        binding: &DeviceBinding,
+        backend: AudioBackend,
+        config: AudioStreamConfig,
+        policy: AudioResamplingPolicy,
+    ) -> Result<Self> {
         validate_config(config)?;
         let (host, device, info) = resolve_cpal_device(binding, backend, DeviceDirection::Input)?;
         let _ = host;
-        let selected = select_config(&device, DeviceDirection::Input, config)?;
+        let selected = select_config(&device, DeviceDirection::Input, config, policy)?;
+        let actual_config = AudioStreamConfig {
+            sample_rate: selected.0.sample_rate,
+            channels: selected.0.channels,
+            ..config
+        };
         let sample_capacity = config
             .ring_frames
-            .checked_mul(config.channels as usize)
+            .checked_mul(actual_config.channels as usize)
             .ok_or_else(|| AudioError::InvalidBuffer("ring capacity overflow".into()))?;
         let (sample_producer, sample_consumer) = RingBuffer::new(sample_capacity);
         let (stamp_producer, stamp_consumer) = RingBuffer::new(STAMP_CAPACITY);
@@ -196,7 +218,7 @@ impl CpalInput {
         Ok(Self {
             id,
             name: info.display_name,
-            config,
+            config: actual_config,
             consumer: Mutex::new(CaptureConsumer {
                 samples: sample_consumer,
                 stamps: stamp_consumer,
@@ -211,6 +233,10 @@ impl CpalInput {
 
     pub fn diagnostics(&self) -> AudioIoDiagnostics {
         self.diagnostics.snapshot(&self.name)
+    }
+
+    pub const fn stream_config(&self) -> AudioStreamConfig {
+        self.config
     }
 }
 
@@ -254,6 +280,10 @@ impl MediaSource for CpalInput {
 pub struct CpalOutput {
     name: String,
     config: AudioStreamConfig,
+    project_sample_rate: u32,
+    project_channels: u16,
+    policy: AudioResamplingPolicy,
+    resampler: Mutex<Option<StreamingAsrc>>,
     producer: Mutex<Producer<f32>>,
     diagnostics: Arc<SharedDiagnostics>,
     _stream: Mutex<cpal::Stream>,
@@ -266,13 +296,34 @@ impl CpalOutput {
         backend: AudioBackend,
         config: AudioStreamConfig,
     ) -> Result<Self> {
+        Self::open_with_policy(
+            name,
+            binding,
+            backend,
+            config,
+            AudioResamplingPolicy::ExactRate,
+        )
+    }
+
+    pub fn open_with_policy(
+        name: impl Into<String>,
+        binding: &DeviceBinding,
+        backend: AudioBackend,
+        config: AudioStreamConfig,
+        policy: AudioResamplingPolicy,
+    ) -> Result<Self> {
         validate_config(config)?;
         let (host, device, _) = resolve_cpal_device(binding, backend, DeviceDirection::Output)?;
         let _ = host;
-        let selected = select_config(&device, DeviceDirection::Output, config)?;
+        let selected = select_config(&device, DeviceDirection::Output, config, policy)?;
+        let actual_config = AudioStreamConfig {
+            sample_rate: selected.0.sample_rate,
+            channels: selected.0.channels,
+            ..config
+        };
         let sample_capacity = config
             .ring_frames
-            .checked_mul(config.channels as usize)
+            .checked_mul(actual_config.channels as usize)
             .ok_or_else(|| AudioError::InvalidBuffer("ring capacity overflow".into()))?;
         let (producer, consumer) = RingBuffer::new(sample_capacity);
         let diagnostics = Arc::new(SharedDiagnostics::default());
@@ -280,7 +331,11 @@ impl CpalOutput {
         stream.play().map_err(backend_error)?;
         Ok(Self {
             name: name.into(),
-            config,
+            config: actual_config,
+            project_sample_rate: config.sample_rate,
+            project_channels: config.channels,
+            policy,
+            resampler: Mutex::new(None),
             producer: Mutex::new(producer),
             diagnostics,
             _stream: Mutex::new(stream),
@@ -288,7 +343,17 @@ impl CpalOutput {
     }
 
     pub fn diagnostics(&self) -> AudioIoDiagnostics {
-        self.diagnostics.snapshot(&self.name)
+        let mut diagnostics = self.diagnostics.snapshot(&self.name);
+        diagnostics.asrc = self
+            .resampler
+            .lock()
+            .as_ref()
+            .map(StreamingAsrc::diagnostics);
+        diagnostics
+    }
+
+    pub const fn stream_config(&self) -> AudioStreamConfig {
+        self.config
     }
 }
 
@@ -298,12 +363,53 @@ impl AudioSink for CpalOutput {
     }
 
     fn push_audio(&self, audio: &AudioBuffer) -> eiviz_media::Result<()> {
-        if audio.sample_rate != self.config.sample_rate || audio.channels != self.config.channels {
+        if audio.channels != self.project_channels {
             return Err(MediaError::Unsupported(format!(
-                "audio output requires {} Hz/{} channels, got {} Hz/{} channels; no implicit ASRC",
-                self.config.sample_rate, self.config.channels, audio.sample_rate, audio.channels
+                "audio output requires {} channels, got {}",
+                self.project_channels, audio.channels
             )));
         }
+        if audio.sample_rate != self.project_sample_rate {
+            return Err(MediaError::Unsupported(format!(
+                "audio output project format changed from {} Hz to {} Hz",
+                self.project_sample_rate, audio.sample_rate
+            )));
+        }
+        let converted;
+        let audio = if audio.sample_rate == self.config.sample_rate {
+            audio
+        } else {
+            let AudioResamplingPolicy::Asrc { profile } = self.policy else {
+                return Err(MediaError::Unsupported(format!(
+                    "audio output requires {} Hz, got {} Hz and policy is ExactRate",
+                    self.config.sample_rate, audio.sample_rate
+                )));
+            };
+            let buffered_frames = {
+                let producer = self.producer.lock();
+                self.config
+                    .ring_frames
+                    .saturating_sub(producer.slots() / self.config.channels as usize)
+            };
+            let mut resampler = self.resampler.lock();
+            if resampler.is_none() {
+                *resampler = Some(
+                    StreamingAsrc::new(
+                        audio.sample_rate,
+                        self.config.sample_rate,
+                        audio.channels,
+                        profile,
+                    )
+                    .map_err(|error| MediaError::Other(error.to_string()))?,
+                );
+            }
+            converted = resampler
+                .as_mut()
+                .expect("ASRC inserted above")
+                .process_chunk(audio, Some((buffered_frames, self.config.ring_frames / 2)))
+                .map_err(|error| MediaError::Other(error.to_string()))?;
+            &converted
+        };
         let frames = audio.planes.first().map_or(0, Vec::len);
         if audio
             .planes
@@ -427,6 +533,7 @@ fn select_config(
     device: &Device,
     direction: DeviceDirection,
     requested: AudioStreamConfig,
+    policy: AudioResamplingPolicy,
 ) -> Result<(StreamConfig, SampleFormat)> {
     let ranges = match direction {
         DeviceDirection::Input => device
@@ -442,20 +549,43 @@ fn select_config(
         .into_iter()
         .filter(|range| {
             range.channels() == requested.channels
-                && range.contains_rate(requested.sample_rate)
                 && sample_priority(range.sample_format()).is_some()
         })
+        .filter_map(|range| {
+            let sample_rate = if range.contains_rate(requested.sample_rate) {
+                requested.sample_rate
+            } else if matches!(policy, AudioResamplingPolicy::Asrc { .. }) {
+                let minimum = range.min_sample_rate();
+                let maximum = range.max_sample_rate();
+                if requested.sample_rate.abs_diff(minimum)
+                    <= requested.sample_rate.abs_diff(maximum)
+                {
+                    minimum
+                } else {
+                    maximum
+                }
+            } else {
+                return None;
+            };
+            Some((range, sample_rate))
+        })
         .collect::<Vec<_>>();
-    supported.sort_by_key(|range| sample_priority(range.sample_format()));
-    let selected = supported
-        .first()
-        .copied()
-        .ok_or_else(|| AudioError::UnsupportedFormat {
-            device: device.to_string(),
-            sample_rate: requested.sample_rate,
-            channels: requested.channels,
-        })?;
-    let supported_config = selected.with_sample_rate(requested.sample_rate);
+    supported.sort_by_key(|(range, sample_rate)| {
+        (
+            requested.sample_rate.abs_diff(*sample_rate),
+            sample_priority(range.sample_format()),
+        )
+    });
+    let (selected, sample_rate) =
+        supported
+            .first()
+            .copied()
+            .ok_or_else(|| AudioError::UnsupportedFormat {
+                device: device.to_string(),
+                sample_rate: requested.sample_rate,
+                channels: requested.channels,
+            })?;
+    let supported_config = selected.with_sample_rate(sample_rate);
     let mut stream_config = supported_config.config();
     stream_config.buffer_size = requested
         .buffer_frames

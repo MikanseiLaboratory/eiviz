@@ -1,3 +1,7 @@
+mod asrc;
+
+pub use asrc::{AsrcDiagnostics, AsrcError, StreamingAsrc};
+
 use eiviz_core::{InputId, Playback};
 use eiviz_time::{ClockDomain, FrameRate, MediaTime};
 use parking_lot::Mutex;
@@ -243,4 +247,5 @@ pub struct AudioIoDiagnostics {
     pub last_callback_nanos: u64,
     pub last_device_nanos: u64,
     pub last_error: Option<String>,
+    pub asrc: Option<AsrcDiagnostics>,
 }

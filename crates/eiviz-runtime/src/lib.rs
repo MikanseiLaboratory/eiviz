@@ -1,13 +1,14 @@
 //! Virtual-clock media runtime. Command snapshots are applied at frame boundaries.
 
 use eiviz_core::{
-    AssetId, AudioBusId, AudioFollowPolicy, AudioMatrix, CompositorBackend, InputId, InputSource,
-    MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Playback,
-    Project, RouteMode, Transform2D, TransitionStyle,
+    AssetId, AudioBusId, AudioFollowPolicy, AudioMatrix, AudioResamplingPolicy, CompositorBackend,
+    InputId, InputSource, MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId,
+    MultiviewSource, Playback, Project, RouteMode, Transform2D, TransitionStyle,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{
-    AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy, VideoFrame,
+    AsrcDiagnostics, AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy,
+    StreamingAsrc, VideoFrame,
 };
 use eiviz_time::{ClockDomain, MediaTime, VirtualClock, audio_frame_sample_span};
 use parking_lot::Mutex;
@@ -33,6 +34,14 @@ pub enum RuntimeError {
     Gpu(String),
     #[error("missing media and policy is Fail: {0}")]
     MissingMedia(String),
+    #[error(
+        "audio source {source} is {source_rate} Hz but project is {project_rate} Hz and policy is ExactRate"
+    )]
+    AudioRateMismatch {
+        source: InputId,
+        source_rate: u32,
+        project_rate: u32,
+    },
     #[error("{0}")]
     Other(String),
 }
@@ -48,9 +57,10 @@ pub struct RenderPlanSnapshot {
 
 #[derive(Clone, Debug)]
 pub struct AudioPlan {
-    matrix: AudioMatrix,
-    sample_rate: u32,
-    channels: u16,
+    pub matrix: AudioMatrix,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub resampling: AudioResamplingPolicy,
 }
 
 /// Fully validated, immutable state consumed by a media boundary.
@@ -84,6 +94,7 @@ impl RuntimeSnapshot {
             matrix: project.audio_matrix.clone(),
             sample_rate: project.audio.sample_rate,
             channels: project.audio.channels,
+            resampling: project.audio.resampling,
         };
         Ok(Self {
             accepted_revision,
@@ -135,6 +146,7 @@ pub struct Runtime {
     asset_root: Option<PathBuf>,
     image_cache: HashMap<AssetId, VideoFrame>,
     delay_lines: HashMap<(InputId, AudioBusId), Vec<VecDeque<f32>>>,
+    input_asrc: HashMap<InputId, StreamingAsrc>,
     sources: HashMap<InputId, Arc<dyn MediaSource>>,
     simulated: HashMap<InputId, VideoFrame>,
     pub peak_meters: HashMap<AudioBusId, f32>,
@@ -187,6 +199,7 @@ impl Runtime {
             asset_root: None,
             image_cache: HashMap::new(),
             delay_lines: HashMap::new(),
+            input_asrc: HashMap::new(),
             sources: HashMap::new(),
             simulated: HashMap::new(),
             peak_meters: HashMap::new(),
@@ -236,12 +249,20 @@ impl Runtime {
     pub fn detach_source(&mut self, id: InputId) {
         self.sources.remove(&id);
         self.last_good_inputs.remove(&id);
+        self.input_asrc.remove(&id);
     }
 
     pub fn audio_source_diagnostics(&self) -> Vec<AudioIoDiagnostics> {
         self.sources
             .values()
             .filter_map(|source| source.audio_diagnostics())
+            .collect()
+    }
+
+    pub fn audio_asrc_diagnostics(&self) -> Vec<(InputId, AsrcDiagnostics)> {
+        self.input_asrc
+            .iter()
+            .map(|(input, converter)| (*input, converter.diagnostics()))
             .collect()
     }
 
@@ -320,6 +341,9 @@ impl Runtime {
             )));
         }
         if let Some(previous) = &self.active_snapshot {
+            if previous.audio.resampling != snapshot.audio.resampling {
+                self.input_asrc.clear();
+            }
             for (unit_id, unit) in &project.mixing_units {
                 let old_program = previous
                     .project
@@ -741,16 +765,63 @@ impl Runtime {
                 }
                 continue;
             };
-            let buffer = source.pull_audio(sample_index, frames).map_err(|error| {
-                RuntimeError::Other(format!("source {} audio pull failed: {error}", route.input))
-            })?;
+            let requested_frames = self
+                .input_asrc
+                .get(&route.input)
+                .map_or(frames, |converter| {
+                    ((frames as u128 * converter.input_rate() as u128)
+                        .div_ceil(sample_rate as u128)) as usize
+                });
+            let buffer = source
+                .pull_audio(sample_index, requested_frames)
+                .map_err(|error| {
+                    RuntimeError::Other(format!(
+                        "source {} audio pull failed: {error}",
+                        route.input
+                    ))
+                })?;
             if let Some(buffer) = buffer {
                 if buffer.sample_rate != sample_rate {
-                    return Err(RuntimeError::Other(format!(
-                        "source {} sample rate {} does not match project {}; explicit ASRC is required",
-                        route.input, buffer.sample_rate, sample_rate
-                    )));
+                    let AudioResamplingPolicy::Asrc { profile } = plan.resampling else {
+                        return Err(RuntimeError::AudioRateMismatch {
+                            source: route.input,
+                            source_rate: buffer.sample_rate,
+                            project_rate: sample_rate,
+                        });
+                    };
+                    let replace = self.input_asrc.get(&route.input).is_none_or(|converter| {
+                        converter.input_rate() != buffer.sample_rate
+                            || converter.output_rate() != sample_rate
+                            || converter.channels() != buffer.channels
+                    });
+                    if replace {
+                        if self.input_asrc.contains_key(&route.input) && !buffer.discontinuity {
+                            return Err(RuntimeError::Other(format!(
+                                "source {} changed audio format without a discontinuity marker",
+                                route.input
+                            )));
+                        }
+                        self.input_asrc.insert(
+                            route.input,
+                            StreamingAsrc::new(
+                                buffer.sample_rate,
+                                sample_rate,
+                                buffer.channels,
+                                profile,
+                            )
+                            .map_err(|error| RuntimeError::Other(error.to_string()))?,
+                        );
+                    }
+                    let converted = self
+                        .input_asrc
+                        .get_mut(&route.input)
+                        .expect("ASRC inserted above")
+                        .process(&buffer, sample_index, frames)
+                        .map_err(|error| RuntimeError::Other(error.to_string()))?;
+                    source_audio.insert(route.input, converted);
+                    continue;
                 }
+                self.input_asrc.remove(&route.input);
                 source_audio.insert(route.input, buffer);
             }
         }
@@ -1152,6 +1223,56 @@ mod tests {
         let mut runtime = Runtime::new(48_000);
         let error = runtime.tick(&project).unwrap_err();
         assert!(matches!(error, RuntimeError::MissingMedia(_)));
+    }
+
+    #[test]
+    fn exact_rate_policy_rejects_mismatched_live_audio() {
+        let (mut project, input, _, _) = setup();
+        project.audio_matrix.routes[0].mode = RouteMode::Manual;
+        let source = RegisteredSource {
+            id: input,
+            video: VideoFrame::rgba_solid(1, MediaTime::ZERO, 2, 2, [0, 0, 0, 255]),
+            audio: AudioBuffer::silence(0, 44_100, 2, 736),
+        };
+        let mut runtime = Runtime::new(48_000);
+        runtime.attach_source(Arc::new(source));
+        let error = runtime.tick(&project).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeError::AudioRateMismatch {
+                source,
+                source_rate: 44_100,
+                project_rate: 48_000,
+            } if source == input
+        ));
+        assert!(runtime.audio_asrc_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn selected_asrc_is_compiled_into_audio_plan_and_preserves_channels() {
+        let (mut project, input, _, _) = setup();
+        project.audio.resampling = AudioResamplingPolicy::Asrc {
+            profile: eiviz_core::AsrcProfile::broadcast(),
+        };
+        project.audio_matrix.routes[0].mode = RouteMode::Manual;
+        let mut audio = AudioBuffer::silence(0, 44_100, 2, 2_000);
+        audio.planes[0].fill(0.25);
+        audio.planes[1].fill(-0.5);
+        let source = RegisteredSource {
+            id: input,
+            video: VideoFrame::rgba_solid(1, MediaTime::ZERO, 2, 2, [0, 0, 0, 255]),
+            audio,
+        };
+        let mut runtime = Runtime::new(48_000);
+        runtime.attach_source(Arc::new(source));
+        let tick = runtime.tick(&project).unwrap();
+        assert_eq!(tick.audio.sample_rate, 48_000);
+        assert_eq!(tick.audio.channels, 2);
+        assert_eq!(tick.audio.planes.len(), 2);
+        let diagnostics = runtime.audio_asrc_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].1.input_rate, 44_100);
+        assert_eq!(diagnostics[0].1.output_rate, 48_000);
     }
 
     #[test]

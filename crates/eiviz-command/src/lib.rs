@@ -143,6 +143,9 @@ pub enum Command {
     AddMultiview {
         view: Multiview,
     },
+    SetAudioResampling {
+        policy: eiviz_core::AudioResamplingPolicy,
+    },
     SetAudioRoute {
         route: AudioRoute,
     },
@@ -729,6 +732,9 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
             {
                 u.multiviews.push(view.id);
             }
+        }
+        Command::SetAudioResampling { policy } => {
+            project.audio.resampling = *policy;
         }
         Command::SetAudioRoute { route } => {
             project

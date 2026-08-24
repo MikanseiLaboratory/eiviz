@@ -1,4 +1,4 @@
-use crate::audio::AudioMatrix;
+use crate::audio::{AudioMatrix, AudioResamplingPolicy};
 use crate::graph::MixingGraph;
 use crate::ids::*;
 use crate::input::{DeviceBinding, Input, InputSource, Playback};
@@ -10,7 +10,7 @@ use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +52,8 @@ pub enum ColorSpace {
 pub struct AudioFormat {
     pub sample_rate: u32,
     pub channels: u16,
+    #[serde(default)]
+    pub resampling: AudioResamplingPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +104,7 @@ impl Default for AudioFormat {
         Self {
             sample_rate: 48000,
             channels: 2,
+            resampling: AudioResamplingPolicy::ExactRate,
         }
     }
 }
@@ -147,6 +150,22 @@ impl Project {
                 "unsupported schema {}",
                 self.schema_version
             )));
+        }
+        if self.audio.sample_rate == 0 || self.audio.channels == 0 {
+            return Err(DomainError::msg(
+                "audio sample rate and channel count must be non-zero",
+            ));
+        }
+        if let AudioResamplingPolicy::Asrc { profile } = self.audio.resampling {
+            if profile.target_latency_ms == 0
+                || profile.max_buffer_ms <= profile.target_latency_ms
+                || profile.max_drift_ppm == 0
+                || profile.max_drift_ppm > 10_000
+            {
+                return Err(DomainError::msg(
+                    "ASRC profile requires non-zero latency/drift, a larger buffer, and at most 10000 ppm correction",
+                ));
+            }
         }
         for input in self.inputs.values() {
             match input.source {
@@ -617,14 +636,22 @@ mod tests {
     }
 
     #[test]
-    fn compositor_and_missing_media_default_on_old_json() {
+    fn new_project_uses_explicit_exact_rate_audio_policy() {
+        let project = Project::new("demo");
+        assert_eq!(project.audio.resampling, AudioResamplingPolicy::ExactRate);
+    }
+
+    #[test]
+    fn compositor_missing_media_and_audio_policy_default_on_old_json() {
         let p = Project::new("demo");
         let mut v = serde_json::to_value(&p).unwrap();
         v.as_object_mut().unwrap().remove("compositor");
         v.as_object_mut().unwrap().remove("missing_media");
+        v["audio"].as_object_mut().unwrap().remove("resampling");
         let loaded: Project = serde_json::from_value(v).unwrap();
         assert_eq!(loaded.compositor, CompositorBackend::CpuReference);
         assert_eq!(loaded.missing_media, MissingMediaPolicy::Slate);
+        assert_eq!(loaded.audio.resampling, AudioResamplingPolicy::ExactRate);
     }
 
     #[test]

@@ -315,28 +315,6 @@ pub fn planar_to_interleaved(planes: &[Vec<f32>], out: &mut [f32]) -> Result<usi
     Ok(frames)
 }
 
-/// Linear interpolating resampler. Safe to call off the audio callback.
-pub fn resample_linear(src: &AudioBuffer, dst_rate: u32, dst_frames: usize) -> AudioBuffer {
-    let mut out = AudioBuffer::silence(src.sample_index, dst_rate, src.channels, dst_frames);
-    if src.planes.is_empty() || src.planes[0].is_empty() || dst_frames == 0 {
-        return out;
-    }
-    let src_len = src.planes[0].len();
-    let ratio = src.sample_rate as f64 / dst_rate as f64;
-    for c in 0..src.channels as usize {
-        for i in 0..dst_frames {
-            let pos = i as f64 * ratio;
-            let i0 = pos.floor() as usize;
-            let i1 = (i0 + 1).min(src_len - 1);
-            let frac = (pos - i0 as f64) as f32;
-            let a = src.planes[c][i0.min(src_len - 1)];
-            let b = src.planes[c][i1];
-            out.planes[c][i] = a + (b - a) * frac;
-        }
-    }
-    out
-}
-
 pub fn peak_meter(buf: &AudioBuffer) -> f32 {
     buf.planes
         .iter()
@@ -367,9 +345,6 @@ mod tests {
         let mut round_trip = [0.0; 6];
         assert_eq!(planar_to_interleaved(&planes, &mut round_trip).unwrap(), 3);
         assert_eq!(round_trip, interleaved);
-        let up = resample_linear(&src, 96000, 16);
-        assert_eq!(up.sample_rate, 96000);
-        assert_eq!(up.planes[0].len(), 16);
         assert!(peak_meter(&src) > 0.4);
     }
 

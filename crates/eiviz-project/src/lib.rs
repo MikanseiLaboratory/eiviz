@@ -41,8 +41,10 @@ pub fn migrate(mut project: Project) -> Result<Project> {
                 output.id
             )));
         }
-        project.schema_version = SCHEMA_VERSION;
     }
+    // v3 persists the audio resampling policy. Serde defaults every older
+    // project to ExactRate; migration never opts a project into ASRC.
+    project.schema_version = SCHEMA_VERSION;
     project.validate()?;
     Ok(project)
 }
@@ -277,5 +279,20 @@ mod tests {
             .push(output.id);
         let error = migrate(distribution).unwrap_err();
         assert!(error.to_string().contains("requires an explicit codec"));
+    }
+
+    #[test]
+    fn v2_migration_selects_exact_rate_without_inventing_asrc() {
+        let project = Project::new("legacy audio");
+        let mut json = serde_json::to_value(project).unwrap();
+        json["schema_version"] = serde_json::json!(2);
+        json["audio"].as_object_mut().unwrap().remove("resampling");
+        let loaded: Project = serde_json::from_value(json).unwrap();
+        let migrated = migrate(loaded).unwrap();
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            migrated.audio.resampling,
+            eiviz_core::AudioResamplingPolicy::ExactRate
+        );
     }
 }

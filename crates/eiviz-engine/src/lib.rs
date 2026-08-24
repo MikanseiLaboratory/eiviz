@@ -88,6 +88,7 @@ pub struct EngineMetrics {
     pub failed_outputs: Vec<(String, String)>,
     pub peak_meters: Vec<(String, f32)>,
     pub audio_devices: Vec<EngineAudioDiagnostics>,
+    pub audio_resamplers: Vec<EngineAsrcDiagnostics>,
     pub distribution_outputs: Vec<DistributionOutputDiagnostics>,
 }
 
@@ -123,6 +124,23 @@ pub struct EngineAudioDiagnostics {
     pub last_callback_nanos: u64,
     pub last_device_nanos: u64,
     pub last_error: Option<String>,
+    pub asrc: Option<EngineAsrcDiagnostics>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineAsrcDiagnostics {
+    pub endpoint: String,
+    pub input_rate: u32,
+    pub output_rate: u32,
+    pub ratio: f64,
+    pub drift_ppm: f64,
+    pub buffered_frames: usize,
+    pub buffer_capacity_frames: usize,
+    pub input_frames: u64,
+    pub output_frames: u64,
+    pub queue_overflows: u64,
+    pub queue_underflows: u64,
+    pub discontinuities: u64,
 }
 
 /// Process-wide composition root. GUI and control adapters only talk to this.
@@ -379,6 +397,25 @@ impl Engine {
         let g = self.inner.lock();
         let mut audio_devices = g.runtime.audio_source_diagnostics();
         audio_devices.extend(g.audio_sinks.values().map(|sink| sink.diagnostics()));
+        let mut audio_resamplers = g
+            .runtime
+            .audio_asrc_diagnostics()
+            .into_iter()
+            .map(|(input, diagnostics)| {
+                let endpoint = g
+                    .project
+                    .inputs
+                    .get(&input)
+                    .map_or_else(|| input.to_string(), |source| source.name.clone());
+                EngineAsrcDiagnostics::from_diagnostics(endpoint, diagnostics)
+            })
+            .collect::<Vec<_>>();
+        audio_resamplers.extend(audio_devices.iter().filter_map(|diagnostics| {
+            diagnostics
+                .asrc
+                .clone()
+                .map(|asrc| EngineAsrcDiagnostics::from_diagnostics(diagnostics.name.clone(), asrc))
+        }));
         EngineMetrics {
             revision: g.sequencer.revision(),
             applied_revision: g.sequencer.applied_revision(),
@@ -397,6 +434,7 @@ impl Engine {
                 .into_iter()
                 .map(EngineAudioDiagnostics::from)
                 .collect(),
+            audio_resamplers,
             distribution_outputs: distribution_diagnostics(&g),
         }
     }
@@ -1091,6 +1129,9 @@ fn distribution_detail(
 
 impl From<AudioIoDiagnostics> for EngineAudioDiagnostics {
     fn from(value: AudioIoDiagnostics) -> Self {
+        let asrc = value.asrc.map(|diagnostics| {
+            EngineAsrcDiagnostics::from_diagnostics(value.name.clone(), diagnostics)
+        });
         Self {
             name: value.name,
             health: format!("{:?}", value.health),
@@ -1103,6 +1144,26 @@ impl From<AudioIoDiagnostics> for EngineAudioDiagnostics {
             last_callback_nanos: value.last_callback_nanos,
             last_device_nanos: value.last_device_nanos,
             last_error: value.last_error,
+            asrc,
+        }
+    }
+}
+
+impl EngineAsrcDiagnostics {
+    fn from_diagnostics(endpoint: String, value: eiviz_media::AsrcDiagnostics) -> Self {
+        Self {
+            endpoint,
+            input_rate: value.input_rate,
+            output_rate: value.output_rate,
+            ratio: value.ratio,
+            drift_ppm: value.drift_ppm,
+            buffered_frames: value.buffered_frames,
+            buffer_capacity_frames: value.buffer_capacity_frames,
+            input_frames: value.input_frames,
+            output_frames: value.output_frames,
+            queue_overflows: value.queue_overflows,
+            queue_underflows: value.queue_underflows,
+            discontinuities: value.discontinuities,
         }
     }
 }

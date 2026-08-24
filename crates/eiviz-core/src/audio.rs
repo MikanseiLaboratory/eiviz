@@ -1,6 +1,66 @@
 use crate::ids::{AudioBusId, InputId, MixingUnitId};
 use serde::{Deserialize, Serialize};
 
+/// Project-wide policy for crossing audio sample-clock domains.
+///
+/// A rate mismatch is never converted unless `Asrc` is persisted in the
+/// project. `ExactRate` is also the deserialization default for legacy files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum AudioResamplingPolicy {
+    #[default]
+    ExactRate,
+    Asrc {
+        profile: AsrcProfile,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AsrcProfile {
+    pub quality: AsrcQuality,
+    /// Queue target used by the clock-drift servo.
+    pub target_latency_ms: u32,
+    /// Hard per-input bound. Old samples are discarded on overflow.
+    pub max_buffer_ms: u32,
+    /// Absolute correction limit for measured drift and queue steering.
+    pub max_drift_ppm: u32,
+}
+
+impl Default for AsrcProfile {
+    fn default() -> Self {
+        Self::broadcast()
+    }
+}
+
+impl AsrcProfile {
+    pub const fn broadcast() -> Self {
+        Self {
+            quality: AsrcQuality::Broadcast,
+            target_latency_ms: 40,
+            max_buffer_ms: 250,
+            max_drift_ppm: 2_000,
+        }
+    }
+
+    pub const fn mastering() -> Self {
+        Self {
+            quality: AsrcQuality::Mastering,
+            target_latency_ms: 80,
+            max_buffer_ms: 500,
+            max_drift_ppm: 1_000,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrcQuality {
+    /// 32-tap Blackman-windowed sinc; bounded latency for live production.
+    Broadcast,
+    /// 64-tap Blackman-windowed sinc; higher stop-band rejection.
+    Mastering,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioMatrix {
     pub buses: Vec<AudioBus>,
