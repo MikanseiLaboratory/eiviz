@@ -1000,7 +1000,7 @@ fn rgba_to_i420_bt709_limited(frame: &VideoFrame, output: &mut [u8]) -> Result<(
             let mut b = 0i32;
             for dy in 0..2 {
                 for dx in 0..2 {
-                    let index = (((y * 2 + dy) * width + x * 2 + dx) * 4) as usize;
+                    let index = ((y * 2 + dy) * width + x * 2 + dx) * 4;
                     r += frame.data[index] as i32;
                     g += frame.data[index + 1] as i32;
                     b += frame.data[index + 2] as i32;
