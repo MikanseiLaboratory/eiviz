@@ -1521,6 +1521,9 @@ mod tests {
         let engine = Engine::new("websocket").shared();
         let stop = Arc::new(AtomicBool::new(false));
         let ports = spawn_control(engine.clone(), config(), stop.clone()).unwrap();
+        // The accept loop is intentionally non-blocking; allow its worker to
+        // enter the poll loop before beginning the synchronous handshake.
+        std::thread::sleep(Duration::from_millis(50));
         let stream = TcpStream::connect(("127.0.0.1", ports.websocket)).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
