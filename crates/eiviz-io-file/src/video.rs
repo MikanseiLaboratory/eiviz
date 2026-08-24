@@ -550,4 +550,28 @@ mod tests {
         assert!(!cursor.config.playing);
         assert_eq!(cursor.tick(1_000).position_us, 99);
     }
+
+    #[test]
+    #[ignore = "requires explicit Cisco binary and representative MP4 paths"]
+    fn decodes_real_openh264_binary_and_mp4() {
+        let binary =
+            std::env::var_os("EIVIZ_OPENH264_HIL_BINARY").expect("set EIVIZ_OPENH264_HIL_BINARY");
+        let mp4 = std::env::var_os("EIVIZ_OPENH264_HIL_MP4").expect("set EIVIZ_OPENH264_HIL_MP4");
+        let source = VideoFileSource::open(
+            InputId::new(),
+            Path::new(&mp4),
+            Path::new(&binary),
+            Playback::default(),
+        )
+        .unwrap();
+        let frame = source
+            .pull_video(MediaTime::ZERO, eiviz_time::NTSC_5994)
+            .unwrap()
+            .expect("decoder must emit an authentic frame");
+        assert_eq!(frame.format, eiviz_media::PixelFormat::Rgba8);
+        assert_eq!(
+            frame.data.len(),
+            frame.width as usize * frame.height as usize * 4
+        );
+    }
 }
