@@ -158,8 +158,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     if layer.color_flags.w == 1u {
         let peak = max(layer.tone_map.x, 1.0);
-        let target = max(layer.tone_map.y, 1.0);
-        let scaled = max(color.rgb, vec3<f32>(0.0)) * peak / target;
+        let target_luminance = max(layer.tone_map.y, 1.0);
+        let scaled = max(color.rgb, vec3<f32>(0.0)) * peak / target_luminance;
         color = vec4<f32>(scaled / (vec3<f32>(1.0) + scaled), color.a);
     }
     if (layer.color_flags.z & 2u) != 0u {
