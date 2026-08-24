@@ -779,6 +779,7 @@ version = "0.1.0"
 dependencies = [
  "eiviz-command",
  "eiviz-core",
+ "eiviz-io-file",
  "eiviz-io-stream",
  "eiviz-media",
  "eiviz-project",

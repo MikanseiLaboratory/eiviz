@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+eiviz-core.workspace = true
 eiviz-media.workspace = true
 eiviz-time.workspace = true
 openh264-sys2 = { version = "=0.9.8", default-features = false, features = ["libloading"] }
