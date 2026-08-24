@@ -446,20 +446,17 @@ impl Runtime {
                         false,
                     ),
                 },
-                InputSource::Video { asset, playback } => {
-                    match self.try_load_image(project, *asset, pts) {
-                        Some(mut frame) => {
-                            if !playback.playing {
-                                frame.discontinuity = false;
-                            }
-                            (frame, true)
-                        }
-                        None => (
-                            self.missing_frame(project, input.id, w, h, pts, "video")?,
-                            false,
-                        ),
-                    }
-                }
+                InputSource::Video { .. } => (
+                    self.missing_frame(
+                        project,
+                        input.id,
+                        w,
+                        h,
+                        pts,
+                        "video decoder source is not attached",
+                    )?,
+                    false,
+                ),
                 InputSource::Ndi { .. }
                 | InputSource::Omt { .. }
                 | InputSource::DeckLink { .. } => (
