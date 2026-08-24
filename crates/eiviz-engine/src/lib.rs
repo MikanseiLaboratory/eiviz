@@ -338,12 +338,13 @@ impl Engine {
     }
 
     fn from_project_with_runtime(
-        project: Project,
+        mut project: Project,
         pending_capacity: usize,
         idempotency_capacity: usize,
         #[cfg(feature = "wgpu-backend")] shared_wgpu: Option<Arc<eiviz_gpu::WgpuCompositor>>,
         #[cfg(feature = "wgpu-backend")] wgpu_context: Option<eiviz_gpu::SharedWgpuContext>,
     ) -> Result<Self> {
+        disarm_loaded_distribution_outputs(&mut project);
         validate_enabled_distribution_outputs(&project)?;
         let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
         #[cfg(feature = "wgpu-backend")]
@@ -1361,6 +1362,49 @@ impl Engine {
         })
     }
 
+    pub fn declared_distribution_outputs(&self) -> Vec<(OutputId, String)> {
+        self.staged_snapshot()
+            .outputs
+            .values()
+            .filter_map(|output| {
+                output.distribution.as_ref()?;
+                match &output.kind {
+                    OutputKind::Rtmp { url } | OutputKind::Srt { url } => {
+                        Some((output.id, url.clone()))
+                    }
+                    OutputKind::Mp4 { path } => Some((output.id, path.clone())),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn require_declared_distribution(&self, id: OutputId) -> Result<()> {
+        let declared = self.staged_snapshot();
+        let output = declared
+            .outputs
+            .get(&id)
+            .ok_or_else(|| EngineError::Admission(format!("unknown output {id}")))?;
+        if output.distribution.is_none() {
+            return Err(EngineError::Admission(format!(
+                "output {id} is not a distribution mapping"
+            )));
+        }
+        match &output.kind {
+            OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => Ok(()),
+            other => Err(EngineError::Admission(format!(
+                "output {id} is {other:?}, not an RTMP/SRT/MP4 distribution mapping"
+            ))),
+        }
+    }
+
+    /// Starts a project-declared RTMP/SRT/MP4 mapping through the explicit
+    /// encoder factory. Missing binaries are Admission; PCM/I_PCM is not used.
+    pub fn bind_distribution_output(&self, id: OutputId) -> Result<CommandAck> {
+        self.require_declared_distribution(id)?;
+        self.set_distribution_enabled(id, true)
+    }
+
     pub fn flight_log(&self) -> Vec<DiagnosticEvent> {
         self.inner.lock().flight.snapshot()
     }
@@ -1770,6 +1814,7 @@ impl Engine {
     }
 
     fn replace_project(&self, mut project: Project, asset_root: Option<PathBuf>) -> Result<()> {
+        disarm_loaded_distribution_outputs(&mut project);
         let asset_diagnostics = reconcile_assets(&mut project, asset_root.as_deref());
         validate_enabled_distribution_outputs(&project)?;
         let active_snapshot = Arc::new(RuntimeSnapshot::compile(Arc::new(project.clone()), 0, 0)?);
@@ -2300,6 +2345,19 @@ fn deactivate_distribution_output(inner: &mut Inner, output: OutputId) {
         .is_some_and(|session| session.fanout.sink_count() == 0);
     if remove_session {
         inner.encoder_sessions.remove(&binding.profile);
+    }
+}
+
+fn disarm_loaded_distribution_outputs(project: &mut Project) {
+    for output in project.outputs.values_mut() {
+        if output.distribution.is_some()
+            && matches!(
+                output.kind,
+                OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. }
+            )
+        {
+            output.enabled = false;
+        }
     }
 }
 
@@ -3540,6 +3598,124 @@ mod tests {
         }
         assert!(engine.source_control_diagnostics().is_empty());
         assert_eq!(engine.declared_audio_device_sources().len(), 1);
+    }
+
+    fn test_mp4_distribution(engine: &Engine, path: &std::path::Path) -> Output {
+        Output {
+            id: OutputId::new(),
+            name: "record".into(),
+            owner: engine.primary_unit(),
+            video_source: OutputVideoSource::Program,
+            kind: OutputKind::Mp4 {
+                path: path.display().to_string(),
+            },
+            enabled: false,
+            distribution: Some(eiviz_core::DistributionProfile {
+                video: H264EncoderProfile::CiscoOpenH26426 {
+                    bitrate_bps: 8_000_000,
+                    keyframe_interval_frames: 120,
+                    level_idc: 42,
+                },
+                audio: AacEncoderProfile::FdkAacLc {
+                    bitrate_bps: 192_000,
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+                transport: eiviz_core::TransportProfile::FragmentedMp4 {
+                    recover_incomplete_tail: true,
+                },
+                queue_capacity: 8,
+                reconnect: eiviz_core::ReconnectProfile {
+                    initial_delay_ms: 1,
+                    max_delay_ms: 2,
+                    max_attempts: 1,
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn load_disarms_distribution_instead_of_inventing_an_encoder() {
+        let engine = Engine::new("distribution reload");
+        engine
+            .install_distribution_encoder_factory(
+                Arc::new(MockEncoderFactory {
+                    creates: Arc::new(AtomicU64::new(0)),
+                    encodes: Arc::new(AtomicU64::new(0)),
+                    idr_requests: Arc::new(AtomicU64::new(0)),
+                }),
+                EncoderCapabilities::dynamic_openh264_fdk(),
+            )
+            .unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("eiviz-distribution-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let output = test_mp4_distribution(&engine, &dir.join("pgm.mp4"));
+        engine
+            .configure_distribution_output(output.clone())
+            .unwrap();
+        engine.set_distribution_enabled(output.id, true).unwrap();
+        engine.tick().unwrap();
+        assert!(
+            engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .any(|diagnostic| diagnostic.enabled)
+        );
+        let path = dir.join("project.json");
+        engine.save(&path).unwrap();
+        engine.load_project(&path, None).unwrap();
+        assert_eq!(
+            engine.declared_distribution_outputs(),
+            vec![(output.id, dir.join("pgm.mp4").display().to_string())]
+        );
+        assert!(
+            engine
+                .snapshot()
+                .outputs
+                .get(&output.id)
+                .is_some_and(|loaded| !loaded.enabled)
+        );
+        assert!(
+            engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .all(|diagnostic| !diagnostic.enabled && diagnostic.state == "stopped")
+        );
+    }
+
+    #[test]
+    fn bind_distribution_output_rejects_without_a_substitute_encoder() {
+        let engine = Engine::new("distribution bind");
+        let dir =
+            std::env::temp_dir().join(format!("eiviz-distribution-bind-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let output = test_mp4_distribution(&engine, &dir.join("pgm.mp4"));
+        engine
+            .configure_distribution_output(output.clone())
+            .unwrap();
+        engine.tick().unwrap();
+        match engine.bind_distribution_output(output.id) {
+            Ok(_) => panic!("missing encoder factory must not start distribution"),
+            Err(error) => {
+                assert!(matches!(error, EngineError::Admission(_)), "{error:?}");
+                assert!(
+                    error.to_string().contains("fallback is forbidden")
+                        || error.to_string().contains("no substitute"),
+                    "{error}"
+                );
+            }
+        }
+        assert!(
+            engine
+                .metrics()
+                .distribution_outputs
+                .iter()
+                .all(|diagnostic| diagnostic.state == "stopped")
+        );
+        assert_eq!(engine.declared_distribution_outputs().len(), 1);
     }
 
     #[test]

@@ -1140,11 +1140,16 @@ impl DesktopApp {
                 Err(error) => failures.push(format!("audio {binding_id}: {error}")),
             }
         }
+        let declared_distribution = self.engine.declared_distribution_outputs().len();
         self.status = if failures.is_empty() {
-            if bound == 0 {
+            if bound == 0 && declared_distribution == 0 {
                 action.to_owned()
-            } else {
+            } else if declared_distribution == 0 {
                 format!("{action}; rebound {bound} live source(s)")
+            } else {
+                format!(
+                    "{action}; rebound {bound} live source(s); {declared_distribution} distribution mapping(s) remain stopped until Start with explicit encoder binaries"
+                )
             }
         } else {
             format!(

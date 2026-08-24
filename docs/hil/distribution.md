@@ -39,6 +39,13 @@ This checks dynamic loading, OpenH264 hash/version verification, SPS/PPS,
 AudioSpecificConfig, one AVC access unit, and one raw AAC-LC access unit. It is
 not legal approval, codec conformance, or transport interoperability evidence.
 
+Engine `declared_distribution_outputs` / `bind_distribution_output` keep RTMP,
+SRT, and fMP4 mappings in the project after load, but live encoder sessions are
+dropped and `enabled` is forced off. Start requires an explicit factory or
+operator-provided binaries. Missing codecs are Admission; PCM/I_PCM is never
+attached. Desktop reports stopped mappings after load and does not auto-publish.
+This is not real-server `DIST-HIL`.
+
 ## Real RTMP
 
 1. Install a current MediaMTX or nginx-rtmp release on a separate machine.
