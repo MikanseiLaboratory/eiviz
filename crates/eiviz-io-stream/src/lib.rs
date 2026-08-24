@@ -1,8 +1,10 @@
 //! Encoded distribution fan-out, muxers, and network transports.
 //!
-//! This crate does not pretend the in-tree I_PCM test encoder or PCM audio are
+//! This crate never treats the in-tree I_PCM test encoder or PCM audio as
 //! production H.264/AAC. Product activation requires an explicitly registered
-//! H.264 Annex-B encoder and raw AAC-LC encoder with exact profile names.
+//! encoder factory: the production slice uses hash/version-verified dynamic
+//! Cisco OpenH264 2.6.0 plus an explicit license-reviewed dynamic FDK AAC-LC
+//! binary.
 
 mod fanout;
 mod recording;

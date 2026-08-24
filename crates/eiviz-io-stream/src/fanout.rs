@@ -54,6 +54,7 @@ struct SharedDiagnostics {
     dropped: AtomicU64,
     reconnects: AtomicU64,
     last_error: Mutex<Option<String>>,
+    stopping: AtomicBool,
     recovery_required: AtomicBool,
     recovery_generation: AtomicU64,
 }
@@ -137,6 +138,7 @@ impl EncodedFanout {
             dropped: AtomicU64::new(0),
             reconnects: AtomicU64::new(0),
             last_error: Mutex::new(None),
+            stopping: AtomicBool::new(false),
             recovery_required: AtomicBool::new(true),
             recovery_generation: AtomicU64::new(0),
         });
@@ -227,6 +229,7 @@ impl EncodedFanout {
     pub fn remove_sink(&self, name: &str) {
         let queue = self.sinks.lock().expect("fanout sinks").remove(name);
         if let Some(mut queue) = queue {
+            queue.diagnostics.stopping.store(true, Ordering::Release);
             drop(queue.sender);
             if let Some(thread) = queue.thread.take() {
                 let _ = thread.join();
@@ -239,6 +242,7 @@ impl Drop for EncodedFanout {
     fn drop(&mut self) {
         let queues = std::mem::take(self.sinks.get_mut().expect("fanout sinks"));
         for (_, mut queue) in queues {
+            queue.diagnostics.stopping.store(true, Ordering::Release);
             drop(queue.sender);
             if let Some(thread) = queue.thread.take() {
                 let _ = thread.join();
@@ -256,6 +260,9 @@ fn run_worker(
 ) {
     let mut connected = false;
     while let Ok(queued) = receiver.recv() {
+        if diagnostics.stopping.load(Ordering::Acquire) {
+            break;
+        }
         let access_unit = queued.access_unit;
         diagnostics
             .queue_depth
@@ -316,6 +323,9 @@ fn connect_with_backoff(
     let mut attempt = 0u32;
     let mut delay = recovery.initial_delay.max(Duration::from_millis(1));
     loop {
+        if diagnostics.stopping.load(Ordering::Acquire) {
+            return false;
+        }
         diagnostics.set_state(SinkState::Connecting);
         match sink.connect(config) {
             Ok(()) => return true,
@@ -327,11 +337,27 @@ fn connect_with_backoff(
                     return false;
                 }
                 diagnostics.set_state(SinkState::Backoff);
-                std::thread::sleep(delay);
+                if !interruptible_sleep(delay, diagnostics) {
+                    return false;
+                }
                 delay = delay.saturating_mul(2).min(recovery.max_delay.max(delay));
                 diagnostics.reconnects.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+}
+
+fn interruptible_sleep(delay: Duration, diagnostics: &SharedDiagnostics) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        if diagnostics.stopping.load(Ordering::Acquire) {
+            return false;
+        }
+        let remaining = delay.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return true;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(10)));
     }
 }
 

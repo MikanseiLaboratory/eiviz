@@ -346,16 +346,21 @@ impl Engine {
             || "no explicit dynamic encoder binaries configured".into(),
             |factory| factory.description(),
         );
-        capabilities.push(eiviz_media::Capability {
-            id: "distribution-cisco-openh264-2.6".into(),
-            available: g.encoder_capabilities.cisco_openh264_26,
-            detail: description.clone(),
-        });
-        capabilities.push(eiviz_media::Capability {
-            id: "distribution-fdk-aac-lc".into(),
-            available: g.encoder_capabilities.fdk_aac_lc,
-            detail: description,
-        });
+        for capability in &mut capabilities {
+            match capability.id.as_str() {
+                "distribution-h264-encoder" => {
+                    capability.available = g.encoder_capabilities.cisco_openh264_26
+                        || !g.encoder_capabilities.h264_annexb_adapters.is_empty();
+                    capability.detail.clone_from(&description);
+                }
+                "distribution-aac-encoder" => {
+                    capability.available = g.encoder_capabilities.fdk_aac_lc
+                        || !g.encoder_capabilities.raw_aac_lc_adapters.is_empty();
+                    capability.detail.clone_from(&description);
+                }
+                _ => {}
+            }
+        }
         capabilities
     }
 

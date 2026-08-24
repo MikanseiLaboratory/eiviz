@@ -10,6 +10,7 @@ use openh264_sys2::{
     PRO_BASELINE, RC_BITRATE_MODE, SEncParamExt, SFrameBSInfo, SSourcePicture, videoFormatI420,
     videoFrameTypeIDR, videoFrameTypeSkip,
 };
+use std::collections::VecDeque;
 use std::ffi::{c_int, c_uint, c_void};
 use std::path::{Path, PathBuf};
 use std::ptr::{from_mut, null_mut};
@@ -247,7 +248,6 @@ impl ProgramEncoder for DynamicProgramEncoder {
 type EncoderUninitialize = unsafe extern "C" fn(*mut ISVCEncoder) -> c_int;
 type EncoderEncodeFrame =
     unsafe extern "C" fn(*mut ISVCEncoder, *const SSourcePicture, *mut SFrameBSInfo) -> c_int;
-type EncoderParameterSets = unsafe extern "C" fn(*mut ISVCEncoder, *mut SFrameBSInfo) -> c_int;
 type EncoderForceIntra = unsafe extern "C" fn(*mut ISVCEncoder, bool) -> c_int;
 
 struct OpenH264Encoder {
@@ -390,7 +390,16 @@ impl OpenH264Encoder {
                 "OpenH264 EncodeParameterSets failed with code {parameter_result}"
             )));
         }
-        let parameter_bytes = collect_openh264_layers(&parameter_info)?;
+        let parameter_bytes = match collect_openh264_layers(&parameter_info) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                unsafe {
+                    uninitialize(encoder);
+                    api.WelsDestroySVCEncoder(encoder);
+                }
+                return Err(error);
+            }
+        };
         let parameter_au = EncodedAccessUnit {
             pts: MediaTime::ZERO,
             dts: Some(MediaTime::ZERO),
@@ -624,6 +633,7 @@ struct FdkAacEncoder {
     max_output_bytes: usize,
     pending: Vec<Vec<f32>>,
     pending_start: Option<u64>,
+    encoded_starts: VecDeque<u64>,
     audio_specific_config: Vec<u8>,
 }
 
@@ -704,6 +714,10 @@ impl FdkAacEncoder {
                 return Err(error);
             }
         };
+        if let Err(error) = validate_aac_lc_config(&audio_specific_config, sample_rate, channels) {
+            unsafe { close_fn(&raw mut handle) };
+            return Err(error);
+        }
         Ok(Self {
             _library: library,
             handle,
@@ -715,6 +729,7 @@ impl FdkAacEncoder {
             max_output_bytes,
             pending: vec![Vec::new(); channels as usize],
             pending_start: None,
+            encoded_starts: VecDeque::new(),
             audio_specific_config,
         })
     }
@@ -806,31 +821,49 @@ impl FdkAacEncoder {
                 },
                 "aacEncEncode",
             )?;
+            let consumed_samples = usize::try_from(output_args.num_in_samples)
+                .map_err(|_| MediaError::Other("FDK returned negative consumed samples".into()))?;
+            if consumed_samples == 0
+                || consumed_samples > interleaved.len()
+                || !consumed_samples.is_multiple_of(self.channels as usize)
+            {
+                return Err(MediaError::Other(format!(
+                    "FDK returned invalid consumed sample count {consumed_samples}"
+                )));
+            }
+            let consumed_frames = consumed_samples / self.channels as usize;
+            self.encoded_starts.push_back(start);
             let bytes = usize::try_from(output_args.num_out_bytes)
                 .map_err(|_| MediaError::Other("FDK returned negative output size".into()))?;
-            if bytes == 0 || bytes > encoded.len() {
+            if bytes > encoded.len() {
                 return Err(MediaError::Other(format!(
                     "FDK returned invalid AAC access-unit size {bytes}"
                 )));
             }
-            encoded.truncate(bytes);
-            let pts = MediaTime::new(
-                i64::try_from(start)
-                    .map_err(|_| MediaError::Other("audio PTS exceeds i64".into()))?,
-                Rational::new(1, self.sample_rate as i64)
-                    .map_err(|error| MediaError::Other(error.to_string()))?,
-            );
-            output.push(EncodedAccessUnit {
-                pts,
-                dts: Some(pts),
-                keyframe: false,
-                bytes: encoded.into(),
-                kind: EncodedKind::Aac,
-            });
             for plane in &mut self.pending {
-                plane.drain(..self.frame_length);
+                plane.drain(..consumed_frames);
             }
-            self.pending_start = Some(start.saturating_add(self.frame_length as u64));
+            self.pending_start = Some(start.saturating_add(consumed_frames as u64));
+            if bytes > 0 {
+                encoded.truncate(bytes);
+                let encoded_start = self
+                    .encoded_starts
+                    .pop_front()
+                    .expect("an input timestamp was queued above");
+                let pts = MediaTime::new(
+                    i64::try_from(encoded_start)
+                        .map_err(|_| MediaError::Other("audio PTS exceeds i64".into()))?,
+                    Rational::new(1, self.sample_rate as i64)
+                        .map_err(|error| MediaError::Other(error.to_string()))?,
+                );
+                output.push(EncodedAccessUnit {
+                    pts,
+                    dts: Some(pts),
+                    keyframe: false,
+                    bytes: encoded.into(),
+                    kind: EncodedKind::Aac,
+                });
+            }
         }
         Ok(output)
     }
@@ -867,6 +900,66 @@ fn fdk_ok(code: c_int, operation: &str) -> Result<()> {
         Err(MediaError::Other(format!(
             "FDK {operation} failed with AACENC_ERROR {code:#x}"
         )))
+    }
+}
+
+fn validate_aac_lc_config(config: &[u8], sample_rate: u32, channels: u16) -> Result<()> {
+    let mut bits = BitReader::new(config);
+    let object_type = bits.read(5)?;
+    if object_type != FDK_AAC_LC_OBJECT_TYPE {
+        return Err(MediaError::Unsupported(format!(
+            "FDK AudioSpecificConfig reports object type {object_type}; AAC-LC (2) is required"
+        )));
+    }
+    let frequency_index = bits.read(4)?;
+    let actual_rate = if frequency_index == 15 {
+        bits.read(24)?
+    } else {
+        const RATES: [u32; 13] = [
+            96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
+            8_000, 7_350,
+        ];
+        *RATES.get(frequency_index as usize).ok_or_else(|| {
+            MediaError::Unsupported(format!(
+                "FDK AudioSpecificConfig has reserved sample-rate index {frequency_index}"
+            ))
+        })?
+    };
+    let actual_channels = bits.read(4)? as u16;
+    if actual_rate != sample_rate || actual_channels != channels {
+        return Err(MediaError::Unsupported(format!(
+            "FDK AudioSpecificConfig is {actual_rate} Hz/{actual_channels} ch; selected profile is {sample_rate} Hz/{channels} ch"
+        )));
+    }
+    Ok(())
+}
+
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    bit: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, bit: 0 }
+    }
+
+    fn read(&mut self, count: usize) -> Result<u32> {
+        let end = self
+            .bit
+            .checked_add(count)
+            .ok_or_else(|| MediaError::Other("AAC config bit offset overflow".into()))?;
+        if count > 32 || end > self.bytes.len() * 8 {
+            return Err(MediaError::Unsupported(
+                "FDK returned truncated AudioSpecificConfig".into(),
+            ));
+        }
+        let mut value = 0u32;
+        for bit in self.bit..end {
+            value = (value << 1) | u32::from((self.bytes[bit / 8] >> (7 - bit % 8)) & 1);
+        }
+        self.bit = end;
+        Ok(value)
     }
 }
 
@@ -977,6 +1070,13 @@ mod tests {
                 .to_string()
                 .contains("hash-verified Cisco OpenH264 2.6.0")
         );
+    }
+
+    #[test]
+    fn aac_specific_config_must_match_lc_profile() {
+        validate_aac_lc_config(&[0x11, 0x90], 48_000, 2).unwrap();
+        assert!(validate_aac_lc_config(&[0x12, 0x10], 48_000, 2).is_err());
+        assert!(validate_aac_lc_config(&[0x11, 0x88], 48_000, 2).is_err());
     }
 
     #[test]
