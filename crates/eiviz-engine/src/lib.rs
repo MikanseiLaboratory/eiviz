@@ -957,10 +957,10 @@ impl Engine {
                 applied_revision = g.sequencer.applied_revision(),
                 "commands latched at media boundary"
             );
-            if let Some(path) = g.journal_path.clone() {
-                if let Err(error) = append_journal(&path, latched.applied_revision, &hash) {
-                    record_persistence_error(&mut g, "journal.write", error.to_string());
-                }
+            if let Some(path) = g.journal_path.clone()
+                && let Err(error) = append_journal(&path, latched.applied_revision, &hash)
+            {
+                record_persistence_error(&mut g, "journal.write", error.to_string());
             }
         }
         let result = g.runtime.tick_active()?;
