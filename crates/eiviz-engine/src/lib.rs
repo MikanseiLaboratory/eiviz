@@ -114,6 +114,17 @@ pub struct EngineMetrics {
     pub gpu_frame_nanos: u64,
     pub gpu_device_loss: Option<String>,
     pub gpu_automatic_recovery: bool,
+    pub gpu_lifecycle_state: String,
+    pub gpu_lifecycle_detail: Option<String>,
+    pub gpu_pool_resident_bytes: u64,
+    pub gpu_pool_resident_resources: usize,
+    pub gpu_pool_idle_resources: usize,
+    pub gpu_pool_allocations: u64,
+    pub gpu_pool_reuses: u64,
+    pub gpu_pool_evictions: u64,
+    pub gpu_pool_acquisition_misses: u64,
+    pub gpu_prewarm_generations: u64,
+    pub gpu_reinjections: u64,
     pub deadline_slack_nanos: i64,
     pub deadline_misses: u64,
     pub program_drops: u64,
@@ -128,6 +139,20 @@ pub struct EngineMetrics {
     pub multiview_queue_high_water: usize,
     pub persistence_errors: u64,
     pub last_persistence_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum GpuLifecycleState {
+    #[default]
+    NotApplicable,
+    Active,
+    Degraded {
+        reason: String,
+    },
+    RecoveryPending,
+    RestartRequired {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -221,6 +246,10 @@ struct Inner {
     wgpu_compositor: Option<Arc<eiviz_gpu::WgpuCompositor>>,
     #[cfg(feature = "wgpu-backend")]
     wgpu_context: Option<eiviz_gpu::SharedWgpuContext>,
+    gpu_lifecycle: GpuLifecycleState,
+    #[cfg(feature = "wgpu-backend")]
+    pending_wgpu_compositor: Option<Arc<eiviz_gpu::WgpuCompositor>>,
+    gpu_reinjections: u64,
     client: ClientId,
     budget: AdmissionBudget,
     flight: FlightRecorder,
@@ -341,6 +370,11 @@ impl Engine {
         let wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
         runtime.activate_snapshot(active_snapshot.clone())?;
         let asset_diagnostics = inspect_assets(&project, None);
+        let gpu_lifecycle = if project.compositor == eiviz_core::CompositorBackend::Wgpu {
+            GpuLifecycleState::Active
+        } else {
+            GpuLifecycleState::NotApplicable
+        };
         let engine = Self {
             inner: Mutex::new(Inner {
                 project,
@@ -351,6 +385,10 @@ impl Engine {
                 wgpu_compositor,
                 #[cfg(feature = "wgpu-backend")]
                 wgpu_context,
+                gpu_lifecycle,
+                #[cfg(feature = "wgpu-backend")]
+                pending_wgpu_compositor: None,
+                gpu_reinjections: 0,
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
                 flight: FlightRecorder::default(),
@@ -629,10 +667,53 @@ impl Engine {
         self.inner.lock().runtime.compositor_detail()
     }
 
+    pub fn gpu_lifecycle_state(&self) -> GpuLifecycleState {
+        self.inner.lock().gpu_lifecycle.clone()
+    }
+
+    /// The desktop calls this when its framework cannot recreate the
+    /// GUI-owned render state in place.
+    pub fn require_gpu_restart(&self, reason: impl Into<String>) {
+        let mut inner = self.inner.lock();
+        if matches!(
+            inner.gpu_lifecycle,
+            GpuLifecycleState::Degraded { .. } | GpuLifecycleState::RecoveryPending
+        ) {
+            inner.gpu_lifecycle = GpuLifecycleState::RestartRequired {
+                reason: reason.into(),
+            };
+        }
+    }
+
+    /// Queue a newly GUI-owned compositor. It is never installed here; the
+    /// next [`Self::tick`] performs prewarm and injection at its frame boundary.
+    #[cfg(feature = "wgpu-backend")]
+    pub fn queue_wgpu_reinjection(&self, compositor: Arc<eiviz_gpu::WgpuCompositor>) -> Result<()> {
+        let mut inner = self.inner.lock();
+        if inner.project.compositor != CompositorBackend::Wgpu {
+            return Err(EngineError::Admission(
+                "cannot inject Wgpu into a CpuReference project".into(),
+            ));
+        }
+        if compositor.diagnostics().device_loss.is_some() {
+            return Err(EngineError::Admission(
+                "replacement compositor is already device-lost".into(),
+            ));
+        }
+        inner.pending_wgpu_compositor = Some(compositor);
+        inner.gpu_lifecycle = GpuLifecycleState::RecoveryPending;
+        Ok(())
+    }
+
     pub fn metrics(&self) -> EngineMetrics {
         let g = self.inner.lock();
         #[cfg(feature = "wgpu-backend")]
         let gpu = g.runtime.wgpu_diagnostics();
+        #[cfg(feature = "wgpu-backend")]
+        let gpu_pool = gpu
+            .as_ref()
+            .map(|value| value.pool.clone())
+            .unwrap_or_default();
         let mut audio_devices = g.runtime.audio_source_diagnostics();
         audio_devices.extend(g.audio_sinks.values().map(|sink| sink.diagnostics()));
         let mut audio_resamplers = g
@@ -741,6 +822,54 @@ impl Engine {
             gpu_automatic_recovery: gpu.as_ref().is_some_and(|value| value.automatic_recovery),
             #[cfg(not(feature = "wgpu-backend"))]
             gpu_automatic_recovery: false,
+            gpu_lifecycle_state: match &g.gpu_lifecycle {
+                GpuLifecycleState::NotApplicable => "not-applicable",
+                GpuLifecycleState::Active => "active",
+                GpuLifecycleState::Degraded { .. } => "degraded",
+                GpuLifecycleState::RecoveryPending => "recovery-pending",
+                GpuLifecycleState::RestartRequired { .. } => "restart-required",
+            }
+            .into(),
+            gpu_lifecycle_detail: match &g.gpu_lifecycle {
+                GpuLifecycleState::Degraded { reason }
+                | GpuLifecycleState::RestartRequired { reason } => Some(reason.clone()),
+                GpuLifecycleState::NotApplicable
+                | GpuLifecycleState::Active
+                | GpuLifecycleState::RecoveryPending => None,
+            },
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_resident_bytes: gpu_pool.resident_bytes,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_resident_bytes: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_resident_resources: gpu_pool.resident_resources,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_resident_resources: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_idle_resources: gpu_pool.idle_resources,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_idle_resources: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_allocations: gpu_pool.allocations,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_allocations: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_reuses: gpu_pool.reuses,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_reuses: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_evictions: gpu_pool.evictions,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_evictions: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pool_acquisition_misses: gpu_pool.acquisition_misses,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pool_acquisition_misses: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_prewarm_generations: gpu_pool.prewarm_generations,
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_prewarm_generations: 0,
+            gpu_reinjections: g.gpu_reinjections,
             deadline_slack_nanos: g.runtime.metrics.deadline_slack_nanos,
             deadline_misses: g.runtime.metrics.deadline_misses,
             program_drops: g.runtime.metrics.program_drops,
@@ -1053,6 +1182,9 @@ impl Engine {
 
     pub fn tick(&self) -> Result<TickResult> {
         let mut g = self.inner.lock();
+        #[cfg(feature = "wgpu-backend")]
+        apply_pending_gpu_reinjection(&mut g)?;
+        observe_gpu_lifecycle(&mut g)?;
         let tick_span = tracing::info_span!(
             "engine_tick",
             frame_id = g.runtime.frame(),
@@ -1078,10 +1210,10 @@ impl Engine {
             )?);
             reconcile_distribution_outputs(&mut g, &next_project)?;
             update_source_playback_at_boundary(&g.runtime, &g.project, &next_project);
+            g.runtime.activate_snapshot(snapshot.clone())?;
             g.project = next_project;
-            g.active_snapshot = snapshot.clone();
+            g.active_snapshot = snapshot;
             g.sequencer = candidate_sequencer;
-            g.runtime.activate_snapshot(snapshot)?;
             let hash = state_hash(&g.project);
             let event = DiagnosticEvent::new(
                 eiviz_time::monotonic_nanos(),
@@ -1108,7 +1240,13 @@ impl Engine {
             }
         }
         service_source_controls(&mut g);
-        let result = g.runtime.tick_active()?;
+        let result = match g.runtime.tick_active() {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = observe_gpu_lifecycle(&mut g);
+                return Err(error.into());
+            }
+        };
         let audio = result.audio.clone();
         let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
         let mut distribution_errors = Vec::new();
@@ -1368,7 +1506,13 @@ impl Engine {
         {
             inner.wgpu_compositor = shared_wgpu.or_else(|| runtime.wgpu_compositor());
             inner.wgpu_context = wgpu_context;
+            inner.pending_wgpu_compositor = None;
         }
+        inner.gpu_lifecycle = if inner.project.compositor == eiviz_core::CompositorBackend::Wgpu {
+            GpuLifecycleState::Active
+        } else {
+            GpuLifecycleState::NotApplicable
+        };
         inner.runtime = runtime;
         inner.asset_diagnostics = asset_diagnostics;
         let command_limits = inner.sequencer.diagnostics();
@@ -1499,6 +1643,82 @@ impl Engine {
                 .map_err(|error| EngineError::Admission(error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "wgpu-backend")]
+fn apply_pending_gpu_reinjection(inner: &mut Inner) -> Result<()> {
+    let Some(compositor) = inner.pending_wgpu_compositor.take() else {
+        return Ok(());
+    };
+    if let Err(error) = inner
+        .runtime
+        .reinject_wgpu_compositor_at_boundary(compositor.clone())
+    {
+        let reason = format!("replacement compositor prewarm failed: {error}");
+        inner.gpu_lifecycle = GpuLifecycleState::RestartRequired {
+            reason: reason.clone(),
+        };
+        return Err(EngineError::Runtime(
+            eiviz_runtime::RuntimeError::GpuDegraded(reason),
+        ));
+    }
+    inner.wgpu_compositor = Some(compositor);
+    inner.wgpu_context = None;
+    inner.gpu_lifecycle = GpuLifecycleState::Active;
+    inner.gpu_reinjections = inner.gpu_reinjections.saturating_add(1);
+    inner.flight.record(
+        DiagnosticEvent::new(
+            eiviz_time::monotonic_nanos(),
+            DiagnosticLevel::Info,
+            "gpu",
+            "gpu.reinjected",
+        )
+        .frame(inner.runtime.frame())
+        .field("reinjections", inner.gpu_reinjections),
+    );
+    Ok(())
+}
+
+fn observe_gpu_lifecycle(inner: &mut Inner) -> Result<()> {
+    #[cfg(feature = "wgpu-backend")]
+    if inner.project.compositor == CompositorBackend::Wgpu {
+        if let Some(loss) = inner
+            .runtime
+            .wgpu_diagnostics()
+            .and_then(|diagnostics| diagnostics.device_loss)
+        {
+            let reason = format!("{}: {}", loss.reason, loss.message);
+            if matches!(
+                inner.gpu_lifecycle,
+                GpuLifecycleState::Active | GpuLifecycleState::RecoveryPending
+            ) {
+                inner.gpu_lifecycle = GpuLifecycleState::Degraded {
+                    reason: reason.clone(),
+                };
+                inner.flight.record(
+                    DiagnosticEvent::new(
+                        eiviz_time::monotonic_nanos(),
+                        DiagnosticLevel::Error,
+                        "gpu",
+                        "gpu.device_lost",
+                    )
+                    .frame(inner.runtime.frame())
+                    .field("reason", reason.clone())
+                    .field("backend", "Wgpu"),
+                );
+            }
+        }
+    }
+    match &inner.gpu_lifecycle {
+        GpuLifecycleState::Degraded { reason } | GpuLifecycleState::RestartRequired { reason } => {
+            Err(EngineError::Runtime(
+                eiviz_runtime::RuntimeError::GpuDegraded(reason.clone()),
+            ))
+        }
+        GpuLifecycleState::NotApplicable
+        | GpuLifecycleState::Active
+        | GpuLifecycleState::RecoveryPending => Ok(()),
     }
 }
 

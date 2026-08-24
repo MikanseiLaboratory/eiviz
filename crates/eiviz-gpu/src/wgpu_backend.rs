@@ -13,10 +13,9 @@ use eiviz_core::{
 use eiviz_media::{PixelFormat, VideoFrame};
 use eiviz_time::MediaTime;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use wgpu::util::DeviceExt;
 
 const SHADER: &str = r#"
 struct LayerUniform {
@@ -200,13 +199,23 @@ pub enum WgpuError {
     Map(String),
     #[error("wgpu device was lost: {0}")]
     DeviceLost(String),
+    #[error("GPU resource was not prewarmed: {0}")]
+    UnpreparedResource(String),
+    #[error(
+        "GPU resource prewarm exceeds pool limits: requires {required_bytes} bytes/{required_resources} resources, limit is {limit_bytes} bytes/{limit_resources} resources"
+    )]
+    PoolLimit {
+        required_bytes: u64,
+        required_resources: usize,
+        limit_bytes: u64,
+        limit_resources: usize,
+    },
 }
 
 /// A compositor result that remains on the shared GPU device.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WgpuTextureFrame {
-    texture: Arc<wgpu::Texture>,
-    view: Arc<wgpu::TextureView>,
+    resource: Arc<ResourceLease>,
     pub width: u32,
     pub height: u32,
     pub pts: MediaTime,
@@ -214,6 +223,21 @@ pub struct WgpuTextureFrame {
     pub format: PixelFormat,
     pub color: ColorMetadata,
     pub field: FieldKind,
+}
+
+impl std::fmt::Debug for WgpuTextureFrame {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WgpuTextureFrame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("pts", &self.pts)
+            .field("frame_id", &self.frame_id)
+            .field("format", &self.format)
+            .field("color", &self.color)
+            .field("field", &self.field)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -267,11 +291,302 @@ impl AdapterCapabilities {
 
 impl WgpuTextureFrame {
     pub fn texture(&self) -> &wgpu::Texture {
-        &self.texture
+        self.resource.output().0
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
-        &self.view
+        self.resource.output().1
+    }
+}
+
+/// Hard bounds for all reusable compositor allocations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourcePoolLimits {
+    pub max_bytes: u64,
+    pub max_resources: usize,
+}
+
+impl Default for ResourcePoolLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 2 * 1024 * 1024 * 1024,
+            max_resources: 16_384,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourcePoolDiagnostics {
+    pub resident_bytes: u64,
+    pub resident_resources: usize,
+    pub idle_resources: usize,
+    pub source_resources: usize,
+    pub output_resources: usize,
+    pub readback_resources: usize,
+    pub allocations: u64,
+    pub reuses: u64,
+    pub evictions: u64,
+    pub acquisition_misses: u64,
+    pub prewarm_generations: u64,
+    pub last_evicted: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ResourceKind {
+    Source,
+    Output,
+    Readback,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum PoolFormat {
+    Rgba8,
+    Bgra8,
+    Rgba16Float,
+}
+
+impl PoolFormat {
+    const fn bytes_per_pixel(self) -> u64 {
+        match self {
+            Self::Rgba8 | Self::Bgra8 => 4,
+            Self::Rgba16Float => 8,
+        }
+    }
+
+    const fn texture_format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
+            Self::Bgra8 => wgpu::TextureFormat::Bgra8Unorm,
+            Self::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ResourceKey {
+    kind: ResourceKind,
+    format: PoolFormat,
+    width: u32,
+    height: u32,
+}
+
+impl ResourceKey {
+    fn bytes(self) -> u64 {
+        let row_bytes = u64::from(self.width).saturating_mul(self.format.bytes_per_pixel());
+        match self.kind {
+            ResourceKind::Readback => {
+                let alignment = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+                row_bytes
+                    .div_ceil(alignment)
+                    .saturating_mul(alignment)
+                    .saturating_mul(u64::from(self.height))
+            }
+            ResourceKind::Source | ResourceKind::Output => {
+                row_bytes.saturating_mul(u64::from(self.height))
+            }
+        }
+    }
+}
+
+struct SourceResource {
+    texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    uniform: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+struct OutputResource {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+struct ReadbackResource {
+    buffer: wgpu::Buffer,
+}
+
+enum GpuResource {
+    Source(SourceResource),
+    Output(OutputResource),
+    Readback(ReadbackResource),
+}
+
+struct IdleResource {
+    sequence: u64,
+    resource: GpuResource,
+}
+
+struct ResourcePool {
+    limits: ResourcePoolLimits,
+    idle: BTreeMap<ResourceKey, VecDeque<IdleResource>>,
+    resident_by_key: BTreeMap<ResourceKey, usize>,
+    resident_bytes: u64,
+    resident_resources: usize,
+    sequence: u64,
+    diagnostics: ResourcePoolDiagnostics,
+}
+
+impl ResourcePool {
+    fn new(limits: ResourcePoolLimits) -> Self {
+        Self {
+            limits,
+            idle: BTreeMap::new(),
+            resident_by_key: BTreeMap::new(),
+            resident_bytes: 0,
+            resident_resources: 0,
+            sequence: 0,
+            diagnostics: ResourcePoolDiagnostics::default(),
+        }
+    }
+
+    fn idle_count(&self) -> usize {
+        self.idle.values().map(VecDeque::len).sum()
+    }
+
+    fn diagnostics(&self) -> ResourcePoolDiagnostics {
+        let mut value = self.diagnostics.clone();
+        value.resident_bytes = self.resident_bytes;
+        value.resident_resources = self.resident_resources;
+        value.idle_resources = self.idle_count();
+        value.source_resources = self
+            .resident_by_key
+            .iter()
+            .filter(|(key, _)| key.kind == ResourceKind::Source)
+            .map(|(_, count)| *count)
+            .sum();
+        value.output_resources = self
+            .resident_by_key
+            .iter()
+            .filter(|(key, _)| key.kind == ResourceKind::Output)
+            .map(|(_, count)| *count)
+            .sum();
+        value.readback_resources = self
+            .resident_by_key
+            .iter()
+            .filter(|(key, _)| key.kind == ResourceKind::Readback)
+            .map(|(_, count)| *count)
+            .sum();
+        value
+    }
+
+    fn acquire(pool: &Arc<Mutex<Self>>, key: ResourceKey) -> Result<ResourceLease, WgpuError> {
+        let resource = {
+            let mut state = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let resource = state
+                .idle
+                .get_mut(&key)
+                .and_then(VecDeque::pop_front)
+                .map(|idle| idle.resource);
+            if resource.is_some() {
+                state.diagnostics.reuses = state.diagnostics.reuses.saturating_add(1);
+            } else {
+                state.diagnostics.acquisition_misses =
+                    state.diagnostics.acquisition_misses.saturating_add(1);
+            }
+            resource
+        };
+        resource
+            .map(|resource| ResourceLease {
+                key,
+                resource: Some(resource),
+                pool: Arc::clone(pool),
+            })
+            .ok_or_else(|| {
+                WgpuError::UnpreparedResource(format!(
+                    "{:?}/{:?} {}x{}",
+                    key.kind, key.format, key.width, key.height
+                ))
+            })
+    }
+
+    fn release(&mut self, key: ResourceKey, resource: GpuResource) {
+        self.sequence = self.sequence.saturating_add(1);
+        self.idle.entry(key).or_default().push_back(IdleResource {
+            sequence: self.sequence,
+            resource,
+        });
+    }
+
+    fn evict_one(&mut self, required: &BTreeMap<ResourceKey, usize>) -> bool {
+        let candidate = self
+            .idle
+            .iter()
+            .filter(|(key, idle)| {
+                let resident = self.resident_by_key.get(key).copied().unwrap_or(0);
+                let protected = required.get(key).copied().unwrap_or(0);
+                !idle.is_empty() && resident > protected
+            })
+            .flat_map(|(key, idle)| {
+                idle.iter()
+                    .enumerate()
+                    .map(move |(index, value)| (value.sequence, *key, index))
+            })
+            .min();
+        let Some((_, key, index)) = candidate else {
+            return false;
+        };
+        let queue = self.idle.get_mut(&key).expect("candidate queue exists");
+        let _ = queue.remove(index).expect("candidate entry exists");
+        if queue.is_empty() {
+            self.idle.remove(&key);
+        }
+        let count = self
+            .resident_by_key
+            .get_mut(&key)
+            .expect("resident key exists");
+        *count -= 1;
+        if *count == 0 {
+            self.resident_by_key.remove(&key);
+        }
+        self.resident_resources -= 1;
+        self.resident_bytes = self.resident_bytes.saturating_sub(key.bytes());
+        self.diagnostics.evictions = self.diagnostics.evictions.saturating_add(1);
+        self.diagnostics.last_evicted = Some(format!(
+            "{:?}/{:?} {}x{}",
+            key.kind, key.format, key.width, key.height
+        ));
+        true
+    }
+}
+
+struct ResourceLease {
+    key: ResourceKey,
+    resource: Option<GpuResource>,
+    pool: Arc<Mutex<ResourcePool>>,
+}
+
+impl ResourceLease {
+    fn source(&self) -> &SourceResource {
+        match self.resource.as_ref().expect("live resource lease") {
+            GpuResource::Source(resource) => resource,
+            _ => unreachable!("source lease has source resource"),
+        }
+    }
+
+    fn output(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
+        match self.resource.as_ref().expect("live resource lease") {
+            GpuResource::Output(resource) => (&resource.texture, &resource.view),
+            _ => unreachable!("output lease has output resource"),
+        }
+    }
+
+    fn readback(&self) -> &wgpu::Buffer {
+        match self.resource.as_ref().expect("live resource lease") {
+            GpuResource::Readback(resource) => &resource.buffer,
+            _ => unreachable!("readback lease has readback resource"),
+        }
+    }
+}
+
+impl Drop for ResourceLease {
+    fn drop(&mut self) {
+        if let Some(resource) = self.resource.take() {
+            self.pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .release(self.key, resource);
+        }
     }
 }
 
@@ -292,6 +607,7 @@ pub struct WgpuDiagnostics {
     pub device_loss: Option<DeviceLossReport>,
     /// Device recreation is owned by the caller that supplied the device.
     pub automatic_recovery: bool,
+    pub pool: ResourcePoolDiagnostics,
 }
 
 #[derive(Default)]
@@ -339,6 +655,7 @@ pub struct WgpuCompositor {
     pipeline_8: wgpu::RenderPipeline,
     pipeline_16: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
+    resources: Arc<Mutex<ResourcePool>>,
     diagnostics: Arc<SharedDiagnostics>,
     latest_output: Mutex<Option<WgpuTextureFrame>>,
 }
@@ -398,6 +715,24 @@ impl WgpuCompositor {
         capabilities: AdapterCapabilities,
         device: wgpu::Device,
         queue: wgpu::Queue,
+    ) -> Result<Self, WgpuError> {
+        Self::build_with_limits(
+            instance,
+            adapter_info,
+            capabilities,
+            device,
+            queue,
+            ResourcePoolLimits::default(),
+        )
+    }
+
+    fn build_with_limits(
+        instance: Option<wgpu::Instance>,
+        adapter_info: wgpu::AdapterInfo,
+        capabilities: AdapterCapabilities,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        pool_limits: ResourcePoolLimits,
     ) -> Result<Self, WgpuError> {
         let diagnostics = Arc::new(SharedDiagnostics::default());
         let device_loss = diagnostics.clone();
@@ -512,6 +847,7 @@ impl WgpuCompositor {
             pipeline_8,
             pipeline_16,
             sampler,
+            resources: Arc::new(Mutex::new(ResourcePool::new(pool_limits))),
             diagnostics,
             latest_output: Mutex::new(None),
         })
@@ -529,6 +865,209 @@ impl WgpuCompositor {
         self.capabilities.admit(format)
     }
 
+    /// Materialize every resident resource needed by an immutable runtime
+    /// snapshot. Rendering only acquires from this pool; it never grows it.
+    pub fn prewarm_snapshot(
+        &self,
+        plans: &[RenderPlan],
+        source_width: u32,
+        source_height: u32,
+        source_slots: usize,
+    ) -> Result<(), WgpuError> {
+        self.ensure_device_available()?;
+        let mut required = BTreeMap::<ResourceKey, usize>::new();
+        for plan in plans {
+            validate_plan(plan)?;
+            let format = pool_format(plan.output_format)?;
+            let output = ResourceKey {
+                kind: ResourceKind::Output,
+                format,
+                width: plan.width,
+                height: plan.height,
+            };
+            *required.entry(output).or_default() += 1;
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Readback,
+                    ..output
+                },
+                1,
+            );
+        }
+        // One spare output per key allows the next frame to render while the
+        // previous native GUI texture remains leased.
+        for count in required
+            .iter_mut()
+            .filter_map(|(key, count)| (key.kind == ResourceKind::Output).then_some(count))
+        {
+            *count = count.saturating_add(1);
+        }
+        if source_slots > 0 {
+            for format in [
+                PoolFormat::Rgba8,
+                PoolFormat::Bgra8,
+                PoolFormat::Rgba16Float,
+            ] {
+                required.insert(
+                    ResourceKey {
+                        kind: ResourceKind::Source,
+                        format,
+                        width: source_width,
+                        height: source_height,
+                    },
+                    source_slots,
+                );
+            }
+        }
+        let required_resources = required.values().copied().sum::<usize>();
+        let required_bytes = required.iter().fold(0_u64, |total, (key, count)| {
+            total.saturating_add(key.bytes().saturating_mul(*count as u64))
+        });
+        let mut pool = self
+            .resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if required_bytes > pool.limits.max_bytes || required_resources > pool.limits.max_resources
+        {
+            return Err(WgpuError::PoolLimit {
+                required_bytes,
+                required_resources,
+                limit_bytes: pool.limits.max_bytes,
+                limit_resources: pool.limits.max_resources,
+            });
+        }
+        let additions = required
+            .iter()
+            .map(|(key, count)| {
+                let resident = pool.resident_by_key.get(key).copied().unwrap_or(0);
+                (*key, count.saturating_sub(resident))
+            })
+            .filter(|(_, count)| *count > 0)
+            .collect::<Vec<_>>();
+        let addition_resources = additions.iter().map(|(_, count)| *count).sum::<usize>();
+        let addition_bytes = additions.iter().fold(0_u64, |total, (key, count)| {
+            total.saturating_add(key.bytes().saturating_mul(*count as u64))
+        });
+        while pool.resident_bytes.saturating_add(addition_bytes) > pool.limits.max_bytes
+            || pool.resident_resources.saturating_add(addition_resources)
+                > pool.limits.max_resources
+        {
+            if !pool.evict_one(&required) {
+                return Err(WgpuError::PoolLimit {
+                    required_bytes: pool.resident_bytes.saturating_add(addition_bytes),
+                    required_resources: pool.resident_resources.saturating_add(addition_resources),
+                    limit_bytes: pool.limits.max_bytes,
+                    limit_resources: pool.limits.max_resources,
+                });
+            }
+        }
+        for (key, count) in additions {
+            for _ in 0..count {
+                let resource = self.create_resource(key);
+                pool.resident_bytes = pool.resident_bytes.saturating_add(key.bytes());
+                pool.resident_resources = pool.resident_resources.saturating_add(1);
+                *pool.resident_by_key.entry(key).or_default() += 1;
+                pool.diagnostics.allocations = pool.diagnostics.allocations.saturating_add(1);
+                pool.release(key, resource);
+            }
+        }
+        pool.diagnostics.prewarm_generations =
+            pool.diagnostics.prewarm_generations.saturating_add(1);
+        drop(pool);
+        let _ = self.device.poll(wgpu::PollType::Wait);
+        Ok(())
+    }
+
+    fn create_resource(&self, key: ResourceKey) -> GpuResource {
+        match key.kind {
+            ResourceKind::Source => {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("eiviz-pooled-source"),
+                    size: wgpu::Extent3d {
+                        width: key.width,
+                        height: key.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: key.format.texture_format(),
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("eiviz-pooled-layer-uniform"),
+                    size: 80,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("eiviz-pooled-layer-bind-group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: uniform.as_entire_binding(),
+                        },
+                    ],
+                });
+                GpuResource::Source(SourceResource {
+                    texture,
+                    _view: view,
+                    uniform,
+                    bind_group,
+                })
+            }
+            ResourceKind::Output => {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("eiviz-pooled-output"),
+                    size: wgpu::Extent3d {
+                        width: key.width,
+                        height: key.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: key.format.texture_format(),
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                GpuResource::Output(OutputResource { texture, view })
+            }
+            ResourceKind::Readback => {
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("eiviz-pooled-readback"),
+                    size: key.bytes(),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                GpuResource::Readback(ReadbackResource { buffer })
+            }
+        }
+    }
+
+    /// Release the compositor's own native-texture lease before a snapshot or
+    /// device boundary. Runtime stream leases are released separately.
+    pub fn clear_latest_output(&self) {
+        self.latest_output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     pub fn diagnostics(&self) -> WgpuDiagnostics {
         WgpuDiagnostics {
             readbacks: self.diagnostics.readbacks.load(Ordering::Relaxed),
@@ -544,6 +1083,11 @@ impl WgpuCompositor {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
             automatic_recovery: false,
+            pool: self
+                .resources
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .diagnostics(),
         }
     }
 
@@ -621,30 +1165,16 @@ impl WgpuCompositor {
                 return Err(error);
             }
         };
-        let output_texture_format = match plan.output_format {
-            PixelFormat::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
-            PixelFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
-            other => {
-                return Err(WgpuError::InvalidPlan(format!(
-                    "unsupported compositor output format {other:?}"
-                )));
-            }
-        };
-        let output = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("eiviz-compositor-output"),
-            size: wgpu::Extent3d {
+        let output = ResourcePool::acquire(
+            &self.resources,
+            ResourceKey {
+                kind: ResourceKind::Output,
+                format: pool_format(plan.output_format)?,
                 width: plan.width,
                 height: plan.height,
-                depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: output_texture_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        )?;
+        let (_, output_view) = output.output();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -652,7 +1182,7 @@ impl WgpuCompositor {
             });
         {
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
-                view: &output_view,
+                view: output_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -675,7 +1205,7 @@ impl WgpuCompositor {
                 _ => unreachable!("validated output format above"),
             });
             for layer in &layers {
-                pass.set_bind_group(0, &layer.bind_group, &[]);
+                pass.set_bind_group(0, &layer.resource.source().bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }
@@ -685,8 +1215,7 @@ impl WgpuCompositor {
             return Err(WgpuError::Validation(error.to_string()));
         }
         let frame = WgpuTextureFrame {
-            texture: Arc::new(output),
-            view: Arc::new(output_view),
+            resource: Arc::new(output),
             width: plan.width,
             height: plan.height,
             pts,
@@ -741,12 +1270,16 @@ impl WgpuCompositor {
             .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let readback_size = u64::from(padded_bytes_per_row) * u64::from(frame.height);
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("eiviz-compositor-readback"),
-            size: readback_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let readback = ResourcePool::acquire(
+            &self.resources,
+            ResourceKey {
+                kind: ResourceKind::Readback,
+                format: pool_format(frame.format)?,
+                width: frame.width,
+                height: frame.height,
+            },
+        )?;
+        debug_assert_eq!(readback.key.bytes(), readback_size);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut encoder = self
             .device
@@ -761,7 +1294,7 @@ impl WgpuCompositor {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
+                buffer: readback.readback(),
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
@@ -776,7 +1309,7 @@ impl WgpuCompositor {
         );
         self.diagnostics.readbacks.fetch_add(1, Ordering::Relaxed);
         self.queue.submit(Some(encoder.finish()));
-        let slice = readback.slice(..);
+        let slice = readback.readback().slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
@@ -797,7 +1330,7 @@ impl WgpuCompositor {
             rgba.extend_from_slice(&row[..unpadded_bytes_per_row as usize]);
         }
         drop(mapped);
-        readback.unmap();
+        readback.readback().unmap();
         let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.diagnostics
             .readback_nanos
@@ -897,23 +1430,19 @@ impl WgpuCompositor {
                     layer.input, source.width, source.height
                 )));
             }
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("eiviz-layer-source"),
-                size: wgpu::Extent3d {
+            let resource = ResourcePool::acquire(
+                &self.resources,
+                ResourceKey {
+                    kind: ResourceKind::Source,
+                    format: pool_format_from_wgpu(upload.texture_format)?,
                     width: source.width,
                     height: source.height,
-                    depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: upload.texture_format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            )?;
+            let source_resource = resource.source();
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
+                    texture: &source_resource.texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -930,41 +1459,38 @@ impl WgpuCompositor {
                     depth_or_array_layers: 1,
                 },
             );
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let uniform_data = layer_uniform_bytes(plan, layer, source, upload.yuv)?;
-            let uniform = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("eiviz-layer-uniform"),
-                    contents: &uniform_data,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("eiviz-layer-bind-group"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: uniform.as_entire_binding(),
-                    },
-                ],
-            });
-            prepared.push(PreparedLayer { bind_group });
+            self.queue
+                .write_buffer(&source_resource.uniform, 0, &uniform_data);
+            prepared.push(PreparedLayer { resource });
         }
         Ok(prepared)
     }
 }
 
 struct PreparedLayer {
-    bind_group: wgpu::BindGroup,
+    resource: ResourceLease,
+}
+
+fn pool_format(format: PixelFormat) -> Result<PoolFormat, WgpuError> {
+    match format {
+        PixelFormat::Rgba8 | PixelFormat::Nv12 => Ok(PoolFormat::Rgba8),
+        PixelFormat::Bgra8 => Ok(PoolFormat::Bgra8),
+        PixelFormat::Rgba16Float | PixelFormat::P010 | PixelFormat::P216 => {
+            Ok(PoolFormat::Rgba16Float)
+        }
+    }
+}
+
+fn pool_format_from_wgpu(format: wgpu::TextureFormat) -> Result<PoolFormat, WgpuError> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm => Ok(PoolFormat::Rgba8),
+        wgpu::TextureFormat::Bgra8Unorm => Ok(PoolFormat::Bgra8),
+        wgpu::TextureFormat::Rgba16Float => Ok(PoolFormat::Rgba16Float),
+        other => Err(WgpuError::InvalidPlan(format!(
+            "unsupported pooled texture format {other:?}"
+        ))),
+    }
 }
 
 fn validate_plan(plan: &RenderPlan) -> Result<(), WgpuError> {
@@ -1256,6 +1782,52 @@ const fn transfer_code(transfer: TransferFunction) -> f32 {
 mod tests {
     use super::*;
 
+    fn noop_compositor(limits: ResourcePoolLimits) -> WgpuCompositor {
+        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
+            label: Some("eiviz-injected-device-test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        });
+        WgpuCompositor::build_with_limits(
+            None,
+            wgpu::AdapterInfo {
+                name: "injected-noop".into(),
+                vendor: 0,
+                device: 0,
+                device_type: wgpu::DeviceType::Other,
+                driver: "noop".into(),
+                driver_info: String::new(),
+                backend: wgpu::Backend::Noop,
+            },
+            AdapterCapabilities {
+                max_texture_dimension_2d: 8192,
+                max_buffer_size: 256 * 1024 * 1024,
+                rgba16_float_renderable: true,
+                rgba16_float_filterable: true,
+                rgba32_float_sampleable: true,
+            },
+            device,
+            queue,
+            limits,
+        )
+        .unwrap()
+    }
+
+    fn empty_plan(width: u32, height: u32) -> RenderPlan {
+        RenderPlan {
+            width,
+            height,
+            output_format: PixelFormat::Rgba8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(width, height, PixelFormat::Rgba8, 0),
+            layers: Vec::new(),
+        }
+    }
+
     #[test]
     fn wgsl_parses_and_validates_without_an_adapter() {
         let module = naga::front::wgsl::parse_str(SHADER).unwrap();
@@ -1277,38 +1849,89 @@ mod tests {
 
     #[test]
     fn injected_device_path_builds_without_requesting_another_device() {
-        let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor {
-            label: Some("eiviz-injected-device-test"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        });
-        let compositor = WgpuCompositor::build(
-            None,
-            wgpu::AdapterInfo {
-                name: "injected-noop".into(),
-                vendor: 0,
-                device: 0,
-                device_type: wgpu::DeviceType::Other,
-                driver: "noop".into(),
-                driver_info: String::new(),
-                backend: wgpu::Backend::Noop,
-            },
-            AdapterCapabilities {
-                max_texture_dimension_2d: 8192,
-                max_buffer_size: 256 * 1024 * 1024,
-                rgba16_float_renderable: true,
-                rgba16_float_filterable: true,
-                rgba32_float_sampleable: true,
-            },
-            device,
-            queue,
-        )
-        .unwrap();
+        let compositor = noop_compositor(ResourcePoolLimits::default());
         assert_eq!(compositor.adapter_info().name, "injected-noop");
         assert_eq!(compositor.diagnostics().readbacks, 0);
         assert!(!compositor.diagnostics().automatic_recovery);
+    }
+
+    #[test]
+    fn prewarmed_steady_state_reuses_every_resident_resource() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        let plan = empty_plan(16, 16);
+        compositor
+            .prewarm_snapshot(std::slice::from_ref(&plan), 16, 16, 0)
+            .unwrap();
+        let allocations = compositor.diagnostics().pool.allocations;
+        for frame_id in 0..3 {
+            compositor
+                .composite(&plan, &HashMap::new(), MediaTime::ZERO, frame_id)
+                .unwrap();
+        }
+        let diagnostics = compositor.diagnostics();
+        assert_eq!(diagnostics.pool.allocations, allocations);
+        assert_eq!(diagnostics.pool.acquisition_misses, 0);
+        assert!(diagnostics.pool.reuses >= 6);
+        assert_eq!(diagnostics.readbacks, 3);
+    }
+
+    #[test]
+    fn bounded_pool_evicts_oldest_idle_key_deterministically() {
+        let compositor = noop_compositor(ResourcePoolLimits {
+            max_bytes: 1024 * 1024,
+            max_resources: 3,
+        });
+        compositor
+            .prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 0)
+            .unwrap();
+        compositor
+            .prewarm_snapshot(&[empty_plan(32, 32)], 32, 32, 0)
+            .unwrap();
+        let pool = compositor.diagnostics().pool;
+        assert_eq!(pool.resident_resources, 3);
+        assert_eq!(pool.evictions, 3);
+        assert_eq!(pool.last_evicted.as_deref(), Some("Readback/Rgba8 16x16"));
+    }
+
+    #[test]
+    fn prewarm_rejects_snapshot_over_pool_limit() {
+        let compositor = noop_compositor(ResourcePoolLimits {
+            max_bytes: 1,
+            max_resources: 1,
+        });
+        assert!(matches!(
+            compositor.prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 0),
+            Err(WgpuError::PoolLimit { .. })
+        ));
+        assert_eq!(compositor.diagnostics().pool.allocations, 0);
+    }
+
+    #[test]
+    fn injected_loss_stops_gpu_operations_without_cpu_fallback() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        let plan = empty_plan(16, 16);
+        compositor
+            .prewarm_snapshot(std::slice::from_ref(&plan), 16, 16, 0)
+            .unwrap();
+        *compositor
+            .diagnostics
+            .device_loss
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(DeviceLossReport {
+            reason: "Injected".into(),
+            message: "mock device removed".into(),
+        });
+        assert!(matches!(
+            compositor.composite_texture(&plan, &HashMap::new(), MediaTime::ZERO, 1),
+            Err(WgpuError::DeviceLost(_))
+        ));
+        assert_eq!(
+            compositor.diagnostics().device_loss,
+            Some(DeviceLossReport {
+                reason: "Injected".into(),
+                message: "mock device removed".into(),
+            })
+        );
     }
 
     #[test]

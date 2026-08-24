@@ -42,6 +42,8 @@ pub enum RuntimeError {
     WgpuFeatureDisabled,
     #[error("GPU compositor failed: {0}")]
     Gpu(String),
+    #[error("GPU runtime is degraded after device loss: {0}")]
+    GpuDegraded(String),
     #[error("missing media and policy is Fail: {0}")]
     MissingMedia(String),
     #[error("source {input} clock is unlocked ({domain:?}) and policy is Fail")]
@@ -151,6 +153,64 @@ impl RuntimeSnapshot {
             .chain(self.render.previews.values())
             .fold(0_u64, |total, plan| total.saturating_add(plan.vram_bytes))
     }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn gpu_prewarm_plans(&self) -> Vec<RenderPlan> {
+        let mut plans = self
+            .render
+            .programs
+            .values()
+            .chain(self.render.previews.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut divisors = vec![1_u32];
+        if let AuxiliaryLoadSheddingPolicy::Thresholds(policy) =
+            self.auxiliary_load_shedding_policy()
+        {
+            divisors.extend(
+                policy
+                    .tiers
+                    .iter()
+                    .flat_map(|tier| {
+                        [
+                            tier.preview_resolution_divisor,
+                            tier.multiview_resolution_divisor,
+                        ]
+                    })
+                    .filter(|divisor| *divisor > 1),
+            );
+        }
+        divisors.sort_unstable();
+        divisors.dedup();
+        for divisor in divisors.iter().copied().filter(|divisor| *divisor > 1) {
+            plans.extend(
+                self.render
+                    .previews
+                    .values()
+                    .map(|plan| scaled_render_plan(plan, divisor)),
+            );
+        }
+        for view in self.project.multiviews.values() {
+            for divisor in &divisors {
+                plans.push(multiview_prewarm_plan(
+                    &self.project,
+                    view.tiles.len(),
+                    *divisor,
+                ));
+            }
+        }
+        plans
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum GpuRuntimeState {
+    #[default]
+    NotConfigured,
+    Active,
+    Degraded {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -366,6 +426,7 @@ pub struct Runtime {
     transitions: HashMap<MixingUnitId, TransitionRuntime>,
     auxiliary_load_shedding: AuxiliaryLoadSheddingController,
     pending_timing_feedback: Option<TimingFeedback>,
+    gpu_state: GpuRuntimeState,
     #[cfg(feature = "wgpu-backend")]
     wgpu: ConfiguredWgpu,
     #[cfg(feature = "wgpu-backend")]
@@ -452,6 +513,11 @@ impl Runtime {
             transitions: HashMap::new(),
             auxiliary_load_shedding: AuxiliaryLoadSheddingController::default(),
             pending_timing_feedback: None,
+            gpu_state: if backend == CompositorBackend::Wgpu {
+                GpuRuntimeState::Active
+            } else {
+                GpuRuntimeState::NotConfigured
+            },
             #[cfg(feature = "wgpu-backend")]
             wgpu: _wgpu,
             #[cfg(feature = "wgpu-backend")]
@@ -484,6 +550,10 @@ impl Runtime {
                 "Wgpu unavailable".into()
             }
         }
+    }
+
+    pub fn gpu_state(&self) -> GpuRuntimeState {
+        self.gpu_state.clone()
     }
 
     pub fn set_asset_root(&mut self, root: impl Into<PathBuf>) {
@@ -631,6 +701,77 @@ impl Runtime {
     }
 
     #[cfg(feature = "wgpu-backend")]
+    fn observe_gpu_device_loss(&mut self) -> Result<()> {
+        if self.backend != CompositorBackend::Wgpu {
+            return Ok(());
+        }
+        if let GpuRuntimeState::Degraded { reason } = &self.gpu_state {
+            return Err(RuntimeError::GpuDegraded(reason.clone()));
+        }
+        let gpu = self
+            .wgpu
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Gpu("wgpu compositor was not constructed".into()))?;
+        if let Some(loss) = gpu.diagnostics().device_loss {
+            let reason = format!("{}: {}", loss.reason, loss.message);
+            self.gpu_state = GpuRuntimeState::Degraded {
+                reason: reason.clone(),
+            };
+            return Err(RuntimeError::GpuDegraded(reason));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "wgpu-backend"))]
+    fn observe_gpu_device_loss(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Replace a lost shared compositor at a media boundary. The caller owns
+    /// boundary serialization; this method preserves the Wgpu backend and
+    /// prewarms the active snapshot before publishing the new device.
+    #[cfg(feature = "wgpu-backend")]
+    pub fn reinject_wgpu_compositor_at_boundary(
+        &mut self,
+        compositor: Arc<eiviz_gpu::WgpuCompositor>,
+    ) -> Result<()> {
+        if self.backend != CompositorBackend::Wgpu {
+            return Err(RuntimeError::BackendMismatch {
+                project: self.backend,
+                runtime: CompositorBackend::Wgpu,
+            });
+        }
+        let snapshot = self
+            .active_snapshot
+            .clone()
+            .ok_or_else(|| RuntimeError::Other("no active runtime snapshot".into()))?;
+        compositor
+            .admit_video_format(&snapshot.project().video)
+            .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+        let plans = snapshot.gpu_prewarm_plans();
+        let source_slots = plans
+            .iter()
+            .map(|plan| plan.layers.len())
+            .max()
+            .unwrap_or(0);
+        compositor
+            .prewarm_snapshot(
+                &plans,
+                snapshot.project().video.width,
+                snapshot.project().video.height,
+                source_slots,
+            )
+            .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+        compositor.clear_latest_output();
+        self.program_textures.clear();
+        self.preview_textures.clear();
+        self.multiview_textures.clear();
+        self.wgpu = Some(compositor);
+        self.gpu_state = GpuRuntimeState::Active;
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
     fn capture_program_texture(&mut self, unit: MixingUnitId) {
         if let Some(texture) = self.wgpu.as_ref().and_then(|gpu| gpu.latest_output()) {
             self.program_textures.insert(unit, texture);
@@ -685,6 +826,22 @@ impl Runtime {
         if let Some(gpu) = &self.wgpu {
             gpu.admit_video_format(&project.video)
                 .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+            if let GpuRuntimeState::Degraded { reason } = &self.gpu_state {
+                return Err(RuntimeError::GpuDegraded(reason.clone()));
+            }
+            let plans = snapshot.gpu_prewarm_plans();
+            let source_slots = plans
+                .iter()
+                .map(|plan| plan.layers.len())
+                .max()
+                .unwrap_or(0);
+            gpu.prewarm_snapshot(
+                &plans,
+                project.video.width,
+                project.video.height,
+                source_slots,
+            )
+            .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
         }
         self.auxiliary_load_shedding
             .synchronize(snapshot.auxiliary_load_shedding_policy());
@@ -720,6 +877,13 @@ impl Runtime {
             self.transitions
                 .retain(|unit, _| project.mixing_units.contains_key(unit));
         }
+        #[cfg(feature = "wgpu-backend")]
+        if let Some(gpu) = &self.wgpu {
+            gpu.clear_latest_output();
+            self.program_textures.clear();
+            self.preview_textures.clear();
+            self.multiview_textures.clear();
+        }
         self.active_snapshot = Some(snapshot);
         Ok(())
     }
@@ -739,6 +903,7 @@ impl Runtime {
     }
 
     pub fn tick_active(&mut self) -> Result<TickResult> {
+        self.observe_gpu_device_loss()?;
         let started_nanos = monotonic_nanos();
         let gpu_started_nanos = self.gpu_pass_total_nanos();
         let span = tracing::info_span!(
@@ -1327,8 +1492,8 @@ impl Runtime {
         deadline_monotonic_nanos: u64,
     ) -> Result<HashMap<InputId, VideoFrame>> {
         let mut out = HashMap::new();
-        let w = project.video.width.clamp(16, 1920);
-        let h = project.video.height.clamp(16, 1080);
+        let w = project.video.width;
+        let h = project.video.height;
         for input in project.inputs.values() {
             if matches!(input.source, InputSource::AudioDevice { .. }) {
                 let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
@@ -1727,6 +1892,33 @@ fn scaled_render_plan(plan: &RenderPlan, divisor: u32) -> RenderPlan {
             plan.layers.len(),
         ),
         layers: plan.layers.clone(),
+    }
+}
+
+#[cfg(feature = "wgpu-backend")]
+fn multiview_prewarm_plan(project: &Project, layer_count: usize, divisor: u32) -> RenderPlan {
+    let width = scaled_dimension(project.video.width, divisor);
+    let height = scaled_dimension(project.video.height, divisor);
+    let output_format = if project.video.bit_depth > 8 {
+        eiviz_media::PixelFormat::Rgba16Float
+    } else {
+        eiviz_media::PixelFormat::Rgba8
+    };
+    RenderPlan {
+        width,
+        height,
+        output_format,
+        color: project.video.color_metadata(),
+        field_order: project.video.field_order,
+        color_conversion: project.video.color_conversion,
+        vram_bytes: RenderPlan::estimate_vram_bytes(width, height, output_format, layer_count),
+        layers: (0..layer_count)
+            .map(|index| Layer {
+                input: InputId::from_u128(index as u128 + 1),
+                transform: Transform2D::fullscreen(),
+                opacity: 1.0,
+            })
+            .collect(),
     }
 }
 

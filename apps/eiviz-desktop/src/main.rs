@@ -1459,7 +1459,17 @@ fn bootstrap(engine: &Engine) {
 impl eframe::App for DesktopApp {
     #[allow(clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let _ = self.engine.tick();
+        if let Err(error) = self.engine.tick() {
+            self.status = format!("Engine boundary failed: {error}");
+            if matches!(
+                self.engine.gpu_lifecycle_state(),
+                eiviz_engine::GpuLifecycleState::Degraded { .. }
+            ) {
+                self.engine.require_gpu_restart(
+                    "eframe 0.32 does not expose in-place Wgpu RenderState recreation; restart the desktop or inject a newly framework-owned compositor",
+                );
+            }
+        }
         let project = self.engine.snapshot();
         let unit_id = self.engine.primary_unit();
         let unit = project.mixing_units.get(&unit_id).cloned();
@@ -1842,6 +1852,32 @@ impl eframe::App for DesktopApp {
                 gpu_metrics.gpu_readback_max_nanos,
                 gpu_metrics.gpu_readbacks,
             ));
+            ui.label(format!(
+                "GPU lifecycle: {}{}; pool={} bytes / {} resources (idle {}, allocations {}, reuse {}, evictions {}, misses {}, prewarms {}, reinjections {})",
+                gpu_metrics.gpu_lifecycle_state,
+                gpu_metrics
+                    .gpu_lifecycle_detail
+                    .as_ref()
+                    .map_or_else(String::new, |detail| format!(" — {detail}")),
+                gpu_metrics.gpu_pool_resident_bytes,
+                gpu_metrics.gpu_pool_resident_resources,
+                gpu_metrics.gpu_pool_idle_resources,
+                gpu_metrics.gpu_pool_allocations,
+                gpu_metrics.gpu_pool_reuses,
+                gpu_metrics.gpu_pool_evictions,
+                gpu_metrics.gpu_pool_acquisition_misses,
+                gpu_metrics.gpu_prewarm_generations,
+                gpu_metrics.gpu_reinjections,
+            ));
+            if gpu_metrics.gpu_lifecycle_state == "restart-required" {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "Wgpu remains selected and rendering is stopped. Restart to obtain a new eframe RenderState; CpuReference is not selected.",
+                );
+                if ui.button("Close for GPU restart").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
             ui.label(format!(
                 "Deadline slack: {} ns; misses={}; Program drop={} repeat={}",
                 gpu_metrics.deadline_slack_nanos,

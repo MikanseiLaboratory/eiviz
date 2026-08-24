@@ -375,6 +375,8 @@ mod tests {
         };
         if let Ok(gpu) = WgpuCompositor::new_headless_hardware() {
             let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [255, 0, 0, 255]);
+            gpu.prewarm_snapshot(std::slice::from_ref(&plan), 4, 4, 1)
+                .unwrap();
             let frame = gpu
                 .composite(&plan, &HashMap::from([(input, source)]), MediaTime::ZERO, 1)
                 .unwrap();
@@ -389,6 +391,6 @@ mod wgpu_backend;
 
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu_backend::{
-    AdapterCapabilities, DeviceLossReport, SharedWgpuContext, WgpuCompositor, WgpuDiagnostics,
-    WgpuError, WgpuTextureFrame,
+    AdapterCapabilities, DeviceLossReport, ResourcePoolDiagnostics, ResourcePoolLimits,
+    SharedWgpuContext, WgpuCompositor, WgpuDiagnostics, WgpuError, WgpuTextureFrame,
 };
