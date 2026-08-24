@@ -13,19 +13,22 @@ use eiviz_core::{
 };
 use eiviz_io_stream::{EncodedFanout, EncoderCapabilities, SinkDiagnostics};
 use eiviz_media::{AudioIoDiagnostics, AudioSink, MediaSink, MediaSource, VideoFrame};
+use eiviz_operations::{
+    CapabilityEntry, CapabilityReport, CrashReport, DiagnosticEvent, DiagnosticLevel,
+    EvidenceState, FlightRecorder,
+};
 use eiviz_project::{
-    append_journal, export_portable as export_project_portable,
-    import_portable as import_project_portable, load, save_atomic, save_autosave, stage_asset,
+    append_journal, discard_autosave, export_portable as export_project_portable,
+    import_portable as import_project_portable, load, recover_autosave, save_atomic, save_autosave,
+    stage_asset,
 };
 use eiviz_runtime::{Runtime, RuntimeSnapshot, TickResult};
 pub use eiviz_runtime::{SourceClockPolicy, UnlockedBehavior};
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-const FLIGHT_CAP: usize = 1800;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -67,18 +70,6 @@ impl Default for AdmissionBudget {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct FlightEvent {
-    pub frame: u64,
-    /// Latest accepted revision at the event.
-    pub revision: u64,
-    pub applied_revision: u64,
-    pub hash: String,
-    pub dropped_preview: u64,
-    pub failed_outputs: Vec<String>,
-    pub note: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct EngineMetrics {
     /// Latest accepted command revision.
     pub revision: u64,
@@ -95,8 +86,18 @@ pub struct EngineMetrics {
     pub timing_sources: Vec<EngineTimingDiagnostics>,
     pub distribution_outputs: Vec<DistributionOutputDiagnostics>,
     pub gpu_readbacks: u64,
+    pub gpu_pass_nanos: u64,
+    pub gpu_pass_max_nanos: u64,
+    pub gpu_readback_nanos: u64,
+    pub gpu_readback_max_nanos: u64,
     pub gpu_device_loss: Option<String>,
     pub gpu_automatic_recovery: bool,
+    pub deadline_slack_nanos: i64,
+    pub deadline_misses: u64,
+    pub program_drops: u64,
+    pub program_repeats: u64,
+    pub persistence_errors: u64,
+    pub last_persistence_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -192,7 +193,7 @@ struct Inner {
     wgpu_context: Option<eiviz_gpu::SharedWgpuContext>,
     client: ClientId,
     budget: AdmissionBudget,
-    flight: VecDeque<FlightEvent>,
+    flight: FlightRecorder,
     sinks: HashMap<OutputId, Arc<dyn MediaSink>>,
     audio_sinks: HashMap<OutputId, Arc<dyn AudioSink>>,
     encoder_factory: Option<Arc<dyn ProgramEncoderFactory>>,
@@ -201,6 +202,8 @@ struct Inner {
     distribution_bindings: HashMap<OutputId, DistributionBinding>,
     autosave_path: Option<PathBuf>,
     journal_path: Option<PathBuf>,
+    persistence_errors: u64,
+    last_persistence_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -313,7 +316,7 @@ impl Engine {
                 wgpu_context,
                 client: ClientId::new(),
                 budget: AdmissionBudget::default(),
-                flight: VecDeque::with_capacity(FLIGHT_CAP),
+                flight: FlightRecorder::default(),
                 sinks: HashMap::new(),
                 audio_sinks: HashMap::new(),
                 encoder_factory: None,
@@ -322,6 +325,8 @@ impl Engine {
                 distribution_bindings: HashMap::new(),
                 autosave_path: None,
                 journal_path: None,
+                persistence_errors: 0,
+                last_persistence_error: None,
             }),
         })
     }
@@ -581,6 +586,22 @@ impl Engine {
             #[cfg(not(feature = "wgpu-backend"))]
             gpu_readbacks: 0,
             #[cfg(feature = "wgpu-backend")]
+            gpu_pass_nanos: gpu.as_ref().map_or(0, |value| value.pass_nanos),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pass_nanos: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_pass_max_nanos: gpu.as_ref().map_or(0, |value| value.pass_max_nanos),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_pass_max_nanos: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_readback_nanos: gpu.as_ref().map_or(0, |value| value.readback_nanos),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_readback_nanos: 0,
+            #[cfg(feature = "wgpu-backend")]
+            gpu_readback_max_nanos: gpu.as_ref().map_or(0, |value| value.readback_max_nanos),
+            #[cfg(not(feature = "wgpu-backend"))]
+            gpu_readback_max_nanos: 0,
+            #[cfg(feature = "wgpu-backend")]
             gpu_device_loss: gpu
                 .as_ref()
                 .and_then(|value| value.device_loss.as_ref())
@@ -591,6 +612,12 @@ impl Engine {
             gpu_automatic_recovery: gpu.as_ref().is_some_and(|value| value.automatic_recovery),
             #[cfg(not(feature = "wgpu-backend"))]
             gpu_automatic_recovery: false,
+            deadline_slack_nanos: g.runtime.metrics.deadline_slack_nanos,
+            deadline_misses: g.runtime.metrics.deadline_misses,
+            program_drops: g.runtime.metrics.program_drops,
+            program_repeats: g.runtime.metrics.program_repeats,
+            persistence_errors: g.persistence_errors,
+            last_persistence_error: g.last_persistence_error.clone(),
         }
     }
 
@@ -617,6 +644,61 @@ impl Engine {
             }
         }
         capabilities
+    }
+
+    pub fn capability_report(&self, mut additional: Vec<CapabilityEntry>) -> CapabilityReport {
+        let project = self.snapshot();
+        additional.push(CapabilityEntry {
+            id: "compositor-cpu-reference".into(),
+            compiled: true,
+            available: true,
+            active: project.compositor == eiviz_core::CompositorBackend::CpuReference,
+            detail: "explicit deterministic reference compositor; never a GPU fallback".into(),
+            evidence: EvidenceState::Automated,
+        });
+        additional.push(CapabilityEntry {
+            id: "compositor-wgpu".into(),
+            compiled: cfg!(feature = "wgpu-backend"),
+            available: cfg!(feature = "wgpu-backend")
+                && project.compositor == eiviz_core::CompositorBackend::Wgpu
+                && !self.compositor_detail().contains("unavailable"),
+            active: project.compositor == eiviz_core::CompositorBackend::Wgpu,
+            detail: self.compositor_detail(),
+            evidence: EvidenceState::HilPending,
+        });
+        additional.extend(
+            self.distribution_capabilities()
+                .into_iter()
+                .map(|capability| CapabilityEntry {
+                    id: capability.id,
+                    compiled: true,
+                    available: capability.available,
+                    active: project
+                        .outputs
+                        .values()
+                        .any(|output| output.enabled && output.distribution.is_some()),
+                    detail: capability.detail,
+                    evidence: EvidenceState::HilPending,
+                }),
+        );
+        CapabilityReport::new(
+            unix_millis(),
+            env!("CARGO_PKG_VERSION"),
+            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+            additional,
+        )
+    }
+
+    pub fn export_capability_report(
+        &self,
+        path: &Path,
+        additional: Vec<CapabilityEntry>,
+    ) -> Result<()> {
+        self.capability_report(additional)
+            .export(path)
+            .map_err(|error| {
+                EngineError::Persist(eiviz_project::ProjectError::Io(error.to_string()))
+            })
     }
 
     /// Select explicit operator-provided dynamic binaries. OpenH264 is
@@ -699,16 +781,54 @@ impl Engine {
         })
     }
 
-    pub fn flight_log(&self) -> Vec<FlightEvent> {
-        self.inner.lock().flight.iter().cloned().collect()
+    pub fn flight_log(&self) -> Vec<DiagnosticEvent> {
+        self.inner.lock().flight.snapshot()
+    }
+
+    pub fn export_flight_recorder(&self, path: &Path) -> Result<()> {
+        let diagnostics = self.flight_log();
+        eiviz_operations::export_json_atomic(&diagnostics, path).map_err(|error| {
+            EngineError::Persist(eiviz_project::ProjectError::Io(error.to_string()))
+        })
+    }
+
+    pub fn export_crash_report(
+        &self,
+        path: &Path,
+        reason: impl Into<String>,
+        additional_capabilities: Vec<CapabilityEntry>,
+    ) -> Result<()> {
+        let report = CrashReport::new(
+            unix_millis(),
+            reason,
+            self.state_hash(),
+            self.flight_log(),
+            Some(self.capability_report(additional_capabilities)),
+        );
+        report.export(path).map_err(|error| {
+            EngineError::Persist(eiviz_project::ProjectError::Io(error.to_string()))
+        })
     }
 
     pub fn submit(&self, env: CommandEnvelope) -> Result<CommandAck> {
         let mut g = self.inner.lock();
         if let Some(acknowledgement) = g.sequencer.existing_ack(&env)? {
+            tracing::debug!(
+                command_id = %env.id,
+                revision = acknowledgement.revision,
+                "command replay acknowledged"
+            );
             return Ok(acknowledgement);
         }
+        let command_id = env.id;
         let now = current_boundary_time(&g)?;
+        let span = tracing::info_span!(
+            "command_stage",
+            command_id = %command_id,
+            frame_id = g.runtime.frame(),
+            revision = g.sequencer.revision()
+        );
+        let _entered = span.enter();
         let mut candidate = g.sequencer.clone();
         let ack = candidate.stage(&g.project, env, now)?;
         let staged = candidate.staged_project().unwrap_or(&g.project);
@@ -722,21 +842,24 @@ impl Engine {
         validate_distribution_admission(&g, staged)?;
         g.sequencer = candidate;
         let hash = state_hash(&g.project);
-        let ev = FlightEvent {
-            frame: g.runtime.frame(),
-            revision: ack.revision,
-            applied_revision: g.sequencer.applied_revision(),
-            hash: hash.clone(),
-            dropped_preview: g.runtime.metrics.dropped_preview,
-            failed_outputs: g
-                .runtime
-                .failed_outputs()
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect(),
-            note: "command accepted".into(),
-        };
-        push_flight(&mut g.flight, ev);
+        let event = DiagnosticEvent::new(
+            eiviz_time::monotonic_nanos(),
+            DiagnosticLevel::Info,
+            "command",
+            "command.accepted",
+        )
+        .frame(g.runtime.frame())
+        .field("command_id", command_id.to_string())
+        .field("revision", ack.revision)
+        .field("applied_revision", g.sequencer.applied_revision())
+        .field("project_hash", hash);
+        g.flight.record(event);
+        tracing::info!(
+            command_id = %command_id,
+            revision = ack.revision,
+            applied_revision = g.sequencer.applied_revision(),
+            "command accepted"
+        );
         Ok(ack)
     }
 
@@ -759,21 +882,23 @@ impl Engine {
         let revision = acknowledgements
             .last()
             .map_or_else(|| g.sequencer.revision(), |ack| ack.revision);
-        let event = FlightEvent {
-            frame: g.runtime.frame(),
+        let event = DiagnosticEvent::new(
+            eiviz_time::monotonic_nanos(),
+            DiagnosticLevel::Info,
+            "command",
+            "transaction.accepted",
+        )
+        .frame(g.runtime.frame())
+        .field("command_count", acknowledgements.len() as u64)
+        .field("revision", revision)
+        .field("applied_revision", g.sequencer.applied_revision())
+        .field("project_hash", hash);
+        g.flight.record(event);
+        tracing::info!(
+            command_count = acknowledgements.len(),
             revision,
-            applied_revision: g.sequencer.applied_revision(),
-            hash: hash.clone(),
-            dropped_preview: g.runtime.metrics.dropped_preview,
-            failed_outputs: g
-                .runtime
-                .failed_outputs()
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect(),
-            note: format!("transaction accepted:{}", acknowledgements.len()),
-        };
-        push_flight(&mut g.flight, event);
+            "command transaction accepted"
+        );
         Ok(acknowledgements)
     }
 
@@ -784,6 +909,13 @@ impl Engine {
 
     pub fn tick(&self) -> Result<TickResult> {
         let mut g = self.inner.lock();
+        let tick_span = tracing::info_span!(
+            "engine_tick",
+            frame_id = g.runtime.frame(),
+            revision = g.sequencer.revision(),
+            applied_revision = g.sequencer.applied_revision()
+        );
+        let _tick_entered = tick_span.enter();
         let boundary = current_boundary_time(&g)?;
         let mut candidate_sequencer = g.sequencer.clone();
         if let Some(latched) = candidate_sequencer.latch_due(boundary) {
@@ -807,23 +939,28 @@ impl Engine {
             g.sequencer = candidate_sequencer;
             g.runtime.activate_snapshot(snapshot)?;
             let hash = state_hash(&g.project);
-            let event = FlightEvent {
-                frame: g.runtime.frame(),
-                revision: g.sequencer.revision(),
-                applied_revision: g.sequencer.applied_revision(),
-                hash: hash.clone(),
-                dropped_preview: g.runtime.metrics.dropped_preview,
-                failed_outputs: g
-                    .runtime
-                    .failed_outputs()
-                    .into_iter()
-                    .map(|(name, _)| name)
-                    .collect(),
-                note: format!("applied:{}", latched.command_ids.len()),
-            };
-            push_flight(&mut g.flight, event);
+            let event = DiagnosticEvent::new(
+                eiviz_time::monotonic_nanos(),
+                DiagnosticLevel::Info,
+                "command",
+                "command.latched",
+            )
+            .frame(g.runtime.frame())
+            .field("command_count", latched.command_ids.len() as u64)
+            .field("revision", g.sequencer.revision())
+            .field("applied_revision", g.sequencer.applied_revision())
+            .field("project_hash", hash.clone());
+            g.flight.record(event);
+            tracing::info!(
+                frame_id = g.runtime.frame(),
+                command_count = latched.command_ids.len(),
+                applied_revision = g.sequencer.applied_revision(),
+                "commands latched at media boundary"
+            );
             if let Some(path) = g.journal_path.clone() {
-                let _ = append_journal(&path, latched.applied_revision, &hash);
+                if let Err(error) = append_journal(&path, latched.applied_revision, &hash) {
+                    record_persistence_error(&mut g, "journal.write", error.to_string());
+                }
             }
         }
         let result = g.runtime.tick_active()?;
@@ -867,6 +1004,17 @@ impl Engine {
         }
         let sinks = g.sinks.clone();
         for (output_id, sink) in sinks {
+            let span = tracing::debug_span!(
+                "io_output_push",
+                frame_id = result
+                    .programs
+                    .values()
+                    .next()
+                    .map_or(0, |frame| frame.id),
+                output_id = %output_id,
+                sink = sink.name()
+            );
+            let _entered = span.enter();
             let Some((enabled, owner)) = g
                 .project
                 .outputs
@@ -880,43 +1028,76 @@ impl Engine {
             }
             if let Some(frame) = result.programs.get(&owner) {
                 if let Err(e) = sink.push_video(frame) {
+                    tracing::error!(error = %e, "video output push failed");
                     g.runtime.mark_output_failed(sink.name(), e.to_string());
                 }
                 if let Err(e) = sink.push_audio(&audio) {
+                    tracing::error!(error = %e, "audio output push failed");
                     g.runtime.mark_output_failed(sink.name(), e.to_string());
                 }
             }
         }
         let audio_sinks = g.audio_sinks.clone();
         for (output_id, sink) in audio_sinks {
+            let span = tracing::debug_span!(
+                "audio_output_push",
+                frame_id = result
+                    .programs
+                    .values()
+                    .next()
+                    .map_or(0, |frame| frame.id),
+                output_id = %output_id,
+                sink = sink.name()
+            );
+            let _entered = span.enter();
             let enabled = g
                 .project
                 .outputs
                 .get(&output_id)
                 .is_some_and(|output| output.enabled);
             if enabled && let Err(error) = sink.push_audio(&audio) {
+                tracing::error!(error = %error, "audio device push failed");
                 g.runtime.mark_output_failed(sink.name(), error.to_string());
             }
         }
-        let ev = FlightEvent {
-            frame: g.runtime.frame().saturating_sub(1),
-            revision: g.sequencer.revision(),
-            applied_revision: g.sequencer.applied_revision(),
-            hash: state_hash(&g.project),
-            dropped_preview: g.runtime.metrics.dropped_preview,
-            failed_outputs: g
-                .runtime
-                .failed_outputs()
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect(),
-            note: "tick".into(),
-        };
-        push_flight(&mut g.flight, ev);
+        record_operational_sample(&mut g);
+        let frame_id = g.runtime.frame().saturating_sub(1);
+        let timing = g.runtime.metrics.clone();
+        let failed_outputs = g.runtime.failed_outputs().len() as u64;
+        let event = DiagnosticEvent::new(
+            eiviz_time::monotonic_nanos(),
+            if timing.deadline_slack_nanos < 0 {
+                DiagnosticLevel::Warn
+            } else {
+                DiagnosticLevel::Info
+            },
+            "runtime",
+            "frame.completed",
+        )
+        .frame(frame_id)
+        .field("revision", g.sequencer.revision())
+        .field("applied_revision", g.sequencer.applied_revision())
+        .field("deadline_slack_nanos", timing.deadline_slack_nanos)
+        .field("deadline_misses", timing.deadline_misses)
+        .field("program_drops", timing.program_drops)
+        .field("program_repeats", timing.program_repeats)
+        .field("dropped_preview", timing.dropped_preview)
+        .field("failed_outputs", failed_outputs);
+        g.flight.record(event);
+        tracing::info!(
+            frame_id,
+            deadline_slack_nanos = timing.deadline_slack_nanos,
+            deadline_misses = timing.deadline_misses,
+            program_drops = timing.program_drops,
+            program_repeats = timing.program_repeats,
+            failed_outputs,
+            "frame completed"
+        );
         if let Some(path) = g.autosave_path.clone()
             && g.runtime.frame().is_multiple_of(60)
+            && let Err(error) = save_autosave(&g.project, &path)
         {
-            let _ = save_autosave(&g.project, &path);
+            record_persistence_error(&mut g, "autosave.write", error.to_string());
         }
         Ok(result)
     }
@@ -946,6 +1127,20 @@ impl Engine {
 
     pub fn load_project(&self, path: &Path, asset_root: Option<&Path>) -> Result<()> {
         self.replace_project(load(path)?, asset_root.map(std::path::Path::to_path_buf))
+    }
+
+    /// Explicit recovery action. Merely detecting an autosave never calls this.
+    pub fn recover_autosave_into(&self, path: &Path, asset_root: Option<&Path>) -> Result<bool> {
+        let Some(project) = recover_autosave(path)? else {
+            return Ok(false);
+        };
+        self.replace_project(project, asset_root.map(std::path::Path::to_path_buf))?;
+        Ok(true)
+    }
+
+    pub fn discard_autosave(&self, path: &Path) -> Result<()> {
+        discard_autosave(path)?;
+        Ok(())
     }
 
     pub fn import_portable_into(&self, path: &Path, destination: &Path) -> Result<()> {
@@ -1382,11 +1577,196 @@ impl EngineAsrcDiagnostics {
     }
 }
 
-fn push_flight(buf: &mut VecDeque<FlightEvent>, ev: FlightEvent) {
-    if buf.len() >= FLIGHT_CAP {
-        buf.pop_front();
+fn record_operational_sample(inner: &mut Inner) {
+    let now = eiviz_time::monotonic_nanos();
+    let frame_id = inner.runtime.frame().saturating_sub(1);
+    let timing = inner.runtime.source_timing_diagnostics();
+    for source in timing {
+        let event = DiagnosticEvent::new(
+            now,
+            if source
+                .av_drift_nanos
+                .is_some_and(|drift| drift.abs() > 5_000_000)
+            {
+                DiagnosticLevel::Warn
+            } else {
+                DiagnosticLevel::Debug
+            },
+            "io",
+            "source.timing",
+        )
+        .frame(frame_id)
+        .field("input_id", source.input.to_string())
+        .field("lock_state", format!("{:?}", source.state))
+        .field(
+            "video_skew_nanos",
+            source
+                .video_skew_nanos
+                .map_or(serde_json::Value::Null, Into::into),
+        )
+        .field(
+            "audio_skew_nanos",
+            source
+                .audio_skew_nanos
+                .map_or(serde_json::Value::Null, Into::into),
+        )
+        .field(
+            "av_drift_nanos",
+            source
+                .av_drift_nanos
+                .map_or(serde_json::Value::Null, Into::into),
+        );
+        inner.flight.record(event);
+        tracing::debug!(
+            frame_id,
+            input_id = %source.input,
+            lock_state = ?source.state,
+            video_skew_nanos = source.video_skew_nanos,
+            audio_skew_nanos = source.audio_skew_nanos,
+            av_drift_nanos = source.av_drift_nanos,
+            "source timing sampled"
+        );
     }
-    buf.push_back(ev);
+
+    let mut audio = inner.runtime.audio_source_diagnostics();
+    audio.extend(inner.audio_sinks.values().map(|sink| sink.diagnostics()));
+    for device in audio {
+        inner.flight.record(
+            DiagnosticEvent::new(
+                now,
+                if device.xruns > 0 || device.last_error.is_some() {
+                    DiagnosticLevel::Warn
+                } else {
+                    DiagnosticLevel::Debug
+                },
+                "audio",
+                "device.metrics",
+            )
+            .frame(frame_id)
+            .field("name", device.name.clone())
+            .field("health", format!("{:?}", device.health))
+            .field("xruns", device.xruns)
+            .field("queue_overflows", device.queue_overflows)
+            .field("queue_underflows", device.queue_underflows)
+            .field(
+                "last_error",
+                device
+                    .last_error
+                    .clone()
+                    .map_or(serde_json::Value::Null, Into::into),
+            ),
+        );
+        tracing::debug!(
+            frame_id,
+            device = %device.name,
+            health = ?device.health,
+            xruns = device.xruns,
+            queue_overflows = device.queue_overflows,
+            queue_underflows = device.queue_underflows,
+            "audio device metrics sampled"
+        );
+    }
+
+    for output in distribution_diagnostics(inner) {
+        inner.flight.record(
+            DiagnosticEvent::new(
+                now,
+                if output.dropped > 0 || output.state == "failed" {
+                    DiagnosticLevel::Warn
+                } else {
+                    DiagnosticLevel::Debug
+                },
+                "distribution",
+                "queue.metrics",
+            )
+            .frame(frame_id)
+            .field("output_id", output.output_id.clone())
+            .field("state", output.state.clone())
+            .field("queue_depth", output.queue_depth as u64)
+            .field("queue_high_water", output.queue_high_water as u64)
+            .field("dropped", output.dropped)
+            .field("reconnects", output.reconnects),
+        );
+        tracing::debug!(
+            frame_id,
+            output_id = %output.output_id,
+            state = %output.state,
+            queue_depth = output.queue_depth,
+            queue_high_water = output.queue_high_water,
+            dropped = output.dropped,
+            reconnects = output.reconnects,
+            "distribution queue sampled"
+        );
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    if let Some(gpu) = inner.runtime.wgpu_diagnostics() {
+        inner.flight.record(
+            DiagnosticEvent::new(
+                now,
+                if gpu.device_loss.is_some() {
+                    DiagnosticLevel::Error
+                } else {
+                    DiagnosticLevel::Debug
+                },
+                "gpu",
+                "gpu.metrics",
+            )
+            .frame(frame_id)
+            .field("pass_nanos", gpu.pass_nanos)
+            .field("pass_max_nanos", gpu.pass_max_nanos)
+            .field("readbacks", gpu.readbacks)
+            .field("readback_nanos", gpu.readback_nanos)
+            .field("readback_max_nanos", gpu.readback_max_nanos)
+            .field(
+                "device_loss",
+                gpu.device_loss
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |loss| {
+                        format!("{}: {}", loss.reason, loss.message).into()
+                    }),
+            ),
+        );
+    }
+
+    for (name, reason) in inner.runtime.failed_outputs() {
+        inner.flight.record(
+            DiagnosticEvent::new(now, DiagnosticLevel::Error, "io", "output.failed")
+                .frame(frame_id)
+                .field("name", name)
+                .field("reason", reason),
+        );
+    }
+}
+
+fn record_persistence_error(inner: &mut Inner, kind: &str, error: String) {
+    inner.persistence_errors = inner.persistence_errors.saturating_add(1);
+    inner.last_persistence_error = Some(error.clone());
+    inner.flight.record(
+        DiagnosticEvent::new(
+            eiviz_time::monotonic_nanos(),
+            DiagnosticLevel::Error,
+            "persistence",
+            kind,
+        )
+        .frame(inner.runtime.frame())
+        .field("error", error.clone())
+        .field("error_count", inner.persistence_errors),
+    );
+    tracing::error!(
+        operation = kind,
+        error = %error,
+        error_count = inner.persistence_errors,
+        "project persistence operation failed"
+    );
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

@@ -186,6 +186,7 @@ pub struct SequencerDiagnostics {
     pub accepted_revision: u64,
     pub applied_revision: u64,
     pub pending_commands: usize,
+    pub pending_high_water: usize,
     pub pending_batches: usize,
     pub pending_capacity: usize,
     pub retained_idempotency_records: usize,
@@ -224,6 +225,7 @@ pub struct Sequencer {
     client_sequences: HashMap<ClientId, u64>,
     pending: Vec<ScheduledBatch>,
     pending_commands: usize,
+    pending_high_water: usize,
     pending_capacity: usize,
     history_capacity: usize,
     next_order: u64,
@@ -249,6 +251,7 @@ impl Sequencer {
             client_sequences: HashMap::new(),
             pending: Vec::new(),
             pending_commands: 0,
+            pending_high_water: 0,
             pending_capacity,
             history_capacity: history_capacity.max(1),
             next_order: 0,
@@ -269,6 +272,7 @@ impl Sequencer {
             accepted_revision: self.accepted_revision,
             applied_revision: self.applied_revision,
             pending_commands: self.pending_commands,
+            pending_high_water: self.pending_high_water,
             pending_batches: self.pending.len(),
             pending_capacity: self.pending_capacity,
             retained_idempotency_records: self.records.len(),
@@ -355,6 +359,15 @@ impl Sequencer {
         envelopes: Vec<CommandEnvelope>,
         now: MediaTime,
     ) -> Result<Vec<CommandAck>> {
+        let span = tracing::info_span!(
+            "command_sequencer_stage",
+            command_count = envelopes.len(),
+            accepted_revision = self.accepted_revision,
+            applied_revision = self.applied_revision,
+            queue_depth = self.pending_commands,
+            queue_capacity = self.pending_capacity
+        );
+        let _entered = span.enter();
         if envelopes.is_empty() {
             return Err(CommandError::EmptyTransaction);
         }
@@ -422,14 +435,28 @@ impl Sequencer {
         candidate.pending_commands = candidate
             .pending_commands
             .saturating_add(acknowledgements.len());
+        candidate.pending_high_water = candidate.pending_high_water.max(candidate.pending_commands);
         candidate.rebuild_pending(active_project)?;
         *self = candidate;
+        tracing::info!(
+            command_count = acknowledgements.len(),
+            accepted_revision = self.accepted_revision,
+            queue_depth = self.pending_commands,
+            queue_capacity = self.pending_capacity,
+            "command batch staged"
+        );
         Ok(acknowledgements)
     }
 
     /// Atomically removes and returns every batch due at this media boundary.
     /// Commands with the same effective time retain acceptance order.
     pub fn latch_due(&mut self, now: MediaTime) -> Option<LatchedState> {
+        let span = tracing::info_span!(
+            "command_sequencer_latch",
+            applied_revision = self.applied_revision,
+            queue_depth = self.pending_commands
+        );
+        let _entered = span.enter();
         let due_count = self
             .pending
             .iter()
@@ -455,6 +482,12 @@ impl Sequencer {
         }
         self.pending_commands = self.pending_commands.saturating_sub(command_ids.len());
         self.trim_history();
+        tracing::info!(
+            command_count = command_ids.len(),
+            applied_revision = self.applied_revision,
+            queue_depth = self.pending_commands,
+            "commands latched"
+        );
         Some(LatchedState {
             project,
             command_ids,

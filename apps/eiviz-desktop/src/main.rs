@@ -10,6 +10,7 @@ use eiviz_core::{AudioRoute, RouteMode};
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
+use eiviz_operations::{CapabilityEntry, EvidenceState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -104,6 +105,10 @@ struct DesktopApp {
     openh264_path: String,
     fdk_aac_path: String,
     portable_path: String,
+    capability_report_path: String,
+    diagnostics_export_path: String,
+    crash_report_path: String,
+    recovery: Option<RecoveryPrompt>,
     rtmp_url: String,
     srt_url: String,
     recording_path: String,
@@ -169,6 +174,18 @@ struct DesktopApp {
     wgpu_preview: WgpuPreviewBridge,
 }
 
+enum RecoveryPrompt {
+    Recoverable {
+        path: std::path::PathBuf,
+        project_hash: String,
+        newer_than_project: bool,
+    },
+    Corrupt {
+        path: std::path::PathBuf,
+        error: String,
+    },
+}
+
 impl DesktopApp {
     fn new(
         cc: &eframe::CreationContext<'_>,
@@ -210,6 +227,29 @@ impl DesktopApp {
         #[cfg(not(feature = "wgpu-backend"))]
         let engine = Engine::from_project(project)?.shared();
         bootstrap(&engine);
+        let save_path = "project.json".to_owned();
+        let recovery = match eiviz_project::inspect_autosave(std::path::Path::new(&save_path)) {
+            eiviz_project::AutosaveInspection::Recoverable(candidate) => {
+                Some(RecoveryPrompt::Recoverable {
+                    path: candidate.path,
+                    project_hash: candidate.project_hash,
+                    newer_than_project: candidate.newer_than_project,
+                })
+            }
+            eiviz_project::AutosaveInspection::Corrupt { path, error } => {
+                Some(RecoveryPrompt::Corrupt { path, error })
+            }
+            eiviz_project::AutosaveInspection::Missing
+            | eiviz_project::AutosaveInspection::Current => None,
+        };
+        if recovery.is_none() {
+            engine.set_autosave_path(&save_path);
+        }
+        install_crash_hook(
+            engine.clone(),
+            std::env::var("EIVIZ_CRASH_REPORT_PATH")
+                .unwrap_or_else(|_| "eiviz-crash-report.json".into()),
+        );
         let control_stop = Arc::new(AtomicBool::new(false));
         let control_enabled = std::env::var("EIVIZ_CONTROL").as_deref() != Ok("off");
         let control_rate = parse_env("EIVIZ_CONTROL_RATE", 60)?;
@@ -243,13 +283,17 @@ impl DesktopApp {
             engine,
             status: "ready".into(),
             selected_scene: None,
-            save_path: "project.json".into(),
+            save_path,
             asset_root: "eiviz-assets".into(),
             image_path: String::new(),
             video_path: String::new(),
             openh264_path: std::env::var("EIVIZ_OPENH264_PATH").unwrap_or_default(),
             fdk_aac_path: std::env::var("EIVIZ_FDK_AAC_PATH").unwrap_or_default(),
             portable_path: "project.eiviz".into(),
+            capability_report_path: "eiviz-capabilities.json".into(),
+            diagnostics_export_path: "eiviz-flight-recorder.json".into(),
+            crash_report_path: "eiviz-crash-report.json".into(),
+            recovery,
             rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
             srt_url: "srt://127.0.0.1:9000".into(),
             recording_path: "recording.mp4".into(),
@@ -1157,6 +1201,90 @@ impl DesktopApp {
     }
 }
 
+fn install_crash_hook(engine: Arc<Engine>, path: String) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = engine.export_crash_report(
+            std::path::Path::new(&path),
+            info.to_string(),
+            desktop_capabilities(),
+        );
+        previous(info);
+    }));
+}
+
+fn desktop_capabilities() -> Vec<CapabilityEntry> {
+    let mut capabilities = Vec::new();
+    capabilities.push(capability_entry(
+        eiviz_io_omt::probe(),
+        true,
+        false,
+        EvidenceState::HilPending,
+    ));
+    capabilities.push(capability_entry(
+        eiviz_io_decklink::probe(),
+        cfg!(feature = "decklink"),
+        false,
+        EvidenceState::HilPending,
+    ));
+    #[cfg(feature = "ndi")]
+    capabilities.push(capability_entry(
+        eiviz_io_ndi::probe(),
+        true,
+        false,
+        EvidenceState::HilPending,
+    ));
+    #[cfg(not(feature = "ndi"))]
+    capabilities.push(CapabilityEntry {
+        id: "ndi".into(),
+        compiled: false,
+        available: false,
+        active: false,
+        detail: "not compiled; NDI 6 SDK/runtime and explicit `ndi` feature required".into(),
+        evidence: EvidenceState::HilPending,
+    });
+    for capability in eiviz_io_audio::probe() {
+        capabilities.push(capability_entry(
+            capability,
+            cfg!(feature = "audio-cpal"),
+            false,
+            EvidenceState::HilPending,
+        ));
+    }
+    capabilities.push(capability_entry(
+        eiviz_codec_gpu_video::probe(),
+        false,
+        false,
+        EvidenceState::HilPending,
+    ));
+    let midi = eiviz_control::midi_capability();
+    capabilities.push(CapabilityEntry {
+        id: "midi".into(),
+        compiled: midi.compiled,
+        available: midi.compiled,
+        active: false,
+        detail: midi.detail,
+        evidence: EvidenceState::HilPending,
+    });
+    capabilities
+}
+
+fn capability_entry(
+    capability: eiviz_media::Capability,
+    compiled: bool,
+    active: bool,
+    evidence: EvidenceState,
+) -> CapabilityEntry {
+    CapabilityEntry {
+        id: capability.id,
+        compiled,
+        available: capability.available,
+        active,
+        detail: capability.detail,
+        evidence,
+    }
+}
+
 fn bootstrap(engine: &Engine) {
     let red = Input {
         id: InputId::new(),
@@ -1241,6 +1369,78 @@ impl eframe::App for DesktopApp {
         let unit_id = self.engine.primary_unit();
         let unit = project.mixing_units.get(&unit_id).cloned();
 
+        let mut recover = false;
+        let mut discard = false;
+        if let Some(prompt) = self.recovery.as_ref() {
+            egui::Window::new("Autosave recovery")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| match prompt {
+                    RecoveryPrompt::Recoverable {
+                        path,
+                        project_hash,
+                        newer_than_project,
+                    } => {
+                        ui.label("A divergent autosave was detected.");
+                        ui.label(format!("Path: {}", path.display()));
+                        ui.label(format!("Project hash: {project_hash}"));
+                        ui.label(if *newer_than_project {
+                            "The autosave is at least as new as the saved project."
+                        } else {
+                            "The autosave is older than the saved project."
+                        });
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "The current project has not been replaced. Choose Recover or Discard.",
+                        );
+                        ui.horizontal(|ui| {
+                            recover = ui.button("Recover autosave").clicked();
+                            discard = ui.button("Discard autosave").clicked();
+                        });
+                    }
+                    RecoveryPrompt::Corrupt { path, error } => {
+                        ui.colored_label(egui::Color32::RED, "The autosave is corrupt.");
+                        ui.label(format!("Path: {}", path.display()));
+                        ui.label(error);
+                        ui.label("The current project remains unchanged.");
+                        discard = ui.button("Discard corrupt autosave").clicked();
+                    }
+                });
+        }
+        if recover {
+            match self.engine.recover_autosave_into(
+                std::path::Path::new(&self.save_path),
+                Some(std::path::Path::new(&self.asset_root)),
+            ) {
+                Ok(true) => {
+                    self.engine.set_autosave_path(&self.save_path);
+                    self.selected_scene = None;
+                    self.recovery = None;
+                    self.status =
+                        "autosave recovered in memory; Save explicitly to replace project.json"
+                            .into();
+                }
+                Ok(false) => {
+                    self.engine.set_autosave_path(&self.save_path);
+                    self.recovery = None;
+                    self.status = "autosave disappeared before recovery".into();
+                }
+                Err(error) => self.status = format!("autosave recovery: {error}"),
+            }
+        } else if discard {
+            match self
+                .engine
+                .discard_autosave(std::path::Path::new(&self.save_path))
+            {
+                Ok(()) => {
+                    self.engine.set_autosave_path(&self.save_path);
+                    self.recovery = None;
+                    self.status = "autosave discarded; current project unchanged".into();
+                }
+                Err(error) => self.status = format!("autosave discard: {error}"),
+            }
+        }
+
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("eiviz");
@@ -1266,7 +1466,10 @@ impl eframe::App for DesktopApp {
                 ui.text_edit_singleline(&mut self.save_path);
                 if ui.button("Save").clicked() {
                     match self.engine.save(std::path::Path::new(&self.save_path)) {
-                        Ok(()) => self.status = "saved".into(),
+                        Ok(()) => {
+                            self.engine.set_autosave_path(&self.save_path);
+                            self.status = "saved".into();
+                        }
                         Err(e) => self.status = format!("save: {e}"),
                     }
                 }
@@ -1276,6 +1479,7 @@ impl eframe::App for DesktopApp {
                         Some(std::path::Path::new(&self.asset_root)),
                     ) {
                         Ok(()) => {
+                            self.engine.set_autosave_path(&self.save_path);
                             self.selected_scene = None;
                             self.status = "loaded".into();
                         }
@@ -1323,6 +1527,44 @@ impl eframe::App for DesktopApp {
                             self.status = "portable imported".into();
                         }
                         Err(error) => self.status = format!("portable import: {error}"),
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("capability report");
+                ui.text_edit_singleline(&mut self.capability_report_path);
+                if ui.button("Export capabilities").clicked() {
+                    match self.engine.export_capability_report(
+                        std::path::Path::new(&self.capability_report_path),
+                        desktop_capabilities(),
+                    ) {
+                        Ok(()) => self.status = "capability report exported".into(),
+                        Err(error) => self.status = format!("capability report: {error}"),
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("flight recorder");
+                ui.text_edit_singleline(&mut self.diagnostics_export_path);
+                if ui.button("Export diagnostics").clicked() {
+                    match self
+                        .engine
+                        .export_flight_recorder(std::path::Path::new(&self.diagnostics_export_path))
+                    {
+                        Ok(()) => self.status = "flight recorder exported".into(),
+                        Err(error) => self.status = format!("flight recorder: {error}"),
+                    }
+                }
+                ui.label("crash report");
+                ui.text_edit_singleline(&mut self.crash_report_path);
+                if ui.button("Export crash snapshot").clicked() {
+                    match self.engine.export_crash_report(
+                        std::path::Path::new(&self.crash_report_path),
+                        "manual diagnostic snapshot",
+                        desktop_capabilities(),
+                    ) {
+                        Ok(()) => self.status = "crash diagnostic snapshot exported".into(),
+                        Err(error) => self.status = format!("crash report: {error}"),
                     }
                 }
             });
@@ -1379,9 +1621,29 @@ impl eframe::App for DesktopApp {
             ui.label(self.engine.compositor_detail());
             let gpu_metrics = self.engine.metrics();
             ui.label(format!(
-                "GPU staging readbacks: {} (VideoFrame sinks only)",
-                gpu_metrics.gpu_readbacks
+                "GPU pass: {} ns (max {}); staging readback: {} ns (max {}, count {})",
+                gpu_metrics.gpu_pass_nanos,
+                gpu_metrics.gpu_pass_max_nanos,
+                gpu_metrics.gpu_readback_nanos,
+                gpu_metrics.gpu_readback_max_nanos,
+                gpu_metrics.gpu_readbacks,
             ));
+            ui.label(format!(
+                "Deadline slack: {} ns; misses={}; Program drop={} repeat={}",
+                gpu_metrics.deadline_slack_nanos,
+                gpu_metrics.deadline_misses,
+                gpu_metrics.program_drops,
+                gpu_metrics.program_repeats,
+            ));
+            if let Some(error) = &gpu_metrics.last_persistence_error {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    format!(
+                        "Persistence errors={}: {error}",
+                        gpu_metrics.persistence_errors
+                    ),
+                );
+            }
             if let Some(loss) = &gpu_metrics.gpu_device_loss {
                 ui.colored_label(
                     egui::Color32::RED,

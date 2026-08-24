@@ -56,13 +56,21 @@ pub fn save_atomic(project: &Project, path: &Path) -> Result<()> {
     }
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(project)?;
-    {
+    let write_result = (|| -> Result<()> {
         let mut f = File::create(&tmp).map_err(|e| ProjectError::Io(e.to_string()))?;
         f.write_all(&json)
             .map_err(|e| ProjectError::Io(e.to_string()))?;
         f.sync_all().map_err(|e| ProjectError::Io(e.to_string()))?;
+        fs::rename(&tmp, path).map_err(|e| ProjectError::Io(e.to_string()))?;
+        if let Some(parent) = path.parent() {
+            sync_directory(parent).map_err(|error| ProjectError::Io(error.to_string()))?;
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    fs::rename(&tmp, path).map_err(|e| ProjectError::Io(e.to_string()))?;
+    write_result?;
     Ok(())
 }
 
@@ -192,6 +200,88 @@ pub fn recover_autosave(path: &Path) -> Result<Option<Project>> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct AutosaveCandidate {
+    pub path: PathBuf,
+    pub project: Project,
+    pub project_hash: String,
+    pub newer_than_project: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum AutosaveInspection {
+    Missing,
+    Current,
+    Recoverable(AutosaveCandidate),
+    Corrupt { path: PathBuf, error: String },
+}
+
+/// Inspect startup autosave state without mutating or replacing the project.
+pub fn inspect_autosave(path: &Path) -> AutosaveInspection {
+    let autosave = autosave_path(path);
+    if !autosave.exists() {
+        return AutosaveInspection::Missing;
+    }
+    let project = match load(&autosave) {
+        Ok(project) => project,
+        Err(error) => {
+            return AutosaveInspection::Corrupt {
+                path: autosave,
+                error: error.to_string(),
+            };
+        }
+    };
+    let project_hash = serde_json::to_vec(&project)
+        .map(|bytes| hash_bytes(&bytes))
+        .unwrap_or_default();
+    if let Ok(saved) = load(path)
+        && serde_json::to_vec(&saved)
+            .map(|bytes| hash_bytes(&bytes))
+            .is_ok_and(|hash| hash == project_hash)
+    {
+        return AutosaveInspection::Current;
+    }
+    let newer_than_project = fs::metadata(&autosave)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .zip(
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok(),
+        )
+        .is_none_or(|(autosave_modified, project_modified)| autosave_modified >= project_modified);
+    AutosaveInspection::Recoverable(AutosaveCandidate {
+        path: autosave,
+        project,
+        project_hash,
+        newer_than_project,
+    })
+}
+
+pub fn discard_autosave(path: &Path) -> Result<()> {
+    let autosave = autosave_path(path);
+    match fs::remove_file(&autosave) {
+        Ok(()) => {
+            if let Some(parent) = autosave.parent() {
+                sync_directory(parent).map_err(|error| ProjectError::Io(error.to_string()))?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ProjectError::Io(error.to_string())),
+    }
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 pub fn append_journal(path: &Path, revision: u64, hash: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| ProjectError::Io(e.to_string()))?;
@@ -294,5 +384,49 @@ mod tests {
             migrated.audio.resampling,
             eiviz_core::AudioResamplingPolicy::ExactRate
         );
+    }
+
+    #[test]
+    fn corrupt_autosave_is_reported_without_replacing_saved_project() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-corrupt-autosave-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("project.json");
+        let saved = Project::new("saved");
+        save_atomic(&saved, &path).unwrap();
+        fs::write(autosave_path(&path), b"{not valid json").unwrap();
+
+        match inspect_autosave(&path) {
+            AutosaveInspection::Corrupt {
+                path: corrupt,
+                error,
+            } => {
+                assert_eq!(corrupt, autosave_path(&path));
+                assert!(!error.is_empty());
+            }
+            other => panic!("expected corrupt autosave, got {other:?}"),
+        }
+        assert_eq!(load(&path).unwrap().id, saved.id);
+        discard_autosave(&path).unwrap();
+        assert!(matches!(
+            inspect_autosave(&path),
+            AutosaveInspection::Missing
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_write_error_keeps_destination_and_cleans_temporary_file() {
+        let root =
+            std::env::temp_dir().join(format!("eiviz-project-write-error-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let error = save_atomic(&Project::new("cannot replace directory"), &root).unwrap_err();
+        assert!(matches!(error, ProjectError::Io(_)));
+        assert!(root.is_dir());
+        assert!(!root.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
     }
 }

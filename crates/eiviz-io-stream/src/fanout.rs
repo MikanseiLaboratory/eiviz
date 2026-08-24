@@ -182,6 +182,15 @@ impl EncodedFanout {
                         .diagnostics
                         .queue_high_water
                         .fetch_max(depth, Ordering::Relaxed);
+                    tracing::debug!(
+                        sink = %queue.diagnostics.name,
+                        queue_depth = depth,
+                        queue_high_water = queue
+                            .diagnostics
+                            .queue_high_water
+                            .load(Ordering::Relaxed),
+                        "distribution access unit queued"
+                    );
                 }
                 Err(TrySendError::Full(_)) => {
                     queue.diagnostics.dropped.fetch_add(1, Ordering::Relaxed);
@@ -193,11 +202,21 @@ impl EncodedFanout {
                         .diagnostics
                         .recovery_required
                         .store(true, Ordering::Release);
+                    tracing::warn!(
+                        sink = %queue.diagnostics.name,
+                        queue_depth = queue.sender.len(),
+                        dropped = queue.diagnostics.dropped.load(Ordering::Relaxed),
+                        "distribution queue full"
+                    );
                 }
                 Err(TrySendError::Disconnected(_)) => {
                     queue.diagnostics.dropped.fetch_add(1, Ordering::Relaxed);
                     queue.diagnostics.set_state(SinkState::Failed);
                     queue.diagnostics.set_error("sink worker stopped");
+                    tracing::error!(
+                        sink = %queue.diagnostics.name,
+                        "distribution worker disconnected"
+                    );
                 }
             }
         }
@@ -291,6 +310,11 @@ fn run_worker(
                 .store(false, Ordering::Release);
         }
         if let Err(error) = sink.send(&access_unit) {
+            tracing::warn!(
+                sink = %diagnostics.name,
+                error = %error,
+                "distribution send failed"
+            );
             diagnostics.set_error(error.to_string());
             diagnostics.set_state(SinkState::WaitingForKeyframe);
             diagnostics.reconnects.fetch_add(1, Ordering::Relaxed);
@@ -332,6 +356,12 @@ fn connect_with_backoff(
             Err(error) => {
                 attempt = attempt.saturating_add(1);
                 diagnostics.set_error(error.to_string());
+                tracing::warn!(
+                    sink = %diagnostics.name,
+                    attempt,
+                    error = %error,
+                    "distribution connect failed"
+                );
                 if recovery.max_attempts != 0 && attempt >= recovery.max_attempts {
                     diagnostics.set_state(SinkState::Failed);
                     return false;

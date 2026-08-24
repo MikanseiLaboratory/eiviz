@@ -120,6 +120,10 @@ pub struct DeviceLossReport {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WgpuDiagnostics {
     pub readbacks: u64,
+    pub pass_nanos: u64,
+    pub pass_max_nanos: u64,
+    pub readback_nanos: u64,
+    pub readback_max_nanos: u64,
     pub device_loss: Option<DeviceLossReport>,
     /// Device recreation is owned by the caller that supplied the device.
     pub automatic_recovery: bool,
@@ -128,6 +132,10 @@ pub struct WgpuDiagnostics {
 #[derive(Default)]
 struct SharedDiagnostics {
     readbacks: AtomicU64,
+    pass_nanos: AtomicU64,
+    pass_max_nanos: AtomicU64,
+    readback_nanos: AtomicU64,
+    readback_max_nanos: AtomicU64,
     device_loss: Mutex<Option<DeviceLossReport>>,
 }
 
@@ -222,6 +230,7 @@ impl WgpuCompositor {
         let diagnostics = Arc::new(SharedDiagnostics::default());
         let device_loss = diagnostics.clone();
         device.set_device_lost_callback(move |reason, message| {
+            tracing::error!(reason = ?reason, message = %message, "GPU device lost");
             *device_loss
                 .device_loss
                 .lock()
@@ -329,6 +338,10 @@ impl WgpuCompositor {
     pub fn diagnostics(&self) -> WgpuDiagnostics {
         WgpuDiagnostics {
             readbacks: self.diagnostics.readbacks.load(Ordering::Relaxed),
+            pass_nanos: self.diagnostics.pass_nanos.load(Ordering::Relaxed),
+            pass_max_nanos: self.diagnostics.pass_max_nanos.load(Ordering::Relaxed),
+            readback_nanos: self.diagnostics.readback_nanos.load(Ordering::Relaxed),
+            readback_max_nanos: self.diagnostics.readback_max_nanos.load(Ordering::Relaxed),
             device_loss: self
                 .diagnostics
                 .device_loss
@@ -381,6 +394,15 @@ impl WgpuCompositor {
         pts: MediaTime,
         frame_id: u64,
     ) -> Result<WgpuTextureFrame, WgpuError> {
+        let started = std::time::Instant::now();
+        let span = tracing::info_span!(
+            "gpu_pass",
+            frame_id,
+            width = plan.width,
+            height = plan.height,
+            layers = plan.layers.len()
+        );
+        let _entered = span.enter();
         self.ensure_device_available()?;
         validate_plan(plan)?;
         let max_dimension = self.device.limits().max_texture_dimension_2d;
@@ -458,11 +480,27 @@ impl WgpuCompositor {
             .latest_output
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(frame.clone());
+        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.diagnostics
+            .pass_nanos
+            .store(elapsed, Ordering::Relaxed);
+        self.diagnostics
+            .pass_max_nanos
+            .fetch_max(elapsed, Ordering::Relaxed);
+        tracing::info!(frame_id, pass_nanos = elapsed, "GPU pass completed");
         Ok(frame)
     }
 
     /// Counted GPU staging readback for CPU-frame sinks.
     pub fn readback(&self, frame: &WgpuTextureFrame) -> Result<VideoFrame, WgpuError> {
+        let started = std::time::Instant::now();
+        let span = tracing::info_span!(
+            "gpu_readback",
+            frame_id = frame.frame_id,
+            width = frame.width,
+            height = frame.height
+        );
+        let _entered = span.enter();
         self.ensure_device_available()?;
         let unpadded_bytes_per_row = frame.width * 4;
         let padded_bytes_per_row = unpadded_bytes_per_row
@@ -526,6 +564,18 @@ impl WgpuCompositor {
         }
         drop(mapped);
         readback.unmap();
+        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.diagnostics
+            .readback_nanos
+            .store(elapsed, Ordering::Relaxed);
+        self.diagnostics
+            .readback_max_nanos
+            .fetch_max(elapsed, Ordering::Relaxed);
+        tracing::info!(
+            frame_id = frame.frame_id,
+            readback_nanos = elapsed,
+            "GPU staging readback completed"
+        );
         Ok(VideoFrame {
             id: frame.frame_id,
             source: None,

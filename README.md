@@ -59,14 +59,20 @@ all pass:
   binary is bundled or built from source. Missing/rejected binaries hard-fail;
   I_PCM, PCM, test bytes, and alternate codecs are never substituted.
   Real-server/loss/24-hour HIL remains pending.
-- Capability stub only for gpu-video
-- Portable `.eiviz` packages and crash-safe JSON save
+- Persisted, truth-preserving capability reports and CI-generated SPDX 2.3 /
+  CycloneDX 1.5 SBOM artifacts
+- Structured operational spans/metrics, a bounded 45-second redacted flight
+  recorder, and crash reports containing recent diagnostics plus project hash
+- Portable `.eiviz` packages, crash-safe JSON save, and explicit Desktop
+  autosave recover/discard startup UX
 
 Hardware/interoperability HIL (OMT, DeckLink genlock, NDI round-trip, Vulkan
 Video, audio devices, RTMP, and SRT) is **not** claimed. See the current truth table in
 the implementation plan, the [DeckLink HIL procedure](docs/hil/decklink.md),
 the [audio HIL procedure](docs/hil/audio.md), and the
-[distribution HIL procedure](docs/hil/distribution.md).
+[distribution HIL procedure](docs/hil/distribution.md). Operational export,
+recovery semantics, and SBOM generation are documented in
+[operations](docs/operations.md).
 
 ## Build
 

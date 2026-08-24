@@ -8,6 +8,21 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - name: Generate SPDX and CycloneDX SBOMs
+        run: python3 scripts/generate-sbom.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eiviz-sbom
+          path: target/sbom/*.json
+          if-no-files-found: error
+
   msrv:
     runs-on: ubuntu-latest
     steps:

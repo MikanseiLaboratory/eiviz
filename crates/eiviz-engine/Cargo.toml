@@ -13,6 +13,7 @@ eiviz-core.workspace = true
 eiviz-gpu = { workspace = true, optional = true }
 eiviz-io-file.workspace = true
 eiviz-media.workspace = true
+eiviz-operations.workspace = true
 eiviz-project.workspace = true
 eiviz-runtime.workspace = true
 eiviz-time.workspace = true

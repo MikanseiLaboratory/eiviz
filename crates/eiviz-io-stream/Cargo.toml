@@ -16,3 +16,4 @@ srt-tokio = "=0.4.4"
 tokio = { version = "1.53.1", features = ["rt", "net", "time", "rt-multi-thread"] }
 crossbeam-channel.workspace = true
 eiviz-core.workspace = true
+tracing.workspace = true

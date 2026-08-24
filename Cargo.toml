@@ -5,6 +5,7 @@ members = [
     "crates/eiviz-core",
     "crates/eiviz-time",
     "crates/eiviz-command",
+    "crates/eiviz-operations",
     "crates/eiviz-project",
     "crates/eiviz-media",
     "crates/eiviz-runtime",
@@ -34,6 +35,7 @@ description = "Cross-platform GPU vision mixer"
 eiviz-core = { path = "crates/eiviz-core" }
 eiviz-time = { path = "crates/eiviz-time" }
 eiviz-command = { path = "crates/eiviz-command" }
+eiviz-operations = { path = "crates/eiviz-operations" }
 eiviz-project = { path = "crates/eiviz-project" }
 eiviz-media = { path = "crates/eiviz-media" }
 eiviz-runtime = { path = "crates/eiviz-runtime" }

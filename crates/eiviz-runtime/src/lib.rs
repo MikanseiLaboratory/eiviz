@@ -141,8 +141,12 @@ impl RuntimeSnapshot {
 pub struct TickMetrics {
     pub frame: u64,
     pub dropped_preview: u64,
+    pub program_drops: u64,
     pub program_repeats: u64,
     pub deadline_monotonic_nanos: u64,
+    pub deadline_slack_nanos: i64,
+    pub deadline_misses: u64,
+    pub processing_nanos: u64,
     pub timing_unlocked_sources: usize,
 }
 
@@ -574,6 +578,13 @@ impl Runtime {
     }
 
     pub fn tick_active(&mut self) -> Result<TickResult> {
+        let started_nanos = monotonic_nanos();
+        let span = tracing::info_span!(
+            "runtime_tick",
+            frame_id = self.frame,
+            backend = ?self.backend
+        );
+        let _entered = span.enter();
         let snapshot = self
             .active_snapshot
             .clone()
@@ -645,6 +656,17 @@ impl Runtime {
         self.peak_meters = meters.clone();
         self.metrics.frame = self.frame;
         self.metrics.deadline_monotonic_nanos = deadline_monotonic_nanos;
+        let completion_deadline =
+            MediaTime::from_frame_index(self.frame.saturating_add(1), project.video.frame_rate)
+                .map_err(|error| RuntimeError::Other(error.to_string()))
+                .and_then(|next_pts| self.schedule_deadline(next_pts))?;
+        let completed_nanos = monotonic_nanos();
+        self.metrics.processing_nanos = completed_nanos.saturating_sub(started_nanos);
+        self.metrics.deadline_slack_nanos = i64::try_from(completion_deadline).unwrap_or(i64::MAX)
+            - i64::try_from(completed_nanos).unwrap_or(i64::MAX);
+        if self.metrics.deadline_slack_nanos < 0 {
+            self.metrics.deadline_misses = self.metrics.deadline_misses.saturating_add(1);
+        }
         self.metrics.timing_unlocked_sources = self
             .source_timing
             .values()
@@ -653,6 +675,17 @@ impl Runtime {
                     && timing.island.state() != ClockLockState::Locked
             })
             .count();
+        tracing::info!(
+            frame_id = self.frame,
+            deadline_monotonic_nanos,
+            completion_deadline_monotonic_nanos = completion_deadline,
+            deadline_slack_nanos = self.metrics.deadline_slack_nanos,
+            processing_nanos = self.metrics.processing_nanos,
+            deadline_misses = self.metrics.deadline_misses,
+            program_drops = self.metrics.program_drops,
+            program_repeats = self.metrics.program_repeats,
+            "runtime frame completed"
+        );
         self.frame += 1;
         Ok(TickResult {
             pts,
