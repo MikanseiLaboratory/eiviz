@@ -346,6 +346,9 @@ impl Engine {
 
     pub fn submit(&self, env: CommandEnvelope) -> Result<CommandAck> {
         let mut g = self.inner.lock();
+        if let Some(acknowledgement) = g.sequencer.existing_ack(&env)? {
+            return Ok(acknowledgement);
+        }
         let playback_update = match &env.payload {
             Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
             _ => None,
@@ -380,6 +383,54 @@ impl Engine {
             let _ = append_journal(&path, ack.revision, &hash);
         }
         Ok(ack)
+    }
+
+    pub fn submit_transaction(&self, envelopes: Vec<CommandEnvelope>) -> Result<Vec<CommandAck>> {
+        let mut g = self.inner.lock();
+        for envelope in &envelopes {
+            if g.sequencer.existing_ack(envelope)?.is_none() {
+                Self::admit(&g, &envelope.payload)?;
+            }
+        }
+        let playback_updates = envelopes
+            .iter()
+            .filter_map(|envelope| match &envelope.payload {
+                Command::SetInputPlayback { input, playback } => Some((*input, playback.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let (acknowledgements, hash) = {
+            let Inner {
+                sequencer, project, ..
+            } = &mut *g;
+            let acknowledgements = sequencer.apply_transaction(project, envelopes)?;
+            let hash = state_hash(project);
+            (acknowledgements, hash)
+        };
+        for (input, playback) in playback_updates {
+            g.runtime.update_source_playback(input, &playback);
+        }
+        let revision = acknowledgements
+            .last()
+            .map_or_else(|| g.sequencer.revision(), |ack| ack.revision);
+        let event = FlightEvent {
+            frame: g.runtime.frame(),
+            revision,
+            hash: hash.clone(),
+            dropped_preview: g.runtime.metrics.dropped_preview,
+            failed_outputs: g
+                .runtime
+                .failed_outputs()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect(),
+            note: format!("transaction:{}", acknowledgements.len()),
+        };
+        push_flight(&mut g.flight, event);
+        if let Some(path) = g.journal_path.clone() {
+            let _ = append_journal(&path, revision, &hash);
+        }
+        Ok(acknowledgements)
     }
 
     pub fn submit_payload(&self, payload: Command) -> Result<CommandAck> {

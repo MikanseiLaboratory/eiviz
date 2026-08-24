@@ -16,8 +16,14 @@ all pass:
   alpha composition, transition mixing, and staging readback on a hardware GPU.
   GPU HIL and device-loss recovery remain pending.
 - Native GUI (`apps/eiviz-desktop`) talking **only** through `CommandEnvelope`
-- Desktop starts the localhost HTTP Command API on `127.0.0.1:8090` and TCP
-  JSON-lines API on `127.0.0.1:8091`. Set `EIVIZ_CONTROL=off` to disable.
+- Desktop starts authenticated-capable HTTP (`127.0.0.1:8090`), TCP JSON-lines
+  (`:8091`), and WebSocket (`:8092`) Query/Command APIs. Versioned envelopes,
+  expected revision, idempotent command IDs, atomic transactions, rate limits,
+  bounded command/event queues, and WebSocket revision events are preserved.
+  Set `EIVIZ_CONTROL=off` to disable.
+- Optional real MIDI input uses `midir` and requires explicit backend-stable
+  device selection plus channel-message mapping to versioned envelopes. The
+  default build has no MIDI listener or no-op substitute.
 - Mixing Units expose rendered multi-tile Multiview frames for Input, Preview,
   and Program sources; the desktop bootstraps a PRV/PGM two-up view.
 - Desktop can ingest PNG/JPEG files into the content-addressed asset store,
@@ -94,11 +100,23 @@ cargo run -p eiviz-desktop --features audio-pipewire
 # eiviz builds so the SDK is operator-installed and license-reviewed.
 CPAL_ASIO_DIR=C:\path\to\asiosdk \
   cargo run -p eiviz-desktop --features audio-asio
+
+# Real platform MIDI input (WinMM/CoreMIDI/ALSA). Linux requires ALSA
+# development packages. Select the port and TAKE mapping in Desktop.
+cargo run -p eiviz-desktop --features midi
 ```
 
-Control binds can be changed with `EIVIZ_HTTP_BIND` / `EIVIZ_TCP_BIND`, but
-only loopback addresses are accepted until remote authorization is implemented.
-`EIVIZ_CONTROL_TOKEN` protects HTTP commands; TCP remains localhost-only.
+Control binds are `EIVIZ_HTTP_BIND`, `EIVIZ_TCP_BIND`, and `EIVIZ_WS_BIND`.
+Loopback is the default. Any non-loopback bind is rejected unless a non-empty
+`EIVIZ_CONTROL_TOKEN` is configured; when configured, it protects health,
+queries, events, and commands on every transport. HTTP and WebSocket use
+`Authorization: Bearer`; TCP includes `token` in each versioned request.
+`EIVIZ_CONTROL_RATE`, `EIVIZ_CONTROL_QUEUE`, `EIVIZ_CONTROL_EVENT_QUEUE`, and
+`EIVIZ_CONTROL_MAX_CONNECTIONS` configure bounded admission. These listeners
+are plaintext: use a trusted management network or TLS reverse proxy remotely.
+See [control/MIDI HIL](docs/hil/control-midi.md) for protocol examples and
+physical-device verification, and the [Control API reference](docs/control-api.md)
+for wire formats.
 
 Windows x64 is the first-class target. Linux/macOS compile the same core.
 MSRV is 1.97; the repo `rust-toolchain.toml` pins the CI/dev toolchain.

@@ -38,7 +38,7 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 | eiviz-gpu | 合成（明示 CpuReference / Wgpu。暗黙切替なし） | NDI/DeckLink 型 |
 | eiviz-engine | 所有権の結線 | 個別 SDK 実装の詳細 |
 | eiviz-io-* / codec-* | adapter | domain 型の再定義 |
-| eiviz-control | HTTP/TCP Command API。Stream Deck 固有ロジックは置かない | Project 直接更新 |
+| eiviz-control | HTTP/TCP/WebSocket Query・Command API、optional MIDI。Stream Deck 固有ロジックは置かない | Project 直接更新、default buildでnative MIDI依存 |
 
 ## 時刻
 
@@ -46,7 +46,15 @@ Sources ──► ClockMapper ──► TimingIsland ──► Runtime
 
 ## コマンド
 
-すべての状態変更は `CommandEnvelope` です。sequencer だけが `Project` を mutate し、`revision` を進め、frame boundary で immutable snapshot を差し替えます。TAKE と record start/stop は coalesce しません。
+すべての状態変更は versioned `CommandEnvelope` です。sequencer だけが `Project` を mutate し、`revision` を進め、frame boundary で immutable snapshot を差し替えます。TAKE と record start/stop は coalesce しません。複数Command transactionはProjectとsequencerのcandidateを検証してから一括commitし、途中失敗時はrevision・idempotency・client sequenceも含めてrollbackします。
+
+Control API v1はHTTP query/command/transaction、TCP JSON-lines、
+WebSocket query/command/transaction/event subscriptionを提供します。全mutationは
+bounded dispatcherを通り、遅いWebSocket subscriberはbounded queue満杯時に切断
+します。loopback以外のbindには明示tokenが必須で、token設定時はhealth/queryを
+含む全requestを認証します。MIDIは`midi` featureの`midir`実backendだけで、
+backend stable port IDとmappingを明示選択します。feature無効時にlistener stubは
+存在しません。Stream Deck固有actionはout-of-tree clientの責務です。
 
 ## メディア
 

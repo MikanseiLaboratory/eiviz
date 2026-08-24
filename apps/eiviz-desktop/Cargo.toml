@@ -32,3 +32,4 @@ audio-cpal = ["eiviz-io-audio/cpal"]
 audio-pipewire = ["audio-cpal", "eiviz-io-audio/pipewire"]
 # Separate distribution profile: requires an operator-installed Steinberg ASIO SDK.
 audio-asio = ["audio-cpal", "eiviz-io-audio/asio"]
+midi = ["eiviz-control/midi"]

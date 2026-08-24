@@ -54,6 +54,7 @@ eframe = { version = "0.32.3", default-features = false, features = ["default_fo
 egui = "0.32.3"
 hex = "0.4.3"
 image = { version = "=0.25.6", default-features = false, features = ["png", "jpeg"] }
+midir = "0.11.0"
 parking_lot = "0.12.4"
 pollster = "0.4.0"
 rtrb = "0.4.0"
@@ -67,6 +68,7 @@ uuid = { version = "1.18.1", features = ["v4", "v7", "serde"] }
 wgpu = { version = "24.0.5", default-features = true }
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
 tiny_http = "0.12.0"
+tungstenite = "0.30.0"
 
 [profile.release]
 lto = "thin"

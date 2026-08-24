@@ -6,10 +6,16 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crossbeam-channel.workspace = true
 eiviz-command.workspace = true
 eiviz-core.workspace = true
 eiviz-engine.workspace = true
+midir = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tiny_http.workspace = true
+tungstenite.workspace = true
+
+[features]
+midi = ["dep:midir"]

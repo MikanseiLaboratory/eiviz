@@ -77,6 +77,7 @@ Issue #1 を測定可能な要件へ分解した文書です。ID は実装・�
 - R09.3 「順次処理」は state mutation の確定順序のみ。I/O や GPU を直列実行しない
 - R09.4 再送は command id で冪等。満杯時は Busy を返し捨てない
 - R09.5 HTTP/TCP は localhost 既定。remote は認証・権限・rate limit 必須
+- R09.6 HTTP/TCP/WebSocket はversioned envelopeを保持し、QueryとCommandを分離する。複数Command transactionは全件成功または全件rollbackとし、WebSocket event subscriptionをbounded queueで提供する
 
 ### R10 Operations
 - R10.1 structured log、metrics、30–60 秒 flight recorder、frame id 追跡

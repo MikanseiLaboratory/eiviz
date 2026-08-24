@@ -10,6 +10,8 @@ use eiviz_time::MediaTime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub const COMMAND_ENVELOPE_VERSION: u32 = 1;
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum CommandError {
     #[error(transparent)]
@@ -20,6 +22,16 @@ pub enum CommandError {
     Duplicate(CommandId),
     #[error("busy: command queue is full")]
     Busy,
+    #[error("unsupported command envelope version {actual}; expected {expected}")]
+    UnsupportedVersion { expected: u32, actual: u32 },
+    #[error("client {client} sequence {actual} is not greater than last sequence {last}")]
+    ClientSequence {
+        client: ClientId,
+        last: u64,
+        actual: u64,
+    },
+    #[error("transaction must contain at least one command")]
+    EmptyTransaction,
     #[error("{0}")]
     Rejected(String),
 }
@@ -28,6 +40,7 @@ pub type Result<T> = std::result::Result<T, CommandError>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommandEnvelope {
+    pub version: u32,
     pub id: CommandId,
     pub client: ClientId,
     pub client_seq: u64,
@@ -155,6 +168,7 @@ pub struct CommandAck {
 pub struct Sequencer {
     revision: u64,
     applied: std::collections::HashMap<CommandId, u64>,
+    client_sequences: std::collections::HashMap<ClientId, u64>,
     last_coalesce: std::collections::HashMap<String, CommandId>,
     capacity: usize,
 }
@@ -170,6 +184,7 @@ impl Sequencer {
         Self {
             revision: 0,
             applied: std::collections::HashMap::new(),
+            client_sequences: std::collections::HashMap::new(),
             last_coalesce: std::collections::HashMap::new(),
             capacity,
         }
@@ -179,15 +194,35 @@ impl Sequencer {
         self.revision
     }
 
+    pub fn existing_ack(&self, envelope: &CommandEnvelope) -> Result<Option<CommandAck>> {
+        if envelope.version != COMMAND_ENVELOPE_VERSION {
+            return Err(CommandError::UnsupportedVersion {
+                expected: COMMAND_ENVELOPE_VERSION,
+                actual: envelope.version,
+            });
+        }
+        Ok(self.applied.get(&envelope.id).map(|revision| CommandAck {
+            id: envelope.id,
+            revision: *revision,
+            duplicate: true,
+        }))
+    }
+
     pub fn apply(&mut self, project: &mut Project, env: CommandEnvelope) -> Result<CommandAck> {
+        if let Some(acknowledgement) = self.existing_ack(&env)? {
+            return Ok(acknowledgement);
+        }
         if self.applied.len() >= self.capacity && !self.applied.contains_key(&env.id) {
             return Err(CommandError::Busy);
         }
-        if let Some(rev) = self.applied.get(&env.id) {
-            return Ok(CommandAck {
-                id: env.id,
-                revision: *rev,
-                duplicate: true,
+        if env.client_seq != 0
+            && let Some(last) = self.client_sequences.get(&env.client)
+            && env.client_seq <= *last
+        {
+            return Err(CommandError::ClientSequence {
+                client: env.client,
+                last: *last,
+                actual: env.client_seq,
             });
         }
         if let Some(expected) = env.expected_revision
@@ -220,11 +255,35 @@ impl Sequencer {
         *project = candidate;
         self.revision += 1;
         self.applied.insert(env.id, self.revision);
+        if env.client_seq != 0 {
+            self.client_sequences.insert(env.client, env.client_seq);
+        }
         Ok(CommandAck {
             id: env.id,
             revision: self.revision,
             duplicate: false,
         })
+    }
+
+    /// Applies all envelopes or none. Individual command IDs retain their
+    /// revision and idempotency semantics after a successful transaction.
+    pub fn apply_transaction(
+        &mut self,
+        project: &mut Project,
+        envelopes: Vec<CommandEnvelope>,
+    ) -> Result<Vec<CommandAck>> {
+        if envelopes.is_empty() {
+            return Err(CommandError::EmptyTransaction);
+        }
+        let mut candidate_project = project.clone();
+        let mut candidate_sequencer = self.clone();
+        let mut acknowledgements = Vec::with_capacity(envelopes.len());
+        for envelope in envelopes {
+            acknowledgements.push(candidate_sequencer.apply(&mut candidate_project, envelope)?);
+        }
+        *project = candidate_project;
+        *self = candidate_sequencer;
+        Ok(acknowledgements)
     }
 }
 
@@ -433,6 +492,7 @@ pub fn state_hash(project: &Project) -> String {
 impl CommandEnvelope {
     pub fn new(client: ClientId, payload: Command) -> Self {
         Self {
+            version: COMMAND_ENVELOPE_VERSION,
             id: CommandId::new(),
             client,
             client_seq: 0,
@@ -542,5 +602,69 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(project, before);
         assert_eq!(sequencer.revision(), 0);
+    }
+
+    #[test]
+    fn transaction_rolls_back_every_command_and_sequence() {
+        let mut project = Project::new("transaction");
+        let before = project.clone();
+        let client = ClientId::new();
+        let mut sequencer = Sequencer::default();
+        let mut first = CommandEnvelope::new(
+            client,
+            Command::SetName {
+                name: "must roll back".into(),
+            },
+        );
+        first.client_seq = 1;
+        let mut invalid = CommandEnvelope::new(
+            client,
+            Command::RemoveMixingUnit {
+                id: *project.mixing_units.keys().next().unwrap(),
+            },
+        );
+        invalid.client_seq = 2;
+
+        assert!(
+            sequencer
+                .apply_transaction(&mut project, vec![first, invalid])
+                .is_err()
+        );
+        assert_eq!(project, before);
+        assert_eq!(sequencer.revision(), 0);
+
+        let mut retry = CommandEnvelope::new(
+            client,
+            Command::SetName {
+                name: "committed".into(),
+            },
+        );
+        retry.client_seq = 1;
+        sequencer.apply(&mut project, retry).unwrap();
+        assert_eq!(project.name, "committed");
+    }
+
+    #[test]
+    fn client_sequence_and_envelope_version_are_validated() {
+        let mut project = Project::new("sequence");
+        let client = ClientId::new();
+        let mut sequencer = Sequencer::default();
+        let mut first = CommandEnvelope::new(client, Command::Noop);
+        first.client_seq = 9;
+        sequencer.apply(&mut project, first).unwrap();
+
+        let mut stale = CommandEnvelope::new(client, Command::Noop);
+        stale.client_seq = 9;
+        assert!(matches!(
+            sequencer.apply(&mut project, stale),
+            Err(CommandError::ClientSequence { .. })
+        ));
+
+        let mut future = CommandEnvelope::new(client, Command::Noop);
+        future.version += 1;
+        assert!(matches!(
+            sequencer.apply(&mut project, future),
+            Err(CommandError::UnsupportedVersion { .. })
+        ));
     }
 }

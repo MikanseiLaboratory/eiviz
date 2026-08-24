@@ -13,6 +13,26 @@ use eiviz_engine::Engine;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+fn parse_env<T>(name: &str, default: T) -> Result<T, std::io::Error>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(name) {
+        Ok(value) => value.parse().map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid {name}: {error}"),
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid {name}: {error}"),
+        )),
+    }
+}
+
 fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let native = eframe::NativeOptions {
@@ -84,8 +104,20 @@ struct DesktopApp {
     #[cfg(feature = "audio-cpal")]
     audio_outputs: Vec<(OutputId, Arc<eiviz_io_audio::CpalOutput>)>,
     control_stop: Arc<AtomicBool>,
-    http_port: Option<u16>,
-    tcp_port: Option<u16>,
+    control_ports: Option<eiviz_control::ControlPorts>,
+    control_token_required: bool,
+    control_rate: u32,
+    control_queue_capacity: usize,
+    #[cfg(feature = "midi")]
+    midi_devices: Vec<eiviz_control::MidiDeviceInfo>,
+    #[cfg(feature = "midi")]
+    midi_selected: Option<usize>,
+    #[cfg(feature = "midi")]
+    midi_channel: u8,
+    #[cfg(feature = "midi")]
+    midi_take_note: u8,
+    #[cfg(feature = "midi")]
+    midi_handle: Option<eiviz_control::MidiHandle>,
     drag_item: Option<(SceneId, SceneItemId, f32, f32, Transform2D)>,
 }
 
@@ -115,42 +147,32 @@ impl DesktopApp {
         bootstrap(&engine);
         let control_stop = Arc::new(AtomicBool::new(false));
         let control_enabled = std::env::var("EIVIZ_CONTROL").as_deref() != Ok("off");
-        let (http_port, tcp_port) = if control_enabled {
-            let max_requests_per_sec = std::env::var("EIVIZ_CONTROL_RATE")
-                .unwrap_or_else(|_| "60".into())
-                .parse::<u32>()
-                .map_err(|error| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("invalid EIVIZ_CONTROL_RATE: {error}"),
-                    )
-                })?;
-            let http_port = eiviz_control::spawn_http(
+        let control_rate = parse_env("EIVIZ_CONTROL_RATE", 60)?;
+        let control_queue_capacity = parse_env("EIVIZ_CONTROL_QUEUE", 256)?;
+        let control_token = std::env::var("EIVIZ_CONTROL_TOKEN")
+            .ok()
+            .filter(|token| !token.is_empty());
+        let control_token_required = control_token.is_some();
+        let control_ports = if control_enabled {
+            Some(eiviz_control::spawn_control(
                 engine.clone(),
                 eiviz_control::ControlConfig {
-                    bind: std::env::var("EIVIZ_HTTP_BIND")
+                    http_bind: std::env::var("EIVIZ_HTTP_BIND")
                         .unwrap_or_else(|_| "127.0.0.1:8090".into()),
-                    require_token: std::env::var("EIVIZ_CONTROL_TOKEN")
-                        .ok()
-                        .filter(|token| !token.is_empty()),
-                    max_requests_per_sec,
+                    tcp_bind: std::env::var("EIVIZ_TCP_BIND")
+                        .unwrap_or_else(|_| "127.0.0.1:8091".into()),
+                    websocket_bind: std::env::var("EIVIZ_WS_BIND")
+                        .unwrap_or_else(|_| "127.0.0.1:8092".into()),
+                    require_token: control_token,
+                    max_requests_per_sec: control_rate,
+                    command_queue_capacity: control_queue_capacity,
+                    event_queue_capacity: parse_env("EIVIZ_CONTROL_EVENT_QUEUE", 128)?,
+                    max_connections: parse_env("EIVIZ_CONTROL_MAX_CONNECTIONS", 64)?,
                 },
                 control_stop.clone(),
-            )?;
-            let tcp_result = eiviz_control::spawn_tcp(
-                engine.clone(),
-                &std::env::var("EIVIZ_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:8091".into()),
-                control_stop.clone(),
-            );
-            match tcp_result {
-                Ok(tcp_port) => (Some(http_port), Some(tcp_port)),
-                Err(error) => {
-                    control_stop.store(true, Ordering::Release);
-                    return Err(error.into());
-                }
-            }
+            )?)
         } else {
-            (None, None)
+            None
         };
         let mut app = Self {
             engine,
@@ -208,8 +230,20 @@ impl DesktopApp {
             #[cfg(feature = "audio-cpal")]
             audio_outputs: Vec::new(),
             control_stop,
-            http_port,
-            tcp_port,
+            control_ports,
+            control_token_required,
+            control_rate,
+            control_queue_capacity,
+            #[cfg(feature = "midi")]
+            midi_devices: Vec::new(),
+            #[cfg(feature = "midi")]
+            midi_selected: None,
+            #[cfg(feature = "midi")]
+            midi_channel: 0,
+            #[cfg(feature = "midi")]
+            midi_take_note: 60,
+            #[cfg(feature = "midi")]
+            midi_handle: None,
             drag_item: None,
         };
         if !app.omt_address.is_empty() {
@@ -843,6 +877,63 @@ impl DesktopApp {
         self.status = format!("Audio output started: {}", device.display_name);
     }
 
+    #[cfg(feature = "midi")]
+    fn refresh_midi_inputs(&mut self) {
+        match eiviz_control::list_midi_inputs() {
+            Ok(devices) => {
+                self.midi_devices = devices;
+                self.midi_selected = None;
+                self.status = format!("MIDI: {} input port(s)", self.midi_devices.len());
+            }
+            Err(error) => {
+                self.midi_devices.clear();
+                self.midi_selected = None;
+                self.status = format!("MIDI enumeration: {error}");
+            }
+        }
+    }
+
+    #[cfg(feature = "midi")]
+    fn start_midi_take(&mut self) {
+        let Some(device) = self
+            .midi_selected
+            .and_then(|index| self.midi_devices.get(index))
+            .cloned()
+        else {
+            self.status = "MIDI: refresh and select an explicit input port".into();
+            return;
+        };
+        let config = eiviz_control::MidiConfig {
+            device_id: device.id.clone(),
+            mappings: vec![eiviz_control::MidiMapping {
+                trigger: eiviz_control::MidiTrigger::NoteOn {
+                    channel: self.midi_channel,
+                    note: self.midi_take_note,
+                    minimum_velocity: 1,
+                },
+                command: Command::Take {
+                    unit: self.engine.primary_unit(),
+                    swap: false,
+                    style: TransitionStyle::Cut,
+                    duration_frames: 0,
+                },
+            }],
+            queue_capacity: 128,
+        };
+        match eiviz_control::spawn_midi(self.engine.clone(), config, self.control_stop.clone()) {
+            Ok(handle) => {
+                self.midi_handle = Some(handle);
+                self.status = format!(
+                    "MIDI TAKE active: {} channel {} note {}",
+                    device.name,
+                    self.midi_channel + 1,
+                    self.midi_take_note
+                );
+            }
+            Err(error) => self.status = format!("MIDI input: {error}"),
+        }
+    }
+
     fn configure_distribution(&mut self, transport_name: &str, owner: eiviz_core::MixingUnitId) {
         let (name, kind, transport) = match transport_name {
             "rtmp" => (
@@ -1138,12 +1229,32 @@ impl eframe::App for DesktopApp {
             ui.label(format!("compositor {:?}", project.compositor));
             ui.label(self.engine.compositor_detail());
             ui.label(format!("missing-media {:?}", project.missing_media));
-            ui.label(match (self.http_port, self.tcp_port) {
-                (Some(http), Some(tcp)) => {
-                    format!("control localhost HTTP :{http} / TCP :{tcp}")
-                }
-                _ => "control disabled".into(),
+            ui.label(match self.control_ports {
+                Some(ports) => format!(
+                    "control HTTP :{} / TCP :{} / WS :{}; auth={}; rate={}/s; command queue={}",
+                    ports.http,
+                    ports.tcp,
+                    ports.websocket,
+                    if self.control_token_required {
+                        "required"
+                    } else {
+                        "loopback-only"
+                    },
+                    self.control_rate,
+                    self.control_queue_capacity
+                ),
+                None => "control disabled".into(),
             });
+            let midi = eiviz_control::midi_capability();
+            ui.label(format!(
+                "MIDI: {} ({})",
+                if midi.compiled {
+                    "compiled"
+                } else {
+                    "unavailable"
+                },
+                midi.detail
+            ));
             for cap in [
                 eiviz_io_omt::probe(),
                 eiviz_codec_gpu_video::probe(),
@@ -1426,6 +1537,69 @@ impl eframe::App for DesktopApp {
             #[cfg(not(feature = "audio-cpal"))]
             ui.label(
                 "Build with `--features audio-cpal`; use `audio-pipewire` or the separately licensed `audio-asio` profile when required.",
+            );
+            ui.separator();
+            ui.heading("MIDI Control");
+            #[cfg(feature = "midi")]
+            {
+                ui.label(
+                    "Select one physical input by its backend ID. The mapping below emits a versioned TAKE CommandEnvelope; no default-device fallback is used.",
+                );
+                if ui.button("Refresh MIDI inputs").clicked() {
+                    self.refresh_midi_inputs();
+                }
+                for (index, device) in self.midi_devices.iter().enumerate() {
+                    if ui
+                        .selectable_label(
+                            self.midi_selected == Some(index),
+                            format!("{} [{}]", device.name, device.id),
+                        )
+                        .clicked()
+                    {
+                        self.midi_selected = Some(index);
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.label("channel (1-16)");
+                    let mut display_channel = self.midi_channel + 1;
+                    if ui
+                        .add(egui::DragValue::new(&mut display_channel).range(1..=16))
+                        .changed()
+                    {
+                        self.midi_channel = display_channel - 1;
+                    }
+                    ui.label("TAKE note");
+                    ui.add(egui::DragValue::new(&mut self.midi_take_note).range(0..=127));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Start MIDI TAKE mapping").clicked() {
+                        self.start_midi_take();
+                    }
+                    if ui.button("Stop MIDI").clicked() {
+                        self.midi_handle = None;
+                        self.status = "MIDI stopped".into();
+                    }
+                });
+                if let Some(handle) = &self.midi_handle {
+                    let status = handle.status();
+                    ui.label(format!(
+                        "{} [{}]: received={} matched={} queue-overflow={} submit-errors={}{}",
+                        status.device_name,
+                        status.device_id,
+                        status.received_messages,
+                        status.matched_messages,
+                        status.queue_overflows,
+                        status.submit_errors,
+                        status
+                            .last_error
+                            .as_deref()
+                            .map_or(String::new(), |error| format!("; {error}"))
+                    ));
+                }
+            }
+            #[cfg(not(feature = "midi"))]
+            ui.label(
+                "Build with `--features midi` to compile the platform midir backend. No no-op MIDI listener is present in portable builds.",
             );
             ui.separator();
             ui.heading("OMT Capture");

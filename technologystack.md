@@ -14,7 +14,8 @@
 | openh264-sys2 | 0.9.8 exact | `libloading`のみ。Cisco 2.6.0外部binary、source build禁止 |
 | yuv | 0.8.17 exact | 固定profileのlimited-range BT.709 I420→RGBA変換。MP4 color metadata検証は未認定 |
 | zip | 4.3.x | portable `.eiviz` |
-| tiny_http | 0.12.0 | localhost HTTP |
+| tiny_http / tungstenite | 0.12.0 / 0.30.0 | authenticated HTTP + WebSocket control API |
+| midir | 0.11.0 | optional `midi` feature。WinMM/CoreMIDI/ALSA native input only |
 | gpu-video | 0.4.0 | **optional feature only**, MIT, wgpu 29 |
 | Smelter | 非同梱 | ADR-0002 |
 | openmediatransport-rs | git rev 2a0a9d31 | Pure Rust OMT、MIT、HIL pending |
