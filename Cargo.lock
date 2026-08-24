@@ -1178,6 +1178,7 @@ dependencies = [
  "eiviz-command",
  "eiviz-core",
  "eiviz-gpu",
+ "eiviz-io-audio",
  "eiviz-io-decklink",
  "eiviz-io-file",
  "eiviz-io-ndi",

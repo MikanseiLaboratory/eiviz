@@ -32,10 +32,10 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
-decklink = ["eiviz-io-decklink/decklink-sdk"]
+decklink = ["eiviz-io-decklink/decklink-sdk", "eiviz-engine/decklink"]
 ndi = ["eiviz-io-ndi/ndi", "eiviz-engine/ndi"]
 wgpu-backend = ["eiviz-engine/wgpu-backend", "dep:eiviz-gpu"]
-audio-cpal = ["eiviz-io-audio/cpal"]
+audio-cpal = ["eiviz-io-audio/cpal", "eiviz-engine/audio-cpal"]
 audio-pipewire = ["audio-cpal", "eiviz-io-audio/pipewire"]
 # Separate distribution profile: requires an operator-installed Steinberg ASIO SDK.
 audio-asio = ["audio-cpal", "eiviz-io-audio/asio"]

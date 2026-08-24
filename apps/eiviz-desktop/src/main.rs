@@ -1069,6 +1069,11 @@ impl DesktopApp {
             self.decklink_sources.clear();
             self.decklink_outputs.clear();
         }
+        #[cfg(feature = "audio-cpal")]
+        {
+            self.audio_inputs.clear();
+            self.audio_outputs.clear();
+        }
     }
 
     fn rebind_declared_live_sources(&mut self, action: &str) {
@@ -1099,6 +1104,40 @@ impl DesktopApp {
                 failures.push(format!(
                     "{source_name}: NDI adapter is not enabled in this build; no substitute"
                 ));
+            }
+        }
+        for (id, binding_id) in self.engine.declared_decklink_sources() {
+            #[cfg(feature = "decklink")]
+            match self.engine.bind_decklink_source(id, binding_id) {
+                Ok(source) => {
+                    self.decklink_sources.push(source);
+                    bound += 1;
+                }
+                Err(error) => failures.push(format!("DeckLink {binding_id}: {error}")),
+            }
+            #[cfg(not(feature = "decklink"))]
+            match self.engine.bind_decklink_source(id, binding_id) {
+                Ok(()) => failures.push(format!(
+                    "DeckLink {binding_id}: adapter claimed success without an endpoint; no substitute"
+                )),
+                Err(error) => failures.push(format!("DeckLink {binding_id}: {error}")),
+            }
+        }
+        for (id, binding_id) in self.engine.declared_audio_device_sources() {
+            #[cfg(feature = "audio-cpal")]
+            match self.engine.bind_audio_device_source(id, binding_id) {
+                Ok(source) => {
+                    self.audio_inputs.push((id, source));
+                    bound += 1;
+                }
+                Err(error) => failures.push(format!("audio {binding_id}: {error}")),
+            }
+            #[cfg(not(feature = "audio-cpal"))]
+            match self.engine.bind_audio_device_source(id, binding_id) {
+                Ok(()) => failures.push(format!(
+                    "audio {binding_id}: adapter claimed success without an endpoint; no substitute"
+                )),
+                Err(error) => failures.push(format!("audio {binding_id}: {error}")),
             }
         }
         self.status = if failures.is_empty() {

@@ -64,6 +64,11 @@ Default SDK-free tests cover:
   shared bounded mapper; deterministic drift/jump/wrap/domain tests are in
   `eiviz-time`.
 
+- Engine `declared_decklink_sources` / `bind_decklink_source`: load drops live
+  bindings; a missing SDK/feature or unresolved persistent ID returns Admission
+  and attaches no substitute. Desktop rebinds declared DeckLink cards only
+  through that Engine path. This is not `DL-HIL-*`.
+
 The native feature must additionally be compiled on each shipping platform
 against SDK 16. Interop, SDI electrical behavior, completion timing, reference
 lock, and soak scenarios remain pending until every `DL-HIL-*` row has attached

@@ -63,5 +63,13 @@ Archive the project binding JSON, logs, Engine/Desktop audio diagnostics,
 analyzer capture, callback-size trace, sample-index/timestamp comparison, xrun
 counters, negotiated source/device rates, ASRC ratio/drift/reset counters, and
 24-hour memory/queue high-water plots. Mark startup underflow separately from
-steady-state underflow. Real-device, hot-plug, and soak results remain pending
-until this evidence exists for each shipping profile.
+steady-state underflow.
+
+Engine `declared_audio_device_sources` / `bind_audio_device_source` drop live
+bindings on load and return Admission when the CPAL adapter is not compiled or
+the persisted persistent ID is absent. Desktop rebinds declared audio inputs
+only through that Engine path and never selects another host, a default device,
+or a generated tone. This is not `AUD-HIL-*`.
+
+Real-device, hot-plug, and soak results remain pending until this evidence
+exists for each shipping profile.

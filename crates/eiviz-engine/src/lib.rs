@@ -8,9 +8,9 @@ use eiviz_command::{
 #[cfg(feature = "wgpu-backend")]
 use eiviz_core::CompositorBackend;
 use eiviz_core::{
-    AacEncoderProfile, AssetRef, ClientId, H264EncoderProfile, Input, InputId, InputSource,
-    MixingGraph, MixingUnitId, MultiviewId, Output, OutputId, OutputKind, OutputVideoSource,
-    Playback, Project,
+    AacEncoderProfile, AssetRef, ClientId, DeviceBinding, DeviceBindingId, H264EncoderProfile,
+    Input, InputId, InputSource, MixingGraph, MixingUnitId, MultiviewId, Output, OutputId,
+    OutputKind, OutputVideoSource, Playback, Project,
 };
 use eiviz_io_stream::{EncodedFanout, EncoderCapabilities, SinkDiagnostics};
 use eiviz_media::{
@@ -716,6 +716,188 @@ impl Engine {
         self.require_declared_ndi(id, source_name)?;
         Err(EngineError::Admission(
             "NDI adapter is not enabled in this build; no substitute is attached".into(),
+        ))
+    }
+
+    pub fn declared_decklink_sources(&self) -> Vec<(InputId, DeviceBindingId)> {
+        self.staged_snapshot()
+            .inputs
+            .values()
+            .filter_map(|input| match &input.source {
+                InputSource::DeckLink { binding } => Some((input.id, *binding)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn require_declared_decklink(
+        &self,
+        id: InputId,
+        binding_id: DeviceBindingId,
+    ) -> Result<DeviceBinding> {
+        let declared = self.staged_snapshot();
+        let input = declared
+            .inputs
+            .get(&id)
+            .ok_or_else(|| EngineError::Admission(format!("unknown input {id}")))?;
+        match &input.source {
+            InputSource::DeckLink { binding } if *binding == binding_id => {}
+            InputSource::DeckLink { binding } => {
+                return Err(EngineError::Admission(format!(
+                    "DeckLink input {id} is declared as {binding}, not {binding_id}"
+                )));
+            }
+            other => {
+                return Err(EngineError::Admission(format!(
+                    "input {id} is {other:?}, not a DeckLink source"
+                )));
+            }
+        }
+        declared.device_bindings.get(&binding_id).cloned().ok_or_else(|| {
+            EngineError::Admission(format!(
+                "declared DeckLink input {id} references unknown device binding {binding_id}; no substitute is attached"
+            ))
+        })
+    }
+
+    /// Opens a project-declared DeckLink card through the real SDK adapter when
+    /// the `decklink` feature is present. Failure is returned; no simulator
+    /// substitute is attached.
+    #[cfg(feature = "decklink")]
+    pub fn bind_decklink_source(
+        &self,
+        id: InputId,
+        binding_id: DeviceBindingId,
+    ) -> Result<Arc<eiviz_io_decklink::DeckLinkSource>> {
+        let binding = self.require_declared_decklink(id, binding_id)?;
+        let source = Arc::new(
+            eiviz_io_decklink::DeckLinkSource::open(
+                id,
+                &binding,
+                eiviz_io_decklink::DeckLinkConfig::default(),
+            )
+            .map_err(|error| {
+                EngineError::Admission(format!("{error}; no substitute is attached"))
+            })?,
+        );
+        self.attach_source(
+            source.clone(),
+            SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: UnlockedBehavior::Fail,
+            },
+        );
+        Ok(source)
+    }
+
+    #[cfg(not(feature = "decklink"))]
+    pub fn bind_decklink_source(&self, id: InputId, binding_id: DeviceBindingId) -> Result<()> {
+        let _ = self.require_declared_decklink(id, binding_id)?;
+        Err(EngineError::Admission(
+            "DeckLink adapter is not enabled in this build; no substitute is attached".into(),
+        ))
+    }
+
+    pub fn declared_audio_device_sources(&self) -> Vec<(InputId, DeviceBindingId)> {
+        self.staged_snapshot()
+            .inputs
+            .values()
+            .filter_map(|input| match &input.source {
+                InputSource::AudioDevice { binding } => Some((input.id, *binding)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn require_declared_audio_device(
+        &self,
+        id: InputId,
+        binding_id: DeviceBindingId,
+    ) -> Result<DeviceBinding> {
+        let declared = self.staged_snapshot();
+        let input = declared
+            .inputs
+            .get(&id)
+            .ok_or_else(|| EngineError::Admission(format!("unknown input {id}")))?;
+        match &input.source {
+            InputSource::AudioDevice { binding } if *binding == binding_id => {}
+            InputSource::AudioDevice { binding } => {
+                return Err(EngineError::Admission(format!(
+                    "audio device input {id} is declared as {binding}, not {binding_id}"
+                )));
+            }
+            other => {
+                return Err(EngineError::Admission(format!(
+                    "input {id} is {other:?}, not an audio device source"
+                )));
+            }
+        }
+        declared.device_bindings.get(&binding_id).cloned().ok_or_else(|| {
+            EngineError::Admission(format!(
+                "declared audio device input {id} references unknown device binding {binding_id}; no substitute is attached"
+            ))
+        })
+    }
+
+    #[cfg(feature = "audio-cpal")]
+    fn audio_backend_from_binding(binding: &DeviceBinding) -> Result<eiviz_io_audio::AudioBackend> {
+        let backend_id = binding.kind.strip_prefix("audio:").ok_or_else(|| {
+            EngineError::Admission(format!(
+                "audio device binding {} has kind {}, expected audio:<backend>; no substitute is attached",
+                binding.id, binding.kind
+            ))
+        })?;
+        backend_id
+            .parse()
+            .map_err(|error: eiviz_io_audio::AudioError| {
+                EngineError::Admission(format!("{error}; no substitute is attached"))
+            })
+    }
+
+    /// Opens a project-declared WASAPI/ASIO/CoreAudio/ALSA/PipeWire device
+    /// through the real CPAL adapter when the `audio-cpal` feature is present.
+    /// Failure is returned; no tone, default device, or other substitute is attached.
+    #[cfg(feature = "audio-cpal")]
+    pub fn bind_audio_device_source(
+        &self,
+        id: InputId,
+        binding_id: DeviceBindingId,
+    ) -> Result<Arc<eiviz_io_audio::CpalInput>> {
+        let binding = self.require_declared_audio_device(id, binding_id)?;
+        let backend = Self::audio_backend_from_binding(&binding)?;
+        let project = self.staged_snapshot();
+        let config = eiviz_io_audio::AudioStreamConfig {
+            sample_rate: project.audio.sample_rate,
+            channels: project.audio.channels,
+            ..Default::default()
+        };
+        let source = Arc::new(
+            eiviz_io_audio::CpalInput::open_with_policy(
+                id,
+                &binding,
+                backend,
+                config,
+                project.audio.resampling,
+            )
+            .map_err(|error| {
+                EngineError::Admission(format!("{error}; no substitute is attached"))
+            })?,
+        );
+        self.attach_source(
+            source.clone(),
+            SourceClockPolicy::Bounded {
+                config: Default::default(),
+                unlocked: UnlockedBehavior::Fail,
+            },
+        );
+        Ok(source)
+    }
+
+    #[cfg(not(feature = "audio-cpal"))]
+    pub fn bind_audio_device_source(&self, id: InputId, binding_id: DeviceBindingId) -> Result<()> {
+        let _ = self.require_declared_audio_device(id, binding_id)?;
+        Err(EngineError::Admission(
+            "audio adapter is not enabled in this build; no substitute is attached".into(),
         ))
     }
 
@@ -3036,6 +3218,328 @@ mod tests {
         }
         assert!(engine.source_control_diagnostics().is_empty());
         assert_eq!(engine.declared_ndi_sources().len(), 1);
+    }
+
+    fn test_hardware_binding(kind: &str) -> DeviceBinding {
+        DeviceBinding {
+            id: DeviceBindingId::new(),
+            kind: kind.into(),
+            logical_name: "test-device".into(),
+            last_seen_hardware_id: Some("HW-1".into()),
+        }
+    }
+
+    #[test]
+    fn load_drops_decklink_bindings_instead_of_inventing_a_capture() {
+        let engine = Engine::new("decklink reload");
+        let unit = engine.primary_unit();
+        let binding = test_hardware_binding("decklink");
+        let input = Input {
+            id: InputId::new(),
+            name: "decklink cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::DeckLink {
+                binding: binding.id,
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "decklink cam".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddDeviceBinding {
+                binding: binding.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(1, eiviz_time::MediaTime::ZERO, 2, 2, [3, 4, 5, 255]),
+                audio: AudioBuffer::silence(0, 48_000, 2, 800),
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
+        engine.tick().unwrap();
+        assert_eq!(engine.source_control_diagnostics().len(), 1);
+        let dir =
+            std::env::temp_dir().join(format!("eiviz-decklink-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("project.json");
+        engine.save(&path).unwrap();
+        engine.load_project(&path, None).unwrap();
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(
+            engine.declared_decklink_sources(),
+            vec![(input.id, binding.id)]
+        );
+    }
+
+    #[test]
+    fn unattached_decklink_program_obeys_fail_policy() {
+        let mut project = Project::new("decklink fail");
+        project.missing_media = eiviz_core::MissingMediaPolicy::Fail;
+        let engine = Engine::from_project(project).unwrap();
+        let unit = engine.primary_unit();
+        let binding = test_hardware_binding("decklink");
+        let input = Input {
+            id: InputId::new(),
+            name: "decklink cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::DeckLink {
+                binding: binding.id,
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "decklink cam".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddDeviceBinding { binding })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        let error = engine.tick().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EngineError::Runtime(eiviz_runtime::RuntimeError::MissingMedia(_))
+            ),
+            "{error:?}"
+        );
+        assert!(engine.source_control_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn bind_decklink_source_rejects_without_a_substitute() {
+        let engine = Engine::new("decklink bind");
+        let binding = test_hardware_binding("decklink");
+        let input = Input {
+            id: InputId::new(),
+            name: "decklink cam".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::DeckLink {
+                binding: binding.id,
+            },
+        };
+        engine
+            .submit_payload(Command::AddDeviceBinding {
+                binding: binding.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine.tick().unwrap();
+        match engine.bind_decklink_source(input.id, binding.id) {
+            Ok(_) => panic!("missing DeckLink adapter must not bind a substitute"),
+            Err(error) => {
+                assert!(matches!(error, EngineError::Admission(_)), "{error:?}");
+                assert!(error.to_string().contains("no substitute"), "{error}");
+            }
+        }
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(engine.declared_decklink_sources().len(), 1);
+    }
+
+    #[test]
+    fn load_drops_audio_device_bindings_instead_of_inventing_a_capture() {
+        let engine = Engine::new("audio reload");
+        let unit = engine.primary_unit();
+        let binding = test_hardware_binding("audio:alsa");
+        let input = Input {
+            id: InputId::new(),
+            name: "line in".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::AudioDevice {
+                binding: binding.id,
+            },
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name: "line in".into(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Playback::default(),
+            }],
+        };
+        engine
+            .submit_payload(Command::AddDeviceBinding {
+                binding: binding.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddScene {
+                scene: scene.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(scene.id),
+            })
+            .unwrap();
+        engine.attach_source(
+            Arc::new(ConstantSource {
+                id: input.id,
+                video: VideoFrame::rgba_solid(1, eiviz_time::MediaTime::ZERO, 2, 2, [6, 7, 8, 255]),
+                audio: AudioBuffer::silence(0, 48_000, 2, 800),
+            }),
+            SourceClockPolicy::ScheduleTime,
+        );
+        engine.tick().unwrap();
+        assert_eq!(engine.source_control_diagnostics().len(), 1);
+        let dir = std::env::temp_dir().join(format!("eiviz-audio-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("project.json");
+        engine.save(&path).unwrap();
+        engine.load_project(&path, None).unwrap();
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(
+            engine.declared_audio_device_sources(),
+            vec![(input.id, binding.id)]
+        );
+    }
+
+    #[test]
+    fn unattached_audio_device_route_obeys_fail_policy() {
+        let mut project = Project::new("audio fail");
+        project.missing_media = eiviz_core::MissingMediaPolicy::Fail;
+        let engine = Engine::from_project(project).unwrap();
+        let binding = test_hardware_binding("audio:alsa");
+        let input = Input {
+            id: InputId::new(),
+            name: "line in".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::AudioDevice {
+                binding: binding.id,
+            },
+        };
+        let bus = engine.snapshot().audio_matrix.buses[0].id;
+        engine
+            .submit_payload(Command::AddDeviceBinding { binding })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetAudioRoute {
+                route: eiviz_core::AudioRoute {
+                    input: input.id,
+                    bus,
+                    mode: eiviz_core::RouteMode::Manual,
+                    gain_db: 0.0,
+                    muted: false,
+                    solo: false,
+                    delay_ms: 0.0,
+                    pan: 0.0,
+                },
+            })
+            .unwrap();
+        let error = engine.tick().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EngineError::Runtime(eiviz_runtime::RuntimeError::MissingMedia(_))
+            ),
+            "{error:?}"
+        );
+        assert!(engine.source_control_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn bind_audio_device_source_rejects_without_a_substitute() {
+        let engine = Engine::new("audio bind");
+        let binding = test_hardware_binding("audio:alsa");
+        let input = Input {
+            id: InputId::new(),
+            name: "line in".into(),
+            tags: vec![],
+            groups: vec![],
+            source: InputSource::AudioDevice {
+                binding: binding.id,
+            },
+        };
+        engine
+            .submit_payload(Command::AddDeviceBinding {
+                binding: binding.clone(),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::AddInput {
+                input: input.clone(),
+            })
+            .unwrap();
+        engine.tick().unwrap();
+        match engine.bind_audio_device_source(input.id, binding.id) {
+            Ok(_) => panic!("missing audio adapter must not bind a substitute"),
+            Err(error) => {
+                assert!(matches!(error, EngineError::Admission(_)), "{error:?}");
+                assert!(error.to_string().contains("no substitute"), "{error}");
+            }
+        }
+        assert!(engine.source_control_diagnostics().is_empty());
+        assert_eq!(engine.declared_audio_device_sources().len(), 1);
     }
 
     #[test]
