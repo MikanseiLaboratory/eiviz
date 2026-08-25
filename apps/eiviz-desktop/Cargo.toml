@@ -11,6 +11,7 @@ default-run = "eiviz-desktop"
 eiviz-command.workspace = true
 eiviz-control.workspace = true
 eiviz-core.workspace = true
+eiviz-codec-software.workspace = true
 eiviz-engine.workspace = true
 eiviz-gpu = { workspace = true, optional = true }
 eiviz-media.workspace = true
@@ -42,6 +43,5 @@ audio-asio = ["audio-cpal", "eiviz-io-audio/asio"]
 midi = ["eiviz-control/midi"]
 
 [dev-dependencies]
-eiviz-codec-software.workspace = true
 eiviz-io-stream.workspace = true
 eiviz-time.workspace = true

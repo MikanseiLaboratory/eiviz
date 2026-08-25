@@ -448,7 +448,7 @@ impl OpenH264Encoder {
                 self.width, self.height, frame.width, frame.height
             )));
         }
-        rgba_to_i420_bt709_limited(frame, &mut self.i420)?;
+        frame_to_i420_bt709_limited(frame, &mut self.i420)?;
         let y_len = (self.width * self.height) as usize;
         let uv_len = y_len / 4;
         let picture = SSourcePicture {
@@ -968,6 +968,38 @@ fn media_time_millis(time: MediaTime) -> i64 {
     let millis =
         time.ticks() as i128 * base.numerator() as i128 * 1_000 / base.denominator() as i128;
     millis.clamp(i64::MIN as i128, i64::MAX as i128) as i64
+}
+
+fn frame_to_i420_bt709_limited(frame: &VideoFrame, output: &mut [u8]) -> Result<()> {
+    match frame.format {
+        eiviz_media::PixelFormat::Nv12 => nv12_to_i420(frame, output),
+        eiviz_media::PixelFormat::Rgba8 => rgba_to_i420_bt709_limited(frame, output),
+        other => Err(MediaError::Unsupported(format!(
+            "OpenH264 encoding accepts Nv12 or Rgba8, got {other:?}"
+        ))),
+    }
+}
+
+fn nv12_to_i420(frame: &VideoFrame, output: &mut [u8]) -> Result<()> {
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let pixels = width
+        .checked_mul(height)
+        .ok_or_else(|| MediaError::Other("video dimensions overflow".into()))?;
+    let required = pixels * 3 / 2;
+    if frame.data.len() != required || output.len() != required {
+        return Err(MediaError::Other(
+            "NV12/I420 buffer size does not match frame dimensions".into(),
+        ));
+    }
+    output[..pixels].copy_from_slice(&frame.data[..pixels]);
+    let uv = &frame.data[pixels..];
+    let (u_plane, v_plane) = output[pixels..].split_at_mut(pixels / 4);
+    for index in 0..u_plane.len() {
+        u_plane[index] = uv[index * 2];
+        v_plane[index] = uv[index * 2 + 1];
+    }
+    Ok(())
 }
 
 fn rgba_to_i420_bt709_limited(frame: &VideoFrame, output: &mut [u8]) -> Result<()> {

@@ -429,11 +429,9 @@ fn convert_capture_video(
     }
     // SAFETY: The callback frame exposes at least `required` bytes.
     let source = unsafe { std::slice::from_raw_parts(frame.data, required) };
-    let mut rgba = Vec::with_capacity(active_row * VIDEO_HEIGHT as usize);
+    let mut bgra = Vec::with_capacity(active_row * VIDEO_HEIGHT as usize);
     for row in source.chunks(row_bytes).take(VIDEO_HEIGHT as usize) {
-        for pixel in row[..active_row].chunks_exact(4) {
-            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-        }
+        bgra.extend_from_slice(&row[..active_row]);
     }
     let pts = decklink_ticks_to_media_time(frame.stream_time, frame.time_scale)
         .ok_or_else(|| DeckLinkError::InvalidFrame("invalid video time scale".into()))?;
@@ -455,10 +453,10 @@ fn convert_capture_video(
         clock_observation: Some(clock_observation),
         width: frame.width,
         height: frame.height,
-        format: PixelFormat::Rgba8,
+        format: PixelFormat::Bgra8,
         color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
         field: eiviz_core::FieldKind::Progressive,
-        data: rgba.into(),
+        data: bgra.into(),
         discontinuity,
     })
 }
@@ -776,7 +774,8 @@ impl PlaybackHandle {
             PixelFormat::Nv12
             | PixelFormat::P010
             | PixelFormat::P216
-            | PixelFormat::Rgba16Float => {
+            | PixelFormat::Rgba16Float
+            | PixelFormat::Uyvy => {
                 return Err(DeckLinkError::InvalidFrame(
                     "planar/10-bit to BGRA conversion is not implemented; profile fallback is forbidden".into(),
                 ));

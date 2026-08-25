@@ -629,23 +629,24 @@ fn receive_video(
             "truncated or invalid packed video frame".into(),
         ));
     }
-    let mut rgba = Vec::with_capacity(active * height as usize);
+    let mut packed = Vec::with_capacity(active * height as usize);
+    let (format, native) = match frame.pixel_format() {
+        PixelFormat::RGBA => (EivizPixelFormat::Rgba8, true),
+        PixelFormat::RGBX => (EivizPixelFormat::Rgba8, false),
+        PixelFormat::BGRA => (EivizPixelFormat::Bgra8, true),
+        PixelFormat::BGRX => (EivizPixelFormat::Bgra8, false),
+        other => {
+            return Err(NdiError::InvalidFrame(format!(
+                "unexpected receiver pixel format {other:?}"
+            )));
+        }
+    };
     for row in frame.data().chunks(stride).take(height as usize) {
         for pixel in row[..active].chunks_exact(4) {
-            match frame.pixel_format() {
-                PixelFormat::RGBA => rgba.extend_from_slice(pixel),
-                PixelFormat::RGBX => rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]),
-                PixelFormat::BGRA => {
-                    rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-                }
-                PixelFormat::BGRX => {
-                    rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
-                }
-                other => {
-                    return Err(NdiError::InvalidFrame(format!(
-                        "unexpected receiver pixel format {other:?}"
-                    )));
-                }
+            if native {
+                packed.extend_from_slice(pixel);
+            } else {
+                packed.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
         }
     }
@@ -666,10 +667,10 @@ fn receive_video(
         clock_observation: Some(clock_observation),
         width,
         height,
-        format: EivizPixelFormat::Rgba8,
+        format,
         color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
         field: eiviz_core::FieldKind::Progressive,
-        data: rgba.into(),
+        data: packed.into(),
         discontinuity: false,
     })
 }
@@ -748,7 +749,8 @@ fn send_video(
                 EivizPixelFormat::Nv12
                 | EivizPixelFormat::P010
                 | EivizPixelFormat::P216
-                | EivizPixelFormat::Rgba16Float => {
+                | EivizPixelFormat::Rgba16Float
+                | EivizPixelFormat::Uyvy => {
                     return Err(NdiError::InvalidFrame(
                         "planar/10-bit input cannot be implicitly interpreted as RGBA output"
                             .into(),
@@ -764,7 +766,11 @@ fn send_video(
             })?;
             (
                 PixelFormat::NV12,
-                frame_to_nv12(frame, profile).map_err(NdiError::InvalidFrame)?,
+                if frame.format == EivizPixelFormat::Nv12 {
+                    frame.data.to_vec()
+                } else {
+                    frame_to_nv12(frame, profile).map_err(NdiError::InvalidFrame)?
+                },
             )
         }
     };

@@ -17,12 +17,76 @@ pub struct Output {
     /// instead of silently receiving a codec default.
     #[serde(default)]
     pub distribution: Option<DistributionProfile>,
+    /// CPU egress pixel format. Window outputs stay `None` and display GPU
+    /// textures. Older projects omit the field; [`Self::effective_color_format`]
+    /// fills the historical default for that kind.
+    #[serde(default)]
+    pub color_format: Option<OutputColorFormat>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OutputColorFormat {
+    Rgba8,
+    Bgra8,
+    Nv12,
+    Uyvy,
+}
+
+impl OutputColorFormat {
+    pub fn allowed_for(kind: &OutputKind) -> &'static [Self] {
+        match kind {
+            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
+                &[Self::Rgba8, Self::Nv12]
+            }
+            OutputKind::Omt { .. } => &[Self::Bgra8, Self::Uyvy],
+            OutputKind::DeckLink { .. } => &[Self::Bgra8],
+            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
+                &[]
+            }
+        }
+    }
+
+    pub fn recommended_for(kind: &OutputKind) -> Option<Self> {
+        match kind {
+            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
+                Some(Self::Nv12)
+            }
+            OutputKind::Omt { .. } => Some(Self::Uyvy),
+            OutputKind::DeckLink { .. } => Some(Self::Bgra8),
+            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
+                None
+            }
+        }
+    }
+
+    pub fn legacy_for(kind: &OutputKind) -> Option<Self> {
+        match kind {
+            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
+                Some(Self::Rgba8)
+            }
+            OutputKind::Omt { .. } | OutputKind::DeckLink { .. } => Some(Self::Bgra8),
+            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
+                None
+            }
+        }
+    }
+
+    pub fn allows(kind: &OutputKind, format: Self) -> bool {
+        Self::allowed_for(kind).contains(&format)
+    }
+}
+
+impl Output {
+    pub fn effective_color_format(&self) -> Option<OutputColorFormat> {
+        self.color_format.or_else(|| OutputColorFormat::legacy_for(&self.kind))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OutputVideoSource {
     #[default]
     Program,
+    Preview,
     Multiview(MultiviewId),
 }
 

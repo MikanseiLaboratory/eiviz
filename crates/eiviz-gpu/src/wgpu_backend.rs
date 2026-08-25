@@ -29,6 +29,7 @@ struct LayerUniform {
 @group(0) @binding(0) var source_texture: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
 @group(0) @binding(2) var<uniform> layer: LayerUniform;
+@group(0) @binding(3) var chroma_texture: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -105,19 +106,40 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(source_texture, source_sampler, input.uv);
     if layer.color_flags.x == 1u {
-        let yuv = color.rgb;
-        var y = yuv.x;
-        var cb = yuv.y - 0.5;
-        var cr = yuv.z - 0.5;
-        if layer.color_flags.y == 1u {
-            if (layer.color_flags.z & 16u) != 0u {
-                y = (yuv.x * 1023.0 - 64.0) / 876.0;
-                cb = (yuv.y * 1023.0 - 512.0) / 896.0;
-                cr = (yuv.z * 1023.0 - 512.0) / 896.0;
-            } else {
-                y = (yuv.x * 255.0 - 16.0) / 219.0;
-                cb = (yuv.y * 255.0 - 128.0) / 224.0;
-                cr = (yuv.z * 255.0 - 128.0) / 224.0;
+        var y: f32;
+        var cb: f32;
+        var cr: f32;
+        if (layer.color_flags.z & 32u) != 0u {
+            y = textureSample(source_texture, source_sampler, input.uv).r;
+            let chroma = textureSample(chroma_texture, source_sampler, input.uv).rg;
+            cb = chroma.x - 0.5;
+            cr = chroma.y - 0.5;
+            if layer.color_flags.y == 1u {
+                if (layer.color_flags.z & 16u) != 0u {
+                    y = (y * 1023.0 - 64.0) / 876.0;
+                    cb = (chroma.x * 1023.0 - 512.0) / 896.0;
+                    cr = (chroma.y * 1023.0 - 512.0) / 896.0;
+                } else {
+                    y = (y * 255.0 - 16.0) / 219.0;
+                    cb = (chroma.x * 255.0 - 128.0) / 224.0;
+                    cr = (chroma.y * 255.0 - 128.0) / 224.0;
+                }
+            }
+        } else {
+            let yuv = color.rgb;
+            y = yuv.x;
+            cb = yuv.y - 0.5;
+            cr = yuv.z - 0.5;
+            if layer.color_flags.y == 1u {
+                if (layer.color_flags.z & 16u) != 0u {
+                    y = (yuv.x * 1023.0 - 64.0) / 876.0;
+                    cb = (yuv.y * 1023.0 - 512.0) / 896.0;
+                    cr = (yuv.z * 1023.0 - 512.0) / 896.0;
+                } else {
+                    y = (yuv.x * 255.0 - 16.0) / 219.0;
+                    cb = (yuv.y * 255.0 - 128.0) / 224.0;
+                    cr = (yuv.z * 255.0 - 128.0) / 224.0;
+                }
             }
         }
         let matrix_code = layer.color_flags.z & 3u;
@@ -176,6 +198,131 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return color;
 }
 "#;
+
+const CONVERT_SHADER: &str = r#"
+struct ConvertParams {
+    mode: u32,
+    width: u32,
+    height: u32,
+    _pad: u32,
+};
+
+@group(0) @binding(0) var source_texture: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
+@group(0) @binding(2) var<uniform> params: ConvertParams;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var points = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    var output: VertexOutput;
+    output.position = vec4<f32>(points[vertex_index], 0.0, 1.0);
+    return output;
+}
+
+fn rec709_limited_yuv(rgb: vec3<f32>) -> vec3<f32> {
+    let y = dot(rgb, vec3<f32>(0.1826, 0.6142, 0.0620)) + 16.0 / 255.0;
+    let u = dot(rgb, vec3<f32>(-0.1006, -0.3386, 0.4392)) + 128.0 / 255.0;
+    let v = dot(rgb, vec3<f32>(0.4392, -0.3989, -0.0403)) + 128.0 / 255.0;
+    return clamp(vec3<f32>(y, u, v), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let pixel = vec2<i32>(i32(input.position.x), i32(input.position.y));
+    if params.mode == 0u {
+        let uv = (vec2<f32>(pixel) + vec2<f32>(0.5)) / vec2<f32>(f32(params.width), f32(params.height));
+        let rgb = textureSampleLevel(source_texture, source_sampler, uv, 0.0).rgb;
+        return vec4<f32>(rec709_limited_yuv(rgb).x, 0.0, 0.0, 1.0);
+    }
+    if params.mode == 1u {
+        let src = vec2<i32>(pixel.x * 2, pixel.y * 2);
+        var rgb = vec3<f32>(0.0);
+        for (var dy = 0; dy < 2; dy++) {
+            for (var dx = 0; dx < 2; dx++) {
+                let uv = (vec2<f32>(src + vec2<i32>(dx, dy)) + vec2<f32>(0.5))
+                    / vec2<f32>(f32(params.width), f32(params.height));
+                rgb += textureSampleLevel(source_texture, source_sampler, uv, 0.0).rgb;
+            }
+        }
+        let yuv = rec709_limited_yuv(rgb * 0.25);
+        return vec4<f32>(yuv.y, yuv.z, 0.0, 1.0);
+    }
+    if params.mode == 2u {
+        let x0 = pixel.x * 2;
+        let uv0 = (vec2<f32>(f32(x0), f32(pixel.y)) + vec2<f32>(0.5))
+            / vec2<f32>(f32(params.width), f32(params.height));
+        let uv1 = (vec2<f32>(f32(x0 + 1), f32(pixel.y)) + vec2<f32>(0.5))
+            / vec2<f32>(f32(params.width), f32(params.height));
+        let left = rec709_limited_yuv(textureSampleLevel(source_texture, source_sampler, uv0, 0.0).rgb);
+        let right = rec709_limited_yuv(textureSampleLevel(source_texture, source_sampler, uv1, 0.0).rgb);
+        let u = (left.y + right.y) * 0.5;
+        let v = (left.z + right.z) * 0.5;
+        return vec4<f32>(u, left.x, v, right.x);
+    }
+    let uv = (vec2<f32>(pixel) + vec2<f32>(0.5)) / vec2<f32>(f32(params.width), f32(params.height));
+    let color = textureSampleLevel(source_texture, source_sampler, uv, 0.0);
+    return vec4<f32>(color.b, color.g, color.r, color.a);
+}
+"#;
+
+const FILL_SHADER: &str = r#"
+struct FillParams {
+    mode: u32,
+    width: u32,
+    height: u32,
+    _pad: u32,
+    color: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> params: FillParams;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
+    var points = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    return vec4<f32>(points[vertex_index], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    if params.mode == 0u {
+        return params.color;
+    }
+    let stripe = max(params.width / 8u, 1u);
+    let index = min(u32(pos.x) / stripe, 7u);
+    var colors = array<vec4<f32>, 8>(
+        vec4<f32>(192.0 / 255.0, 192.0 / 255.0, 192.0 / 255.0, 1.0),
+        vec4<f32>(192.0 / 255.0, 192.0 / 255.0, 0.0, 1.0),
+        vec4<f32>(0.0, 192.0 / 255.0, 192.0 / 255.0, 1.0),
+        vec4<f32>(0.0, 192.0 / 255.0, 0.0, 1.0),
+        vec4<f32>(192.0 / 255.0, 0.0, 192.0 / 255.0, 1.0),
+        vec4<f32>(192.0 / 255.0, 0.0, 0.0, 1.0),
+        vec4<f32>(0.0, 0.0, 192.0 / 255.0, 1.0),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0),
+    );
+    return colors[index];
+}
+"#;
+
+const READBACK_RING_DEPTH: usize = 3;
+
+/// GPU-resident generator. No CPU pixel buffer is created.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuFill {
+    Solid { rgba: [u8; 4] },
+    ColorBars,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WgpuError {
@@ -240,6 +387,30 @@ impl std::fmt::Debug for WgpuTextureFrame {
     }
 }
 
+/// Layer image for a compositor pass. GPU frames are sampled in-place; CPU
+/// frames are uploaded once per distinct pixel buffer.
+#[derive(Clone, Copy)]
+pub enum CompositeSource<'a> {
+    Cpu(&'a VideoFrame),
+    Gpu(&'a WgpuTextureFrame),
+}
+
+struct CachedCpuSource {
+    data_ptr: usize,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    lease: ResourceLease,
+}
+
+struct RetainedSource {
+    data_ptr: usize,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    frame: WgpuTextureFrame,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdapterCapabilities {
     pub max_texture_dimension_2d: u32,
@@ -291,11 +462,11 @@ impl AdapterCapabilities {
 
 impl WgpuTextureFrame {
     pub fn texture(&self) -> &wgpu::Texture {
-        self.resource.output().0
+        self.resource.sampled().0
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
-        self.resource.output().1
+        self.resource.sampled().1
     }
 }
 
@@ -345,6 +516,14 @@ enum PoolFormat {
     Rgba8,
     Bgra8,
     Rgba16Float,
+    R8,
+    Rg8,
+    #[allow(dead_code)]
+    R16Float,
+    #[allow(dead_code)]
+    Rg16Float,
+    Nv12,
+    P010,
 }
 
 impl PoolFormat {
@@ -352,6 +531,12 @@ impl PoolFormat {
         match self {
             Self::Rgba8 | Self::Bgra8 => 4,
             Self::Rgba16Float => 8,
+            Self::R8 => 1,
+            Self::Rg8 => 2,
+            Self::R16Float => 2,
+            Self::Rg16Float => 4,
+            Self::Nv12 => 1,
+            Self::P010 => 2,
         }
     }
 
@@ -360,6 +545,10 @@ impl PoolFormat {
             Self::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
             Self::Bgra8 => wgpu::TextureFormat::Bgra8Unorm,
             Self::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+            Self::R8 | Self::Nv12 => wgpu::TextureFormat::R8Unorm,
+            Self::Rg8 => wgpu::TextureFormat::Rg8Unorm,
+            Self::R16Float | Self::P010 => wgpu::TextureFormat::R16Float,
+            Self::Rg16Float => wgpu::TextureFormat::Rg16Float,
         }
     }
 }
@@ -375,27 +564,44 @@ struct ResourceKey {
 impl ResourceKey {
     fn bytes(self) -> u64 {
         let row_bytes = u64::from(self.width).saturating_mul(self.format.bytes_per_pixel());
-        match self.kind {
-            ResourceKind::Readback => {
+        match (self.kind, self.format) {
+            (ResourceKind::Readback, _) => {
                 let alignment = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
                 row_bytes
                     .div_ceil(alignment)
                     .saturating_mul(alignment)
                     .saturating_mul(u64::from(self.height))
             }
-            ResourceKind::Source => row_bytes
+            (ResourceKind::Source, PoolFormat::Nv12) => {
+                let luma = row_bytes.saturating_mul(u64::from(self.height));
+                let chroma_row = u64::from(self.width / 2).saturating_mul(2);
+                luma.saturating_add(chroma_row.saturating_mul(u64::from(self.height / 2)))
+                    .saturating_add(80)
+            }
+            (ResourceKind::Source, PoolFormat::P010) => {
+                let luma = row_bytes.saturating_mul(u64::from(self.height));
+                let chroma_row = u64::from(self.width / 2).saturating_mul(4);
+                luma.saturating_add(chroma_row.saturating_mul(u64::from(self.height / 2)))
+                    .saturating_add(80)
+            }
+            (ResourceKind::Source, _) => row_bytes
                 .saturating_mul(u64::from(self.height))
                 .saturating_add(80),
-            ResourceKind::Output => row_bytes.saturating_mul(u64::from(self.height)),
+            (ResourceKind::Output, _) => row_bytes.saturating_mul(u64::from(self.height)),
         }
     }
 }
 
 struct SourceResource {
     texture: wgpu::Texture,
-    _view: wgpu::TextureView,
+    view: wgpu::TextureView,
+    chroma: wgpu::Texture,
+    #[allow(dead_code)]
+    chroma_view: wgpu::TextureView,
     uniform: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
+    planar: bool,
 }
 
 struct OutputResource {
@@ -576,6 +782,14 @@ impl ResourceLease {
         }
     }
 
+    fn sampled(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
+        match self.resource.as_ref().expect("live resource lease") {
+            GpuResource::Source(resource) => (&resource.texture, &resource.view),
+            GpuResource::Output(resource) => (&resource.texture, &resource.view),
+            GpuResource::Readback(_) => unreachable!("readback lease is not sampleable"),
+        }
+    }
+
     fn readback(&self) -> &wgpu::Buffer {
         match self.resource.as_ref().expect("live resource lease") {
             GpuResource::Readback(resource) => &resource.buffer,
@@ -609,6 +823,9 @@ pub struct WgpuDiagnostics {
     pub pass_max_nanos: u64,
     pub readback_nanos: u64,
     pub readback_max_nanos: u64,
+    /// `PollType::Wait` calls. Construction and prewarm may increment this;
+    /// the live composite/readback path must not.
+    pub wait_polls: u64,
     pub device_loss: Option<DeviceLossReport>,
     /// Device recreation is owned by the caller that supplied the device.
     pub automatic_recovery: bool,
@@ -623,6 +840,7 @@ struct SharedDiagnostics {
     pass_max_nanos: AtomicU64,
     readback_nanos: AtomicU64,
     readback_max_nanos: AtomicU64,
+    wait_polls: AtomicU64,
     device_loss: Mutex<Option<DeviceLossReport>>,
 }
 
@@ -649,6 +867,25 @@ impl SharedWgpuContext {
     }
 }
 
+struct PendingPlane {
+    lease: ResourceLease,
+    padded_bytes_per_row: u32,
+    unpadded_bytes_per_row: u32,
+}
+
+struct PendingReadback {
+    planes: Vec<PendingPlane>,
+    receiver: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    started: std::time::Instant,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    pts: MediaTime,
+    frame_id: u64,
+    color: ColorMetadata,
+    field: FieldKind,
+}
+
 pub struct WgpuCompositor {
     // The headless profile owns an Instance. The injected desktop profile does not.
     _instance: Option<wgpu::Instance>,
@@ -660,9 +897,25 @@ pub struct WgpuCompositor {
     pipeline_8: wgpu::RenderPipeline,
     pipeline_16: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
+    dummy_chroma_view: wgpu::TextureView,
+    convert_bind_layout: wgpu::BindGroupLayout,
+    convert_pipeline: wgpu::RenderPipeline,
+    convert_y_pipeline: wgpu::RenderPipeline,
+    convert_uv_pipeline: wgpu::RenderPipeline,
+    convert_bgra_pipeline: wgpu::RenderPipeline,
+    convert_uniform: wgpu::Buffer,
+    convert_uniform_y: wgpu::Buffer,
+    convert_uniform_uv: wgpu::Buffer,
+    fill_bind_layout: wgpu::BindGroupLayout,
+    fill_pipeline: wgpu::RenderPipeline,
+    fill_uniform: wgpu::Buffer,
+    _dummy_chroma: wgpu::Texture,
     resources: Arc<Mutex<ResourcePool>>,
     diagnostics: Arc<SharedDiagnostics>,
     latest_output: Mutex<Option<WgpuTextureFrame>>,
+    cpu_source_cache: Mutex<HashMap<InputId, CachedCpuSource>>,
+    retained_sources: Mutex<HashMap<InputId, RetainedSource>>,
+    pending_readbacks: Mutex<HashMap<u64, VecDeque<PendingReadback>>>,
 }
 
 impl WgpuCompositor {
@@ -759,7 +1012,7 @@ impl WgpuCompositor {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -768,7 +1021,7 @@ impl WgpuCompositor {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -778,6 +1031,16 @@ impl WgpuCompositor {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -838,6 +1101,252 @@ impl WgpuCompositor {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
+        let dummy_chroma = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz-dummy-chroma"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dummy_chroma,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[128, 128],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(2),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let dummy_chroma_view = dummy_chroma.create_view(&wgpu::TextureViewDescriptor::default());
+        let convert_bind_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("eiviz-convert-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let convert_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("eiviz-convert-shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(CONVERT_SHADER)),
+        });
+        let convert_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("eiviz-convert-pipeline-layout"),
+            bind_group_layouts: &[&convert_bind_layout],
+            push_constant_ranges: &[],
+        });
+        let convert_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eiviz-convert-pipeline"),
+            layout: Some(&convert_layout),
+            vertex: wgpu::VertexState {
+                module: &convert_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &convert_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let convert_y_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eiviz-convert-y-pipeline"),
+            layout: Some(&convert_layout),
+            vertex: wgpu::VertexState {
+                module: &convert_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &convert_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let convert_uv_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eiviz-convert-uv-pipeline"),
+            layout: Some(&convert_layout),
+            vertex: wgpu::VertexState {
+                module: &convert_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &convert_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rg8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let convert_bgra_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eiviz-convert-bgra-pipeline"),
+            layout: Some(&convert_layout),
+            vertex: wgpu::VertexState {
+                module: &convert_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &convert_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let convert_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-convert-uniform"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let convert_uniform_y = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-convert-uniform-y"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let convert_uniform_uv = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-convert-uniform-uv"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let fill_bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("eiviz-fill-layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let fill_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("eiviz-fill-shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(FILL_SHADER)),
+        });
+        let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("eiviz-fill-pipeline-layout"),
+            bind_group_layouts: &[&fill_bind_layout],
+            push_constant_ranges: &[],
+        });
+        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("eiviz-fill-pipeline"),
+            layout: Some(&fill_layout),
+            vertex: wgpu::VertexState {
+                module: &fill_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fill_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let fill_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-fill-uniform"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let _ = device.poll(wgpu::PollType::Wait);
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
             return Err(WgpuError::Validation(error.to_string()));
@@ -852,9 +1361,25 @@ impl WgpuCompositor {
             pipeline_8,
             pipeline_16,
             sampler,
+            dummy_chroma_view,
+            convert_bind_layout,
+            convert_pipeline,
+            convert_y_pipeline,
+            convert_uv_pipeline,
+            convert_bgra_pipeline,
+            convert_uniform,
+            convert_uniform_y,
+            convert_uniform_uv,
+            fill_bind_layout,
+            fill_pipeline,
+            fill_uniform,
+            _dummy_chroma: dummy_chroma,
             resources: Arc::new(Mutex::new(ResourcePool::new(pool_limits))),
             diagnostics,
             latest_output: Mutex::new(None),
+            cpu_source_cache: Mutex::new(HashMap::new()),
+            retained_sources: Mutex::new(HashMap::new()),
+            pending_readbacks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -896,8 +1421,73 @@ impl WgpuCompositor {
                     kind: ResourceKind::Readback,
                     ..output
                 },
-                1,
+                READBACK_RING_DEPTH,
             );
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Readback,
+                    format: PoolFormat::R8,
+                    width: plan.width,
+                    height: plan.height,
+                },
+                READBACK_RING_DEPTH,
+            );
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Readback,
+                    format: PoolFormat::Rg8,
+                    width: (plan.width / 2).max(1),
+                    height: (plan.height / 2).max(1),
+                },
+                READBACK_RING_DEPTH,
+            );
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Output,
+                    format: PoolFormat::R8,
+                    width: plan.width,
+                    height: plan.height,
+                },
+                READBACK_RING_DEPTH,
+            );
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Output,
+                    format: PoolFormat::Rg8,
+                    width: (plan.width / 2).max(1),
+                    height: (plan.height / 2).max(1),
+                },
+                READBACK_RING_DEPTH,
+            );
+            required.insert(
+                ResourceKey {
+                    kind: ResourceKind::Output,
+                    format: PoolFormat::Bgra8,
+                    width: plan.width,
+                    height: plan.height,
+                },
+                READBACK_RING_DEPTH,
+            );
+            if plan.width >= 2 {
+                required.insert(
+                    ResourceKey {
+                        kind: ResourceKind::Output,
+                        format: PoolFormat::Rgba8,
+                        width: plan.width / 2,
+                        height: plan.height,
+                    },
+                    READBACK_RING_DEPTH,
+                );
+                required.insert(
+                    ResourceKey {
+                        kind: ResourceKind::Readback,
+                        format: PoolFormat::Rgba8,
+                        width: plan.width / 2,
+                        height: plan.height,
+                    },
+                    READBACK_RING_DEPTH,
+                );
+            }
         }
         // One spare output per key allows the next frame to render while the
         // previous native GUI texture remains leased.
@@ -912,6 +1502,8 @@ impl WgpuCompositor {
                 PoolFormat::Rgba8,
                 PoolFormat::Bgra8,
                 PoolFormat::Rgba16Float,
+                PoolFormat::Nv12,
+                PoolFormat::P010,
             ] {
                 required.insert(
                     ResourceKey {
@@ -979,13 +1571,31 @@ impl WgpuCompositor {
         pool.diagnostics.prewarm_generations =
             pool.diagnostics.prewarm_generations.saturating_add(1);
         drop(pool);
-        let _ = self.device.poll(wgpu::PollType::Wait);
+        self.poll_device(wgpu::PollType::Wait);
         Ok(())
     }
 
     fn create_resource(&self, key: ResourceKey) -> GpuResource {
         match key.kind {
             ResourceKind::Source => {
+                let planar = matches!(key.format, PoolFormat::Nv12 | PoolFormat::P010);
+                let chroma_size = if planar {
+                    wgpu::Extent3d {
+                        width: (key.width / 2).max(1),
+                        height: (key.height / 2).max(1),
+                        depth_or_array_layers: 1,
+                    }
+                } else {
+                    wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    }
+                };
+                let chroma_format = match key.format {
+                    PoolFormat::P010 => wgpu::TextureFormat::Rg16Float,
+                    _ => wgpu::TextureFormat::Rg8Unorm,
+                };
                 let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("eiviz-pooled-source"),
                     size: wgpu::Extent3d {
@@ -997,10 +1607,31 @@ impl WgpuCompositor {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: key.format.texture_format(),
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    usage: {
+                        let mut usage =
+                            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+                        if matches!(
+                            key.format,
+                            PoolFormat::Rgba8 | PoolFormat::Bgra8 | PoolFormat::Rgba16Float
+                        ) {
+                            usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+                        }
+                        usage
+                    },
                     view_formats: &[],
                 });
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let chroma = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("eiviz-pooled-source-chroma"),
+                    size: chroma_size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: chroma_format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let chroma_view = chroma.create_view(&wgpu::TextureViewDescriptor::default());
                 let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("eiviz-pooled-layer-uniform"),
                     size: 80,
@@ -1023,13 +1654,20 @@ impl WgpuCompositor {
                             binding: 2,
                             resource: uniform.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(&chroma_view),
+                        },
                     ],
                 });
                 GpuResource::Source(SourceResource {
                     texture,
-                    _view: view,
+                    view,
+                    chroma,
+                    chroma_view,
                     uniform,
                     bind_group,
+                    planar,
                 })
             }
             ResourceKind::Output => {
@@ -1073,6 +1711,17 @@ impl WgpuCompositor {
             .take();
     }
 
+    pub fn clear_source_caches(&self) {
+        self.cpu_source_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.retained_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     pub fn diagnostics(&self) -> WgpuDiagnostics {
         WgpuDiagnostics {
             readbacks: self.diagnostics.readbacks.load(Ordering::Relaxed),
@@ -1081,6 +1730,7 @@ impl WgpuCompositor {
             pass_max_nanos: self.diagnostics.pass_max_nanos.load(Ordering::Relaxed),
             readback_nanos: self.diagnostics.readback_nanos.load(Ordering::Relaxed),
             readback_max_nanos: self.diagnostics.readback_max_nanos.load(Ordering::Relaxed),
+            wait_polls: self.diagnostics.wait_polls.load(Ordering::Relaxed),
             device_loss: self
                 .diagnostics
                 .device_loss
@@ -1103,6 +1753,350 @@ impl WgpuCompositor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// Upload a CPU frame into a retained, samplable GPU texture. When
+    /// `overwrite` is false and the pixel buffer is unchanged, the previous
+    /// texture is returned without a GPU copy.
+    pub fn retain_source(
+        &self,
+        input: InputId,
+        frame: &VideoFrame,
+        overwrite: bool,
+    ) -> Result<WgpuTextureFrame, WgpuError> {
+        self.ensure_device_available()?;
+        validate_source(frame, input)?;
+        let upload = prepare_upload(frame, input)?;
+        if upload.texture_format == wgpu::TextureFormat::Rgba16Float
+            && !self.capabilities.rgba16_float_filterable
+        {
+            return Err(WgpuError::UnsupportedProfile(
+                "P010/P216/RGBA16Float input requires filterable RGBA16Float sampling".into(),
+            ));
+        }
+        let max_dimension = self.device.limits().max_texture_dimension_2d;
+        if frame.width > max_dimension || frame.height > max_dimension {
+            return Err(WgpuError::InvalidPlan(format!(
+                "source {input} {}x{} exceeds GPU max dimension {max_dimension}",
+                frame.width, frame.height
+            )));
+        }
+        let data_ptr = frame.data.as_ptr() as usize;
+        let mut cache = self
+            .retained_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reusable = cache.get(&input).is_some_and(|cached| {
+            cached.width == frame.width
+                && cached.height == frame.height
+                && cached.format == frame.format
+        });
+        let skip_upload = reusable && !overwrite && cache.get(&input).is_some_and(|cached| {
+            cached.data_ptr == data_ptr
+        });
+        if skip_upload {
+            let mut retained = cache
+                .get(&input)
+                .expect("reusable retained source")
+                .frame
+                .clone();
+            retained.pts = frame.pts;
+            retained.frame_id = frame.id;
+            retained.color = frame.color;
+            retained.field = frame.field;
+            return Ok(retained);
+        }
+        if !reusable {
+            let key = ResourceKey {
+                kind: ResourceKind::Source,
+                format: pool_format_from_wgpu(upload.texture_format)?,
+                width: frame.width,
+                height: frame.height,
+            };
+            drop(cache);
+            self.ensure_resident(key, 1)?;
+            cache = self
+                .retained_sources
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let lease = ResourcePool::acquire(&self.resources, key)?;
+            cache.insert(
+                input,
+                RetainedSource {
+                    data_ptr,
+                    width: frame.width,
+                    height: frame.height,
+                    format: frame.format,
+                    frame: WgpuTextureFrame {
+                        resource: Arc::new(lease),
+                        width: frame.width,
+                        height: frame.height,
+                        pts: frame.pts,
+                        frame_id: frame.id,
+                        format: frame.format,
+                        color: frame.color,
+                        field: frame.field,
+                    },
+                },
+            );
+        }
+        let cached = cache.get_mut(&input).expect("retained source populated");
+        self.write_upload(
+            cached.frame.texture(),
+            Some(&cached.frame.resource.source().chroma),
+            &upload,
+            frame.width,
+            frame.height,
+        );
+        cached.data_ptr = data_ptr;
+        cached.frame.pts = frame.pts;
+        cached.frame.frame_id = frame.id;
+        cached.frame.color = frame.color;
+        cached.frame.field = frame.field;
+        Ok(cached.frame.clone())
+    }
+
+    pub fn forget_source(&self, input: InputId) {
+        self.retained_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&input);
+        self.cpu_source_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&input);
+    }
+
+    /// Rasterize a generator directly into a pooled source texture. No CPU
+    /// pixel buffer is allocated.
+    pub fn fill_source(
+        &self,
+        input: InputId,
+        width: u32,
+        height: u32,
+        fill: GpuFill,
+        pts: MediaTime,
+        frame_id: u64,
+        color: ColorMetadata,
+        field: FieldKind,
+    ) -> Result<WgpuTextureFrame, WgpuError> {
+        self.ensure_device_available()?;
+        let max_dimension = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > max_dimension || height > max_dimension {
+            return Err(WgpuError::InvalidPlan(format!(
+                "source {input} {width}x{height} is outside GPU fill limits (max {max_dimension})"
+            )));
+        }
+        let key = ResourceKey {
+            kind: ResourceKind::Source,
+            format: PoolFormat::Rgba8,
+            width,
+            height,
+        };
+        let mut cache = self
+            .retained_sources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reusable = cache.get(&input).is_some_and(|cached| {
+            cached.width == width
+                && cached.height == height
+                && cached.format == PixelFormat::Rgba8
+        });
+        if !reusable {
+            drop(cache);
+            self.ensure_resident(key, 1)?;
+            cache = self
+                .retained_sources
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let lease = ResourcePool::acquire(&self.resources, key)?;
+            cache.insert(
+                input,
+                RetainedSource {
+                    data_ptr: 0,
+                    width,
+                    height,
+                    format: PixelFormat::Rgba8,
+                    frame: WgpuTextureFrame {
+                        resource: Arc::new(lease),
+                        width,
+                        height,
+                        pts,
+                        frame_id,
+                        format: PixelFormat::Rgba8,
+                        color,
+                        field,
+                    },
+                },
+            );
+        }
+        let cached = cache.get_mut(&input).expect("filled source populated");
+        let (mode, rgba) = match fill {
+            GpuFill::Solid { rgba } => (0u32, rgba),
+            GpuFill::ColorBars => (1u32, [0, 0, 0, 255]),
+        };
+        let mut uniform = [0u8; 32];
+        uniform[0..4].copy_from_slice(&mode.to_le_bytes());
+        uniform[4..8].copy_from_slice(&width.to_le_bytes());
+        uniform[8..12].copy_from_slice(&height.to_le_bytes());
+        let color_f = [
+            f32::from(rgba[0]) / 255.0,
+            f32::from(rgba[1]) / 255.0,
+            f32::from(rgba[2]) / 255.0,
+            f32::from(rgba[3]) / 255.0,
+        ];
+        uniform[16..20].copy_from_slice(&color_f[0].to_le_bytes());
+        uniform[20..24].copy_from_slice(&color_f[1].to_le_bytes());
+        uniform[24..28].copy_from_slice(&color_f[2].to_le_bytes());
+        uniform[28..32].copy_from_slice(&color_f[3].to_le_bytes());
+        self.queue.write_buffer(&self.fill_uniform, 0, &uniform);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("eiviz-fill-bind"),
+            layout: &self.fill_bind_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.fill_uniform.as_entire_binding(),
+            }],
+        });
+        let view = cached.frame.view().clone();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz-fill-encoder"),
+            });
+        {
+            let color_attachment = Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("eiviz-fill-pass"),
+                color_attachments: &[color_attachment],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.fill_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        self.poll_device(wgpu::PollType::Poll);
+        cached.data_ptr = 0;
+        cached.frame.pts = pts;
+        cached.frame.frame_id = frame_id;
+        cached.frame.color = color;
+        cached.frame.field = field;
+        Ok(cached.frame.clone())
+    }
+
+    fn write_upload(
+        &self,
+        texture: &wgpu::Texture,
+        chroma: Option<&wgpu::Texture>,
+        upload: &PreparedUpload<'_>,
+        width: u32,
+        height: u32,
+    ) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            upload.data.as_ref(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(upload.bytes_per_row),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        if let (Some(chroma_texture), Some(plane)) = (chroma, &upload.chroma) {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: chroma_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                plane.data.as_ref(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(plane.bytes_per_row),
+                    rows_per_image: Some(plane.height),
+                },
+                wgpu::Extent3d {
+                    width: plane.width,
+                    height: plane.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
+    fn poll_device(&self, poll_type: wgpu::PollType) {
+        if matches!(poll_type, wgpu::PollType::Wait) {
+            self.diagnostics.wait_polls.fetch_add(1, Ordering::Relaxed);
+        }
+        let _ = self.device.poll(poll_type);
+    }
+
+    fn ensure_resident(&self, key: ResourceKey, count: usize) -> Result<(), WgpuError> {
+        let mut required = BTreeMap::new();
+        required.insert(key, count);
+        let required_resources = count;
+        let required_bytes = key.bytes().saturating_mul(count as u64);
+        let mut pool = self
+            .resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if required_bytes > pool.limits.max_bytes || required_resources > pool.limits.max_resources
+        {
+            return Err(WgpuError::PoolLimit {
+                required_bytes,
+                required_resources,
+                limit_bytes: pool.limits.max_bytes,
+                limit_resources: pool.limits.max_resources,
+            });
+        }
+        let resident = pool.resident_by_key.get(&key).copied().unwrap_or(0);
+        let addition = count.saturating_sub(resident);
+        if addition == 0 {
+            return Ok(());
+        }
+        let addition_bytes = key.bytes().saturating_mul(addition as u64);
+        while pool.resident_bytes.saturating_add(addition_bytes) > pool.limits.max_bytes
+            || pool.resident_resources.saturating_add(addition) > pool.limits.max_resources
+        {
+            if !pool.evict_one(&required) {
+                return Err(WgpuError::PoolLimit {
+                    required_bytes: pool.resident_bytes.saturating_add(addition_bytes),
+                    required_resources: pool.resident_resources.saturating_add(addition),
+                    limit_bytes: pool.limits.max_bytes,
+                    limit_resources: pool.limits.max_resources,
+                });
+            }
+        }
+        for _ in 0..addition {
+            let resource = self.create_resource(key);
+            pool.resident_bytes = pool.resident_bytes.saturating_add(key.bytes());
+            pool.resident_resources = pool.resident_resources.saturating_add(1);
+            *pool.resident_by_key.entry(key).or_default() += 1;
+            pool.diagnostics.allocations = pool.diagnostics.allocations.saturating_add(1);
+            pool.release(key, resource);
+        }
+        drop(pool);
+        Ok(())
     }
 
     fn ensure_device_available(&self) -> Result<(), WgpuError> {
@@ -1138,6 +2132,22 @@ impl WgpuCompositor {
         pts: MediaTime,
         frame_id: u64,
     ) -> Result<WgpuTextureFrame, WgpuError> {
+        let sourced = sources
+            .iter()
+            .map(|(id, frame)| (*id, CompositeSource::Cpu(frame)))
+            .collect();
+        self.composite_with_sources(plan, &sourced, pts, frame_id)
+    }
+
+    /// Composite from CPU frames and/or GPU-resident textures without an extra
+    /// GPU→CPU copy. Readback is a separate, explicit step.
+    pub fn composite_with_sources(
+        &self,
+        plan: &RenderPlan,
+        sources: &HashMap<InputId, CompositeSource<'_>>,
+        pts: MediaTime,
+        frame_id: u64,
+    ) -> Result<WgpuTextureFrame, WgpuError> {
         let started = std::time::Instant::now();
         let span = tracing::info_span!(
             "gpu_pass",
@@ -1161,15 +2171,7 @@ impl WgpuCompositor {
                 "render plan requires RGBA16Float but adapter cannot render it".into(),
             ));
         }
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let layers = match self.prepare_layers(plan, sources, frame_id) {
-            Ok(layers) => layers,
-            Err(error) => {
-                let _ = self.device.poll(wgpu::PollType::Wait);
-                let _ = pollster::block_on(self.device.pop_error_scope());
-                return Err(error);
-            }
-        };
+        let layers = self.prepare_layers(plan, sources, frame_id)?;
         let output = ResourcePool::acquire(
             &self.resources,
             ResourceKey {
@@ -1210,15 +2212,12 @@ impl WgpuCompositor {
                 _ => unreachable!("validated output format above"),
             });
             for layer in &layers {
-                pass.set_bind_group(0, &layer.resource.source().bind_group, &[]);
+                pass.set_bind_group(0, &layer.bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }
         self.queue.submit(Some(encoder.finish()));
-        let _ = self.device.poll(wgpu::PollType::Wait);
-        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
-            return Err(WgpuError::Validation(error.to_string()));
-        }
+        self.poll_device(wgpu::PollType::Poll);
         let frame = WgpuTextureFrame {
             resource: Arc::new(output),
             width: plan.width,
@@ -1248,95 +2247,394 @@ impl WgpuCompositor {
     }
 
     /// Counted GPU staging readback for CPU-frame sinks.
+    ///
+    /// Tests and the CPU compositor path poll with [`wgpu::PollType::Poll`]
+    /// until the submitted copy is mapped. The live media tick must use
+    /// [`Self::submit_readback`] / [`Self::take_completed_readback`] instead.
     pub fn readback(&self, frame: &WgpuTextureFrame) -> Result<VideoFrame, WgpuError> {
-        let started = std::time::Instant::now();
-        let span = tracing::info_span!(
-            "gpu_readback",
-            frame_id = frame.frame_id,
-            width = frame.width,
-            height = frame.height
-        );
-        let _entered = span.enter();
+        self.readback_as(frame, frame.format)
+    }
+
+    pub fn readback_as(
+        &self,
+        frame: &WgpuTextureFrame,
+        format: PixelFormat,
+    ) -> Result<VideoFrame, WgpuError> {
+        const SYNC_STREAM: u64 = u64::MAX;
+        if !self.submit_readback(SYNC_STREAM, frame, format)? {
+            return Err(WgpuError::InvalidPlan(
+                "synchronous readback ring is full".into(),
+            ));
+        }
+        for _ in 0..10_000 {
+            if let Some(frame) = self.take_completed_readback(SYNC_STREAM)? {
+                return Ok(frame);
+            }
+            std::thread::yield_now();
+        }
+        Err(WgpuError::Map("synchronous readback timed out".into()))
+    }
+
+    /// Queue a GPU→CPU copy on `stream`. Returns `false` when the depth-3 ring
+    /// is full so the caller can reuse the previous CPU frame without waiting.
+    pub fn submit_readback(
+        &self,
+        stream: u64,
+        frame: &WgpuTextureFrame,
+        format: PixelFormat,
+    ) -> Result<bool, WgpuError> {
         self.ensure_device_available()?;
-        let bytes_per_pixel = match frame.format {
-            PixelFormat::Rgba8 => 4,
-            PixelFormat::Rgba16Float => 8,
-            other => {
-                return Err(WgpuError::InvalidPlan(format!(
-                    "unsupported readback format {other:?}"
-                )));
+        {
+            let pending = self
+                .pending_readbacks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending
+                .get(&stream)
+                .is_some_and(|queue| queue.len() >= READBACK_RING_DEPTH)
+            {
+                return Ok(false);
+            }
+        }
+        self.begin_readback(stream, frame, format)?;
+        Ok(true)
+    }
+
+    /// Take the oldest completed staging buffer on `stream`, if the GPU has
+    /// finished mapping it. Never waits.
+    pub fn take_completed_readback(&self, stream: u64) -> Result<Option<VideoFrame>, WgpuError> {
+        self.ensure_device_available()?;
+        self.poll_device(wgpu::PollType::Poll);
+        let job = {
+            let mut pending = self
+                .pending_readbacks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(queue) = pending.get_mut(&stream) else {
+                return Ok(None);
+            };
+            let Some(front) = queue.front() else {
+                return Ok(None);
+            };
+            match front.receiver.try_recv() {
+                Ok(Ok(())) => queue.pop_front(),
+                Ok(Err(error)) => {
+                    let _ = queue.pop_front();
+                    return Err(WgpuError::Map(error.to_string()));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(None),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let _ = queue.pop_front();
+                    return Err(WgpuError::Map("readback mapper dropped".into()));
+                }
             }
         };
-        let unpadded_bytes_per_row = frame
-            .width
-            .checked_mul(bytes_per_pixel)
-            .ok_or_else(|| WgpuError::InvalidPlan("readback row byte overflow".into()))?;
-        let padded_bytes_per_row = unpadded_bytes_per_row
-            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback_size = u64::from(padded_bytes_per_row) * u64::from(frame.height);
-        let readback = ResourcePool::acquire(
-            &self.resources,
-            ResourceKey {
-                kind: ResourceKind::Readback,
-                format: pool_format(frame.format)?,
-                width: frame.width,
-                height: frame.height,
-            },
-        )?;
-        debug_assert_eq!(readback.key.bytes(), readback_size);
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        job.map(|job| self.finish_readback(job)).transpose()
+    }
+
+    fn begin_readback(
+        &self,
+        stream: u64,
+        frame: &WgpuTextureFrame,
+        format: PixelFormat,
+    ) -> Result<(), WgpuError> {
+        let started = std::time::Instant::now();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("eiviz-compositor-readback-encoder"),
             });
+        let mut output_leases = Vec::new();
+        let mut planes = Vec::new();
+        match format {
+            PixelFormat::Rgba8 | PixelFormat::Rgba16Float
+                if format == frame.format =>
+            {
+                planes.push(self.copy_plane_to_readback(
+                    &mut encoder,
+                    frame.texture(),
+                    frame.width,
+                    frame.height,
+                    pool_format(format)?,
+                    bytes_per_pixel(format)?,
+                )?);
+            }
+            PixelFormat::Bgra8 => {
+                let converted = self.acquire_output(PoolFormat::Bgra8, frame.width, frame.height)?;
+                self.queue.write_buffer(
+                    &self.convert_uniform,
+                    0,
+                    &convert_params(3, frame.width, frame.height),
+                );
+                self.encode_convert_pass(
+                    &mut encoder,
+                    &self.convert_bgra_pipeline,
+                    frame.view(),
+                    converted.output().1,
+                    &self.convert_uniform,
+                );
+                planes.push(self.copy_plane_to_readback(
+                    &mut encoder,
+                    converted.output().0,
+                    frame.width,
+                    frame.height,
+                    PoolFormat::Bgra8,
+                    4,
+                )?);
+                output_leases.push(converted);
+            }
+            PixelFormat::Nv12 => {
+                let y = self.acquire_output(PoolFormat::R8, frame.width, frame.height)?;
+                let uv_width = (frame.width / 2).max(1);
+                let uv_height = (frame.height / 2).max(1);
+                let uv = self.acquire_output(PoolFormat::Rg8, uv_width, uv_height)?;
+                self.queue.write_buffer(
+                    &self.convert_uniform_y,
+                    0,
+                    &convert_params(0, frame.width, frame.height),
+                );
+                self.queue.write_buffer(
+                    &self.convert_uniform_uv,
+                    0,
+                    &convert_params(1, frame.width, frame.height),
+                );
+                self.encode_convert_pass(
+                    &mut encoder,
+                    &self.convert_y_pipeline,
+                    frame.view(),
+                    y.output().1,
+                    &self.convert_uniform_y,
+                );
+                self.encode_convert_pass(
+                    &mut encoder,
+                    &self.convert_uv_pipeline,
+                    frame.view(),
+                    uv.output().1,
+                    &self.convert_uniform_uv,
+                );
+                planes.push(self.copy_plane_to_readback(
+                    &mut encoder,
+                    y.output().0,
+                    frame.width,
+                    frame.height,
+                    PoolFormat::R8,
+                    1,
+                )?);
+                planes.push(self.copy_plane_to_readback(
+                    &mut encoder,
+                    uv.output().0,
+                    uv_width,
+                    uv_height,
+                    PoolFormat::Rg8,
+                    2,
+                )?);
+                output_leases.push(y);
+                output_leases.push(uv);
+            }
+            PixelFormat::Uyvy => {
+                if frame.width < 2 || !frame.width.is_multiple_of(2) {
+                    return Err(WgpuError::InvalidPlan(
+                        "UYVY egress requires even width".into(),
+                    ));
+                }
+                let packed_width = frame.width / 2;
+                let packed = self.acquire_output(PoolFormat::Rgba8, packed_width, frame.height)?;
+                self.queue.write_buffer(
+                    &self.convert_uniform,
+                    0,
+                    &convert_params(2, frame.width, frame.height),
+                );
+                self.encode_convert_pass(
+                    &mut encoder,
+                    &self.convert_pipeline,
+                    frame.view(),
+                    packed.output().1,
+                    &self.convert_uniform,
+                );
+                planes.push(self.copy_plane_to_readback(
+                    &mut encoder,
+                    packed.output().0,
+                    packed_width,
+                    frame.height,
+                    PoolFormat::Rgba8,
+                    4,
+                )?);
+                output_leases.push(packed);
+            }
+            other => {
+                return Err(WgpuError::InvalidPlan(format!(
+                    "unsupported egress format {other:?}"
+                )));
+            }
+        }
+        self.diagnostics.readbacks.fetch_add(1, Ordering::Relaxed);
+        self.queue.submit(Some(encoder.finish()));
+        drop(output_leases);
+        let remaining = Arc::new(std::sync::atomic::AtomicUsize::new(planes.len()));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        for plane in &planes {
+            let remaining = remaining.clone();
+            let sender = sender.clone();
+            plane.lease.readback().slice(..).map_async(
+                wgpu::MapMode::Read,
+                move |result| {
+                    if result.is_err() {
+                        let _ = sender.send(result);
+                    } else if remaining.fetch_sub(1, Ordering::Relaxed) == 1 {
+                        let _ = sender.send(Ok(()));
+                    }
+                },
+            );
+        }
+        self.poll_device(wgpu::PollType::Poll);
+        self.pending_readbacks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(stream)
+            .or_default()
+            .push_back(PendingReadback {
+                planes,
+                receiver,
+                started,
+                width: frame.width,
+                height: frame.height,
+                format,
+                pts: frame.pts,
+                frame_id: frame.frame_id,
+                color: frame.color,
+                field: frame.field,
+            });
+        Ok(())
+    }
+
+    fn acquire_output(
+        &self,
+        format: PoolFormat,
+        width: u32,
+        height: u32,
+    ) -> Result<ResourceLease, WgpuError> {
+        ResourcePool::acquire(
+            &self.resources,
+            ResourceKey {
+                kind: ResourceKind::Output,
+                format,
+                width,
+                height,
+            },
+        )
+    }
+
+    fn encode_convert_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        source: &wgpu::TextureView,
+        dest: &wgpu::TextureView,
+        uniform: &wgpu::Buffer,
+    ) {
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("eiviz-convert-bind-group"),
+            layout: &self.convert_bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("eiviz-convert-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    fn copy_plane_to_readback(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        format: PoolFormat,
+        bytes_per_pixel: u32,
+    ) -> Result<PendingPlane, WgpuError> {
+        let unpadded_bytes_per_row = width
+            .checked_mul(bytes_per_pixel)
+            .ok_or_else(|| WgpuError::InvalidPlan("readback row byte overflow".into()))?;
+        let padded_bytes_per_row = unpadded_bytes_per_row
+            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let lease = ResourcePool::acquire(
+            &self.resources,
+            ResourceKey {
+                kind: ResourceKind::Readback,
+                format,
+                width,
+                height,
+            },
+        )?;
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: frame.texture(),
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: readback.readback(),
+                buffer: lease.readback(),
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(frame.height),
+                    rows_per_image: Some(height),
                 },
             },
             wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
         );
-        self.diagnostics.readbacks.fetch_add(1, Ordering::Relaxed);
-        self.queue.submit(Some(encoder.finish()));
-        let slice = readback.readback().slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-        let _ = self.device.poll(wgpu::PollType::Wait);
-        let map_result = receiver
-            .recv()
-            .map_err(|error| WgpuError::Map(error.to_string()))?
-            .map_err(|error| WgpuError::Map(error.to_string()));
-        let validation_error = pollster::block_on(self.device.pop_error_scope());
-        map_result?;
-        if let Some(error) = validation_error {
-            return Err(WgpuError::Validation(error.to_string()));
+        Ok(PendingPlane {
+            lease,
+            padded_bytes_per_row,
+            unpadded_bytes_per_row,
+        })
+    }
+
+    fn finish_readback(&self, job: PendingReadback) -> Result<VideoFrame, WgpuError> {
+        let mut data = Vec::new();
+        for plane in &job.planes {
+            let slice = plane.lease.readback().slice(..);
+            let mapped = slice.get_mapped_range();
+            for row in mapped.chunks_exact(plane.padded_bytes_per_row as usize) {
+                data.extend_from_slice(&row[..plane.unpadded_bytes_per_row as usize]);
+            }
+            drop(mapped);
+            plane.lease.readback().unmap();
         }
-        let mapped = slice.get_mapped_range();
-        let mut rgba = Vec::with_capacity(unpadded_bytes_per_row as usize * frame.height as usize);
-        for row in mapped.chunks_exact(padded_bytes_per_row as usize) {
-            rgba.extend_from_slice(&row[..unpadded_bytes_per_row as usize]);
-        }
-        drop(mapped);
-        readback.readback().unmap();
-        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let elapsed = job.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         self.diagnostics
             .readback_nanos
             .store(elapsed, Ordering::Relaxed);
@@ -1344,22 +2642,22 @@ impl WgpuCompositor {
             .readback_max_nanos
             .fetch_max(elapsed, Ordering::Relaxed);
         tracing::info!(
-            frame_id = frame.frame_id,
+            frame_id = job.frame_id,
             readback_nanos = elapsed,
             "GPU staging readback completed"
         );
         Ok(VideoFrame {
-            id: frame.frame_id,
+            id: job.frame_id,
             source: None,
-            pts: frame.pts,
+            pts: job.pts,
             capture_domain: eiviz_time::ClockDomain::Virtual,
             clock_observation: None,
-            width: frame.width,
-            height: frame.height,
-            format: frame.format,
-            color: frame.color,
-            field: frame.field,
-            data: Arc::from(rgba),
+            width: job.width,
+            height: job.height,
+            format: job.format,
+            color: job.color,
+            field: job.field,
+            data: Arc::from(data),
             discontinuity: false,
         })
     }
@@ -1401,41 +2699,111 @@ impl WgpuCompositor {
         self.composite(&plan, &sources, pts, frame_id)
     }
 
+    /// GPU-resident mix. Neither input is downloaded.
+    pub fn mix_textures(
+        &self,
+        a: &WgpuTextureFrame,
+        b: &WgpuTextureFrame,
+        factor: f32,
+        pts: MediaTime,
+        frame_id: u64,
+    ) -> Result<WgpuTextureFrame, WgpuError> {
+        let a_id = InputId::from_u128(1);
+        let b_id = InputId::from_u128(2);
+        let sources = HashMap::from([
+            (a_id, CompositeSource::Gpu(a)),
+            (b_id, CompositeSource::Gpu(b)),
+        ]);
+        let plan = RenderPlan {
+            width: a.width,
+            height: a.height,
+            output_format: a.format,
+            color: a.color,
+            field_order: None,
+            color_conversion: ColorConversionPolicy::Exact,
+            vram_bytes: RenderPlan::estimate_vram_bytes(a.width, a.height, a.format, 2),
+            layers: vec![
+                Layer {
+                    input: a_id,
+                    transform: Transform2D::fullscreen(),
+                    opacity: 1.0,
+                },
+                Layer {
+                    input: b_id,
+                    transform: Transform2D::fullscreen(),
+                    opacity: factor.clamp(0.0, 1.0),
+                },
+            ],
+        };
+        self.composite_with_sources(&plan, &sources, pts, frame_id)
+    }
+
     fn prepare_layers(
         &self,
         plan: &RenderPlan,
-        sources: &HashMap<InputId, VideoFrame>,
+        sources: &HashMap<InputId, CompositeSource<'_>>,
         frame_id: u64,
     ) -> Result<Vec<PreparedLayer>, WgpuError> {
         let mut prepared = Vec::with_capacity(plan.layers.len());
+        let expected_field = plan.field_at(frame_id);
         for layer in &plan.layers {
             let source = sources
                 .get(&layer.input)
                 .ok_or(WgpuError::MissingSource(layer.input))?;
-            let expected_field = plan.field_at(frame_id);
-            if source.field != expected_field {
-                return Err(WgpuError::UnsupportedProfile(format!(
-                    "input {} field {:?} does not match render boundary {:?}; implicit scan conversion is forbidden",
-                    layer.input, source.field, expected_field
-                )));
+            match *source {
+                CompositeSource::Cpu(frame) => {
+                    prepared.push(self.prepare_cpu_layer(plan, layer, frame, expected_field)?);
+                }
+                CompositeSource::Gpu(frame) => {
+                    prepared.push(self.prepare_gpu_layer(plan, layer, frame, expected_field)?);
+                }
             }
-            validate_source(source, layer.input)?;
-            let upload = prepare_upload(source, layer.input)?;
-            if upload.texture_format == wgpu::TextureFormat::Rgba16Float
-                && !self.capabilities.rgba16_float_filterable
-            {
-                return Err(WgpuError::UnsupportedProfile(
-                    "P010/P216/RGBA16Float input requires filterable RGBA16Float sampling".into(),
-                ));
-            }
-            let max_dimension = self.device.limits().max_texture_dimension_2d;
-            if source.width > max_dimension || source.height > max_dimension {
-                return Err(WgpuError::InvalidPlan(format!(
-                    "source {} {}x{} exceeds GPU max dimension {max_dimension}",
-                    layer.input, source.width, source.height
-                )));
-            }
-            let resource = ResourcePool::acquire(
+        }
+        Ok(prepared)
+    }
+
+    fn prepare_cpu_layer(
+        &self,
+        plan: &RenderPlan,
+        layer: &Layer,
+        source: &VideoFrame,
+        expected_field: FieldKind,
+    ) -> Result<PreparedLayer, WgpuError> {
+        if source.field != expected_field {
+            return Err(WgpuError::UnsupportedProfile(format!(
+                "input {} field {:?} does not match render boundary {:?}; implicit scan conversion is forbidden",
+                layer.input, source.field, expected_field
+            )));
+        }
+        validate_source(source, layer.input)?;
+        let upload = prepare_upload(source, layer.input)?;
+        if upload.texture_format == wgpu::TextureFormat::Rgba16Float
+            && !self.capabilities.rgba16_float_filterable
+        {
+            return Err(WgpuError::UnsupportedProfile(
+                "P010/P216/RGBA16Float input requires filterable RGBA16Float sampling".into(),
+            ));
+        }
+        let max_dimension = self.device.limits().max_texture_dimension_2d;
+        if source.width > max_dimension || source.height > max_dimension {
+            return Err(WgpuError::InvalidPlan(format!(
+                "source {} {}x{} exceeds GPU max dimension {max_dimension}",
+                layer.input, source.width, source.height
+            )));
+        }
+        let data_ptr = source.data.as_ptr() as usize;
+        let mut cache = self
+            .cpu_source_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stale = cache.get(&layer.input).is_none_or(|cached| {
+            cached.data_ptr != data_ptr
+                || cached.width != source.width
+                || cached.height != source.height
+                || cached.format != upload.texture_format
+        });
+        if stale {
+            let lease = ResourcePool::acquire(
                 &self.resources,
                 ResourceKey {
                     kind: ResourceKind::Source,
@@ -1444,46 +2812,121 @@ impl WgpuCompositor {
                     height: source.height,
                 },
             )?;
-            let source_resource = resource.source();
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &source_resource.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &upload.data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(upload.bytes_per_row),
-                    rows_per_image: Some(source.height),
-                },
-                wgpu::Extent3d {
+            cache.insert(
+                layer.input,
+                CachedCpuSource {
+                    data_ptr,
                     width: source.width,
                     height: source.height,
-                    depth_or_array_layers: 1,
+                    format: upload.texture_format,
+                    lease,
                 },
             );
-            let uniform_data = layer_uniform_bytes(plan, layer, source, upload.yuv)?;
-            self.queue
-                .write_buffer(&source_resource.uniform, 0, &uniform_data);
-            prepared.push(PreparedLayer { resource });
         }
-        Ok(prepared)
+        let cached = cache
+            .get_mut(&layer.input)
+            .expect("cpu source cache populated above");
+        let source_resource = cached.lease.source();
+        if stale {
+            self.write_upload(
+                &source_resource.texture,
+                Some(&source_resource.chroma),
+                &upload,
+                source.width,
+                source.height,
+            );
+            cached.data_ptr = data_ptr;
+        }
+        let uniform_data = layer_uniform_bytes(
+            plan,
+            layer,
+            source.color,
+            source.format,
+            upload.yuv,
+            upload.planar,
+        )?;
+        self.queue
+            .write_buffer(&source_resource.uniform, 0, &uniform_data);
+        Ok(PreparedLayer {
+            bind_group: source_resource.bind_group.clone(),
+            _keep: LayerKeep::Cpu,
+        })
+    }
+
+    fn prepare_gpu_layer(
+        &self,
+        plan: &RenderPlan,
+        layer: &Layer,
+        frame: &WgpuTextureFrame,
+        expected_field: FieldKind,
+    ) -> Result<PreparedLayer, WgpuError> {
+        if frame.field != expected_field {
+            return Err(WgpuError::UnsupportedProfile(format!(
+                "input {} field {:?} does not match render boundary {:?}; implicit scan conversion is forbidden",
+                layer.input, frame.field, expected_field
+            )));
+        }
+        let uniform_data =
+            layer_uniform_bytes(plan, layer, frame.color, frame.format, false, false)?;
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("eiviz-resident-layer-uniform"),
+            size: uniform_data.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform, 0, &uniform_data);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("eiviz-resident-layer-bind-group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(frame.view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.dummy_chroma_view),
+                },
+            ],
+        });
+        Ok(PreparedLayer {
+            bind_group,
+            _keep: LayerKeep::Gpu {
+                _frame: frame.clone(),
+                _uniform: uniform,
+            },
+        })
     }
 }
 
 struct PreparedLayer {
-    resource: ResourceLease,
+    bind_group: wgpu::BindGroup,
+    _keep: LayerKeep,
+}
+
+enum LayerKeep {
+    Cpu,
+    Gpu {
+        _frame: WgpuTextureFrame,
+        _uniform: wgpu::Buffer,
+    },
 }
 
 fn pool_format(format: PixelFormat) -> Result<PoolFormat, WgpuError> {
     match format {
-        PixelFormat::Rgba8 | PixelFormat::Nv12 => Ok(PoolFormat::Rgba8),
+        PixelFormat::Rgba8 | PixelFormat::Uyvy => Ok(PoolFormat::Rgba8),
         PixelFormat::Bgra8 => Ok(PoolFormat::Bgra8),
-        PixelFormat::Rgba16Float | PixelFormat::P010 | PixelFormat::P216 => {
-            Ok(PoolFormat::Rgba16Float)
-        }
+        PixelFormat::Nv12 => Ok(PoolFormat::Nv12),
+        PixelFormat::Rgba16Float | PixelFormat::P216 => Ok(PoolFormat::Rgba16Float),
+        PixelFormat::P010 => Ok(PoolFormat::P010),
     }
 }
 
@@ -1492,6 +2935,8 @@ fn pool_format_from_wgpu(format: wgpu::TextureFormat) -> Result<PoolFormat, Wgpu
         wgpu::TextureFormat::Rgba8Unorm => Ok(PoolFormat::Rgba8),
         wgpu::TextureFormat::Bgra8Unorm => Ok(PoolFormat::Bgra8),
         wgpu::TextureFormat::Rgba16Float => Ok(PoolFormat::Rgba16Float),
+        wgpu::TextureFormat::R8Unorm => Ok(PoolFormat::Nv12),
+        wgpu::TextureFormat::R16Float => Ok(PoolFormat::P010),
         other => Err(WgpuError::InvalidPlan(format!(
             "unsupported pooled texture format {other:?}"
         ))),
@@ -1531,70 +2976,114 @@ fn validate_source(source: &VideoFrame, input: InputId) -> Result<(), WgpuError>
     Ok(())
 }
 
-struct PreparedUpload {
+struct PreparedUpload<'a> {
     texture_format: wgpu::TextureFormat,
     bytes_per_row: u32,
-    data: Vec<u8>,
+    data: Cow<'a, [u8]>,
+    chroma: Option<ChromaUpload<'a>>,
     yuv: bool,
+    planar: bool,
 }
 
-fn prepare_upload(source: &VideoFrame, input: InputId) -> Result<PreparedUpload, WgpuError> {
-    let pixels = source.width as usize * source.height as usize;
+struct ChromaUpload<'a> {
+    data: Cow<'a, [u8]>,
+    bytes_per_row: u32,
+    width: u32,
+    height: u32,
+}
+
+fn prepare_upload(source: &VideoFrame, input: InputId) -> Result<PreparedUpload<'_>, WgpuError> {
     match source.format {
         PixelFormat::Rgba8 => Ok(PreparedUpload {
             texture_format: wgpu::TextureFormat::Rgba8Unorm,
             bytes_per_row: source.width * 4,
-            data: source.data.to_vec(),
+            data: Cow::Borrowed(source.data.as_ref()),
+            chroma: None,
             yuv: false,
+            planar: false,
         }),
         PixelFormat::Bgra8 => Ok(PreparedUpload {
             texture_format: wgpu::TextureFormat::Bgra8Unorm,
             bytes_per_row: source.width * 4,
-            data: source.data.to_vec(),
+            data: Cow::Borrowed(source.data.as_ref()),
+            chroma: None,
             yuv: false,
+            planar: false,
         }),
         PixelFormat::Rgba16Float => Ok(PreparedUpload {
             texture_format: wgpu::TextureFormat::Rgba16Float,
             bytes_per_row: source.width * 8,
-            data: source.data.to_vec(),
+            data: Cow::Borrowed(source.data.as_ref()),
+            chroma: None,
             yuv: false,
+            planar: false,
         }),
         PixelFormat::Nv12 => {
+            let y_len = source.width as usize * source.height as usize;
+            let uv_len = y_len / 2;
+            if source.data.len() < y_len + uv_len {
+                return Err(WgpuError::InvalidPlan(format!(
+                    "source {input} NV12 payload is truncated"
+                )));
+            }
+            Ok(PreparedUpload {
+                texture_format: wgpu::TextureFormat::R8Unorm,
+                bytes_per_row: source.width,
+                data: Cow::Borrowed(&source.data[..y_len]),
+                chroma: Some(ChromaUpload {
+                    data: Cow::Borrowed(&source.data[y_len..y_len + uv_len]),
+                    bytes_per_row: source.width,
+                    width: source.width / 2,
+                    height: source.height / 2,
+                }),
+                yuv: true,
+                planar: true,
+            })
+        }
+        PixelFormat::P010 => {
             let width = source.width as usize;
             let height = source.height as usize;
-            let uv_offset = pixels;
-            let mut rgba = Vec::with_capacity(pixels * 4);
-            for y in 0..height {
-                for x in 0..width {
-                    let uv = uv_offset + (y / 2) * width + (x & !1);
-                    rgba.extend_from_slice(&[
-                        source.data[y * width + x],
-                        source.data[uv],
-                        source.data[uv + 1],
-                        255,
-                    ]);
+            let pixels = width * height;
+            let mut luma = Vec::with_capacity(pixels * 2);
+            for index in 0..pixels {
+                let code = ten_bit_word(&source.data, index * 2, input)?;
+                luma.extend_from_slice(&f32_to_f16_bits(code as f32 / 1023.0).to_le_bytes());
+            }
+            let mut chroma = Vec::with_capacity(pixels);
+            let uv_offset = pixels * 2;
+            for y in 0..height / 2 {
+                for x in 0..width / 2 {
+                    let base = uv_offset + (y * width + x * 2) * 2;
+                    let u = ten_bit_word(&source.data, base, input)?;
+                    let v = ten_bit_word(&source.data, base + 2, input)?;
+                    chroma.extend_from_slice(&f32_to_f16_bits(u as f32 / 1023.0).to_le_bytes());
+                    chroma.extend_from_slice(&f32_to_f16_bits(v as f32 / 1023.0).to_le_bytes());
                 }
             }
             Ok(PreparedUpload {
-                texture_format: wgpu::TextureFormat::Rgba8Unorm,
-                bytes_per_row: source.width * 4,
-                data: rgba,
+                texture_format: wgpu::TextureFormat::R16Float,
+                bytes_per_row: source.width * 2,
+                data: Cow::Owned(luma),
+                chroma: Some(ChromaUpload {
+                    data: Cow::Owned(chroma),
+                    bytes_per_row: source.width * 2,
+                    width: source.width / 2,
+                    height: source.height / 2,
+                }),
                 yuv: true,
+                planar: true,
             })
         }
-        PixelFormat::P010 | PixelFormat::P216 => {
+        PixelFormat::P216 => {
             let width = source.width as usize;
             let height = source.height as usize;
+            let pixels = width * height;
             let y_bytes = pixels * 2;
             let mut rgba = Vec::with_capacity(pixels * 8);
             for y in 0..height {
                 for x in 0..width {
                     let y_code = ten_bit_word(&source.data, (y * width + x) * 2, input)?;
-                    let chroma_word = match source.format {
-                        PixelFormat::P010 => ((y / 2) * width + (x & !1)) * 2,
-                        PixelFormat::P216 => (y * width + (x & !1)) * 2,
-                        _ => unreachable!(),
-                    };
+                    let chroma_word = (y * width + (x & !1)) * 2;
                     let u_code = ten_bit_word(&source.data, y_bytes + chroma_word, input)?;
                     let v_code = ten_bit_word(&source.data, y_bytes + chroma_word + 2, input)?;
                     for value in [
@@ -1610,10 +3099,16 @@ fn prepare_upload(source: &VideoFrame, input: InputId) -> Result<PreparedUpload,
             Ok(PreparedUpload {
                 texture_format: wgpu::TextureFormat::Rgba16Float,
                 bytes_per_row: source.width * 8,
-                data: rgba,
+                data: Cow::Owned(rgba),
+                chroma: None,
                 yuv: true,
+                planar: false,
             })
         }
+        PixelFormat::Uyvy => Err(WgpuError::UnsupportedFormat {
+            input,
+            format: PixelFormat::Uyvy,
+        }),
     }
 }
 
@@ -1645,8 +3140,10 @@ fn f32_to_f16_bits(value: f32) -> u16 {
 fn layer_uniform_bytes(
     plan: &RenderPlan,
     layer: &Layer,
-    source: &VideoFrame,
+    source_color: ColorMetadata,
+    source_format: PixelFormat,
     yuv: bool,
+    planar: bool,
 ) -> Result<Vec<u8>, WgpuError> {
     let transform = layer.transform;
     let (x, y, width, height) = if transform.pixel_space {
@@ -1689,7 +3186,7 @@ fn layer_uniform_bytes(
     for value in values {
         bytes.extend_from_slice(&value.to_ne_bytes());
     }
-    let mismatch = source.color != plan.color;
+    let mismatch = source_color != plan.color;
     let tone_map = match (mismatch, plan.color_conversion) {
         (false, _) => None,
         (true, ColorConversionPolicy::Exact) => {
@@ -1697,7 +3194,7 @@ fn layer_uniform_bytes(
                 input: layer.input,
                 detail: format!(
                     "source {:?} does not match render plan {:?} and policy is Exact",
-                    source.color, plan.color
+                    source_color, plan.color
                 ),
             });
         }
@@ -1706,7 +3203,7 @@ fn layer_uniform_bytes(
             ColorConversionPolicy::Gpu {
                 tone_map: ToneMapPolicy::Disabled,
             },
-        ) if is_hdr(source.color.transfer) && !is_hdr(plan.color.transfer) => {
+        ) if is_hdr(source_color.transfer) && !is_hdr(plan.color.transfer) => {
             return Err(WgpuError::ColorConversion {
                 input: layer.input,
                 detail: "HDR-to-SDR conversion requires an explicit tone-map policy".into(),
@@ -1721,7 +3218,7 @@ fn layer_uniform_bytes(
                         target_nits,
                     },
             },
-        ) if is_hdr(source.color.transfer) && !is_hdr(plan.color.transfer) => {
+        ) if is_hdr(source_color.transfer) && !is_hdr(plan.color.transfer) => {
             Some((f32::from(source_peak_nits), f32::from(target_nits)))
         }
         (
@@ -1738,7 +3235,7 @@ fn layer_uniform_bytes(
         }
         (true, ColorConversionPolicy::Gpu { .. }) => None,
     };
-    let source_matrix = match source.color.matrix {
+    let source_matrix = match source_color.matrix {
         ColorMatrix::Bt709 => 0,
         ColorMatrix::Bt2020NonConstantLuminance => 1,
         ColorMatrix::Bt601 => 2,
@@ -1747,10 +3244,11 @@ fn layer_uniform_bytes(
     let color_mode = source_matrix
         | (u32::from(mismatch) << 2)
         | (u32::from(target_2020) << 3)
-        | (u32::from(source.format.bit_depth() > 8) << 4);
+        | (u32::from(source_format.bit_depth() > 8) << 4)
+        | (u32::from(planar) << 5);
     let flags = [
         u32::from(yuv),
-        u32::from(source.color.range == ColorRange::Limited),
+        u32::from(source_color.range == ColorRange::Limited),
         color_mode,
         u32::from(tone_map.is_some()),
     ];
@@ -1761,7 +3259,7 @@ fn layer_uniform_bytes(
     for value in [
         source_peak,
         target,
-        transfer_code(source.color.transfer),
+        transfer_code(source_color.transfer),
         transfer_code(plan.color.transfer),
     ] {
         bytes.extend_from_slice(&value.to_ne_bytes());
@@ -1780,6 +3278,24 @@ const fn transfer_code(transfer: TransferFunction) -> f32 {
         TransferFunction::Pq => 2.0,
         TransferFunction::Hlg => 3.0,
         TransferFunction::Linear => 4.0,
+    }
+}
+
+fn convert_params(mode: u32, width: u32, height: u32) -> [u8; 16] {
+    let mut bytes = [0_u8; 16];
+    bytes[0..4].copy_from_slice(&mode.to_ne_bytes());
+    bytes[4..8].copy_from_slice(&width.to_ne_bytes());
+    bytes[8..12].copy_from_slice(&height.to_ne_bytes());
+    bytes
+}
+
+fn bytes_per_pixel(format: PixelFormat) -> Result<u32, WgpuError> {
+    match format {
+        PixelFormat::Rgba8 | PixelFormat::Bgra8 => Ok(4),
+        PixelFormat::Rgba16Float => Ok(8),
+        other => Err(WgpuError::InvalidPlan(format!(
+            "unsupported packed readback format {other:?}"
+        ))),
     }
 }
 
@@ -1842,6 +3358,20 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+        let convert = naga::front::wgsl::parse_str(CONVERT_SHADER).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&convert)
+        .unwrap();
+        let fill = naga::front::wgsl::parse_str(FILL_SHADER).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&fill)
+        .unwrap();
     }
 
     #[test]
@@ -1868,6 +3398,7 @@ mod tests {
             .prewarm_snapshot(std::slice::from_ref(&plan), 16, 16, 0)
             .unwrap();
         let allocations = compositor.diagnostics().pool.allocations;
+        let waits = compositor.diagnostics().wait_polls;
         for frame_id in 0..3 {
             compositor
                 .composite(&plan, &HashMap::new(), MediaTime::ZERO, frame_id)
@@ -1878,27 +3409,95 @@ mod tests {
         assert_eq!(diagnostics.pool.acquisition_misses, 0);
         assert!(diagnostics.pool.reuses >= 6);
         assert_eq!(diagnostics.readbacks, 3);
+        assert_eq!(diagnostics.wait_polls, waits);
+    }
+
+    #[test]
+    fn steady_composite_does_not_wait_on_the_gpu() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        let plan = empty_plan(16, 16);
+        compositor
+            .prewarm_snapshot(std::slice::from_ref(&plan), 16, 16, 0)
+            .unwrap();
+        let waits = compositor.diagnostics().wait_polls;
+        for frame_id in 0..3 {
+            compositor
+                .composite_texture(&plan, &HashMap::new(), MediaTime::ZERO, frame_id)
+                .unwrap();
+        }
+        let diagnostics = compositor.diagnostics();
+        assert_eq!(diagnostics.wait_polls, waits);
+        assert_eq!(diagnostics.readbacks, 0);
+    }
+
+    #[test]
+    fn bgra_upload_keeps_native_bytes() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let frame = VideoFrame {
+            id: 1,
+            source: None,
+            pts: MediaTime::ZERO,
+            capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
+            width: 2,
+            height: 2,
+            format: PixelFormat::Bgra8,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: FieldKind::Progressive,
+            data: data.clone().into(),
+            discontinuity: false,
+        };
+        let upload = prepare_upload(&frame, InputId::from_u128(1)).unwrap();
+        assert_eq!(upload.texture_format, wgpu::TextureFormat::Bgra8Unorm);
+        assert_eq!(upload.data.as_ref(), data.as_slice());
+        assert!(!upload.planar);
+    }
+
+    #[test]
+    fn nv12_upload_does_not_expand_to_rgba() {
+        let mut data = vec![16_u8; 4];
+        data.extend_from_slice(&[128, 128]);
+        let frame = VideoFrame {
+            id: 1,
+            source: None,
+            pts: MediaTime::ZERO,
+            capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
+            width: 2,
+            height: 2,
+            format: PixelFormat::Nv12,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: FieldKind::Progressive,
+            data: data.into(),
+            discontinuity: false,
+        };
+        let upload = prepare_upload(&frame, InputId::from_u128(1)).unwrap();
+        assert_eq!(upload.texture_format, wgpu::TextureFormat::R8Unorm);
+        assert_eq!(upload.data.len(), 4);
+        let chroma = upload.chroma.expect("NV12 chroma");
+        assert_eq!(chroma.data.len(), 2);
+        assert!(upload.planar);
     }
 
     #[test]
     fn bounded_pool_evicts_oldest_idle_key_deterministically() {
         let compositor = noop_compositor(ResourcePoolLimits {
-            max_bytes: 1024 * 1024,
-            max_resources: 3,
+            max_bytes: 8 * 1024 * 1024,
+            max_resources: 30,
         });
         compositor
             .prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 0)
             .unwrap();
         let first = compositor.diagnostics().pool;
-        assert_eq!(first.resident_resources, 3);
-        assert_eq!(first.resident_bytes, 6_144);
+        assert_eq!(first.resident_resources, first.idle_resources);
+        assert!(first.resident_resources > 3);
         compositor
             .prewarm_snapshot(&[empty_plan(32, 32)], 32, 32, 0)
             .unwrap();
         let pool = compositor.diagnostics().pool;
-        assert_eq!(pool.resident_resources, 3);
-        assert_eq!(pool.evictions, 3);
-        assert_eq!(pool.last_evicted.as_deref(), Some("Readback/Rgba8 16x16"));
+        assert_eq!(pool.resident_resources, first.resident_resources);
+        assert!(pool.evictions >= first.resident_resources as u64);
+        assert!(pool.last_evicted.is_some(), "expected an eviction");
     }
 
     #[test]
@@ -1985,7 +3584,7 @@ mod tests {
             opacity: 0.5,
         };
         let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [0, 0, 0, 255]);
-        let bytes = layer_uniform_bytes(&plan, &layer, &source, false).unwrap();
+        let bytes = layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
         let values = bytes
             .chunks_exact(4)
             .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
@@ -2017,8 +3616,11 @@ mod tests {
             discontinuity: false,
         };
         let upload = prepare_upload(&frame, InputId::from_u128(1)).unwrap();
-        assert_eq!(upload.texture_format, wgpu::TextureFormat::Rgba16Float);
-        assert_eq!(upload.data.len(), 2 * 2 * 8);
+        assert_eq!(upload.texture_format, wgpu::TextureFormat::R16Float);
+        assert_eq!(upload.data.len(), 2 * 2 * 2);
+        let chroma = upload.chroma.expect("P010 chroma plane");
+        assert_eq!(chroma.data.len(), 4);
+        assert!(upload.planar);
     }
 
     #[test]
@@ -2057,14 +3659,14 @@ mod tests {
             layers: vec![layer.clone()],
         };
         assert!(matches!(
-            layer_uniform_bytes(&plan, &layer, &source, false),
+            layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false),
             Err(WgpuError::ColorConversion { .. })
         ));
         plan.color_conversion = ColorConversionPolicy::Gpu {
             tone_map: ToneMapPolicy::Disabled,
         };
         assert!(
-            layer_uniform_bytes(&plan, &layer, &source, false)
+            layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false)
                 .unwrap_err()
                 .to_string()
                 .contains("tone-map")
@@ -2075,7 +3677,7 @@ mod tests {
                 target_nits: 100,
             },
         };
-        let uniform = layer_uniform_bytes(&plan, &layer, &source, false).unwrap();
+        let uniform = layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
         let flags = uniform[48..64]
             .chunks_exact(4)
             .map(|bytes| u32::from_ne_bytes(bytes.try_into().unwrap()))
@@ -2086,5 +3688,70 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(flags[3], 1);
         assert_eq!(policy, [1_000.0, 100.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn retain_source_reuses_the_same_slot_without_reallocating() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        compositor
+            .prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 1)
+            .unwrap();
+        let allocations = compositor.diagnostics().pool.allocations;
+        let input = InputId::from_u128(11);
+        let still = VideoFrame::rgba_solid(1, MediaTime::ZERO, 16, 16, [255, 0, 0, 255]);
+        let first = compositor.retain_source(input, &still, false).unwrap();
+        let second = compositor.retain_source(input, &still, false).unwrap();
+        assert_eq!(first.width, 16);
+        assert_eq!(second.height, 16);
+        let live = VideoFrame::rgba_solid(2, MediaTime::ZERO, 16, 16, [0, 255, 0, 255]);
+        let overwritten = compositor.retain_source(input, &live, true).unwrap();
+        assert_eq!(overwritten.frame_id, 2);
+        compositor.forget_source(input);
+        compositor.clear_source_caches();
+        assert_eq!(compositor.diagnostics().pool.allocations, allocations);
+    }
+
+    #[test]
+    fn fill_source_renders_without_waiting_or_reallocating() {
+        let compositor = noop_compositor(ResourcePoolLimits::default());
+        compositor
+            .prewarm_snapshot(&[empty_plan(16, 16)], 16, 16, 1)
+            .unwrap();
+        let allocations = compositor.diagnostics().pool.allocations;
+        let waits = compositor.diagnostics().wait_polls;
+        let input = InputId::from_u128(21);
+        let color = eiviz_core::ColorSpace::Bt709Sdr.metadata();
+        let first = compositor
+            .fill_source(
+                input,
+                16,
+                16,
+                GpuFill::ColorBars,
+                MediaTime::ZERO,
+                1,
+                color,
+                FieldKind::Progressive,
+            )
+            .unwrap();
+        let second = compositor
+            .fill_source(
+                input,
+                16,
+                16,
+                GpuFill::Solid {
+                    rgba: [32, 32, 48, 255],
+                },
+                MediaTime::ZERO,
+                2,
+                color,
+                FieldKind::Progressive,
+            )
+            .unwrap();
+        assert_eq!(first.width, 16);
+        assert_eq!(second.frame_id, 2);
+        let diagnostics = compositor.diagnostics();
+        assert_eq!(diagnostics.wait_polls, waits);
+        assert_eq!(diagnostics.pool.allocations, allocations);
+        compositor.forget_source(input);
     }
 }

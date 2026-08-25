@@ -547,7 +547,8 @@ fn frame_to_bgra(frame: &VideoFrame) -> Result<Vec<u8>, OmtError> {
         PixelFormat::Nv12
         | PixelFormat::P010
         | PixelFormat::P216
-        | PixelFormat::Rgba16Float => Err(OmtError::InvalidFrame(
+        | PixelFormat::Rgba16Float
+        | PixelFormat::Uyvy => Err(OmtError::InvalidFrame(
             "OMT BGRA output accepts only 8-bit packed RGB; implicit format/profile conversion is not supported".into(),
         )),
     }
@@ -559,10 +560,20 @@ fn frame_to_uyvy(frame: &VideoFrame, profile: OmtColorProfile) -> Result<Vec<u8>
             "UYVY output requires an even frame width".into(),
         ));
     }
+    if frame.format == PixelFormat::Uyvy {
+        let required = frame.width as usize * frame.height as usize * 2;
+        if frame.data.len() < required {
+            return Err(OmtError::InvalidFrame(format!(
+                "truncated UYVY frame: {} bytes, expected {required}",
+                frame.data.len()
+            )));
+        }
+        return Ok(frame.data[..required].to_vec());
+    }
     let required = frame.width as usize * frame.height as usize * 4;
     if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {
         return Err(OmtError::InvalidFrame(
-            "UYVY output accepts only explicit RGBA8 or BGRA8 input".into(),
+            "UYVY output accepts only explicit RGBA8, BGRA8, or UYVY input".into(),
         ));
     }
     if frame.data.len() < required {
@@ -593,7 +604,11 @@ fn rgb_from_pixel(pixel: &[u8], format: PixelFormat) -> [u8; 3] {
     match format {
         PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
         PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
-        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float => {
+        PixelFormat::Nv12
+        | PixelFormat::P010
+        | PixelFormat::P216
+        | PixelFormat::Rgba16Float
+        | PixelFormat::Uyvy => {
             unreachable!("validated packed RGB format")
         }
     }
@@ -702,6 +717,16 @@ mod tests {
         assert_ne!(
             frame_to_uyvy(&red, OmtColorProfile::Bt601Limited).unwrap(),
             frame_to_uyvy(&red, OmtColorProfile::Bt709Limited).unwrap()
+        );
+    }
+
+    #[test]
+    fn uyvy_input_is_passed_through_without_rgb_conversion() {
+        let data = vec![128, 16, 128, 16];
+        let packed = frame(PixelFormat::Uyvy, data.clone());
+        assert_eq!(
+            frame_to_uyvy(&packed, OmtColorProfile::Bt709Limited).unwrap(),
+            data
         );
     }
 

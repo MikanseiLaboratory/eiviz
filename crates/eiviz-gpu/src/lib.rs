@@ -391,6 +391,7 @@ mod wgpu_backend;
 
 #[cfg(feature = "wgpu-backend")]
 pub use wgpu_backend::{
-    AdapterCapabilities, DeviceLossReport, ResourcePoolDiagnostics, ResourcePoolLimits,
-    SharedWgpuContext, WgpuCompositor, WgpuDiagnostics, WgpuError, WgpuTextureFrame,
+    AdapterCapabilities, CompositeSource, DeviceLossReport, GpuFill, ResourcePoolDiagnostics,
+    ResourcePoolLimits, SharedWgpuContext, WgpuCompositor, WgpuDiagnostics, WgpuError,
+    WgpuTextureFrame,
 };

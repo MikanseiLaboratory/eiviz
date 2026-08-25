@@ -132,6 +132,15 @@ pub fn migrate(mut project: Project) -> Result<Project> {
     // conversion, tone map, or extended profile.
     // v6 makes each Output's video source explicit. Older outputs retain the
     // owning Mixing Unit's Program feed; migration never selects a Multiview.
+    // v7 persists per-output color format. Missing values keep the historical
+    // kind default and never switch a window output onto CPU pixels.
+    if project.schema_version < 7 {
+        for output in project.outputs.values_mut() {
+            if output.color_format.is_none() {
+                output.color_format = eiviz_core::OutputColorFormat::legacy_for(&output.kind);
+            }
+        }
+    }
     project.schema_version = SCHEMA_VERSION;
     project.validate()?;
     Ok(project)
@@ -526,6 +535,7 @@ mod tests {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },
             enabled: false,
+            color_format: None,
             distribution: None,
         };
         distribution.outputs.insert(output.id, output.clone());
@@ -585,6 +595,44 @@ mod tests {
         let migrated = migrate(loaded).unwrap();
         assert_eq!(migrated.schema_version, SCHEMA_VERSION);
         assert!(migrated.video.is_baseline_1080p5994());
+    }
+
+    #[test]
+    fn v6_migration_fills_legacy_output_color_formats() {
+        let mut project = Project::new("legacy color");
+        let owner = *project.mixing_units.keys().next().unwrap();
+        let ndi = eiviz_core::Output {
+            id: eiviz_core::OutputId::new(),
+            name: "ndi".into(),
+            owner,
+            video_source: eiviz_core::OutputVideoSource::Program,
+            kind: eiviz_core::OutputKind::Ndi {
+                name: "legacy".into(),
+            },
+            enabled: true,
+            color_format: None,
+            distribution: None,
+        };
+        project.outputs.insert(ndi.id, ndi.clone());
+        project
+            .mixing_units
+            .get_mut(&owner)
+            .unwrap()
+            .outputs
+            .push(ndi.id);
+        let mut json = serde_json::to_value(&project).unwrap();
+        json["schema_version"] = serde_json::json!(6);
+        json["outputs"][ndi.id.to_string()]
+            .as_object_mut()
+            .unwrap()
+            .remove("color_format");
+        let loaded: Project = serde_json::from_value(json).unwrap();
+        let migrated = migrate(loaded).unwrap();
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            migrated.outputs[&ndi.id].color_format,
+            Some(eiviz_core::OutputColorFormat::Rgba8)
+        );
     }
 
     #[test]

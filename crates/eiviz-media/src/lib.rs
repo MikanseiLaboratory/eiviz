@@ -23,7 +23,7 @@ pub enum MediaError {
 
 pub type Result<T> = std::result::Result<T, MediaError>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
     Rgba8,
     Bgra8,
@@ -36,12 +36,14 @@ pub enum PixelFormat {
     P216,
     /// Linear four-channel 16-bit float GPU working/readback format.
     Rgba16Float,
+    /// Packed 4:2:2 8-bit UYVY, two bytes per luma sample. Width must be even.
+    Uyvy,
 }
 
 impl PixelFormat {
     pub const fn bit_depth(self) -> u8 {
         match self {
-            Self::Rgba8 | Self::Bgra8 | Self::Nv12 => 8,
+            Self::Rgba8 | Self::Bgra8 | Self::Nv12 | Self::Uyvy => 8,
             Self::P010 | Self::P216 => 10,
             Self::Rgba16Float => 16,
         }
@@ -70,6 +72,12 @@ impl PixelFormat {
                 pixels.checked_mul(4)
             }
             Self::Rgba16Float => pixels.checked_mul(8),
+            Self::Uyvy => {
+                if !width.is_multiple_of(2) {
+                    return None;
+                }
+                pixels.checked_mul(2)
+            }
         }
     }
 }
@@ -495,5 +503,7 @@ mod tests {
         assert_eq!(PixelFormat::P216.frame_bytes(3840, 2160), Some(33_177_600));
         assert_eq!(PixelFormat::P010.frame_bytes(1919, 1080), None);
         assert_eq!(PixelFormat::P216.bit_depth(), 10);
+        assert_eq!(PixelFormat::Uyvy.frame_bytes(1920, 1080), Some(4_147_200));
+        assert_eq!(PixelFormat::Uyvy.frame_bytes(1919, 1080), None);
     }
 }

@@ -148,6 +148,10 @@ pub enum Command {
         id: OutputId,
         enabled: bool,
     },
+    SetOutputColorFormat {
+        id: OutputId,
+        format: Option<eiviz_core::OutputColorFormat>,
+    },
     AddMultiview {
         view: Multiview,
     },
@@ -789,6 +793,24 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
                 o.enabled = *enabled;
             }
         }
+        Command::SetOutputColorFormat { id, format } => {
+            let output = project
+                .outputs
+                .get(id)
+                .ok_or_else(|| DomainError::UnknownId(id.to_string()))?;
+            if let Some(value) = format {
+                if !eiviz_core::OutputColorFormat::allows(&output.kind, *value) {
+                    return Err(CommandError::Rejected(format!(
+                        "output {id} does not allow color format {value:?}"
+                    )));
+                }
+            } else if !eiviz_core::OutputColorFormat::allowed_for(&output.kind).is_empty() {
+                return Err(CommandError::Rejected(format!(
+                    "output {id} requires an explicit color format"
+                )));
+            }
+            project.outputs.get_mut(id).expect("output existed above").color_format = *format;
+        }
         Command::AddMultiview { view } => {
             let owner = view.owner;
             project.multiviews.insert(view.id, view.clone());
@@ -1265,5 +1287,69 @@ mod tests {
         assert_eq!(mixing.transition.remaining_frames, 12);
         assert!(mixing.overlays[0].enabled);
         assert_eq!(mixing.audio_follow, AudioFollowPolicy::ProgramAndPreview);
+    }
+
+    #[test]
+    fn output_color_format_command_allows_and_rejects_by_kind() {
+        let mut project = Project::new("color");
+        let owner = *project.mixing_units.keys().next().unwrap();
+        let output = Output {
+            id: OutputId::new(),
+            name: "ndi".into(),
+            owner,
+            video_source: eiviz_core::OutputVideoSource::Program,
+            kind: eiviz_core::OutputKind::Ndi { name: "x".into() },
+            enabled: true,
+            color_format: Some(eiviz_core::OutputColorFormat::Nv12),
+            distribution: None,
+        };
+        let id = output.id;
+        let client = ClientId::new();
+        let mut sequencer = Sequencer::default();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(client, Command::AddOutput { output }),
+            )
+            .unwrap();
+        sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetOutputColorFormat {
+                        id,
+                        format: Some(eiviz_core::OutputColorFormat::Rgba8),
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            project.outputs[&id].color_format,
+            Some(eiviz_core::OutputColorFormat::Rgba8)
+        );
+        let rejected = sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetOutputColorFormat {
+                        id,
+                        format: Some(eiviz_core::OutputColorFormat::Bgra8),
+                    },
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(rejected, CommandError::Rejected(_)));
+        let missing = sequencer
+            .apply(
+                &mut project,
+                CommandEnvelope::new(
+                    client,
+                    Command::SetOutputColorFormat { id, format: None },
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(missing, CommandError::Rejected(_)));
     }
 }

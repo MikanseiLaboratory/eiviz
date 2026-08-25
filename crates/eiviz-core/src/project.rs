@@ -10,7 +10,7 @@ use eiviz_time::FrameRate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Explicit compositor selection. Never switch at runtime without a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,6 +382,7 @@ impl Project {
             video_source: OutputVideoSource::Program,
             kind: crate::OutputKind::ProgramWindow,
             enabled: true,
+            color_format: None,
             distribution: None,
         };
         let mut unit = unit;
@@ -531,6 +532,7 @@ impl Project {
                     output.id, binding
                 )));
             }
+            validate_output_color_format(output)?;
             validate_distribution_output(output, &self.audio)?;
         }
         for view in self.multiviews.values() {
@@ -737,6 +739,22 @@ impl Project {
             ));
         }
         Ok(())
+    }
+}
+
+fn validate_output_color_format(output: &Output) -> Result<()> {
+    let allowed = crate::OutputColorFormat::allowed_for(&output.kind);
+    match output.effective_color_format() {
+        None if allowed.is_empty() => Ok(()),
+        None => Err(DomainError::msg(format!(
+            "output {} requires an explicit color format",
+            output.id
+        ))),
+        Some(format) if crate::OutputColorFormat::allows(&output.kind, format) => Ok(()),
+        Some(format) => Err(DomainError::msg(format!(
+            "output {} does not allow color format {format:?}",
+            output.id
+        ))),
     }
 }
 
@@ -1172,6 +1190,7 @@ mod tests {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },
             enabled: false,
+            color_format: None,
             distribution: None,
         };
         project.outputs.insert(output.id, output.clone());

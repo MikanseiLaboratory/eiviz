@@ -113,6 +113,7 @@ pub struct EngineMetrics {
     pub gpu_readback_nanos: u64,
     pub gpu_readback_max_nanos: u64,
     pub gpu_frame_nanos: u64,
+    pub processing_nanos: u64,
     pub gpu_device_loss: Option<String>,
     pub gpu_automatic_recovery: bool,
     pub gpu_lifecycle_state: String,
@@ -424,6 +425,14 @@ impl Engine {
 
     pub fn shared(self) -> Arc<Self> {
         Arc::new(self)
+    }
+
+    pub fn frame_period(&self) -> std::time::Duration {
+        let inner = self.inner.lock();
+        let rate = inner.project.video.frame_rate;
+        let nanos = 1_000_000_000u128 * u128::from(rate.denominator())
+            / u128::from(rate.numerator().max(1));
+        std::time::Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
     }
 
     pub fn set_asset_root(&self, root: impl Into<PathBuf>) {
@@ -1111,6 +1120,7 @@ impl Engine {
             #[cfg(not(feature = "wgpu-backend"))]
             gpu_readback_max_nanos: 0,
             gpu_frame_nanos: g.runtime.metrics.gpu_frame_nanos,
+            processing_nanos: g.runtime.metrics.processing_nanos,
             #[cfg(feature = "wgpu-backend")]
             gpu_device_loss: gpu
                 .as_ref()
@@ -1591,6 +1601,8 @@ impl Engine {
             }
         }
         service_source_controls(&mut g);
+        let cpu_demand = cpu_video_demand(&g);
+        g.runtime.set_cpu_video_demand(cpu_demand);
         let result = match g.runtime.tick_active() {
             Ok(result) => result,
             Err(error) => {
@@ -1602,7 +1614,19 @@ impl Engine {
         let distribution_profiles = g.encoder_sessions.keys().cloned().collect::<Vec<_>>();
         let mut distribution_errors = Vec::new();
         for profile in distribution_profiles {
-            let Some(video) = routed_video_frame(&result, profile.owner, profile.source) else {
+            let format = g
+                .project
+                .outputs
+                .values()
+                .find(|output| {
+                    output.enabled
+                        && output.owner == profile.owner
+                        && output.video_source == profile.source
+                        && output.distribution.is_some()
+                })
+                .and_then(Output::effective_color_format);
+            let Some(video) = routed_video_frame(&result, profile.owner, profile.source, format)
+            else {
                 continue;
             };
             let session = g
@@ -1649,18 +1673,25 @@ impl Engine {
                 sink = sink.name()
             );
             let _entered = span.enter();
-            let Some((enabled, owner, source)) = g
+            let Some((enabled, owner, source, color_format)) = g
                 .project
                 .outputs
                 .get(&output_id)
-                .map(|output| (output.enabled, output.owner, output.video_source))
+                .map(|output| {
+                    (
+                        output.enabled,
+                        output.owner,
+                        output.video_source,
+                        output.effective_color_format(),
+                    )
+                })
             else {
                 continue;
             };
             if !enabled {
                 continue;
             }
-            if let Some(frame) = routed_video_frame(&result, owner, source) {
+            if let Some(frame) = routed_video_frame(&result, owner, source, color_format) {
                 if let Err(e) = sink.push_video(frame) {
                     tracing::error!(error = %e, "video output push failed");
                     g.runtime.mark_output_failed(sink.name(), e.to_string());
@@ -2090,6 +2121,94 @@ fn require_restart_transition(state: &mut GpuLifecycleState, reason: String) {
     }
 }
 
+fn cpu_video_demand(inner: &Inner) -> eiviz_runtime::CpuVideoDemand {
+    let mut demand = cpu_video_demand_from_project(&inner.project);
+    let mut push = |source: OutputVideoSource, owner: MixingUnitId, format: eiviz_media::PixelFormat| {
+        push_cpu_demand(&mut demand, source, owner, format);
+    };
+    for profile in inner.encoder_sessions.keys() {
+        let format = inner
+            .project
+            .outputs
+            .values()
+            .find(|output| {
+                output.enabled
+                    && output.owner == profile.owner
+                    && output.video_source == profile.source
+                    && output.distribution.is_some()
+            })
+            .and_then(Output::effective_color_format)
+            .map(output_pixel_format)
+            .unwrap_or(eiviz_media::PixelFormat::Nv12);
+        push(profile.source, profile.owner, format);
+    }
+    demand
+}
+
+fn cpu_video_demand_from_project(project: &Project) -> eiviz_runtime::CpuVideoDemand {
+    let mut demand = eiviz_runtime::CpuVideoDemand::default();
+    for output in project.outputs.values().filter(|output| output.enabled) {
+        let Some(color) = output.effective_color_format() else {
+            continue;
+        };
+        if !matches!(
+            output.kind,
+            OutputKind::Ndi { .. }
+                | OutputKind::Omt { .. }
+                | OutputKind::DeckLink { .. }
+                | OutputKind::Rtmp { .. }
+                | OutputKind::Srt { .. }
+                | OutputKind::Mp4 { .. }
+        ) {
+            continue;
+        }
+        push_cpu_demand(
+            &mut demand,
+            output.video_source,
+            output.owner,
+            output_pixel_format(color),
+        );
+    }
+    demand
+}
+
+fn push_cpu_demand(
+    demand: &mut eiviz_runtime::CpuVideoDemand,
+    source: OutputVideoSource,
+    owner: MixingUnitId,
+    format: eiviz_media::PixelFormat,
+) {
+    match source {
+        OutputVideoSource::Program => {
+            let formats = demand.programs.entry(owner).or_default();
+            if !formats.contains(&format) {
+                formats.push(format);
+            }
+        }
+        OutputVideoSource::Preview => {
+            let formats = demand.previews.entry(owner).or_default();
+            if !formats.contains(&format) {
+                formats.push(format);
+            }
+        }
+        OutputVideoSource::Multiview(view) => {
+            let formats = demand.multiviews.entry(view).or_default();
+            if !formats.contains(&format) {
+                formats.push(format);
+            }
+        }
+    }
+}
+
+fn output_pixel_format(format: eiviz_core::OutputColorFormat) -> eiviz_media::PixelFormat {
+    match format {
+        eiviz_core::OutputColorFormat::Rgba8 => eiviz_media::PixelFormat::Rgba8,
+        eiviz_core::OutputColorFormat::Bgra8 => eiviz_media::PixelFormat::Bgra8,
+        eiviz_core::OutputColorFormat::Nv12 => eiviz_media::PixelFormat::Nv12,
+        eiviz_core::OutputColorFormat::Uyvy => eiviz_media::PixelFormat::Uyvy,
+    }
+}
+
 fn service_source_controls(inner: &mut Inner) {
     let updates = inner
         .source_controls
@@ -2153,10 +2272,19 @@ fn routed_video_frame(
     result: &TickResult,
     owner: MixingUnitId,
     source: OutputVideoSource,
+    format: Option<eiviz_core::OutputColorFormat>,
 ) -> Option<&VideoFrame> {
+    let pixel = format.map(output_pixel_format);
     match source {
-        OutputVideoSource::Program => result.programs.get(&owner),
-        OutputVideoSource::Multiview(view) => result.multiviews.get(&view),
+        OutputVideoSource::Program => pixel
+            .and_then(|pixel| result.program_frames.get(&(owner, pixel)))
+            .or_else(|| result.programs.get(&owner)),
+        OutputVideoSource::Preview => pixel
+            .and_then(|pixel| result.preview_frames.get(&(owner, pixel)))
+            .or_else(|| result.previews.get(&owner)),
+        OutputVideoSource::Multiview(view) => pixel
+            .and_then(|pixel| result.multiview_frames.get(&(view, pixel)))
+            .or_else(|| result.multiviews.get(&view)),
     }
 }
 
@@ -4009,6 +4137,7 @@ mod tests {
             video_source: OutputVideoSource::Program,
             kind: OutputKind::Omt { url: "test".into() },
             enabled: true,
+            color_format: None,
             distribution: None,
         };
         engine
@@ -4025,6 +4154,81 @@ mod tests {
         engine.tick().unwrap();
         assert_eq!(sink_a.pixels.lock()[0], [255, 0, 0, 255]);
         assert_eq!(sink_b.pixels.lock()[0], [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn output_registry_routes_preview_independently_of_program() {
+        let engine = Engine::new("preview route");
+        let unit = engine.primary_unit();
+        let make_input_scene = |name: &str, rgba: [u8; 4]| {
+            let input = Input {
+                id: InputId::new(),
+                name: name.into(),
+                tags: vec![],
+                groups: vec![],
+                source: InputSource::SolidColor {
+                    r: rgba[0],
+                    g: rgba[1],
+                    b: rgba[2],
+                    a: rgba[3],
+                },
+            };
+            let scene = Scene {
+                id: SceneId::new(),
+                name: name.into(),
+                items: vec![SceneItem {
+                    id: SceneItemId::new(),
+                    input: input.id,
+                    transform: Transform2D::fullscreen(),
+                    z_order: 0,
+                    playback: Default::default(),
+                }],
+            };
+            (input, scene)
+        };
+        let (preview_input, preview_scene) = make_input_scene("preview-green", [0, 255, 0, 255]);
+        let (program_input, program_scene) = make_input_scene("program-red", [255, 0, 0, 255]);
+        for input in [preview_input, program_input] {
+            engine.submit_payload(Command::AddInput { input }).unwrap();
+        }
+        for scene in [preview_scene.clone(), program_scene.clone()] {
+            engine.submit_payload(Command::AddScene { scene }).unwrap();
+        }
+        engine
+            .submit_payload(Command::SetPreview {
+                unit,
+                scene: Some(preview_scene.id),
+            })
+            .unwrap();
+        engine
+            .submit_payload(Command::SetProgram {
+                unit,
+                scene: Some(program_scene.id),
+            })
+            .unwrap();
+        let preview_output = Output {
+            id: OutputId::new(),
+            name: "preview OMT".into(),
+            owner: unit,
+            video_source: OutputVideoSource::Preview,
+            kind: OutputKind::Omt {
+                url: "test-preview".into(),
+            },
+            enabled: true,
+            color_format: None,
+            distribution: None,
+        };
+        engine
+            .submit_payload(Command::AddOutput {
+                output: preview_output.clone(),
+            })
+            .unwrap();
+        let sink = Arc::new(PixelSink::new("preview"));
+        engine
+            .attach_output_sink(preview_output.id, sink.clone())
+            .unwrap();
+        engine.tick().unwrap();
+        assert_eq!(sink.pixels.lock()[0], [0, 255, 0, 255]);
     }
 
     #[test]
@@ -4062,6 +4266,7 @@ mod tests {
                 url: "test-multiview".into(),
             },
             enabled: true,
+            color_format: None,
             distribution: None,
         };
         engine
@@ -4208,6 +4413,7 @@ mod tests {
                 path: path.display().to_string(),
             },
             enabled: false,
+            color_format: None,
             distribution: Some(eiviz_core::DistributionProfile {
                 video: H264EncoderProfile::CiscoOpenH26426 {
                     bitrate_bps: 8_000_000,
@@ -4280,6 +4486,7 @@ mod tests {
                 url: "rtmp://127.0.0.1/live/key".into(),
             },
             enabled: true,
+            color_format: None,
             distribution: Some(eiviz_core::DistributionProfile {
                 video: eiviz_core::H264EncoderProfile::CiscoOpenH26426 {
                     bitrate_bps: 8_000_000,
@@ -4690,5 +4897,38 @@ mod tests {
             engine.snapshot().compositor,
             eiviz_core::CompositorBackend::CpuReference
         );
+    }
+
+    #[test]
+    fn program_ndi_demand_does_not_request_preview_cpu() {
+        let mut project = Project::new("demand");
+        let owner = *project.mixing_units.keys().next().unwrap();
+        let output = Output {
+            id: OutputId::new(),
+            name: "ndi".into(),
+            owner,
+            video_source: OutputVideoSource::Program,
+            kind: OutputKind::Ndi {
+                name: "pgm".into(),
+            },
+            enabled: true,
+            color_format: Some(eiviz_core::OutputColorFormat::Nv12),
+            distribution: None,
+        };
+        let output_id = output.id;
+        project.outputs.insert(output.id, output);
+        project
+            .mixing_units
+            .get_mut(&owner)
+            .unwrap()
+            .outputs
+            .push(output_id);
+        let demand = super::cpu_video_demand_from_project(&project);
+        assert_eq!(
+            demand.programs.get(&owner).cloned().unwrap(),
+            vec![eiviz_media::PixelFormat::Nv12]
+        );
+        assert!(demand.previews.is_empty());
+        assert!(demand.multiviews.is_empty());
     }
 }

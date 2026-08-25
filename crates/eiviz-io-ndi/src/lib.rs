@@ -163,8 +163,11 @@ fn frame_to_nv12(frame: &VideoFrame, profile: NdiColorProfile) -> Result<Vec<u8>
     if !frame.width.is_multiple_of(2) || !frame.height.is_multiple_of(2) {
         return Err("NV12 output requires even width and height".into());
     }
-    if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8) {
-        return Err("NV12 output conversion accepts only RGBA8 or BGRA8 input".into());
+    if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8 | PixelFormat::Nv12) {
+        return Err("NV12 output conversion accepts only RGBA8, BGRA8, or NV12 input".into());
+    }
+    if frame.format == PixelFormat::Nv12 {
+        return Ok(frame.data.to_vec());
     }
     let required = frame.width as usize * frame.height as usize * 4;
     if frame.data.len() < required {
@@ -212,7 +215,7 @@ fn packed_rgb(frame: &VideoFrame, x: usize, y: usize) -> [u8; 3] {
     match frame.format {
         PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
         PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
-        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float => {
+        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float | PixelFormat::Uyvy => {
             unreachable!("validated packed RGB input")
         }
     }
@@ -325,5 +328,28 @@ mod tests {
         let converted = frame_to_nv12(&frame, NdiColorProfile::Bt709Limited).unwrap();
         assert_eq!(&converted[..4], &[16, 235, 16, 235]);
         assert_eq!(converted.len(), 6);
+    }
+
+    #[test]
+    fn nv12_input_is_passed_through_without_rgb_conversion() {
+        let data = vec![16, 235, 16, 235, 128, 128];
+        let frame = VideoFrame {
+            id: 1,
+            source: None,
+            pts: MediaTime::ZERO,
+            capture_domain: eiviz_time::ClockDomain::Virtual,
+            clock_observation: None,
+            width: 2,
+            height: 2,
+            format: PixelFormat::Nv12,
+            color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
+            field: eiviz_core::FieldKind::Progressive,
+            data: data.clone().into(),
+            discontinuity: false,
+        };
+        assert_eq!(
+            frame_to_nv12(&frame, NdiColorProfile::Bt709Limited).unwrap(),
+            data
+        );
     }
 }

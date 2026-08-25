@@ -3,17 +3,52 @@ use eiviz_core::{
     AacEncoderProfile, AsrcProfile, AudioFollowPolicy, AudioResamplingPolicy, AudioRoute,
     AuxiliaryLoadSheddingPolicy, CompositorBackend, DistributionProfile, H264EncoderProfile, Input,
     InputId, InputSource, MixTap, MixingUnit, MixingUnitId, Multiview, MultiviewId,
-    MultiviewSource, MultiviewTile, Output, OutputId, OutputKind, OutputVideoSource, OverlayId,
-    OverlaySlot, Project, ReconnectProfile, RouteMode, Scene, SceneId, SceneItem, SceneItemId,
-    ToneMapPolicy, Transform2D, TransitionStyle, TransportProfile, VideoFormat,
+    MultiviewSource, MultiviewTile, Output, OutputColorFormat, OutputId, OutputKind,
+    OutputVideoSource, OverlayId, OverlaySlot, Project, ReconnectProfile, RouteMode, Scene,
+    SceneId, SceneItem, SceneItemId, ToneMapPolicy, Transform2D, TransitionStyle, TransportProfile,
+    VideoFormat,
 };
 #[cfg(any(feature = "decklink", feature = "audio-cpal"))]
 use eiviz_core::{DeviceBinding, DeviceBindingId};
 use eiviz_engine::Engine;
 use eiviz_operations::{CapabilityEntry, EvidenceState};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputSelectKind {
+    Video,
+    Image,
+    NdiOmt,
+    MixFeed,
+    ColorBars,
+    Color,
+}
+
+impl InputSelectKind {
+    const ALL: [Self; 6] = [
+        Self::Video,
+        Self::Image,
+        Self::NdiOmt,
+        Self::MixFeed,
+        Self::ColorBars,
+        Self::Color,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Video => "Video",
+            Self::Image => "Image",
+            Self::NdiOmt => "NDI / OMT",
+            Self::MixFeed => "MixFeed",
+            Self::ColorBars => "Color Bars",
+            Self::Color => "Colour",
+        }
+    }
+}
 
 fn parse_env<T>(name: &str, default: T) -> Result<T, std::io::Error>
 where
@@ -141,6 +176,9 @@ enum OutputWindow {
 
 struct DesktopApp {
     engine: Arc<Engine>,
+    media_stop: Arc<AtomicBool>,
+    media_error: Arc<Mutex<Option<String>>>,
+    media_thread: Option<std::thread::JoinHandle<()>>,
     status: String,
     selected_unit: MixingUnitId,
     selected_scene: Option<SceneId>,
@@ -166,12 +204,12 @@ struct DesktopApp {
     rtmp_url: String,
     srt_url: String,
     recording_path: String,
-    output_multiview: Option<MultiviewId>,
+    output_source: OutputVideoSource,
     omt_address: String,
     omt_output_name: String,
     omt_output_uyvy: bool,
     omt_discovered: Vec<String>,
-    omt_connections: Vec<Arc<eiviz_io_omt::OmtSource>>,
+    omt_connections: Vec<(InputId, Arc<eiviz_io_omt::OmtSource>)>,
     omt_outputs: Vec<(OutputId, Arc<eiviz_io_omt::OmtSink>)>,
     #[cfg(feature = "decklink")]
     decklink_devices: Vec<eiviz_io_decklink::DeviceInfo>,
@@ -190,7 +228,7 @@ struct DesktopApp {
     #[cfg(feature = "ndi")]
     ndi_selected: Option<usize>,
     #[cfg(feature = "ndi")]
-    ndi_connections: Vec<Arc<eiviz_io_ndi::NdiSource>>,
+    ndi_connections: Vec<(InputId, Arc<eiviz_io_ndi::NdiSource>)>,
     #[cfg(feature = "ndi")]
     ndi_outputs: Vec<(OutputId, Arc<eiviz_io_ndi::NdiSink>)>,
     #[cfg(feature = "ndi")]
@@ -236,6 +274,21 @@ struct DesktopApp {
     switcher_windows: BTreeSet<MixingUnitId>,
     output_windows: BTreeSet<OutputWindow>,
     layout_audit: LayoutAudit,
+    inputs_open: bool,
+    outputs_open: bool,
+    scenes_open: bool,
+    input_kind: InputSelectKind,
+    file_browser_open: bool,
+    file_browser_dir: PathBuf,
+    recent_media: Vec<String>,
+    color_draft: [u8; 4],
+    scene_name_draft: String,
+    scene_add_input: Option<InputId>,
+    fps_window_start: std::time::Instant,
+    fps_window_frame: u64,
+    fps_window_misses: u64,
+    measured_fps: f32,
+    fps_warning: bool,
 }
 
 struct LayoutAudit {
@@ -408,6 +461,7 @@ fn desktop_distribution_output(
         ),
         _ => return Err(format!("unknown distribution transport {transport_name}")),
     };
+    let color_format = OutputColorFormat::recommended_for(&kind);
     Ok(Output {
         id: OutputId::new(),
         name,
@@ -415,6 +469,7 @@ fn desktop_distribution_output(
         video_source,
         kind,
         enabled: false,
+        color_format,
         distribution: Some(DistributionProfile {
             video: H264EncoderProfile::CiscoOpenH26426 {
                 bitrate_bps: 8_000_000,
@@ -439,8 +494,7 @@ fn desktop_distribution_output(
 
 impl DesktopApp {
     fn selected_output_source(&self) -> OutputVideoSource {
-        self.output_multiview
-            .map_or(OutputVideoSource::Program, OutputVideoSource::Multiview)
+        self.output_source
     }
 
     fn new(
@@ -538,6 +592,9 @@ impl DesktopApp {
         let selected_unit = engine.primary_unit();
         let mut app = Self {
             engine,
+            media_stop: Arc::new(AtomicBool::new(false)),
+            media_error: Arc::new(Mutex::new(None)),
+            media_thread: None,
             status: "ready".into(),
             selected_unit,
             selected_scene: None,
@@ -552,7 +609,7 @@ impl DesktopApp {
             asset_root: "eiviz-assets".into(),
             image_path: String::new(),
             video_path: String::new(),
-            openh264_path: std::env::var("EIVIZ_OPENH264_PATH").unwrap_or_default(),
+            openh264_path: resolve_openh264_binary(),
             fdk_aac_path: std::env::var("EIVIZ_FDK_AAC_PATH").unwrap_or_default(),
             portable_path: "project.eiviz".into(),
             capability_report_path: "eiviz-capabilities.json".into(),
@@ -563,10 +620,10 @@ impl DesktopApp {
             rtmp_url: "rtmp://127.0.0.1:1935/live/eiviz".into(),
             srt_url: "srt://127.0.0.1:9000".into(),
             recording_path: "recording.mp4".into(),
-            output_multiview: None,
+            output_source: OutputVideoSource::Program,
             omt_address: std::env::var("EIVIZ_OMT_SOURCE").unwrap_or_default(),
-            omt_output_name: "eiviz Program".into(),
-            omt_output_uyvy: false,
+            omt_output_name: "eiviz".into(),
+            omt_output_uyvy: true,
             omt_discovered: Vec::new(),
             omt_connections: Vec::new(),
             omt_outputs: Vec::new(),
@@ -591,9 +648,9 @@ impl DesktopApp {
             #[cfg(feature = "ndi")]
             ndi_outputs: Vec::new(),
             #[cfg(feature = "ndi")]
-            ndi_output_name: "eiviz Program".into(),
+            ndi_output_name: "eiviz".into(),
             #[cfg(feature = "ndi")]
-            ndi_output_nv12: false,
+            ndi_output_nv12: true,
             #[cfg(feature = "ndi")]
             ndi_capability: eiviz_io_ndi::probe(),
             #[cfg(feature = "audio-cpal")]
@@ -633,11 +690,54 @@ impl DesktopApp {
             switcher_windows: BTreeSet::new(),
             output_windows: BTreeSet::new(),
             layout_audit: LayoutAudit::from_env(),
+            inputs_open: false,
+            outputs_open: false,
+            scenes_open: false,
+            input_kind: InputSelectKind::Video,
+            file_browser_open: false,
+            file_browser_dir: default_media_dir(),
+            recent_media: Vec::new(),
+            color_draft: [40, 40, 200, 255],
+            scene_name_draft: "Scene".into(),
+            scene_add_input: None,
+            fps_window_start: std::time::Instant::now(),
+            fps_window_frame: 0,
+            fps_window_misses: 0,
+            measured_fps: 0.0,
+            fps_warning: false,
         };
+        app.start_media_clock();
         if !app.omt_address.is_empty() {
             app.connect_omt();
         }
+        app.link_openh264_at_startup();
         Ok(app)
+    }
+
+    fn start_media_clock(&mut self) {
+        let engine = self.engine.clone();
+        let stop = self.media_stop.clone();
+        let error_slot = self.media_error.clone();
+        self.media_thread = Some(
+            std::thread::Builder::new()
+                .name("eiviz-media".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Acquire) {
+                        let started = std::time::Instant::now();
+                        if let Err(error) = engine.tick() {
+                            if let Ok(mut slot) = error_slot.lock() {
+                                *slot = Some(error.to_string());
+                            }
+                        }
+                        let period = engine.frame_period();
+                        let elapsed = started.elapsed();
+                        if elapsed < period {
+                            std::thread::sleep(period - elapsed);
+                        }
+                    }
+                })
+                .expect("media clock thread"),
+        );
     }
 
     fn active_unit(&self) -> MixingUnitId {
@@ -705,15 +805,22 @@ impl DesktopApp {
 
     fn add_mix_feed(&mut self) {
         let dest = self.active_unit();
+        let project = self.engine.snapshot();
+        if self.mixfeed_source.is_none() {
+            self.mixfeed_source = project
+                .mixing_units
+                .values()
+                .find(|candidate| candidate.id != dest)
+                .map(|candidate| candidate.id);
+        }
         let Some(source) = self.mixfeed_source else {
-            self.status = "select a source mixing unit for MixFeed".into();
+            self.status = "add another mixing unit, then select it as MixFeed source".into();
             return;
         };
         if source == dest {
             self.status = "MixFeed cannot target the same mixing unit".into();
             return;
         }
-        let project = self.engine.snapshot();
         let Some(source_unit) = project.mixing_units.get(&source) else {
             self.status = "MixFeed source mixing unit is missing".into();
             return;
@@ -760,6 +867,994 @@ impl DesktopApp {
             unit: dest,
             scene: Some(scene.id),
         });
+    }
+
+    fn start_omt_output(&mut self, owner: MixingUnitId, source: OutputVideoSource) {
+        let project = self.engine.snapshot();
+        let feed = output_feed_label(&project, source);
+        let unit_name = project
+            .mixing_units
+            .get(&owner)
+            .map(|unit| unit.name.as_str())
+            .unwrap_or("Mix");
+        let base = self.omt_output_name.trim();
+        let name = if base.is_empty() {
+            format!("eiviz {unit_name} {feed}")
+        } else {
+            format!("{base} {unit_name} {feed}")
+        };
+        let color_profile = match project.video.color {
+            eiviz_core::ColorSpace::Bt709Sdr => Some(eiviz_io_omt::OmtColorProfile::Bt709Limited),
+            eiviz_core::ColorSpace::Bt2020Pq | eiviz_core::ColorSpace::Bt2020Hlg => None,
+        };
+        let Some(color_profile) = color_profile else {
+            self.status = "OMT output supports only an explicit Bt709Sdr project profile".into();
+            return;
+        };
+        let config = eiviz_io_omt::OmtOutputConfig {
+            pixel_format: if self.omt_output_uyvy {
+                eiviz_io_omt::OmtOutputPixelFormat::Uyvy
+            } else {
+                eiviz_io_omt::OmtOutputPixelFormat::Bgra
+            },
+            color_profile,
+            send_queue_depth: 4,
+        };
+        let sink = match eiviz_io_omt::OmtSink::create_for_video_format(&name, &project.video, config)
+        {
+            Ok(sink) => Arc::new(sink),
+            Err(error) => {
+                self.status = format!("OMT output: {error}");
+                return;
+            }
+        };
+        let output = Output {
+            id: OutputId::new(),
+            name: name.clone(),
+            owner,
+            video_source: source,
+            kind: OutputKind::Omt { url: name.clone() },
+            enabled: true,
+            color_format: Some(if self.omt_output_uyvy {
+                OutputColorFormat::Uyvy
+            } else {
+                OutputColorFormat::Bgra8
+            }),
+            distribution: None,
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddOutput {
+            output: output.clone(),
+        }) {
+            self.status = format!("OMT output project: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.attach_output_sink(output.id, sink.clone()) {
+            self.status = format!("OMT output route: {error}");
+            return;
+        }
+        self.omt_outputs.push((output.id, sink));
+        self.status = format!("OMT output started: {name} ({feed})");
+    }
+
+    fn remove_managed_input(&mut self, input_id: InputId) {
+        let project = self.engine.snapshot();
+        for route in project
+            .audio_matrix
+            .routes
+            .iter()
+            .filter(|route| route.input == input_id)
+        {
+            let _ = self.engine.submit_payload(Command::ClearAudioRoute {
+                input: input_id,
+                bus: route.bus,
+            });
+        }
+        let mut scenes_to_remove = Vec::new();
+        for scene in project.scenes.values() {
+            let uses = scene.items.iter().any(|item| item.input == input_id);
+            if !uses {
+                continue;
+            }
+            if scene.items.iter().all(|item| item.input == input_id) {
+                scenes_to_remove.push(scene.id);
+            } else {
+                for item in scene.items.iter().filter(|item| item.input == input_id) {
+                    let _ = self.engine.submit_payload(Command::RemoveSceneItem {
+                        scene: scene.id,
+                        item: item.id,
+                    });
+                }
+            }
+        }
+        for unit in project.mixing_units.values() {
+            if unit
+                .preview
+                .scene
+                .is_some_and(|scene| scenes_to_remove.contains(&scene))
+            {
+                let _ = self.engine.submit_payload(Command::SetPreview {
+                    unit: unit.id,
+                    scene: None,
+                });
+            }
+            if unit
+                .program
+                .scene
+                .is_some_and(|scene| scenes_to_remove.contains(&scene))
+            {
+                let _ = self.engine.submit_payload(Command::SetProgram {
+                    unit: unit.id,
+                    scene: None,
+                });
+            }
+            for overlay in &unit.overlays {
+                if overlay
+                    .scene
+                    .is_some_and(|scene| scenes_to_remove.contains(&scene))
+                {
+                    let _ = self.engine.submit_payload(Command::SetOverlayScene {
+                        unit: unit.id,
+                        overlay: overlay.id,
+                        scene: None,
+                    });
+                }
+            }
+        }
+        for scene in scenes_to_remove {
+            let _ = self.engine.submit_payload(Command::RemoveScene { id: scene });
+        }
+        if let Err(error) = self.engine.submit_payload(Command::RemoveInput { id: input_id }) {
+            self.status = format!("remove input: {error}");
+            return;
+        }
+        self.engine.detach_source(input_id);
+        self.omt_connections.retain(|(id, _)| *id != input_id);
+        #[cfg(feature = "ndi")]
+        self.ndi_connections.retain(|(id, _)| *id != input_id);
+        #[cfg(feature = "audio-cpal")]
+        self.audio_inputs.retain(|(id, _)| *id != input_id);
+        self.status = "input removed".into();
+    }
+
+    fn preview_input(&mut self, unit: MixingUnitId, input_id: InputId) {
+        let project = self.engine.snapshot();
+        let Some(input) = project.inputs.get(&input_id) else {
+            self.status = "preview: unknown input".into();
+            return;
+        };
+        let scene_id = match scene_id_for_input(&project, input_id) {
+            Some(id) => id,
+            None => {
+                let scene = Scene {
+                    id: SceneId::new(),
+                    name: input.name.clone(),
+                    items: vec![SceneItem {
+                        id: SceneItemId::new(),
+                        input: input_id,
+                        transform: Transform2D::fullscreen(),
+                        z_order: 0,
+                        playback: Default::default(),
+                    }],
+                };
+                let id = scene.id;
+                if let Err(error) = self.engine.submit_payload(Command::AddScene { scene }) {
+                    self.status = format!("preview scene: {error}");
+                    return;
+                }
+                id
+            }
+        };
+        self.selected_scene = Some(scene_id);
+        self.submit(Command::SetPreview {
+            unit,
+            scene: Some(scene_id),
+        });
+    }
+
+    fn link_openh264_at_startup(&mut self) {
+        if self.openh264_path.is_empty() {
+            self.status = "OpenH264 2.6.0 bundle was not found next to the executable".into();
+            return;
+        }
+        match eiviz_codec_software::OpenH264Decoder::new(std::path::Path::new(&self.openh264_path)) {
+            Ok(_) => {
+                self.status = format!(
+                    "ready; OpenH264 2.6.0 linked ({})",
+                    std::path::Path::new(&self.openh264_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&self.openh264_path)
+                );
+            }
+            Err(error) => {
+                self.status = format!("OpenH264 link failed: {error}");
+            }
+        }
+    }
+
+    fn sample_fps(&mut self, project: &Project) {
+        let metrics = self.engine.metrics();
+        let now = std::time::Instant::now();
+        let elapsed = now.saturating_duration_since(self.fps_window_start);
+        if metrics.deadline_misses > self.fps_window_misses || metrics.deadline_slack_nanos < 0 {
+            self.fps_warning = true;
+        }
+        if elapsed >= std::time::Duration::from_millis(1000) {
+            let frames = metrics.frame.saturating_sub(self.fps_window_frame);
+            let misses = metrics.deadline_misses.saturating_sub(self.fps_window_misses);
+            let seconds = elapsed.as_secs_f32().max(0.001);
+            self.measured_fps = frames as f32 / seconds;
+            let expected = project.video.frame_rate.numerator() as f32
+                / project.video.frame_rate.denominator() as f32;
+            self.fps_warning = misses > 0
+                || metrics.deadline_slack_nanos < 0
+                || self.measured_fps + 0.75 < expected * 0.95;
+            self.fps_window_start = now;
+            self.fps_window_frame = metrics.frame;
+            self.fps_window_misses = metrics.deadline_misses;
+        }
+    }
+
+    fn draw_fps_badge(&self, ui: &mut egui::Ui, project: &Project) {
+        let expected = project.video.frame_rate;
+        let metrics = self.engine.metrics();
+        let tick_ms = metrics.processing_nanos as f32 / 1_000_000.0;
+        let gpu_ms = metrics.gpu_frame_nanos as f32 / 1_000_000.0;
+        let readback_ms = metrics.gpu_readback_nanos as f32 / 1_000_000.0;
+        let slack_ms = metrics.deadline_slack_nanos as f32 / 1_000_000.0;
+        let detail = format!(
+            "tick {tick_ms:.1}ms gpu {gpu_ms:.1}ms rb {readback_ms:.1}ms n={} slack {slack_ms:.1}ms",
+            metrics.gpu_readbacks
+        );
+        if self.fps_warning {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 80, 60),
+                format!(
+                    "{} not held (meas. {:.1})  {detail}",
+                    expected, self.measured_fps
+                ),
+            );
+        } else {
+            ui.label(format!("{expected}  {detail}"));
+        }
+    }
+
+    fn draw_input_manager(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: Option<MixingUnitId>,
+    ) {
+        ui.heading("Input Select");
+        ui.label(&self.status);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(188.0);
+                ui.label("Input");
+                for kind in InputSelectKind::ALL {
+                    if ui
+                        .selectable_label(self.input_kind == kind, kind.label())
+                        .clicked()
+                    {
+                        self.input_kind = kind;
+                        self.file_browser_open = false;
+                    }
+                }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_min_width(520.0);
+                self.draw_input_select_body(ui, project, unit_id);
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("OK").clicked() {
+                self.confirm_input_select();
+            }
+            if ui.button("Cancel").clicked() {
+                self.inputs_open = false;
+            }
+        });
+        ui.separator();
+        ui.heading("Existing inputs");
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let mut remove = None;
+            for input in project.inputs.values() {
+                ui.push_id(input.id, |ui| {
+                    ui.horizontal(|ui| {
+                        let clicked = ui
+                            .selectable_label(
+                                false,
+                                format!(
+                                    "{}  [{}]  {}",
+                                    input.name,
+                                    input_source_label(&input.source),
+                                    input_source_detail(project, &input.source)
+                                ),
+                            )
+                            .clicked();
+                        if clicked {
+                            if let Some(unit) = unit_id {
+                                self.preview_input(unit, input.id);
+                            } else {
+                                self.status = "select a mixing unit before previewing an input".into();
+                            }
+                        }
+                        if ui.button("Remove").clicked() {
+                            remove = Some(input.id);
+                        }
+                    });
+                });
+            }
+            if let Some(id) = remove {
+                self.remove_managed_input(id);
+            }
+        });
+    }
+
+    fn draw_input_select_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: Option<MixingUnitId>,
+    ) {
+        match self.input_kind {
+            InputSelectKind::Video => {
+                ui.label("Select the Video file to open.");
+                ui.label(openh264_link_label(&self.openh264_path));
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.video_path).desired_width(420.0));
+                    if ui.button("Browse").clicked() {
+                        self.file_browser_open = true;
+                        self.file_browser_dir = default_media_dir();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("FDK AAC (optional)");
+                    ui.text_edit_singleline(&mut self.fdk_aac_path);
+                });
+                if self.file_browser_open {
+                    if let Some(path) = self.draw_file_browser(ui, &["mp4", "mov", "m4v", "avi"]) {
+                        self.video_path = path;
+                    }
+                }
+                self.draw_recent_media(ui, true);
+            }
+            InputSelectKind::Image => {
+                ui.label("Select the Image file to open.");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.image_path).desired_width(420.0));
+                    if ui.button("Browse").clicked() {
+                        self.file_browser_open = true;
+                        self.file_browser_dir = default_pictures_dir();
+                    }
+                });
+                if self.file_browser_open {
+                    if let Some(path) =
+                        self.draw_file_browser(ui, &["png", "jpg", "jpeg", "bmp", "webp"])
+                    {
+                        self.image_path = path;
+                    }
+                }
+                self.draw_recent_media(ui, false);
+            }
+            InputSelectKind::NdiOmt => {
+                ui.heading("OMT");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.omt_address).desired_width(360.0));
+                    if ui.button("Discover").clicked() {
+                        match eiviz_io_omt::discover_sources() {
+                            Ok(sources) => {
+                                self.omt_discovered = sources;
+                                self.status =
+                                    format!("OMT: {} source(s)", self.omt_discovered.len());
+                            }
+                            Err(error) => self.status = format!("OMT discovery: {error}"),
+                        }
+                    }
+                });
+                for address in self.omt_discovered.clone() {
+                    if ui
+                        .selectable_label(self.omt_address == address, &address)
+                        .clicked()
+                    {
+                        self.omt_address = address;
+                    }
+                }
+                ui.separator();
+                ui.heading("NDI");
+                #[cfg(feature = "ndi")]
+                {
+                    if ui.button("Discover NDI").clicked() {
+                        match eiviz_io_ndi::discover_sources(std::time::Duration::from_secs(2)) {
+                            Ok(sources) => {
+                                self.ndi_discovered = sources;
+                                self.status =
+                                    format!("NDI: {} source(s)", self.ndi_discovered.len());
+                            }
+                            Err(error) => self.status = format!("NDI discovery: {error}"),
+                        }
+                    }
+                    for (index, source) in self.ndi_discovered.clone().iter().enumerate() {
+                        if ui
+                            .selectable_label(self.ndi_selected == Some(index), source.label())
+                            .clicked()
+                        {
+                            self.ndi_selected = Some(index);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "ndi"))]
+                ui.label("Build with `--features ndi` after installing the NDI 6 SDK/runtime.");
+            }
+            InputSelectKind::MixFeed => {
+                ui.label("Route another mixing unit's Program or Preview into this unit.");
+                let others: Vec<_> = project
+                    .mixing_units
+                    .values()
+                    .filter(|candidate| unit_id != Some(candidate.id))
+                    .cloned()
+                    .collect();
+                if others.is_empty() {
+                    ui.label("Add another Mixing Unit first, then select it here.");
+                    if ui.button("Add Mixing Unit").clicked() {
+                        let dest = self.active_unit();
+                        let index = self.engine.snapshot().mixing_units.len() + 1;
+                        let unit = MixingUnit::new(format!("Mix {index}"));
+                        let source = unit.id;
+                        self.submit(Command::AddMixingUnit { unit });
+                        self.selected_unit = dest;
+                        self.mixfeed_source = Some(source);
+                    }
+                } else {
+                    if self.mixfeed_source.is_none() {
+                        self.mixfeed_source = others.first().map(|candidate| candidate.id);
+                    }
+                    for candidate in &others {
+                        if ui
+                            .selectable_label(
+                                self.mixfeed_source == Some(candidate.id),
+                                &candidate.name,
+                            )
+                            .clicked()
+                        {
+                            self.mixfeed_source = Some(candidate.id);
+                        }
+                    }
+                    ui.checkbox(&mut self.mixfeed_preview_tap, "Use source Preview");
+                }
+            }
+            InputSelectKind::ColorBars => {
+                ui.label("Add a Color Bars generator.");
+            }
+            InputSelectKind::Color => {
+                ui.label("Add a solid colour source.");
+                ui.horizontal(|ui| {
+                    ui.label("R");
+                    ui.add(egui::DragValue::new(&mut self.color_draft[0]).range(0..=255));
+                    ui.label("G");
+                    ui.add(egui::DragValue::new(&mut self.color_draft[1]).range(0..=255));
+                    ui.label("B");
+                    ui.add(egui::DragValue::new(&mut self.color_draft[2]).range(0..=255));
+                    ui.label("A");
+                    ui.add(egui::DragValue::new(&mut self.color_draft[3]).range(0..=255));
+                });
+            }
+        }
+    }
+
+    fn draw_recent_media(&mut self, ui: &mut egui::Ui, video: bool) {
+        ui.horizontal(|ui| {
+            ui.label("Recent");
+            if !self.recent_media.is_empty() && ui.button("Clear").clicked() {
+                self.recent_media.clear();
+            }
+        });
+        if self.recent_media.is_empty() {
+            ui.label("No recent files. Use Browse, then OK.");
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .max_height(160.0)
+            .show(ui, |ui| {
+                for path in self.recent_media.clone() {
+                    let lower = path.to_ascii_lowercase();
+                    let is_video = [".mp4", ".mov", ".m4v", ".avi"]
+                        .iter()
+                        .any(|ext| lower.ends_with(ext));
+                    if video != is_video {
+                        continue;
+                    }
+                    if ui.selectable_label(false, &path).clicked() {
+                        if video {
+                            self.video_path = path;
+                        } else {
+                            self.image_path = path;
+                        }
+                    }
+                }
+            });
+    }
+
+    fn draw_file_browser(&mut self, ui: &mut egui::Ui, exts: &[&str]) -> Option<String> {
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Up").clicked() {
+                if let Some(parent) = self.file_browser_dir.parent() {
+                    self.file_browser_dir = parent.to_path_buf();
+                }
+            }
+            ui.label(self.file_browser_dir.display().to_string());
+            if ui.button("Close browser").clicked() {
+                self.file_browser_open = false;
+            }
+        });
+        let mut chosen = None;
+        let mut enter = None;
+        let (dirs, files) = list_dir_entries(&self.file_browser_dir, exts);
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .show(ui, |ui| {
+                for dir in dirs {
+                    let name = format!(
+                        "{}/",
+                        dir.file_name().and_then(|n| n.to_str()).unwrap_or("..")
+                    );
+                    if ui.selectable_label(false, name).clicked() {
+                        enter = Some(dir);
+                    }
+                }
+                for file in files {
+                    let name = file
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    if ui.selectable_label(false, name).clicked() {
+                        chosen = Some(file.display().to_string());
+                    }
+                }
+            });
+        if let Some(dir) = enter {
+            self.file_browser_dir = dir;
+        }
+        if chosen.is_some() {
+            self.file_browser_open = false;
+        }
+        chosen
+    }
+
+    fn confirm_input_select(&mut self) {
+        match self.input_kind {
+            InputSelectKind::Video => {
+                if self.video_path.trim().is_empty() {
+                    self.status = "select a video file, then OK".into();
+                    return;
+                }
+                self.remember_media(&self.video_path.clone());
+                self.add_video();
+            }
+            InputSelectKind::Image => {
+                if self.image_path.trim().is_empty() {
+                    self.status = "select an image file, then OK".into();
+                    return;
+                }
+                self.remember_media(&self.image_path.clone());
+                self.add_image();
+            }
+            InputSelectKind::NdiOmt => {
+                if !self.omt_address.trim().is_empty() {
+                    self.connect_omt();
+                    return;
+                }
+                #[cfg(feature = "ndi")]
+                self.connect_ndi();
+                #[cfg(not(feature = "ndi"))]
+                {
+                    self.status = "select an OMT source, then OK".into();
+                }
+            }
+            InputSelectKind::MixFeed => self.add_mix_feed(),
+            InputSelectKind::ColorBars => self.add_color_bars(),
+            InputSelectKind::Color => self.add_solid_color(),
+        }
+    }
+
+    fn remember_media(&mut self, path: &str) {
+        let path = path.trim();
+        if path.is_empty() {
+            return;
+        }
+        self.recent_media.retain(|item| item != path);
+        self.recent_media.insert(0, path.to_owned());
+        self.recent_media.truncate(24);
+    }
+
+    fn add_generated_input(&mut self, input: Input) {
+        let scene = Scene {
+            id: SceneId::new(),
+            name: input.name.clone(),
+            items: vec![SceneItem {
+                id: SceneItemId::new(),
+                input: input.id,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            }],
+        };
+        if let Err(error) = self.engine.submit_payload(Command::AddInput { input }) {
+            self.status = format!("input: {error}");
+            return;
+        }
+        if let Err(error) = self.engine.submit_payload(Command::AddScene {
+            scene: scene.clone(),
+        }) {
+            self.status = format!("scene: {error}");
+            return;
+        }
+        let unit = self.active_unit();
+        if let Err(error) = self.engine.submit_payload(Command::SetPreview {
+            unit,
+            scene: Some(scene.id),
+        }) {
+            self.status = format!("preview: {error}");
+            return;
+        }
+        self.selected_scene = Some(scene.id);
+        self.status = format!("ready: {}", scene.name);
+    }
+
+    fn add_color_bars(&mut self) {
+        self.add_generated_input(Input {
+            id: InputId::new(),
+            name: "Color Bars".into(),
+            tags: vec!["synth".into()],
+            groups: vec![],
+            source: InputSource::ColorBars,
+        });
+    }
+
+    fn add_solid_color(&mut self) {
+        let [r, g, b, a] = self.color_draft;
+        self.add_generated_input(Input {
+            id: InputId::new(),
+            name: format!("Colour {r},{g},{b}"),
+            tags: vec!["synth".into()],
+            groups: vec![],
+            source: InputSource::SolidColor { r, g, b, a },
+        });
+    }
+
+    fn add_empty_scene(&mut self) {
+        let name = self.scene_name_draft.trim();
+        let name = if name.is_empty() {
+            format!("Scene {}", self.engine.snapshot().scenes.len() + 1)
+        } else {
+            name.to_owned()
+        };
+        let scene = Scene {
+            id: SceneId::new(),
+            name,
+            items: vec![],
+        };
+        self.selected_scene = Some(scene.id);
+        self.submit(Command::AddScene { scene });
+    }
+
+    fn add_item_to_selected_scene(&mut self) {
+        let Some(scene) = self.selected_scene else {
+            self.status = "select a scene first".into();
+            return;
+        };
+        let Some(input) = self.scene_add_input else {
+            self.status = "select an input to add to the scene".into();
+            return;
+        };
+        self.submit(Command::AddSceneItem {
+            scene,
+            item: SceneItem {
+                id: SceneItemId::new(),
+                input,
+                transform: Transform2D::fullscreen(),
+                z_order: 0,
+                playback: Default::default(),
+            },
+        });
+    }
+
+    fn remove_scene(&mut self, scene_id: SceneId) {
+        let project = self.engine.snapshot();
+        for unit in project.mixing_units.values() {
+            if unit.preview.scene == Some(scene_id) {
+                let _ = self.engine.submit_payload(Command::SetPreview {
+                    unit: unit.id,
+                    scene: None,
+                });
+            }
+            if unit.program.scene == Some(scene_id) {
+                let _ = self.engine.submit_payload(Command::SetProgram {
+                    unit: unit.id,
+                    scene: None,
+                });
+            }
+            for overlay in &unit.overlays {
+                if overlay.scene == Some(scene_id) {
+                    let _ = self.engine.submit_payload(Command::SetOverlayScene {
+                        unit: unit.id,
+                        overlay: overlay.id,
+                        scene: None,
+                    });
+                }
+            }
+        }
+        if let Err(error) = self.engine.submit_payload(Command::RemoveScene { id: scene_id }) {
+            self.status = format!("remove scene: {error}");
+            return;
+        }
+        if self.selected_scene == Some(scene_id) {
+            self.selected_scene = None;
+        }
+        self.status = "scene removed".into();
+    }
+
+    fn draw_scene_manager(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: Option<MixingUnitId>,
+    ) {
+        ui.heading("Scenes");
+        ui.label(&self.status);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(260.0);
+                ui.label("Scene list");
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        for scene in project.scenes.values() {
+                            let mut badges = Vec::new();
+                            for unit in project.mixing_units.values() {
+                                if unit.preview.scene == Some(scene.id) {
+                                    badges.push(format!("{} PRV", unit.name));
+                                }
+                                if unit.program.scene == Some(scene.id) {
+                                    badges.push(format!("{} PGM", unit.name));
+                                }
+                            }
+                            let text = if badges.is_empty() {
+                                scene.name.clone()
+                            } else {
+                                format!("{}  [{}]", scene.name, badges.join(" / "))
+                            };
+                            if ui
+                                .selectable_label(self.selected_scene == Some(scene.id), text)
+                                .clicked()
+                            {
+                                self.selected_scene = Some(scene.id);
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.scene_name_draft);
+                    if ui.button("New").clicked() {
+                        self.add_empty_scene();
+                    }
+                });
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                let Some(scene_id) = self.selected_scene else {
+                    ui.label("Select a scene.");
+                    return;
+                };
+                let Some(scene) = project.scenes.get(&scene_id).cloned() else {
+                    ui.label("Selected scene is missing.");
+                    return;
+                };
+                ui.label(format!("Scene: {}", scene.name));
+                ui.label(format!("{} item(s)", scene.items.len()));
+                egui::ScrollArea::vertical()
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        let mut remove_item = None;
+                        for item in &scene.items {
+                            ui.push_id(item.id, |ui| {
+                                ui.horizontal(|ui| {
+                                    let input_name = project
+                                        .inputs
+                                        .get(&item.input)
+                                        .map(|input| input.name.as_str())
+                                        .unwrap_or("missing input");
+                                    ui.label(format!("z={}  {}", item.z_order, input_name));
+                                    if ui.button("Remove item").clicked() {
+                                        remove_item = Some(item.id);
+                                    }
+                                });
+                            });
+                        }
+                        if let Some(item) = remove_item {
+                            self.submit(Command::RemoveSceneItem {
+                                scene: scene_id,
+                                item,
+                            });
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    let selected = self
+                        .scene_add_input
+                        .and_then(|id| project.inputs.get(&id).map(|input| input.name.clone()))
+                        .unwrap_or_else(|| "(select input)".into());
+                    egui::ComboBox::from_id_salt("scene-add-input")
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            for input in project.inputs.values() {
+                                ui.selectable_value(
+                                    &mut self.scene_add_input,
+                                    Some(input.id),
+                                    &input.name,
+                                );
+                            }
+                        });
+                    if ui.button("Add item").clicked() {
+                        self.add_item_to_selected_scene();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Preview").clicked() {
+                        if let Some(unit) = unit_id {
+                            self.submit(Command::SetPreview {
+                                unit,
+                                scene: Some(scene_id),
+                            });
+                        } else {
+                            self.status = "select a mixing unit first".into();
+                        }
+                    }
+                    if ui.button("Program").clicked() {
+                        if let Some(unit) = unit_id {
+                            self.submit(Command::SetProgram {
+                                unit,
+                                scene: Some(scene_id),
+                            });
+                        } else {
+                            self.status = "select a mixing unit first".into();
+                        }
+                    }
+                    if ui.button("Delete scene").clicked() {
+                        self.remove_scene(scene_id);
+                    }
+                });
+            });
+        });
+    }
+
+    fn draw_output_manager(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &Project,
+        unit_id: Option<MixingUnitId>,
+    ) {
+        ui.heading("NDI / OMT outputs");
+        ui.label("Each Mixing Unit can emit Preview, Program, and each Multiview as separate NDI/OMT channels.");
+        let Some(unit_id) = unit_id else {
+            ui.label("Select a mixing unit first.");
+            return;
+        };
+        let unit_name = project
+            .mixing_units
+            .get(&unit_id)
+            .map(|unit| unit.name.as_str())
+            .unwrap_or("Mix");
+        ui.label(format!("Mixing Unit: {unit_name}"));
+        ui.separator();
+        #[cfg(feature = "ndi")]
+        {
+            ui.heading("NDI");
+            ui.horizontal(|ui| {
+                ui.label("name prefix");
+                ui.text_edit_singleline(&mut self.ndi_output_name);
+            });
+            ui.checkbox(
+                &mut self.ndi_output_nv12,
+                "NV12 BT.709 limited (otherwise RGBA)",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Start PGM").clicked() {
+                    self.start_ndi_output(unit_id, OutputVideoSource::Program);
+                }
+                if ui.button("Start PRV").clicked() {
+                    self.start_ndi_output(unit_id, OutputVideoSource::Preview);
+                }
+                for view in project
+                    .multiviews
+                    .values()
+                    .filter(|view| view.owner == unit_id)
+                {
+                    if ui.button(format!("Start MV {}", view.name)).clicked() {
+                        self.start_ndi_output(unit_id, OutputVideoSource::Multiview(view.id));
+                    }
+                }
+            });
+        }
+        #[cfg(not(feature = "ndi"))]
+        ui.label("NDI output requires `--features ndi`.");
+        ui.heading("OMT");
+        ui.horizontal(|ui| {
+            ui.label("name prefix");
+            ui.text_edit_singleline(&mut self.omt_output_name);
+        });
+        ui.checkbox(&mut self.omt_output_uyvy, "UYVY 4:2:2 (otherwise BGRA)");
+        ui.horizontal(|ui| {
+            if ui.button("Start PGM").clicked() {
+                self.start_omt_output(unit_id, OutputVideoSource::Program);
+            }
+            if ui.button("Start PRV").clicked() {
+                self.start_omt_output(unit_id, OutputVideoSource::Preview);
+            }
+            for view in project
+                .multiviews
+                .values()
+                .filter(|view| view.owner == unit_id)
+            {
+                if ui.button(format!("Start MV {}", view.name)).clicked() {
+                    self.start_omt_output(unit_id, OutputVideoSource::Multiview(view.id));
+                }
+            }
+        });
+        ui.separator();
+        ui.heading("Active outputs");
+        let mut stop_ndi = None;
+        let mut stop_omt = None;
+        for output in project.outputs.values().filter(|output| {
+            matches!(
+                output.kind,
+                OutputKind::Ndi { .. } | OutputKind::Omt { .. }
+            )
+        }) {
+            ui.push_id(output.id, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "{} → {} {}",
+                        output.name,
+                        project
+                            .mixing_units
+                            .get(&output.owner)
+                            .map(|unit| unit.name.as_str())
+                            .unwrap_or("Mix"),
+                        output_feed_label(project, output.video_source)
+                    ));
+                    if let Some(command) = output_color_format_combo(ui, output) {
+                        if let Err(error) = self.engine.submit_payload(command) {
+                            self.status = format!("output color format: {error}");
+                        }
+                    }
+                    if ui.button("Stop").clicked() {
+                        match output.kind {
+                            OutputKind::Ndi { .. } => stop_ndi = Some(output.id),
+                            OutputKind::Omt { .. } => stop_omt = Some(output.id),
+                            _ => {}
+                        }
+                    }
+                });
+            });
+        }
+        if let Some(id) = stop_ndi {
+            let _ = self.engine.submit_payload(Command::RemoveOutput { id });
+            self.engine.detach_output_sink(id);
+            #[cfg(feature = "ndi")]
+            self.ndi_outputs.retain(|(output, _)| *output != id);
+            self.status = "NDI output stopped".into();
+        }
+        if let Some(id) = stop_omt {
+            let _ = self.engine.submit_payload(Command::RemoveOutput { id });
+            self.engine.detach_output_sink(id);
+            self.omt_outputs.retain(|(output, _)| *output != id);
+            self.status = "OMT output stopped".into();
+        }
     }
 
     #[cfg(feature = "decklink")]
@@ -975,6 +2070,7 @@ impl DesktopApp {
                 binding: binding.id,
             },
             enabled: true,
+            color_format: Some(OutputColorFormat::Bgra8),
             distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
@@ -1043,7 +2139,7 @@ impl DesktopApp {
                 unlocked: eiviz_engine::UnlockedBehavior::Fail,
             },
         );
-        self.omt_connections.push(source);
+        self.omt_connections.push((input.id, source));
         let unit = self.active_unit();
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
@@ -1356,7 +2452,7 @@ impl DesktopApp {
                 unlocked: eiviz_engine::UnlockedBehavior::Fail,
             },
         );
-        self.ndi_connections.push(source);
+        self.ndi_connections.push((input.id, source));
         if let Err(error) = self.engine.submit_payload(Command::SetPreview {
             unit,
             scene: Some(scene.id),
@@ -1369,9 +2465,24 @@ impl DesktopApp {
     }
 
     #[cfg(feature = "ndi")]
-    fn start_ndi_output(&mut self, owner: eiviz_core::MixingUnitId) {
-        let name = self.ndi_output_name.trim().to_owned();
+    fn start_ndi_output(
+        &mut self,
+        owner: eiviz_core::MixingUnitId,
+        source: OutputVideoSource,
+    ) {
         let project = self.engine.snapshot();
+        let feed = output_feed_label(&project, source);
+        let unit_name = project
+            .mixing_units
+            .get(&owner)
+            .map(|unit| unit.name.as_str())
+            .unwrap_or("Mix");
+        let base = self.ndi_output_name.trim();
+        let name = if base.is_empty() {
+            format!("eiviz {unit_name} {feed}")
+        } else {
+            format!("{base} {unit_name} {feed}")
+        };
         let mut config = match eiviz_io_ndi::NdiConfig::for_output(&project.video) {
             Ok(config) => config,
             Err(error) => {
@@ -1399,9 +2510,14 @@ impl DesktopApp {
             id: OutputId::new(),
             name: name.clone(),
             owner,
-            video_source: self.selected_output_source(),
+            video_source: source,
             kind: OutputKind::Ndi { name: name.clone() },
             enabled: true,
+            color_format: Some(if self.ndi_output_nv12 {
+                OutputColorFormat::Nv12
+            } else {
+                OutputColorFormat::Rgba8
+            }),
             distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
@@ -1415,7 +2531,7 @@ impl DesktopApp {
             return;
         }
         self.ndi_outputs.push((output.id, sink));
-        self.status = format!("NDI output started: {name}");
+        self.status = format!("NDI output started: {name} ({feed})");
     }
 
     #[cfg(feature = "audio-cpal")]
@@ -1603,6 +2719,7 @@ impl DesktopApp {
                 binding: binding.id,
             },
             enabled: true,
+            color_format: None,
             distribution: None,
         };
         if let Err(error) = self.engine.submit_payload(Command::AddOutput {
@@ -1930,7 +3047,18 @@ impl DesktopApp {
         unit_id: MixingUnitId,
         unit: Option<&eiviz_core::MixingUnit>,
     ) {
-        ui.heading("Inputs");
+        ui.horizontal(|ui| {
+            ui.heading("Inputs");
+            if ui.button("Manage").clicked() {
+                self.inputs_open = true;
+            }
+            ui.menu_button("Add", |ui| {
+                if ui.button("Image / Video / NDI / OMT / MixFeed…").clicked() {
+                    self.inputs_open = true;
+                    ui.close();
+                }
+            });
+        });
         const TILE_W: f32 = 232.0;
         const PREVIEW_H: f32 = 130.0;
         const TILE_H: f32 = PREVIEW_H + 62.0;
@@ -1950,7 +3078,8 @@ impl DesktopApp {
                             .is_some_and(|id| Some(id) == scene_id);
                         let desired = egui::vec2(TILE_W + 14.0, TILE_H);
                         let (rect, tile_resp) =
-                            ui.allocate_exact_size(desired, egui::Sense::hover());
+                            ui.allocate_exact_size(desired, egui::Sense::click());
+                        let mut handled_click = false;
                         ui.scope_builder(
                             egui::UiBuilder::new()
                                 .max_rect(rect)
@@ -1985,19 +3114,9 @@ impl DesktopApp {
                                             }
                                         });
                                         ui.horizontal(|ui| {
-                                            if ui
-                                                .add_enabled(
-                                                    scene_id.is_some(),
-                                                    egui::Button::new("PRV"),
-                                                )
-                                                .clicked()
-                                                && let Some(scene) = scene_id
-                                            {
-                                                self.selected_scene = Some(scene);
-                                                self.submit(Command::SetPreview {
-                                                    unit: unit_id,
-                                                    scene: Some(scene),
-                                                });
+                                            if ui.button("PRV").clicked() {
+                                                handled_click = true;
+                                                self.preview_input(unit_id, input.id);
                                             }
                                             if ui
                                                 .add_enabled(
@@ -2005,15 +3124,18 @@ impl DesktopApp {
                                                     egui::Button::new("CUT"),
                                                 )
                                                 .clicked()
-                                                && let Some(scene) = scene_id
                                             {
-                                                self.selected_scene = Some(scene);
-                                                self.submit(Command::SetProgram {
-                                                    unit: unit_id,
-                                                    scene: Some(scene),
-                                                });
+                                                handled_click = true;
+                                                if let Some(scene) = scene_id {
+                                                    self.selected_scene = Some(scene);
+                                                    self.submit(Command::SetProgram {
+                                                        unit: unit_id,
+                                                        scene: Some(scene),
+                                                    });
+                                                }
                                             }
                                             if ui.button("FS").clicked() {
+                                                handled_click = true;
                                                 self.output_windows
                                                     .insert(OutputWindow::Input(input.id));
                                             }
@@ -2029,6 +3151,7 @@ impl DesktopApp {
                                                     })
                                                     .clicked()
                                                 {
+                                                    handled_click = true;
                                                     updated.playing = !playback.playing;
                                                     match self
                                                         .engine
@@ -2051,6 +3174,9 @@ impl DesktopApp {
                                     });
                             },
                         );
+                        if tile_resp.clicked() && !handled_click {
+                            self.preview_input(unit_id, input.id);
+                        }
                         if self.layout_audit.tile.is_none() {
                             self.layout_audit.tile = Some(tile_resp.rect);
                         }
@@ -2140,6 +3266,69 @@ impl DesktopApp {
             );
             if close {
                 self.logs_open = false;
+            }
+        }
+
+        if self.inputs_open {
+            let mut close = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("eiviz-inputs"),
+                egui::ViewportBuilder::default()
+                    .with_title("Input Select")
+                    .with_inner_size([960.0, 720.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        self.draw_input_manager(ui, project, unit.as_ref().map(|u| u.id));
+                    });
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.inputs_open = false;
+            }
+        }
+
+        if self.outputs_open {
+            let mut close = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("eiviz-outputs"),
+                egui::ViewportBuilder::default()
+                    .with_title("eiviz Outputs")
+                    .with_inner_size([720.0, 520.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        self.draw_output_manager(ui, project, unit.as_ref().map(|u| u.id));
+                    });
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.outputs_open = false;
+            }
+        }
+
+        if self.scenes_open {
+            let mut close = false;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("eiviz-scenes"),
+                egui::ViewportBuilder::default()
+                    .with_title("Scenes")
+                    .with_inner_size([860.0, 560.0]),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        self.draw_scene_manager(ui, project, unit.as_ref().map(|u| u.id));
+                    });
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        close = true;
+                    }
+                },
+            );
+            if close {
+                self.scenes_open = false;
             }
         }
 
@@ -2674,7 +3863,12 @@ impl eframe::App for DesktopApp {
     #[allow(clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.consume_layout_audit_events(ctx);
-        if let Err(error) = self.engine.tick() {
+        if let Some(error) = self
+            .media_error
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        {
             self.status = format!("Engine boundary failed: {error}");
             if matches!(
                 self.engine.gpu_lifecycle_state(),
@@ -2686,6 +3880,7 @@ impl eframe::App for DesktopApp {
             }
         }
         let project = self.engine.snapshot();
+        self.sample_fps(&project);
         if !project.mixing_units.contains_key(&self.selected_unit) {
             self.selected_unit = self.engine.primary_unit();
         }
@@ -2818,11 +4013,28 @@ impl eframe::App for DesktopApp {
                     }
                 });
                 ui.separator();
-                if ui.button("CUT").clicked() || ui.input(|i| i.key_pressed(egui::Key::Space)) {
-                    self.submit(self.take_command(TransitionStyle::Cut));
-                }
                 ui.label(format!("{:?}", project.compositor));
                 ui.separator();
+                self.draw_fps_badge(ui, &project);
+                ui.separator();
+                if ui
+                    .selectable_label(self.inputs_open, "Inputs")
+                    .clicked()
+                {
+                    self.inputs_open = !self.inputs_open;
+                }
+                if ui
+                    .selectable_label(self.outputs_open, "Outputs")
+                    .clicked()
+                {
+                    self.outputs_open = !self.outputs_open;
+                }
+                if ui
+                    .selectable_label(self.scenes_open, "Scenes")
+                    .clicked()
+                {
+                    self.scenes_open = !self.scenes_open;
+                }
                 ui.label("path");
                 ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(180.0));
                 if ui.button("Save").clicked() {
@@ -2876,6 +4088,8 @@ impl eframe::App for DesktopApp {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.heading("Media ingest");
+                            ui.label("Add Image / Video / NDI / OMT / MixFeed from the Inputs window.");
+                            ui.label(openh264_link_label(&self.openh264_path));
                             ui.horizontal(|ui| {
                                 ui.label("asset root");
                                 ui.text_edit_singleline(&mut self.asset_root);
@@ -2884,26 +4098,8 @@ impl eframe::App for DesktopApp {
                                 }
                             });
                             ui.horizontal(|ui| {
-                                ui.label("image");
-                                ui.text_edit_singleline(&mut self.image_path);
-                                if ui.button("Add Image").clicked() {
-                                    self.add_image();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("H.264/AAC MP4");
-                                ui.text_edit_singleline(&mut self.video_path);
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Cisco OpenH264 2.6.0 binary");
-                                ui.text_edit_singleline(&mut self.openh264_path);
-                            });
-                            ui.horizontal(|ui| {
                                 ui.label("License-reviewed FDK AAC binary");
                                 ui.text_edit_singleline(&mut self.fdk_aac_path);
-                                if ui.button("Add File Media").clicked() {
-                                    self.add_video();
-                                }
                             });
                             ui.horizontal(|ui| {
                                 ui.label("portable");
@@ -3424,41 +4620,54 @@ impl eframe::App for DesktopApp {
             }
             ui.separator();
             ui.heading("Video output routing");
-            let selected_source = self
-                .output_multiview
-                .and_then(|id| project.multiviews.get(&id))
-                .map_or("Program", |view| view.name.as_str());
+            let selected_source = output_feed_label(&project, self.output_source);
             egui::ComboBox::from_id_salt("video-output-source")
                 .selected_text(selected_source)
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(self.output_multiview.is_none(), "Program")
+                        .selectable_label(
+                            self.output_source == OutputVideoSource::Preview,
+                            "Preview",
+                        )
                         .clicked()
                     {
-                        self.output_multiview = None;
+                        self.output_source = OutputVideoSource::Preview;
                     }
-                    for view in project.multiviews.values().filter(|view| view.owner == unit_id) {
+                    if ui
+                        .selectable_label(
+                            self.output_source == OutputVideoSource::Program,
+                            "Program",
+                        )
+                        .clicked()
+                    {
+                        self.output_source = OutputVideoSource::Program;
+                    }
+                    for view in project
+                        .multiviews
+                        .values()
+                        .filter(|view| view.owner == unit_id)
+                    {
+                        let source = OutputVideoSource::Multiview(view.id);
                         if ui
                             .selectable_label(
-                                self.output_multiview == Some(view.id),
+                                self.output_source == source,
                                 format!("Multiview: {}", view.name),
                             )
                             .clicked()
                         {
-                            self.output_multiview = Some(view.id);
+                            self.output_source = source;
                         }
                     }
                 });
             ui.label(
-                "The selection applies independently to new NDI, OMT, DeckLink, RTMP, SRT, and MP4 outputs.",
+                "New NDI/OMT outputs can be started per Preview, Program, and each Multiview. Use the Outputs window to start several feeds at once.",
             );
             ui.separator();
             ui.heading("Distribution");
             ui.label(
                 "Explicit baseline: hash/version-verified Cisco OpenH264 2.6.0 + raw FDK AAC-LC. FDK's upstream license grants no patent rights; use only a reviewed binary. No fallback.",
             );
-            ui.label("Cisco OpenH264 2.6.0 dynamic binary");
-            ui.text_edit_singleline(&mut self.openh264_path);
+            ui.label(openh264_link_label(&self.openh264_path));
             ui.label("License-reviewed FDK AAC dynamic binary");
             ui.text_edit_singleline(&mut self.fdk_aac_path);
             ui.label("RTMP H.264/AAC in FLV");
@@ -3877,31 +5086,9 @@ impl eframe::App for DesktopApp {
                 "Build with `--features midi` to compile the platform midir backend. No no-op MIDI listener is present in portable builds.",
             );
             ui.separator();
-            ui.heading("OMT Capture");
-            ui.text_edit_singleline(&mut self.omt_address);
-            ui.horizontal(|ui| {
-                if ui.button("Discover").clicked() {
-                    match eiviz_io_omt::discover_sources() {
-                        Ok(sources) => {
-                            self.omt_discovered = sources;
-                            self.status = format!("OMT: {} source(s)", self.omt_discovered.len());
-                        }
-                        Err(error) => self.status = format!("OMT discovery: {error}"),
-                    }
-                }
-                if ui.button("Connect").clicked() {
-                    self.connect_omt();
-                }
-            });
-            for address in &self.omt_discovered {
-                if ui
-                    .selectable_label(self.omt_address == *address, address)
-                    .clicked()
-                {
-                    self.omt_address.clone_from(address);
-                }
-            }
-            for source in &self.omt_connections {
+            ui.heading("OMT");
+            ui.label("Add OMT inputs from the Inputs window.");
+            for (_id, source) in &self.omt_connections {
                 let detail = source
                     .last_error()
                     .unwrap_or_else(|| "no adapter error".into());
@@ -4100,31 +5287,8 @@ impl eframe::App for DesktopApp {
             });
             #[cfg(feature = "ndi")]
             {
-                ui.horizontal(|ui| {
-                    if ui.button("Discover NDI").clicked() {
-                        match eiviz_io_ndi::discover_sources(std::time::Duration::from_secs(2)) {
-                            Ok(sources) => {
-                                self.ndi_discovered = sources;
-                                self.ndi_selected = None;
-                                self.status =
-                                    format!("NDI: {} source(s)", self.ndi_discovered.len());
-                            }
-                            Err(error) => self.status = format!("NDI discovery: {error}"),
-                        }
-                    }
-                    if ui.button("Connect NDI").clicked() {
-                        self.connect_ndi();
-                    }
-                });
-                for (index, source) in self.ndi_discovered.iter().enumerate() {
-                    if ui
-                        .selectable_label(self.ndi_selected == Some(index), source.label())
-                        .clicked()
-                    {
-                        self.ndi_selected = Some(index);
-                    }
-                }
-                for source in &self.ndi_connections {
+                ui.label("Add NDI inputs from the Inputs window.");
+                for (_id, source) in &self.ndi_connections {
                     let detail = source
                         .last_error()
                         .unwrap_or_else(|| "no adapter error".into());
@@ -4159,7 +5323,7 @@ impl eframe::App for DesktopApp {
                     "NV12 BT.709 limited output (otherwise RGBA)",
                 );
                 if ui.button("Start NDI Output").clicked() {
-                    self.start_ndi_output(unit_id);
+                    self.start_ndi_output(unit_id, self.selected_output_source());
                 }
                 let mut stop_output = None;
                 for (output_id, sink) in &self.ndi_outputs {
@@ -4184,6 +5348,11 @@ impl eframe::App for DesktopApp {
                             sink.dropped_frames(),
                             sink.receiver_tally(),
                         ));
+                        if let Some(output) = project.outputs.get(output_id)
+                            && let Some(command) = output_color_format_combo(ui, output)
+                        {
+                            let _ = self.engine.submit_payload(command);
+                        }
                         if ui.button("Stop NDI Output").clicked() {
                             stop_output = Some(*output_id);
                         }
@@ -4204,66 +5373,7 @@ impl eframe::App for DesktopApp {
             ui.text_edit_singleline(&mut self.omt_output_name);
             ui.checkbox(&mut self.omt_output_uyvy, "UYVY 4:2:2 (otherwise BGRA)");
             if ui.button("Start OMT Output").clicked() {
-                let output_name = self.omt_output_name.trim().to_owned();
-                let color_profile = match project.video.color {
-                    eiviz_core::ColorSpace::Bt709Sdr => {
-                        Some(eiviz_io_omt::OmtColorProfile::Bt709Limited)
-                    }
-                    eiviz_core::ColorSpace::Bt2020Pq | eiviz_core::ColorSpace::Bt2020Hlg => None,
-                };
-                let Some(color_profile) = color_profile else {
-                    self.status =
-                        "OMT output supports only an explicit Bt709Sdr project profile".into();
-                    return;
-                };
-                let config = eiviz_io_omt::OmtOutputConfig {
-                    pixel_format: if self.omt_output_uyvy {
-                        eiviz_io_omt::OmtOutputPixelFormat::Uyvy
-                    } else {
-                        eiviz_io_omt::OmtOutputPixelFormat::Bgra
-                    },
-                    color_profile,
-                    send_queue_depth: 4,
-                };
-                match eiviz_io_omt::OmtSink::create_for_video_format(
-                    &output_name,
-                    &project.video,
-                    config,
-                ) {
-                    Ok(sink) => {
-                        let sink = Arc::new(sink);
-                        let output = Output {
-                            id: OutputId::new(),
-                            name: output_name.clone(),
-                            owner: unit_id,
-                            video_source: self.selected_output_source(),
-                            kind: OutputKind::Omt {
-                                url: output_name.clone(),
-                            },
-                            enabled: true,
-                            distribution: None,
-                        };
-                        match self.engine.submit_payload(Command::AddOutput {
-                            output: output.clone(),
-                        }) {
-                            Ok(_) => {
-                                match self.engine.attach_output_sink(output.id, sink.clone()) {
-                                    Ok(()) => {
-                                        self.omt_outputs.push((output.id, sink));
-                                        self.status = format!("OMT output started: {output_name}");
-                                    }
-                                    Err(error) => {
-                                        self.status = format!("OMT output route: {error}");
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                self.status = format!("OMT output project: {error}");
-                            }
-                        }
-                    }
-                    Err(error) => self.status = format!("OMT output: {error}"),
-                }
+                self.start_omt_output(unit_id, self.selected_output_source());
             }
             if let Some(u) = &unit {
                 ui.separator();
@@ -4350,31 +5460,7 @@ impl eframe::App for DesktopApp {
                         });
                     });
                 }
-                ui.heading("MixFeed");
-                ui.label("Route another mixing unit's Program/Preview into this unit, then TAKE that scene.");
-                let source_label = self
-                    .mixfeed_source
-                    .and_then(|id| project.mixing_units.get(&id).map(|unit| unit.name.clone()))
-                    .unwrap_or_else(|| "(select source)".into());
-                egui::ComboBox::from_id_salt("mixfeed-source")
-                    .selected_text(source_label)
-                    .show_ui(ui, |ui| {
-                        for candidate in project.mixing_units.values() {
-                            if candidate.id == u.id {
-                                continue;
-                            }
-                            ui.selectable_value(
-                                &mut self.mixfeed_source,
-                                Some(candidate.id),
-                                &candidate.name,
-                            );
-                        }
-                    });
-                ui.checkbox(&mut self.mixfeed_preview_tap, "Use source Preview");
-                if ui.button("Add MixFeed scene").clicked() {
-                    self.add_mix_feed();
-                }
-                            }
+            }
                         });
                     });
                     if ctx.input(|i| i.viewport().close_requested()) {
@@ -4402,7 +5488,217 @@ impl eframe::App for DesktopApp {
 
 impl Drop for DesktopApp {
     fn drop(&mut self) {
+        self.media_stop.store(true, Ordering::Release);
         self.control_stop.store(true, Ordering::Release);
+        if let Some(thread) = self.media_thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn bundled_openh264_file_name() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("openh264-2.6.0-win64.dll")
+    } else if cfg!(all(windows, target_arch = "x86")) {
+        Some("openh264-2.6.0-win32.dll")
+    } else if cfg!(all(windows, target_arch = "aarch64")) {
+        Some("openh264-2.6.0-win-arm64.dll")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("libopenh264-2.6.0-linux64.8.so")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("libopenh264-2.6.0-mac-x64.dylib")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("libopenh264-2.6.0-mac-arm64.dylib")
+    } else {
+        None
+    }
+}
+
+fn resolve_openh264_binary() -> String {
+    if let Ok(path) = std::env::var("EIVIZ_OPENH264_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).is_file() {
+            return trimmed.to_owned();
+        }
+    }
+    let Some(file_name) = bundled_openh264_file_name() else {
+        return String::new();
+    };
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(file_name));
+            candidates.push(dir.join("runtime").join("openh264").join(file_name));
+        }
+    }
+    candidates.push(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("runtime")
+            .join("openh264")
+            .join(file_name),
+    );
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn openh264_link_label(path: &str) -> String {
+    if path.is_empty() {
+        "OpenH264 2.6.0: not linked".into()
+    } else {
+        format!(
+            "OpenH264 2.6.0 linked ({})",
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path)
+        )
+    }
+}
+
+fn default_user_dir(sub: &str) -> PathBuf {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        let candidate = PathBuf::from(&profile).join(sub);
+        if candidate.is_dir() {
+            return candidate;
+        }
+        return PathBuf::from(profile);
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_media_dir() -> PathBuf {
+    default_user_dir("Videos")
+}
+
+fn default_pictures_dir() -> PathBuf {
+    default_user_dir("Pictures")
+}
+
+fn list_dir_entries(dir: &Path, exts: &[&str]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (dirs, files);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+            continue;
+        };
+        let ext = ext.to_ascii_lowercase();
+        if exts.iter().any(|want| ext == *want) {
+            files.push(path);
+        }
+    }
+    dirs.sort();
+    files.sort();
+    (dirs, files)
+}
+
+fn output_feed_label(project: &Project, source: OutputVideoSource) -> String {
+    match source {
+        OutputVideoSource::Program => "PGM".into(),
+        OutputVideoSource::Preview => "PRV".into(),
+        OutputVideoSource::Multiview(id) => project
+            .multiviews
+            .get(&id)
+            .map(|view| format!("MV {}", view.name))
+            .unwrap_or_else(|| format!("MV {id}")),
+    }
+}
+
+fn output_color_format_label(format: OutputColorFormat) -> &'static str {
+    match format {
+        OutputColorFormat::Rgba8 => "RGBA",
+        OutputColorFormat::Bgra8 => "BGRA",
+        OutputColorFormat::Nv12 => "NV12",
+        OutputColorFormat::Uyvy => "UYVY",
+    }
+}
+
+fn output_color_format_combo(ui: &mut egui::Ui, output: &Output) -> Option<Command> {
+    let allowed = OutputColorFormat::allowed_for(&output.kind);
+    if allowed.is_empty() {
+        return None;
+    }
+    let current = output.effective_color_format();
+    let mut selected = None;
+    egui::ComboBox::from_id_salt(("output-color-format", output.id))
+        .selected_text(
+            current
+                .map(output_color_format_label)
+                .unwrap_or("—"),
+        )
+        .show_ui(ui, |ui| {
+            for format in allowed {
+                if ui
+                    .selectable_label(current == Some(*format), output_color_format_label(*format))
+                    .clicked()
+                {
+                    selected = Some(*format);
+                }
+            }
+        });
+    selected.filter(|format| current != Some(*format)).map(|format| {
+        Command::SetOutputColorFormat {
+            id: output.id,
+            format: Some(format),
+        }
+    })
+}
+
+fn input_source_label(source: &InputSource) -> &'static str {
+    match source {
+        InputSource::ColorBars => "ColorBars",
+        InputSource::SolidColor { .. } => "Color",
+        InputSource::Image { .. } => "Image",
+        InputSource::Video { .. } => "Video",
+        InputSource::Ndi { .. } => "NDI",
+        InputSource::Omt { .. } => "OMT",
+        InputSource::DeckLink { .. } => "DeckLink",
+        InputSource::AudioDevice { .. } => "Audio",
+        InputSource::MixFeed { .. } => "MixFeed",
+    }
+}
+
+fn input_source_detail(project: &Project, source: &InputSource) -> String {
+    match source {
+        InputSource::ColorBars => String::new(),
+        InputSource::SolidColor { r, g, b, a } => format!("rgba({r},{g},{b},{a})"),
+        InputSource::Image { asset } => project
+            .assets
+            .get(asset)
+            .map(|asset| asset.original_name.clone())
+            .unwrap_or_else(|| asset.to_string()),
+        InputSource::Video { asset, .. } => project
+            .assets
+            .get(asset)
+            .map(|asset| asset.original_name.clone())
+            .unwrap_or_else(|| asset.to_string()),
+        InputSource::Ndi { source_name } => source_name.clone(),
+        InputSource::Omt { url } => url.clone(),
+        InputSource::DeckLink { binding } | InputSource::AudioDevice { binding } => {
+            binding.to_string()
+        }
+        InputSource::MixFeed { unit, tap } => {
+            let name = project
+                .mixing_units
+                .get(unit)
+                .map(|unit| unit.name.as_str())
+                .unwrap_or("unknown");
+            let tap = match tap {
+                MixTap::Program => "PGM",
+                MixTap::Preview => "PRV",
+            };
+            format!("{name} {tap}")
+        }
     }
 }
 

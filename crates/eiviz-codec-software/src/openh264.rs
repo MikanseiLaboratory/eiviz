@@ -36,7 +36,7 @@ pub enum OpenH264Error {
     Decode(i32),
     #[error("OpenH264 produced invalid I420 output: {0}")]
     InvalidOutput(String),
-    #[error("I420 to RGBA conversion failed: {0}")]
+    #[error("I420 to NV12 packing failed: {0}")]
     ColorConversion(String),
 }
 
@@ -172,29 +172,25 @@ impl OpenH264Decoder {
         let y_plane = unsafe { std::slice::from_raw_parts(planes[0], y_len) };
         let u_plane = unsafe { std::slice::from_raw_parts(planes[1], uv_len) };
         let v_plane = unsafe { std::slice::from_raw_parts(planes[2], uv_len) };
-        let image = yuv::YuvPlanarImage {
-            y_plane,
-            y_stride,
-            u_plane,
-            u_stride: uv_stride,
-            v_plane,
-            v_stride: uv_stride,
-            width,
-            height,
-        };
-        let output_len = (width as usize)
+        let nv12_len = (width as usize)
             .checked_mul(height as usize)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or_else(|| OpenH264Error::InvalidOutput("RGBA size overflow".into()))?;
-        let mut rgba = vec![0; output_len];
-        yuv::yuv420_to_rgba(
-            &image,
-            &mut rgba,
-            width * 4,
-            yuv::YuvRange::Limited,
-            yuv::YuvStandardMatrix::Bt709,
-        )
-        .map_err(|error| OpenH264Error::ColorConversion(error.to_string()))?;
+            .and_then(|pixels| pixels.checked_mul(3)?.checked_div(2))
+            .ok_or_else(|| OpenH264Error::InvalidOutput("NV12 size overflow".into()))?;
+        let mut nv12 = vec![0_u8; nv12_len];
+        let luma_stride = width as usize;
+        for row in 0..height as usize {
+            let src = row * y_stride as usize;
+            let dst = row * luma_stride;
+            nv12[dst..dst + luma_stride].copy_from_slice(&y_plane[src..src + luma_stride]);
+        }
+        let uv_start = luma_stride * height as usize;
+        for row in 0..chroma_height as usize {
+            for col in 0..chroma_width as usize {
+                let dst = uv_start + row * luma_stride + col * 2;
+                nv12[dst] = u_plane[row * uv_stride as usize + col];
+                nv12[dst + 1] = v_plane[row * uv_stride as usize + col];
+            }
+        }
 
         Ok(Some(VideoFrame {
             id,
@@ -204,10 +200,10 @@ impl OpenH264Decoder {
             clock_observation: None,
             width,
             height,
-            format: PixelFormat::Rgba8,
+            format: PixelFormat::Nv12,
             color: eiviz_core::ColorSpace::Bt709Sdr.metadata(),
             field: eiviz_core::FieldKind::Progressive,
-            data: rgba.into(),
+            data: nv12.into(),
             discontinuity: false,
         }))
     }

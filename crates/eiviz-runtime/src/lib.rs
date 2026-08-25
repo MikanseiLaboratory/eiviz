@@ -7,6 +7,8 @@ use eiviz_core::{
     Project, RouteMode, Transform2D, TransitionStyle,
 };
 use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
+#[cfg(feature = "wgpu-backend")]
+use eiviz_gpu::{CompositeSource, GpuFill, WgpuTextureFrame};
 use eiviz_media::{
     AsrcDiagnostics, AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy,
     StreamingAsrc, VideoFrame,
@@ -247,6 +249,15 @@ pub struct TickMetrics {
     pub timing_unlocked_sources: usize,
     pub auxiliary_load_shedding_state: AuxiliaryLoadSheddingState,
     pub auxiliary_admission_diagnostic: Option<String>,
+    pub gpu_readbacks: u64,
+}
+
+/// Buses that need a CPU `VideoFrame` this tick, with the egress pixel format.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CpuVideoDemand {
+    pub programs: HashMap<MixingUnitId, Vec<eiviz_media::PixelFormat>>,
+    pub previews: HashMap<MixingUnitId, Vec<eiviz_media::PixelFormat>>,
+    pub multiviews: HashMap<MultiviewId, Vec<eiviz_media::PixelFormat>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -435,6 +446,35 @@ pub struct Runtime {
     preview_textures: HashMap<MixingUnitId, eiviz_gpu::WgpuTextureFrame>,
     #[cfg(feature = "wgpu-backend")]
     multiview_textures: HashMap<MultiviewId, eiviz_gpu::WgpuTextureFrame>,
+    cpu_demand: CpuVideoDemand,
+    last_program_by_format: HashMap<(MixingUnitId, eiviz_media::PixelFormat), VideoFrame>,
+    last_preview_by_format: HashMap<(MixingUnitId, eiviz_media::PixelFormat), VideoFrame>,
+    last_multiview_by_format: HashMap<(MultiviewId, eiviz_media::PixelFormat), VideoFrame>,
+    #[allow(dead_code)]
+    last_gpu_readbacks: u64,
+    generator_pixels: HashMap<(u32, u32, u8, u8, u8, u8, bool), Arc<[u8]>>,
+    #[cfg(feature = "wgpu-backend")]
+    scratch_gpu_inputs: HashMap<InputId, WgpuTextureFrame>,
+    #[cfg(feature = "wgpu-backend")]
+    gpu_source_slots: HashMap<InputId, WgpuTextureFrame>,
+    #[cfg(feature = "wgpu-backend")]
+    gpu_still_keys: HashMap<InputId, GpuStillKey>,
+}
+
+struct ProducedFrame {
+    cpu: HashMap<eiviz_media::PixelFormat, VideoFrame>,
+    #[cfg(feature = "wgpu-backend")]
+    gpu: Option<WgpuTextureFrame>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "wgpu-backend"), allow(dead_code))]
+enum GpuStillKey {
+    ColorBars { width: u32, height: u32 },
+    Solid { width: u32, height: u32, rgba: [u8; 4] },
+    Image { asset: AssetId, width: u32, height: u32 },
+    Slate { width: u32, height: u32 },
+    Black { width: u32, height: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -526,11 +566,261 @@ impl Runtime {
             preview_textures: HashMap::new(),
             #[cfg(feature = "wgpu-backend")]
             multiview_textures: HashMap::new(),
+            cpu_demand: CpuVideoDemand::default(),
+            last_program_by_format: HashMap::new(),
+            last_preview_by_format: HashMap::new(),
+            last_multiview_by_format: HashMap::new(),
+            last_gpu_readbacks: 0,
+            generator_pixels: HashMap::new(),
+            #[cfg(feature = "wgpu-backend")]
+            scratch_gpu_inputs: HashMap::new(),
+            #[cfg(feature = "wgpu-backend")]
+            gpu_source_slots: HashMap::new(),
+            #[cfg(feature = "wgpu-backend")]
+            gpu_still_keys: HashMap::new(),
         })
     }
 
     pub fn backend(&self) -> CompositorBackend {
         self.backend
+    }
+
+    pub fn set_cpu_video_demand(&mut self, demand: CpuVideoDemand) {
+        self.cpu_demand = demand;
+    }
+
+    pub fn set_cpu_video_required(&mut self, required: bool) {
+        if required {
+            return;
+        }
+        self.cpu_demand = CpuVideoDemand::default();
+    }
+
+    fn cached_generator_frame(
+        &mut self,
+        project: &Project,
+        pts: MediaTime,
+        width: u32,
+        height: u32,
+        rgba: (u8, u8, u8, u8),
+        bars: bool,
+    ) -> VideoFrame {
+        let key = (width, height, rgba.0, rgba.1, rgba.2, rgba.3, bars);
+        let pixels = self
+            .generator_pixels
+            .entry(key)
+            .or_insert_with(|| {
+                let frame = if bars {
+                    color_bars(0, pts, width, height)
+                } else {
+                    VideoFrame::rgba_solid(0, pts, width, height, [rgba.0, rgba.1, rgba.2, rgba.3])
+                };
+                frame.data
+            })
+            .clone();
+        VideoFrame {
+            id: self.frame,
+            source: None,
+            pts,
+            capture_domain: ClockDomain::Virtual,
+            clock_observation: None,
+            width,
+            height,
+            format: eiviz_media::PixelFormat::Rgba8,
+            color: project.video.color_metadata(),
+            field: project.video.field_at(self.frame),
+            data: pixels,
+            discontinuity: false,
+        }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn publish_gpu_frame(
+        &mut self,
+        id: InputId,
+        frame: &VideoFrame,
+        overwrite: bool,
+    ) -> Result<()> {
+        let gpu = self.wgpu.as_ref().ok_or_else(|| {
+            RuntimeError::Gpu("wgpu compositor was not constructed".into())
+        })?;
+        let texture = gpu
+            .retain_source(id, frame, overwrite)
+            .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+        self.gpu_source_slots.insert(id, texture);
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn bind_still_gpu(
+        &mut self,
+        id: InputId,
+        key: GpuStillKey,
+        frame: &VideoFrame,
+    ) -> Result<()> {
+        if self.gpu_still_keys.get(&id) == Some(&key) && self.gpu_source_slots.contains_key(&id)
+        {
+            return Ok(());
+        }
+        self.publish_gpu_frame(id, frame, false)?;
+        self.gpu_still_keys.insert(id, key);
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn fill_still_gpu(
+        &mut self,
+        id: InputId,
+        key: GpuStillKey,
+        fill: GpuFill,
+        project: &Project,
+        pts: MediaTime,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if self.gpu_still_keys.get(&id) == Some(&key) && self.gpu_source_slots.contains_key(&id) {
+            if let Some(slot) = self.gpu_source_slots.get_mut(&id) {
+                slot.pts = pts;
+                slot.frame_id = self.frame;
+            }
+            return Ok(());
+        }
+        let gpu = self.wgpu.as_ref().ok_or_else(|| {
+            RuntimeError::Gpu("wgpu compositor was not constructed".into())
+        })?;
+        let texture = gpu
+            .fill_source(
+                id,
+                width,
+                height,
+                fill,
+                pts,
+                self.frame,
+                project.video.color_metadata(),
+                project.video.field_at(self.frame),
+            )
+            .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+        self.gpu_source_slots.insert(id, texture);
+        self.gpu_still_keys.insert(id, key);
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn hold_gpu_last_good(&mut self, id: InputId, pts: MediaTime, why: &str) -> Result<()> {
+        let slot = self.gpu_source_slots.get_mut(&id).ok_or_else(|| {
+            RuntimeError::MissingMedia(format!(
+                "LastGood requested but no prior frame ({why})"
+            ))
+        })?;
+        slot.pts = pts;
+        slot.frame_id = self.frame;
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn gpu_apply_missing(
+        &mut self,
+        project: &Project,
+        id: InputId,
+        w: u32,
+        h: u32,
+        pts: MediaTime,
+        why: &str,
+    ) -> Result<()> {
+        match project.missing_media {
+            MissingMediaPolicy::Fail => Err(RuntimeError::MissingMedia(why.into())),
+            MissingMediaPolicy::Slate => self.fill_still_gpu(
+                id,
+                GpuStillKey::Slate {
+                    width: w,
+                    height: h,
+                },
+                GpuFill::Solid { rgba: SLATE_RGBA },
+                project,
+                pts,
+                w,
+                h,
+            ),
+            MissingMediaPolicy::LastGood => self.hold_gpu_last_good(id, pts, why),
+        }
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn emit_live_gpu(&mut self, id: InputId, frame: &VideoFrame, overwrite: bool) -> Result<()> {
+        self.gpu_still_keys.remove(&id);
+        self.publish_gpu_frame(id, frame, overwrite)
+    }
+
+    fn still_slot_fresh(
+        &mut self,
+        id: InputId,
+        source: &InputSource,
+        w: u32,
+        h: u32,
+        pts: MediaTime,
+    ) -> bool {
+        #[cfg(feature = "wgpu-backend")]
+        {
+            if !self.gpu_inputs_enabled() {
+                return false;
+            }
+            if self.sources.contains_key(&id) || self.simulated.contains_key(&id) {
+                return false;
+            }
+            let matches_key = match source {
+                InputSource::ColorBars => {
+                    self.gpu_still_keys.get(&id)
+                        == Some(&GpuStillKey::ColorBars {
+                            width: w,
+                            height: h,
+                        })
+                }
+                InputSource::SolidColor { r, g, b, a } => {
+                    self.gpu_still_keys.get(&id)
+                        == Some(&GpuStillKey::Solid {
+                            width: w,
+                            height: h,
+                            rgba: [*r, *g, *b, *a],
+                        })
+                }
+                InputSource::AudioDevice { .. } => {
+                    self.gpu_still_keys.get(&id)
+                        == Some(&GpuStillKey::Black {
+                            width: w,
+                            height: h,
+                        })
+                }
+                InputSource::Image { asset } => {
+                    self.gpu_still_keys.get(&id).is_some_and(|key| {
+                        matches!(key, GpuStillKey::Image { asset: bound, .. } if bound == asset)
+                    })
+                }
+                InputSource::Video { .. }
+                | InputSource::Ndi { .. }
+                | InputSource::Omt { .. }
+                | InputSource::DeckLink { .. } => {
+                    self.gpu_still_keys.get(&id)
+                        == Some(&GpuStillKey::Slate {
+                            width: w,
+                            height: h,
+                        })
+                }
+                InputSource::MixFeed { .. } => false,
+            };
+            if matches_key && self.gpu_source_slots.contains_key(&id) {
+                if let Some(slot) = self.gpu_source_slots.get_mut(&id) {
+                    slot.pts = pts;
+                    slot.frame_id = self.frame;
+                }
+                return true;
+            }
+            false
+        }
+        #[cfg(not(feature = "wgpu-backend"))]
+        {
+            let _ = (id, source, w, h, pts);
+            false
+        }
     }
 
     pub fn compositor_detail(&self) -> String {
@@ -559,6 +849,23 @@ impl Runtime {
     pub fn set_asset_root(&mut self, root: impl Into<PathBuf>) {
         self.asset_root = Some(root.into());
         self.image_cache.clear();
+        #[cfg(feature = "wgpu-backend")]
+        {
+            let stale = self
+                .gpu_still_keys
+                .iter()
+                .filter_map(|(id, key)| {
+                    matches!(key, GpuStillKey::Image { .. }).then_some(*id)
+                })
+                .collect::<Vec<_>>();
+            for id in stale {
+                self.gpu_still_keys.remove(&id);
+                self.gpu_source_slots.remove(&id);
+                if let Some(gpu) = &self.wgpu {
+                    gpu.forget_source(id);
+                }
+            }
+        }
     }
 
     pub fn inject_simulated(&mut self, id: InputId, frame: VideoFrame) {
@@ -584,6 +891,14 @@ impl Runtime {
         self.source_timing.remove(&id);
         self.last_good_inputs.remove(&id);
         self.input_asrc.remove(&id);
+        #[cfg(feature = "wgpu-backend")]
+        {
+            self.gpu_source_slots.remove(&id);
+            self.gpu_still_keys.remove(&id);
+            if let Some(gpu) = &self.wgpu {
+                gpu.forget_source(id);
+            }
+        }
     }
 
     pub fn audio_source_diagnostics(&self) -> Vec<AudioIoDiagnostics> {
@@ -710,10 +1025,14 @@ impl Runtime {
         }
         let gpu = self
             .wgpu
-            .as_ref()
+            .clone()
             .ok_or_else(|| RuntimeError::Gpu("wgpu compositor was not constructed".into()))?;
         if let Some(loss) = gpu.diagnostics().device_loss {
             let reason = format!("{}: {}", loss.reason, loss.message);
+            gpu.clear_source_caches();
+            self.gpu_source_slots.clear();
+            self.gpu_still_keys.clear();
+            self.scratch_gpu_inputs.clear();
             self.gpu_state = GpuRuntimeState::Degraded {
                 reason: reason.clone(),
             };
@@ -753,7 +1072,8 @@ impl Runtime {
             .iter()
             .map(|plan| plan.layers.len())
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .saturating_add(snapshot.project().inputs.len());
         compositor
             .prewarm_snapshot(
                 &plans,
@@ -763,9 +1083,13 @@ impl Runtime {
             )
             .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
         compositor.clear_latest_output();
+        compositor.clear_source_caches();
         self.program_textures.clear();
         self.preview_textures.clear();
         self.multiview_textures.clear();
+        self.gpu_source_slots.clear();
+        self.gpu_still_keys.clear();
+        self.scratch_gpu_inputs.clear();
         self.wgpu = Some(compositor);
         self.gpu_state = GpuRuntimeState::Active;
         Ok(())
@@ -850,7 +1174,8 @@ impl Runtime {
                 .iter()
                 .map(|plan| plan.layers.len())
                 .max()
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .saturating_add(project.inputs.len());
             gpu.prewarm_snapshot(
                 &plans,
                 project.video.width,
@@ -899,6 +1224,9 @@ impl Runtime {
             self.program_textures.clear();
             self.preview_textures.clear();
             self.multiview_textures.clear();
+            self.gpu_source_slots.retain(|id, _| project.inputs.contains_key(id));
+            self.gpu_still_keys.retain(|id, _| project.inputs.contains_key(id));
+            self.scratch_gpu_inputs.clear();
         }
         self.active_snapshot = Some(snapshot);
         Ok(())
@@ -954,25 +1282,65 @@ impl Runtime {
         let mut sources = self.generate_sources(project, pts, deadline_monotonic_nanos)?;
         let mut programs = HashMap::new();
         let mut previews = HashMap::new();
+        let mut program_frames = HashMap::new();
+        let mut preview_frames = HashMap::new();
+        #[cfg(feature = "wgpu-backend")]
+        let mut gpu_programs: HashMap<MixingUnitId, WgpuTextureFrame> = HashMap::new();
+        #[cfg(feature = "wgpu-backend")]
+        let mut gpu_previews: HashMap<MixingUnitId, WgpuTextureFrame> = HashMap::new();
         for &unit_id in snapshot.render.order.iter() {
             let Some(unit) = project.mixing_units.get(&unit_id) else {
                 continue;
             };
             fill_mixfeeds(project, &mut sources, &programs, &previews);
+            #[cfg(feature = "wgpu-backend")]
+            {
+                let mut gpu_sources = self.gpu_source_slots.clone();
+                fill_mixfeeds_gpu(
+                    project,
+                    &mut gpu_sources,
+                    &gpu_programs,
+                    &gpu_previews,
+                );
+                self.scratch_gpu_inputs.clone_from(&gpu_sources);
+            }
             let pg_plan = snapshot
                 .render
                 .programs
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
-            let mut pg = self.composite_plan(pg_plan, &sources, pts)?;
+            let program_formats = if self.backend == CompositorBackend::CpuReference {
+                Vec::new()
+            } else {
+                self.cpu_demand
+                    .programs
+                    .get(&unit_id)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let mut pg = self.produce_plan(
+                pg_plan,
+                &sources,
+                pts,
+                0,
+                unit_id.0.as_u128(),
+                &program_formats,
+            )?;
             if let Some(transition) = self.transitions.get(&unit_id).cloned() {
-                let from = self.composite_plan(&transition.from, &sources, pts)?;
+                let from = self.produce_plan(
+                    &transition.from,
+                    &sources,
+                    pts,
+                    0,
+                    unit_id.0.as_u128(),
+                    &program_formats,
+                )?;
                 let elapsed = transition
                     .duration_frames
                     .saturating_sub(transition.remaining_frames)
                     .saturating_add(1);
                 let factor = elapsed as f32 / transition.duration_frames as f32;
-                pg = self.mix_transition(&from, &pg, factor.min(1.0), pts)?;
+                pg = self.mix_produced(&from, &pg, factor.min(1.0), pts, 0, unit_id.0.as_u128(), &program_formats)?;
                 if transition.remaining_frames <= 1 {
                     self.transitions.remove(&unit_id);
                 } else if let Some(live) = self.transitions.get_mut(&unit_id) {
@@ -980,43 +1348,97 @@ impl Runtime {
                 }
             }
             #[cfg(feature = "wgpu-backend")]
-            self.capture_program_texture(unit.id);
+            if let Some(texture) = pg.gpu.clone() {
+                gpu_programs.insert(unit.id, texture.clone());
+                self.program_textures.insert(unit.id, texture);
+            }
+            let (cpu, by_format) = Self::publish_cpu(
+                pg.cpu,
+                &program_formats,
+                unit.id,
+                &mut self.last_program_by_format,
+                &mut self.last_program,
+            );
+            for (format, frame) in by_format {
+                program_frames.insert((unit.id, format), frame);
+            }
+            if let Some(cpu) = cpu {
+                self.program_slot(unit.id)
+                    .push(cpu.clone())
+                    .map_err(|e| RuntimeError::Other(e.to_string()))?;
+                programs.insert(unit.id, cpu);
+            }
             let pv_plan = snapshot
                 .render
                 .previews
                 .get(&unit_id)
                 .expect("compiled plan exists for every unit");
-            self.program_slot(unit.id)
-                .push(pg.clone())
-                .map_err(|e| RuntimeError::Other(e.to_string()))?;
-            self.last_program.insert(unit.id, pg.clone());
-            programs.insert(unit.id, pg);
             let program_required = snapshot.render.program_required_previews.contains(&unit_id);
+            let has_preview = self.last_preview.contains_key(&unit_id);
+            #[cfg(feature = "wgpu-backend")]
+            let has_preview = has_preview || self.preview_textures.contains_key(&unit_id);
             let preview_due = program_required
-                || !self.last_preview.contains_key(&unit_id)
+                || !has_preview
                 || self
                     .frame
                     .is_multiple_of(u64::from(auxiliary_quality.preview_cadence_divisor));
-            let pv = if preview_due {
+            if preview_due {
                 let plan = if program_required {
                     pv_plan.clone()
                 } else {
                     scaled_render_plan(pv_plan, auxiliary_quality.preview_resolution_divisor)
                 };
-                let frame = self.composite_plan(&plan, &sources, pts)?;
+                let preview_formats = if self.backend == CompositorBackend::CpuReference {
+                    Vec::new()
+                } else {
+                    self.cpu_demand
+                        .previews
+                        .get(&unit_id)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                let frame = self.produce_plan(
+                    &plan,
+                    &sources,
+                    pts,
+                    1,
+                    unit_id.0.as_u128(),
+                    &preview_formats,
+                )?;
                 #[cfg(feature = "wgpu-backend")]
-                self.capture_preview_texture(unit.id);
-                let _ = self.preview_slot(unit.id).push(frame.clone());
-                self.last_preview.insert(unit.id, frame.clone());
-                frame
+                if let Some(texture) = frame.gpu.clone() {
+                    gpu_previews.insert(unit.id, texture.clone());
+                    self.preview_textures.insert(unit.id, texture);
+                }
+                let (cpu, by_format) = Self::publish_cpu(
+                    frame.cpu,
+                    &preview_formats,
+                    unit.id,
+                    &mut self.last_preview_by_format,
+                    &mut self.last_preview,
+                );
+                for (format, frame) in by_format {
+                    preview_frames.insert((unit.id, format), frame);
+                }
+                if let Some(cpu) = cpu {
+                    let _ = self.preview_slot(unit.id).push(cpu.clone());
+                    previews.insert(unit.id, cpu);
+                }
             } else {
                 self.metrics.decimated_preview = self.metrics.decimated_preview.saturating_add(1);
-                self.last_preview
-                    .get(&unit_id)
-                    .cloned()
-                    .expect("a non-due Preview has a last frame")
-            };
-            previews.insert(unit.id, pv);
+                if let Some(cpu) = self.last_preview.get(&unit_id).cloned() {
+                    previews.insert(unit.id, cpu);
+                }
+                for ((id, format), frame) in &self.last_preview_by_format {
+                    if *id == unit.id {
+                        preview_frames.insert((*id, *format), frame.clone());
+                    }
+                }
+                #[cfg(feature = "wgpu-backend")]
+                if let Some(texture) = self.preview_textures.get(&unit_id).cloned() {
+                    gpu_previews.insert(unit.id, texture);
+                }
+            }
         }
         let multiviews = self.render_multiviews(
             project,
@@ -1026,6 +1448,10 @@ impl Runtime {
             pts,
             auxiliary_quality,
         )?;
+        let mut multiview_frames = HashMap::new();
+        for (id, frame) in &multiviews {
+            multiview_frames.insert((*id, frame.format), frame.clone());
+        }
         let (sample_index, sample_count) =
             audio_frame_sample_span(self.frame, self.sample_rate, project.video.frame_rate)
                 .map_err(|e| RuntimeError::Other(e.to_string()))?;
@@ -1063,6 +1489,16 @@ impl Runtime {
             })
             .count();
         self.update_auxiliary_queue_metrics();
+        #[cfg(feature = "wgpu-backend")]
+        {
+            let total = self
+                .wgpu
+                .as_ref()
+                .map(|gpu| gpu.diagnostics().readbacks)
+                .unwrap_or(0);
+            self.metrics.gpu_readbacks = total.saturating_sub(self.last_gpu_readbacks);
+            self.last_gpu_readbacks = total;
+        }
         self.pending_timing_feedback = Some(TimingFeedback {
             deadline_slack_nanos: self.metrics.deadline_slack_nanos,
             gpu_frame_nanos: self.metrics.gpu_frame_nanos,
@@ -1091,9 +1527,172 @@ impl Runtime {
             programs,
             previews,
             multiviews,
+            program_frames,
+            preview_frames,
+            multiview_frames,
             audio,
             peak_meters: meters,
         })
+    }
+
+    fn produce_plan(
+        &self,
+        plan: &RenderPlan,
+        sources: &HashMap<InputId, VideoFrame>,
+        pts: MediaTime,
+        stream_kind: u8,
+        stream_id: u128,
+        formats: &[eiviz_media::PixelFormat],
+    ) -> Result<ProducedFrame> {
+        match self.backend {
+            CompositorBackend::CpuReference => {
+                let frame = composite(plan, sources, pts, self.frame);
+                Ok(ProducedFrame {
+                    cpu: HashMap::from([(frame.format, frame)]),
+                    #[cfg(feature = "wgpu-backend")]
+                    gpu: None,
+                })
+            }
+            CompositorBackend::Wgpu => {
+                #[cfg(not(feature = "wgpu-backend"))]
+                {
+                    let _ = (stream_kind, stream_id, formats);
+                    Err(RuntimeError::WgpuFeatureDisabled)
+                }
+                #[cfg(feature = "wgpu-backend")]
+                {
+                    let gpu = self.wgpu.as_ref().ok_or_else(|| {
+                        RuntimeError::Gpu("wgpu compositor was not constructed".into())
+                    })?;
+                    let mut sourced = HashMap::new();
+                    for layer in &plan.layers {
+                        if let Some(frame) = self.scratch_gpu_inputs.get(&layer.input) {
+                            sourced.insert(layer.input, CompositeSource::Gpu(frame));
+                        } else if let Some(frame) = sources.get(&layer.input) {
+                            sourced.insert(layer.input, CompositeSource::Cpu(frame));
+                        }
+                    }
+                    let texture = gpu
+                        .composite_with_sources(plan, &sourced, pts, self.frame)
+                        .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+                    let cpu = Self::egress_cpu(gpu, &texture, stream_kind, stream_id, formats)?;
+                    Ok(ProducedFrame {
+                        cpu,
+                        gpu: Some(texture),
+                    })
+                }
+            }
+        }
+    }
+
+    fn mix_produced(
+        &self,
+        from: &ProducedFrame,
+        to: &ProducedFrame,
+        factor: f32,
+        pts: MediaTime,
+        stream_kind: u8,
+        stream_id: u128,
+        formats: &[eiviz_media::PixelFormat],
+    ) -> Result<ProducedFrame> {
+        #[cfg(feature = "wgpu-backend")]
+        if let (Some(from_tex), Some(to_tex)) = (&from.gpu, &to.gpu) {
+            let gpu = self.wgpu.as_ref().ok_or_else(|| {
+                RuntimeError::Gpu("wgpu compositor was not constructed".into())
+            })?;
+            let texture = gpu
+                .mix_textures(from_tex, to_tex, factor, pts, self.frame)
+                .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+            let cpu = Self::egress_cpu(gpu, &texture, stream_kind, stream_id, formats)?;
+            return Ok(ProducedFrame {
+                cpu,
+                gpu: Some(texture),
+            });
+        }
+        #[cfg(feature = "wgpu-backend")]
+        if self.backend == CompositorBackend::Wgpu {
+            return Err(RuntimeError::Gpu(
+                "Wgpu transition mix requires GPU-resident textures".into(),
+            ));
+        }
+        let _ = (stream_kind, stream_id, formats);
+        let from_cpu = from
+            .cpu
+            .values()
+            .next()
+            .ok_or_else(|| RuntimeError::Other("transition mix is missing a CPU from-frame".into()))?;
+        let to_cpu = to
+            .cpu
+            .values()
+            .next()
+            .ok_or_else(|| RuntimeError::Other("transition mix is missing a CPU to-frame".into()))?;
+        let mixed = self.mix_transition(from_cpu, to_cpu, factor, pts)?;
+        Ok(ProducedFrame {
+            cpu: HashMap::from([(mixed.format, mixed)]),
+            #[cfg(feature = "wgpu-backend")]
+            gpu: None,
+        })
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn egress_cpu(
+        gpu: &eiviz_gpu::WgpuCompositor,
+        texture: &WgpuTextureFrame,
+        stream_kind: u8,
+        stream_id: u128,
+        formats: &[eiviz_media::PixelFormat],
+    ) -> Result<HashMap<eiviz_media::PixelFormat, VideoFrame>> {
+        let mut cpu = HashMap::new();
+        for format in formats.iter().copied() {
+            let stream = readback_stream(stream_kind, stream_id, format);
+            if let Some(frame) = gpu
+                .take_completed_readback(stream)
+                .map_err(|error| RuntimeError::Gpu(error.to_string()))?
+            {
+                cpu.insert(format, frame);
+            }
+            let _ = gpu
+                .submit_readback(stream, texture, format)
+                .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
+        }
+        Ok(cpu)
+    }
+
+    fn publish_cpu<Id: Copy + Eq + std::hash::Hash>(
+        produced: HashMap<eiviz_media::PixelFormat, VideoFrame>,
+        formats: &[eiviz_media::PixelFormat],
+        id: Id,
+        last_by_format: &mut HashMap<(Id, eiviz_media::PixelFormat), VideoFrame>,
+        last: &mut HashMap<Id, VideoFrame>,
+    ) -> (
+        Option<VideoFrame>,
+        HashMap<eiviz_media::PixelFormat, VideoFrame>,
+    ) {
+        let mut by_format = HashMap::new();
+        for format in formats.iter().copied() {
+            let frame = produced
+                .get(&format)
+                .cloned()
+                .or_else(|| last_by_format.get(&(id, format)).cloned());
+            if let Some(frame) = frame {
+                last_by_format.insert((id, format), frame.clone());
+                by_format.insert(format, frame);
+            }
+        }
+        if formats.is_empty() {
+            for (format, frame) in produced {
+                last_by_format.insert((id, format), frame.clone());
+                by_format.insert(format, frame);
+            }
+        }
+        let primary = formats
+            .iter()
+            .find_map(|format| by_format.get(format).cloned())
+            .or_else(|| by_format.values().next().cloned());
+        if let Some(frame) = &primary {
+            last.insert(id, frame.clone());
+        }
+        (primary, by_format)
     }
 
     fn composite_plan(
@@ -1174,11 +1773,9 @@ impl Runtime {
                 }
                 #[cfg(feature = "wgpu-backend")]
                 {
-                    let gpu = self.wgpu.as_ref().ok_or_else(|| {
-                        RuntimeError::Gpu("wgpu compositor was not constructed".into())
-                    })?;
-                    gpu.mix(a, b, factor, pts, self.frame)
-                        .map_err(|error| RuntimeError::Gpu(error.to_string()))
+                    Err(RuntimeError::Gpu(
+                        "Wgpu transition mix requires GPU-resident textures".into(),
+                    ))
                 }
             }
         }
@@ -1394,51 +1991,57 @@ impl Runtime {
     ) -> Result<HashMap<MultiviewId, VideoFrame>> {
         let mut rendered = HashMap::new();
         for view in project.multiviews.values() {
-            let due = !self.last_multiview.contains_key(&view.id)
+            #[cfg(feature = "wgpu-backend")]
+            let has_last = self.last_multiview.contains_key(&view.id)
+                || self.multiview_textures.contains_key(&view.id);
+            #[cfg(not(feature = "wgpu-backend"))]
+            let has_last = self.last_multiview.contains_key(&view.id);
+            let due = !has_last
                 || self
                     .frame
                     .is_multiple_of(u64::from(auxiliary_quality.multiview_cadence_divisor));
             if !due {
                 self.metrics.decimated_multiview =
                     self.metrics.decimated_multiview.saturating_add(1);
-                rendered.insert(
-                    view.id,
-                    self.last_multiview
-                        .get(&view.id)
-                        .cloned()
-                        .expect("a non-due Multiview has a last frame"),
-                );
+                if let Some(cpu) = self.last_multiview.get(&view.id).cloned() {
+                    rendered.insert(view.id, cpu);
+                }
                 continue;
             }
             let mut sources = input_sources.clone();
             let mut layers = Vec::with_capacity(view.tiles.len());
             let mut synthetic = u128::MAX;
+            let mut reserved = HashSet::new();
             for tile in &view.tiles {
                 let input = match tile.source {
                     MultiviewSource::Black => continue,
                     MultiviewSource::Input(input) => input,
-                    MultiviewSource::Program(unit) => {
-                        let frame = programs.get(&unit).ok_or_else(|| {
-                            RuntimeError::Other(format!(
-                                "multiview {} missing Program for {}",
-                                view.id, unit
-                            ))
-                        })?;
-                        let id = next_synthetic_input(&sources, &mut synthetic)?;
-                        sources.insert(id, frame.clone());
-                        id
-                    }
-                    MultiviewSource::Preview(unit) => {
-                        let frame = previews.get(&unit).ok_or_else(|| {
-                            RuntimeError::Other(format!(
-                                "multiview {} missing Preview for {}",
-                                view.id, unit
-                            ))
-                        })?;
-                        let id = next_synthetic_input(&sources, &mut synthetic)?;
-                        sources.insert(id, frame.clone());
-                        id
-                    }
+                    MultiviewSource::Program(unit) => self.bind_multiview_bus(
+                        view.id,
+                        "Program",
+                        unit,
+                        programs.get(&unit),
+                        #[cfg(feature = "wgpu-backend")]
+                        self.program_textures.get(&unit).cloned(),
+                        #[cfg(not(feature = "wgpu-backend"))]
+                        None,
+                        &mut sources,
+                        &mut reserved,
+                        &mut synthetic,
+                    )?,
+                    MultiviewSource::Preview(unit) => self.bind_multiview_bus(
+                        view.id,
+                        "Preview",
+                        unit,
+                        previews.get(&unit),
+                        #[cfg(feature = "wgpu-backend")]
+                        self.preview_textures.get(&unit).cloned(),
+                        #[cfg(not(feature = "wgpu-backend"))]
+                        None,
+                        &mut sources,
+                        &mut reserved,
+                        &mut synthetic,
+                    )?,
                 };
                 layers.push(Layer {
                     input,
@@ -1487,18 +2090,94 @@ impl Runtime {
                 ),
                 layers,
             };
-            let frame = self.composite_plan(&plan, &sources, pts)?;
+            let formats = if self.backend == CompositorBackend::CpuReference {
+                Vec::new()
+            } else {
+                self.cpu_demand
+                    .multiviews
+                    .get(&view.id)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let produced = self.produce_plan(
+                &plan,
+                &sources,
+                pts,
+                2,
+                view.id.0.as_u128(),
+                &formats,
+            )?;
             #[cfg(feature = "wgpu-backend")]
-            self.capture_multiview_texture(view.id);
-            self.multiview_slots
-                .entry(view.id)
-                .or_insert_with(|| Arc::new(BoundedSlot::new("multiview", QueuePolicy::LatestWins)))
-                .push(frame.clone())
-                .map_err(|error| RuntimeError::Other(error.to_string()))?;
-            self.last_multiview.insert(view.id, frame.clone());
-            rendered.insert(view.id, frame);
+            if let Some(texture) = produced.gpu.clone() {
+                self.multiview_textures.insert(view.id, texture);
+            }
+            let (cpu, _by_format) = Self::publish_cpu(
+                produced.cpu,
+                &formats,
+                view.id,
+                &mut self.last_multiview_by_format,
+                &mut self.last_multiview,
+            );
+            if let Some(frame) = cpu {
+                self.multiview_slots
+                    .entry(view.id)
+                    .or_insert_with(|| {
+                        Arc::new(BoundedSlot::new("multiview", QueuePolicy::LatestWins))
+                    })
+                    .push(frame.clone())
+                    .map_err(|error| RuntimeError::Other(error.to_string()))?;
+                self.last_multiview.insert(view.id, frame.clone());
+                rendered.insert(view.id, frame);
+            }
         }
         Ok(rendered)
+    }
+
+    #[cfg(feature = "wgpu-backend")]
+    fn bind_multiview_bus(
+        &mut self,
+        view: MultiviewId,
+        bus: &str,
+        unit: MixingUnitId,
+        cpu: Option<&VideoFrame>,
+        gpu: Option<eiviz_gpu::WgpuTextureFrame>,
+        sources: &mut HashMap<InputId, VideoFrame>,
+        reserved: &mut HashSet<InputId>,
+        synthetic: &mut u128,
+    ) -> Result<InputId> {
+        if let Some(texture) = gpu {
+            let id = next_synthetic_input(sources, reserved, synthetic)?;
+            reserved.insert(id);
+            self.scratch_gpu_inputs.insert(id, texture);
+            return Ok(id);
+        }
+        let frame = cpu.ok_or_else(|| {
+            RuntimeError::Other(format!("multiview {view} missing {bus} for {unit}"))
+        })?;
+        let id = next_synthetic_input(sources, reserved, synthetic)?;
+        sources.insert(id, frame.clone());
+        Ok(id)
+    }
+
+    #[cfg(not(feature = "wgpu-backend"))]
+    fn bind_multiview_bus(
+        &mut self,
+        view: MultiviewId,
+        bus: &str,
+        unit: MixingUnitId,
+        cpu: Option<&VideoFrame>,
+        gpu: Option<()>,
+        sources: &mut HashMap<InputId, VideoFrame>,
+        reserved: &mut HashSet<InputId>,
+        synthetic: &mut u128,
+    ) -> Result<InputId> {
+        let _ = gpu;
+        let frame = cpu.ok_or_else(|| {
+            RuntimeError::Other(format!("multiview {view} missing {bus} for {unit}"))
+        })?;
+        let id = next_synthetic_input(sources, reserved, synthetic)?;
+        sources.insert(id, frame.clone());
+        Ok(id)
     }
 
     fn generate_sources(
@@ -1510,12 +2189,31 @@ impl Runtime {
         let mut out = HashMap::new();
         let w = project.video.width;
         let h = project.video.height;
+        let gpu_resident = self.gpu_inputs_enabled();
         for input in project.inputs.values() {
+            if matches!(input.source, InputSource::MixFeed { .. }) {
+                continue;
+            }
+            if self.still_slot_fresh(input.id, &input.source, w, h, pts) {
+                continue;
+            }
+            #[cfg(feature = "wgpu-backend")]
+            if gpu_resident {
+                self.generate_gpu_source(
+                    project,
+                    input.id,
+                    &input.source,
+                    pts,
+                    deadline_monotonic_nanos,
+                    w,
+                    h,
+                )?;
+                continue;
+            }
             if matches!(input.source, InputSource::AudioDevice { .. }) {
-                let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]);
+                let mut frame =
+                    self.cached_generator_frame(project, pts, w, h, (0, 0, 0, 255), false);
                 frame.source = Some(input.id);
-                frame.color = project.video.color_metadata();
-                frame.field = project.video.field_at(self.frame);
                 out.insert(input.id, frame);
                 continue;
             }
@@ -1532,17 +2230,17 @@ impl Runtime {
                                 pts,
                                 "source clock acquiring",
                             )?;
-                            out.insert(input.id, held);
+                            self.emit_live_source(input.id, held, false, gpu_resident, &mut out)?;
                             continue;
                         }
                         self.last_good_inputs.insert(input.id, frame.clone());
-                        out.insert(input.id, frame);
+                        self.emit_live_source(input.id, frame, true, gpu_resident, &mut out)?;
                         continue;
                     }
                     Ok(None) => {
                         let frame =
                             self.missing_frame(project, input.id, w, h, pts, "source pending")?;
-                        out.insert(input.id, frame);
+                        self.emit_live_source(input.id, frame, false, gpu_resident, &mut out)?;
                         continue;
                     }
                     Err(error) => {
@@ -1558,13 +2256,16 @@ impl Runtime {
                 f.pts = pts;
                 f.source = Some(input.id);
                 self.last_good_inputs.insert(input.id, f.clone());
-                out.insert(input.id, f);
+                self.emit_live_source(input.id, f, true, gpu_resident, &mut out)?;
                 continue;
             }
             let (mut generated, authentic) = match &input.source {
-                InputSource::ColorBars => (color_bars(self.frame, pts, w, h), true),
+                InputSource::ColorBars => (
+                    self.cached_generator_frame(project, pts, w, h, (0, 0, 0, 0), true),
+                    true,
+                ),
                 InputSource::SolidColor { r, g, b, a } => (
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [*r, *g, *b, *a]),
+                    self.cached_generator_frame(project, pts, w, h, (*r, *g, *b, *a), false),
                     true,
                 ),
                 InputSource::Image { asset } => match self.try_load_image(project, *asset, pts) {
@@ -1591,14 +2292,9 @@ impl Runtime {
                     self.missing_frame(project, input.id, w, h, pts, "live input")?,
                     false,
                 ),
-                InputSource::AudioDevice { .. } => (
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]),
-                    true,
-                ),
-                InputSource::MixFeed { .. } => (
-                    VideoFrame::rgba_solid(self.frame, pts, w, h, [0, 0, 0, 255]),
-                    false,
-                ),
+                InputSource::AudioDevice { .. } | InputSource::MixFeed { .. } => {
+                    unreachable!("handled above")
+                }
             };
             generated.source = Some(input.id);
             generated.color = project.video.color_metadata();
@@ -1611,8 +2307,151 @@ impl Runtime {
         Ok(out)
     }
 
+    #[cfg(feature = "wgpu-backend")]
+    fn generate_gpu_source(
+        &mut self,
+        project: &Project,
+        id: InputId,
+        source: &InputSource,
+        pts: MediaTime,
+        deadline_monotonic_nanos: u64,
+        w: u32,
+        h: u32,
+    ) -> Result<()> {
+        if matches!(source, InputSource::AudioDevice { .. }) {
+            return self.fill_still_gpu(
+                id,
+                GpuStillKey::Black {
+                    width: w,
+                    height: h,
+                },
+                GpuFill::Solid { rgba: [0, 0, 0, 255] },
+                project,
+                pts,
+                w,
+                h,
+            );
+        }
+        if let Some(attached) = self.sources.get(&id).cloned() {
+            match attached.pull_video(pts, project.video.frame_rate) {
+                Ok(Some(mut frame)) => {
+                    frame.source = Some(id);
+                    if !self.observe_video_timing(id, &frame, deadline_monotonic_nanos)? {
+                        return self.gpu_apply_missing(
+                            project,
+                            id,
+                            w,
+                            h,
+                            pts,
+                            "source clock acquiring",
+                        );
+                    }
+                    return self.emit_live_gpu(id, &frame, true);
+                }
+                Ok(None) => {
+                    return self.gpu_apply_missing(project, id, w, h, pts, "source pending");
+                }
+                Err(error) => {
+                    return Err(RuntimeError::Other(format!(
+                        "source {id} video pull failed: {error}"
+                    )));
+                }
+            }
+        }
+        if let Some(sim) = self.simulated.get(&id).cloned() {
+            let mut frame = sim;
+            frame.pts = pts;
+            frame.source = Some(id);
+            return self.emit_live_gpu(id, &frame, true);
+        }
+        match source {
+            InputSource::ColorBars => self.fill_still_gpu(
+                id,
+                GpuStillKey::ColorBars {
+                    width: w,
+                    height: h,
+                },
+                GpuFill::ColorBars,
+                project,
+                pts,
+                w,
+                h,
+            ),
+            InputSource::SolidColor { r, g, b, a } => self.fill_still_gpu(
+                id,
+                GpuStillKey::Solid {
+                    width: w,
+                    height: h,
+                    rgba: [*r, *g, *b, *a],
+                },
+                GpuFill::Solid {
+                    rgba: [*r, *g, *b, *a],
+                },
+                project,
+                pts,
+                w,
+                h,
+            ),
+            InputSource::Image { asset } => match self.try_load_image(project, *asset, pts) {
+                Some(frame) => {
+                    let key = GpuStillKey::Image {
+                        asset: *asset,
+                        width: frame.width,
+                        height: frame.height,
+                    };
+                    self.bind_still_gpu(id, key, &frame)
+                }
+                None => self.gpu_apply_missing(project, id, w, h, pts, "image"),
+            },
+            InputSource::Video { .. } => self.gpu_apply_missing(
+                project,
+                id,
+                w,
+                h,
+                pts,
+                "video decoder source is not attached",
+            ),
+            InputSource::Ndi { .. } | InputSource::Omt { .. } | InputSource::DeckLink { .. } => {
+                self.gpu_apply_missing(project, id, w, h, pts, "live input")
+            }
+            InputSource::AudioDevice { .. } | InputSource::MixFeed { .. } => {
+                unreachable!("handled above")
+            }
+        }
+    }
+
+    fn gpu_inputs_enabled(&self) -> bool {
+        #[cfg(feature = "wgpu-backend")]
+        {
+            self.backend == CompositorBackend::Wgpu && self.wgpu.is_some()
+        }
+        #[cfg(not(feature = "wgpu-backend"))]
+        {
+            false
+        }
+    }
+
+    fn emit_live_source(
+        &mut self,
+        id: InputId,
+        frame: VideoFrame,
+        authentic: bool,
+        gpu_resident: bool,
+        out: &mut HashMap<InputId, VideoFrame>,
+    ) -> Result<()> {
+        #[cfg(feature = "wgpu-backend")]
+        if gpu_resident {
+            self.emit_live_gpu(id, &frame, authentic)?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "wgpu-backend"))]
+        let _ = (gpu_resident, authentic);
+        out.insert(id, frame);
+        Ok(())
+    }
+
     fn missing_frame(
-        &self,
+        &mut self,
         project: &Project,
         id: InputId,
         w: u32,
@@ -1623,9 +2462,15 @@ impl Runtime {
         match project.missing_media {
             MissingMediaPolicy::Fail => Err(RuntimeError::MissingMedia(why.into())),
             MissingMediaPolicy::Slate => {
-                let mut frame = VideoFrame::rgba_solid(self.frame, pts, w, h, SLATE_RGBA);
-                frame.color = project.video.color_metadata();
-                frame.field = project.video.field_at(self.frame);
+                let mut frame = self.cached_generator_frame(
+                    project,
+                    pts,
+                    w,
+                    h,
+                    (SLATE_RGBA[0], SLATE_RGBA[1], SLATE_RGBA[2], SLATE_RGBA[3]),
+                    false,
+                );
+                frame.source = Some(id);
                 Ok(frame)
             }
             MissingMediaPolicy::LastGood => {
@@ -1945,12 +2790,37 @@ pub struct TickResult {
     pub programs: HashMap<MixingUnitId, VideoFrame>,
     pub previews: HashMap<MixingUnitId, VideoFrame>,
     pub multiviews: HashMap<MultiviewId, VideoFrame>,
+    pub program_frames: HashMap<(MixingUnitId, eiviz_media::PixelFormat), VideoFrame>,
+    pub preview_frames: HashMap<(MixingUnitId, eiviz_media::PixelFormat), VideoFrame>,
+    pub multiview_frames: HashMap<(MultiviewId, eiviz_media::PixelFormat), VideoFrame>,
     pub audio: AudioBuffer,
     pub peak_meters: HashMap<AudioBusId, f32>,
 }
 
+#[cfg(feature = "wgpu-backend")]
+fn readback_stream(
+    kind: u8,
+    id: u128,
+    format: eiviz_media::PixelFormat,
+) -> u64 {
+    let format_code = match format {
+        eiviz_media::PixelFormat::Rgba8 => 1,
+        eiviz_media::PixelFormat::Bgra8 => 2,
+        eiviz_media::PixelFormat::Nv12 => 3,
+        eiviz_media::PixelFormat::Uyvy => 4,
+        eiviz_media::PixelFormat::Rgba16Float => 5,
+        eiviz_media::PixelFormat::P010 => 6,
+        eiviz_media::PixelFormat::P216 => 7,
+    };
+    (kind as u64)
+        ^ (id as u64)
+        ^ ((id >> 64) as u64)
+        ^ (format_code << 48)
+}
+
 fn next_synthetic_input(
     sources: &HashMap<InputId, VideoFrame>,
+    reserved: &HashSet<InputId>,
     cursor: &mut u128,
 ) -> Result<InputId> {
     loop {
@@ -1958,7 +2828,7 @@ fn next_synthetic_input(
         *cursor = (*cursor)
             .checked_sub(1)
             .ok_or_else(|| RuntimeError::Other("synthetic multiview id exhausted".into()))?;
-        if !sources.contains_key(&id) {
+        if !sources.contains_key(&id) && !reserved.contains(&id) {
             return Ok(id);
         }
     }
@@ -1980,6 +2850,26 @@ fn fill_mixfeeds(
                 let mut f = src.clone();
                 f.source = Some(input.id);
                 sources.insert(input.id, f);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "wgpu-backend")]
+fn fill_mixfeeds_gpu(
+    project: &Project,
+    sources: &mut HashMap<InputId, WgpuTextureFrame>,
+    programs: &HashMap<MixingUnitId, WgpuTextureFrame>,
+    previews: &HashMap<MixingUnitId, WgpuTextureFrame>,
+) {
+    for input in project.inputs.values() {
+        if let InputSource::MixFeed { unit, tap } = input.source {
+            let frame = match tap {
+                MixTap::Program => programs.get(&unit),
+                MixTap::Preview => previews.get(&unit),
+            };
+            if let Some(src) = frame {
+                sources.insert(input.id, src.clone());
             }
         }
     }
