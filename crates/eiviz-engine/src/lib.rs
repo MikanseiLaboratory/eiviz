@@ -1673,11 +1673,8 @@ impl Engine {
                 sink = sink.name()
             );
             let _entered = span.enter();
-            let Some((enabled, owner, source, color_format)) = g
-                .project
-                .outputs
-                .get(&output_id)
-                .map(|output| {
+            let Some((enabled, owner, source, color_format)) =
+                g.project.outputs.get(&output_id).map(|output| {
                     (
                         output.enabled,
                         output.owner,
@@ -2123,9 +2120,10 @@ fn require_restart_transition(state: &mut GpuLifecycleState, reason: String) {
 
 fn cpu_video_demand(inner: &Inner) -> eiviz_runtime::CpuVideoDemand {
     let mut demand = cpu_video_demand_from_project(&inner.project);
-    let mut push = |source: OutputVideoSource, owner: MixingUnitId, format: eiviz_media::PixelFormat| {
-        push_cpu_demand(&mut demand, source, owner, format);
-    };
+    let mut push =
+        |source: OutputVideoSource, owner: MixingUnitId, format: eiviz_media::PixelFormat| {
+            push_cpu_demand(&mut demand, source, owner, format);
+        };
     for profile in inner.encoder_sessions.keys() {
         let format = inner
             .project
@@ -4908,9 +4906,7 @@ mod tests {
             name: "ndi".into(),
             owner,
             video_source: OutputVideoSource::Program,
-            kind: OutputKind::Ndi {
-                name: "pgm".into(),
-            },
+            kind: OutputKind::Ndi { name: "pgm".into() },
             enabled: true,
             color_format: Some(eiviz_core::OutputColorFormat::Nv12),
             distribution: None,

@@ -900,14 +900,14 @@ impl DesktopApp {
             color_profile,
             send_queue_depth: 4,
         };
-        let sink = match eiviz_io_omt::OmtSink::create_for_video_format(&name, &project.video, config)
-        {
-            Ok(sink) => Arc::new(sink),
-            Err(error) => {
-                self.status = format!("OMT output: {error}");
-                return;
-            }
-        };
+        let sink =
+            match eiviz_io_omt::OmtSink::create_for_video_format(&name, &project.video, config) {
+                Ok(sink) => Arc::new(sink),
+                Err(error) => {
+                    self.status = format!("OMT output: {error}");
+                    return;
+                }
+            };
         let output = Output {
             id: OutputId::new(),
             name: name.clone(),
@@ -1001,9 +1001,14 @@ impl DesktopApp {
             }
         }
         for scene in scenes_to_remove {
-            let _ = self.engine.submit_payload(Command::RemoveScene { id: scene });
+            let _ = self
+                .engine
+                .submit_payload(Command::RemoveScene { id: scene });
         }
-        if let Err(error) = self.engine.submit_payload(Command::RemoveInput { id: input_id }) {
+        if let Err(error) = self
+            .engine
+            .submit_payload(Command::RemoveInput { id: input_id })
+        {
             self.status = format!("remove input: {error}");
             return;
         }
@@ -1056,7 +1061,8 @@ impl DesktopApp {
             self.status = "OpenH264 2.6.0 bundle was not found next to the executable".into();
             return;
         }
-        match eiviz_codec_software::OpenH264Decoder::new(std::path::Path::new(&self.openh264_path)) {
+        match eiviz_codec_software::OpenH264Decoder::new(std::path::Path::new(&self.openh264_path))
+        {
             Ok(_) => {
                 self.status = format!(
                     "ready; OpenH264 2.6.0 linked ({})",
@@ -1081,7 +1087,9 @@ impl DesktopApp {
         }
         if elapsed >= std::time::Duration::from_millis(1000) {
             let frames = metrics.frame.saturating_sub(self.fps_window_frame);
-            let misses = metrics.deadline_misses.saturating_sub(self.fps_window_misses);
+            let misses = metrics
+                .deadline_misses
+                .saturating_sub(self.fps_window_misses);
             let seconds = elapsed.as_secs_f32().max(0.001);
             self.measured_fps = frames as f32 / seconds;
             let expected = project.video.frame_rate.numerator() as f32
@@ -1179,7 +1187,8 @@ impl DesktopApp {
                             if let Some(unit) = unit_id {
                                 self.preview_input(unit, input.id);
                             } else {
-                                self.status = "select a mixing unit before previewing an input".into();
+                                self.status =
+                                    "select a mixing unit before previewing an input".into();
                             }
                         }
                         if ui.button("Remove").clicked() {
@@ -1589,7 +1598,10 @@ impl DesktopApp {
                 }
             }
         }
-        if let Err(error) = self.engine.submit_payload(Command::RemoveScene { id: scene_id }) {
+        if let Err(error) = self
+            .engine
+            .submit_payload(Command::RemoveScene { id: scene_id })
+        {
             self.status = format!("remove scene: {error}");
             return;
         }
@@ -1809,12 +1821,11 @@ impl DesktopApp {
         ui.heading("Active outputs");
         let mut stop_ndi = None;
         let mut stop_omt = None;
-        for output in project.outputs.values().filter(|output| {
-            matches!(
-                output.kind,
-                OutputKind::Ndi { .. } | OutputKind::Omt { .. }
-            )
-        }) {
+        for output in project
+            .outputs
+            .values()
+            .filter(|output| matches!(output.kind, OutputKind::Ndi { .. } | OutputKind::Omt { .. }))
+        {
             ui.push_id(output.id, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(format!(
@@ -2465,11 +2476,7 @@ impl DesktopApp {
     }
 
     #[cfg(feature = "ndi")]
-    fn start_ndi_output(
-        &mut self,
-        owner: eiviz_core::MixingUnitId,
-        source: OutputVideoSource,
-    ) {
+    fn start_ndi_output(&mut self, owner: eiviz_core::MixingUnitId, source: OutputVideoSource) {
         let project = self.engine.snapshot();
         let feed = output_feed_label(&project, source);
         let unit_name = project
@@ -3863,12 +3870,7 @@ impl eframe::App for DesktopApp {
     #[allow(clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.consume_layout_audit_events(ctx);
-        if let Some(error) = self
-            .media_error
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-        {
+        if let Some(error) = self.media_error.lock().ok().and_then(|guard| guard.clone()) {
             self.status = format!("Engine boundary failed: {error}");
             if matches!(
                 self.engine.gpu_lifecycle_state(),
@@ -4017,22 +4019,13 @@ impl eframe::App for DesktopApp {
                 ui.separator();
                 self.draw_fps_badge(ui, &project);
                 ui.separator();
-                if ui
-                    .selectable_label(self.inputs_open, "Inputs")
-                    .clicked()
-                {
+                if ui.selectable_label(self.inputs_open, "Inputs").clicked() {
                     self.inputs_open = !self.inputs_open;
                 }
-                if ui
-                    .selectable_label(self.outputs_open, "Outputs")
-                    .clicked()
-                {
+                if ui.selectable_label(self.outputs_open, "Outputs").clicked() {
                     self.outputs_open = !self.outputs_open;
                 }
-                if ui
-                    .selectable_label(self.scenes_open, "Scenes")
-                    .clicked()
-                {
+                if ui.selectable_label(self.scenes_open, "Scenes").clicked() {
                     self.scenes_open = !self.scenes_open;
                 }
                 ui.label("path");
@@ -5631,11 +5624,7 @@ fn output_color_format_combo(ui: &mut egui::Ui, output: &Output) -> Option<Comma
     let current = output.effective_color_format();
     let mut selected = None;
     egui::ComboBox::from_id_salt(("output-color-format", output.id))
-        .selected_text(
-            current
-                .map(output_color_format_label)
-                .unwrap_or("—"),
-        )
+        .selected_text(current.map(output_color_format_label).unwrap_or("—"))
         .show_ui(ui, |ui| {
             for format in allowed {
                 if ui
@@ -5646,12 +5635,12 @@ fn output_color_format_combo(ui: &mut egui::Ui, output: &Output) -> Option<Comma
                 }
             }
         });
-    selected.filter(|format| current != Some(*format)).map(|format| {
-        Command::SetOutputColorFormat {
+    selected
+        .filter(|format| current != Some(*format))
+        .map(|format| Command::SetOutputColorFormat {
             id: output.id,
             format: Some(format),
-        }
-    })
+        })
 }
 
 fn input_source_label(source: &InputSource) -> &'static str {

@@ -35,39 +35,42 @@ pub enum OutputColorFormat {
 impl OutputColorFormat {
     pub fn allowed_for(kind: &OutputKind) -> &'static [Self] {
         match kind {
-            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
-                &[Self::Rgba8, Self::Nv12]
-            }
+            OutputKind::Ndi { .. }
+            | OutputKind::Rtmp { .. }
+            | OutputKind::Srt { .. }
+            | OutputKind::Mp4 { .. } => &[Self::Rgba8, Self::Nv12],
             OutputKind::Omt { .. } => &[Self::Bgra8, Self::Uyvy],
             OutputKind::DeckLink { .. } => &[Self::Bgra8],
-            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
-                &[]
-            }
+            OutputKind::PreviewWindow
+            | OutputKind::ProgramWindow
+            | OutputKind::AudioDevice { .. } => &[],
         }
     }
 
     pub fn recommended_for(kind: &OutputKind) -> Option<Self> {
         match kind {
-            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
-                Some(Self::Nv12)
-            }
+            OutputKind::Ndi { .. }
+            | OutputKind::Rtmp { .. }
+            | OutputKind::Srt { .. }
+            | OutputKind::Mp4 { .. } => Some(Self::Nv12),
             OutputKind::Omt { .. } => Some(Self::Uyvy),
             OutputKind::DeckLink { .. } => Some(Self::Bgra8),
-            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
-                None
-            }
+            OutputKind::PreviewWindow
+            | OutputKind::ProgramWindow
+            | OutputKind::AudioDevice { .. } => None,
         }
     }
 
     pub fn legacy_for(kind: &OutputKind) -> Option<Self> {
         match kind {
-            OutputKind::Ndi { .. } | OutputKind::Rtmp { .. } | OutputKind::Srt { .. } | OutputKind::Mp4 { .. } => {
-                Some(Self::Rgba8)
-            }
+            OutputKind::Ndi { .. }
+            | OutputKind::Rtmp { .. }
+            | OutputKind::Srt { .. }
+            | OutputKind::Mp4 { .. } => Some(Self::Rgba8),
             OutputKind::Omt { .. } | OutputKind::DeckLink { .. } => Some(Self::Bgra8),
-            OutputKind::PreviewWindow | OutputKind::ProgramWindow | OutputKind::AudioDevice { .. } => {
-                None
-            }
+            OutputKind::PreviewWindow
+            | OutputKind::ProgramWindow
+            | OutputKind::AudioDevice { .. } => None,
         }
     }
 
@@ -78,7 +81,8 @@ impl OutputColorFormat {
 
 impl Output {
     pub fn effective_color_format(&self) -> Option<OutputColorFormat> {
-        self.color_format.or_else(|| OutputColorFormat::legacy_for(&self.kind))
+        self.color_format
+            .or_else(|| OutputColorFormat::legacy_for(&self.kind))
     }
 }
 

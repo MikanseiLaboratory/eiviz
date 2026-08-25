@@ -6,9 +6,9 @@ use eiviz_core::{
     MissingMediaPolicy, MixTap, MixingGraph, MixingUnitId, MultiviewId, MultiviewSource, Playback,
     Project, RouteMode, Transform2D, TransitionStyle,
 };
-use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 #[cfg(feature = "wgpu-backend")]
 use eiviz_gpu::{CompositeSource, GpuFill, WgpuTextureFrame};
+use eiviz_gpu::{Layer, RenderPlan, color_bars, composite, mix_frames, plan_preview, plan_program};
 use eiviz_media::{
     AsrcDiagnostics, AudioBuffer, AudioIoDiagnostics, BoundedSlot, MediaSource, QueuePolicy,
     StreamingAsrc, VideoFrame,
@@ -470,11 +470,28 @@ struct ProducedFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(feature = "wgpu-backend"), allow(dead_code))]
 enum GpuStillKey {
-    ColorBars { width: u32, height: u32 },
-    Solid { width: u32, height: u32, rgba: [u8; 4] },
-    Image { asset: AssetId, width: u32, height: u32 },
-    Slate { width: u32, height: u32 },
-    Black { width: u32, height: u32 },
+    ColorBars {
+        width: u32,
+        height: u32,
+    },
+    Solid {
+        width: u32,
+        height: u32,
+        rgba: [u8; 4],
+    },
+    Image {
+        asset: AssetId,
+        width: u32,
+        height: u32,
+    },
+    Slate {
+        width: u32,
+        height: u32,
+    },
+    Black {
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -641,9 +658,10 @@ impl Runtime {
         frame: &VideoFrame,
         overwrite: bool,
     ) -> Result<()> {
-        let gpu = self.wgpu.as_ref().ok_or_else(|| {
-            RuntimeError::Gpu("wgpu compositor was not constructed".into())
-        })?;
+        let gpu = self
+            .wgpu
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Gpu("wgpu compositor was not constructed".into()))?;
         let texture = gpu
             .retain_source(id, frame, overwrite)
             .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
@@ -652,14 +670,8 @@ impl Runtime {
     }
 
     #[cfg(feature = "wgpu-backend")]
-    fn bind_still_gpu(
-        &mut self,
-        id: InputId,
-        key: GpuStillKey,
-        frame: &VideoFrame,
-    ) -> Result<()> {
-        if self.gpu_still_keys.get(&id) == Some(&key) && self.gpu_source_slots.contains_key(&id)
-        {
+    fn bind_still_gpu(&mut self, id: InputId, key: GpuStillKey, frame: &VideoFrame) -> Result<()> {
+        if self.gpu_still_keys.get(&id) == Some(&key) && self.gpu_source_slots.contains_key(&id) {
             return Ok(());
         }
         self.publish_gpu_frame(id, frame, false)?;
@@ -685,9 +697,10 @@ impl Runtime {
             }
             return Ok(());
         }
-        let gpu = self.wgpu.as_ref().ok_or_else(|| {
-            RuntimeError::Gpu("wgpu compositor was not constructed".into())
-        })?;
+        let gpu = self
+            .wgpu
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Gpu("wgpu compositor was not constructed".into()))?;
         let texture = gpu
             .fill_source(
                 id,
@@ -708,9 +721,7 @@ impl Runtime {
     #[cfg(feature = "wgpu-backend")]
     fn hold_gpu_last_good(&mut self, id: InputId, pts: MediaTime, why: &str) -> Result<()> {
         let slot = self.gpu_source_slots.get_mut(&id).ok_or_else(|| {
-            RuntimeError::MissingMedia(format!(
-                "LastGood requested but no prior frame ({why})"
-            ))
+            RuntimeError::MissingMedia(format!("LastGood requested but no prior frame ({why})"))
         })?;
         slot.pts = pts;
         slot.frame_id = self.frame;
@@ -790,11 +801,9 @@ impl Runtime {
                             height: h,
                         })
                 }
-                InputSource::Image { asset } => {
-                    self.gpu_still_keys.get(&id).is_some_and(|key| {
-                        matches!(key, GpuStillKey::Image { asset: bound, .. } if bound == asset)
-                    })
-                }
+                InputSource::Image { asset } => self.gpu_still_keys.get(&id).is_some_and(
+                    |key| matches!(key, GpuStillKey::Image { asset: bound, .. } if bound == asset),
+                ),
                 InputSource::Video { .. }
                 | InputSource::Ndi { .. }
                 | InputSource::Omt { .. }
@@ -854,9 +863,7 @@ impl Runtime {
             let stale = self
                 .gpu_still_keys
                 .iter()
-                .filter_map(|(id, key)| {
-                    matches!(key, GpuStillKey::Image { .. }).then_some(*id)
-                })
+                .filter_map(|(id, key)| matches!(key, GpuStillKey::Image { .. }).then_some(*id))
                 .collect::<Vec<_>>();
             for id in stale {
                 self.gpu_still_keys.remove(&id);
@@ -1224,8 +1231,10 @@ impl Runtime {
             self.program_textures.clear();
             self.preview_textures.clear();
             self.multiview_textures.clear();
-            self.gpu_source_slots.retain(|id, _| project.inputs.contains_key(id));
-            self.gpu_still_keys.retain(|id, _| project.inputs.contains_key(id));
+            self.gpu_source_slots
+                .retain(|id, _| project.inputs.contains_key(id));
+            self.gpu_still_keys
+                .retain(|id, _| project.inputs.contains_key(id));
             self.scratch_gpu_inputs.clear();
         }
         self.active_snapshot = Some(snapshot);
@@ -1296,12 +1305,7 @@ impl Runtime {
             #[cfg(feature = "wgpu-backend")]
             {
                 let mut gpu_sources = self.gpu_source_slots.clone();
-                fill_mixfeeds_gpu(
-                    project,
-                    &mut gpu_sources,
-                    &gpu_programs,
-                    &gpu_previews,
-                );
+                fill_mixfeeds_gpu(project, &mut gpu_sources, &gpu_programs, &gpu_previews);
                 self.scratch_gpu_inputs.clone_from(&gpu_sources);
             }
             let pg_plan = snapshot
@@ -1340,7 +1344,15 @@ impl Runtime {
                     .saturating_sub(transition.remaining_frames)
                     .saturating_add(1);
                 let factor = elapsed as f32 / transition.duration_frames as f32;
-                pg = self.mix_produced(&from, &pg, factor.min(1.0), pts, 0, unit_id.0.as_u128(), &program_formats)?;
+                pg = self.mix_produced(
+                    &from,
+                    &pg,
+                    factor.min(1.0),
+                    pts,
+                    0,
+                    unit_id.0.as_u128(),
+                    &program_formats,
+                )?;
                 if transition.remaining_frames <= 1 {
                     self.transitions.remove(&unit_id);
                 } else if let Some(live) = self.transitions.get_mut(&unit_id) {
@@ -1597,9 +1609,10 @@ impl Runtime {
     ) -> Result<ProducedFrame> {
         #[cfg(feature = "wgpu-backend")]
         if let (Some(from_tex), Some(to_tex)) = (&from.gpu, &to.gpu) {
-            let gpu = self.wgpu.as_ref().ok_or_else(|| {
-                RuntimeError::Gpu("wgpu compositor was not constructed".into())
-            })?;
+            let gpu = self
+                .wgpu
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Gpu("wgpu compositor was not constructed".into()))?;
             let texture = gpu
                 .mix_textures(from_tex, to_tex, factor, pts, self.frame)
                 .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
@@ -1616,16 +1629,12 @@ impl Runtime {
             ));
         }
         let _ = (stream_kind, stream_id, formats);
-        let from_cpu = from
-            .cpu
-            .values()
-            .next()
-            .ok_or_else(|| RuntimeError::Other("transition mix is missing a CPU from-frame".into()))?;
-        let to_cpu = to
-            .cpu
-            .values()
-            .next()
-            .ok_or_else(|| RuntimeError::Other("transition mix is missing a CPU to-frame".into()))?;
+        let from_cpu = from.cpu.values().next().ok_or_else(|| {
+            RuntimeError::Other("transition mix is missing a CPU from-frame".into())
+        })?;
+        let to_cpu = to.cpu.values().next().ok_or_else(|| {
+            RuntimeError::Other("transition mix is missing a CPU to-frame".into())
+        })?;
         let mixed = self.mix_transition(from_cpu, to_cpu, factor, pts)?;
         Ok(ProducedFrame {
             cpu: HashMap::from([(mixed.format, mixed)]),
@@ -2099,14 +2108,8 @@ impl Runtime {
                     .cloned()
                     .unwrap_or_default()
             };
-            let produced = self.produce_plan(
-                &plan,
-                &sources,
-                pts,
-                2,
-                view.id.0.as_u128(),
-                &formats,
-            )?;
+            let produced =
+                self.produce_plan(&plan, &sources, pts, 2, view.id.0.as_u128(), &formats)?;
             #[cfg(feature = "wgpu-backend")]
             if let Some(texture) = produced.gpu.clone() {
                 self.multiview_textures.insert(view.id, texture);
@@ -2325,7 +2328,9 @@ impl Runtime {
                     width: w,
                     height: h,
                 },
-                GpuFill::Solid { rgba: [0, 0, 0, 255] },
+                GpuFill::Solid {
+                    rgba: [0, 0, 0, 255],
+                },
                 project,
                 pts,
                 w,
@@ -2798,11 +2803,7 @@ pub struct TickResult {
 }
 
 #[cfg(feature = "wgpu-backend")]
-fn readback_stream(
-    kind: u8,
-    id: u128,
-    format: eiviz_media::PixelFormat,
-) -> u64 {
+fn readback_stream(kind: u8, id: u128, format: eiviz_media::PixelFormat) -> u64 {
     let format_code = match format {
         eiviz_media::PixelFormat::Rgba8 => 1,
         eiviz_media::PixelFormat::Bgra8 => 2,
@@ -2812,10 +2813,7 @@ fn readback_stream(
         eiviz_media::PixelFormat::P010 => 6,
         eiviz_media::PixelFormat::P216 => 7,
     };
-    (kind as u64)
-        ^ (id as u64)
-        ^ ((id >> 64) as u64)
-        ^ (format_code << 48)
+    (kind as u64) ^ (id as u64) ^ ((id >> 64) as u64) ^ (format_code << 48)
 }
 
 fn next_synthetic_input(

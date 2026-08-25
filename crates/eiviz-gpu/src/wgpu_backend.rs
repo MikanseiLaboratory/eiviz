@@ -1251,31 +1251,32 @@ impl WgpuCompositor {
             multiview: None,
             cache: None,
         });
-        let convert_bgra_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("eiviz-convert-bgra-pipeline"),
-            layout: Some(&convert_layout),
-            vertex: wgpu::VertexState {
-                module: &convert_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &convert_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let convert_bgra_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("eiviz-convert-bgra-pipeline"),
+                layout: Some(&convert_layout),
+                vertex: wgpu::VertexState {
+                    module: &convert_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &convert_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            });
         let convert_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("eiviz-convert-uniform"),
             size: 16,
@@ -1791,9 +1792,11 @@ impl WgpuCompositor {
                 && cached.height == frame.height
                 && cached.format == frame.format
         });
-        let skip_upload = reusable && !overwrite && cache.get(&input).is_some_and(|cached| {
-            cached.data_ptr == data_ptr
-        });
+        let skip_upload = reusable
+            && !overwrite
+            && cache
+                .get(&input)
+                .is_some_and(|cached| cached.data_ptr == data_ptr);
         if skip_upload {
             let mut retained = cache
                 .get(&input)
@@ -1898,9 +1901,7 @@ impl WgpuCompositor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let reusable = cache.get(&input).is_some_and(|cached| {
-            cached.width == width
-                && cached.height == height
-                && cached.format == PixelFormat::Rgba8
+            cached.width == width && cached.height == height && cached.format == PixelFormat::Rgba8
         });
         if !reusable {
             drop(cache);
@@ -2347,9 +2348,7 @@ impl WgpuCompositor {
         let mut output_leases = Vec::new();
         let mut planes = Vec::new();
         match format {
-            PixelFormat::Rgba8 | PixelFormat::Rgba16Float
-                if format == frame.format =>
-            {
+            PixelFormat::Rgba8 | PixelFormat::Rgba16Float if format == frame.format => {
                 planes.push(self.copy_plane_to_readback(
                     &mut encoder,
                     frame.texture(),
@@ -2360,7 +2359,8 @@ impl WgpuCompositor {
                 )?);
             }
             PixelFormat::Bgra8 => {
-                let converted = self.acquire_output(PoolFormat::Bgra8, frame.width, frame.height)?;
+                let converted =
+                    self.acquire_output(PoolFormat::Bgra8, frame.width, frame.height)?;
                 self.queue.write_buffer(
                     &self.convert_uniform,
                     0,
@@ -2475,16 +2475,17 @@ impl WgpuCompositor {
         for plane in &planes {
             let remaining = remaining.clone();
             let sender = sender.clone();
-            plane.lease.readback().slice(..).map_async(
-                wgpu::MapMode::Read,
-                move |result| {
+            plane
+                .lease
+                .readback()
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
                     if result.is_err() {
                         let _ = sender.send(result);
                     } else if remaining.fetch_sub(1, Ordering::Relaxed) == 1 {
                         let _ = sender.send(Ok(()));
                     }
-                },
-            );
+                });
         }
         self.poll_device(wgpu::PollType::Poll);
         self.pending_readbacks
@@ -3584,7 +3585,8 @@ mod tests {
             opacity: 0.5,
         };
         let source = VideoFrame::rgba_solid(0, MediaTime::ZERO, 4, 4, [0, 0, 0, 255]);
-        let bytes = layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
+        let bytes =
+            layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
         let values = bytes
             .chunks_exact(4)
             .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
@@ -3677,7 +3679,8 @@ mod tests {
                 target_nits: 100,
             },
         };
-        let uniform = layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
+        let uniform =
+            layer_uniform_bytes(&plan, &layer, source.color, source.format, false, false).unwrap();
         let flags = uniform[48..64]
             .chunks_exact(4)
             .map(|bytes| u32::from_ne_bytes(bytes.try_into().unwrap()))

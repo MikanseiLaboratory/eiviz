@@ -163,7 +163,10 @@ fn frame_to_nv12(frame: &VideoFrame, profile: NdiColorProfile) -> Result<Vec<u8>
     if !frame.width.is_multiple_of(2) || !frame.height.is_multiple_of(2) {
         return Err("NV12 output requires even width and height".into());
     }
-    if !matches!(frame.format, PixelFormat::Rgba8 | PixelFormat::Bgra8 | PixelFormat::Nv12) {
+    if !matches!(
+        frame.format,
+        PixelFormat::Rgba8 | PixelFormat::Bgra8 | PixelFormat::Nv12
+    ) {
         return Err("NV12 output conversion accepts only RGBA8, BGRA8, or NV12 input".into());
     }
     if frame.format == PixelFormat::Nv12 {
@@ -215,7 +218,11 @@ fn packed_rgb(frame: &VideoFrame, x: usize, y: usize) -> [u8; 3] {
     match frame.format {
         PixelFormat::Rgba8 => [pixel[0], pixel[1], pixel[2]],
         PixelFormat::Bgra8 => [pixel[2], pixel[1], pixel[0]],
-        PixelFormat::Nv12 | PixelFormat::P010 | PixelFormat::P216 | PixelFormat::Rgba16Float | PixelFormat::Uyvy => {
+        PixelFormat::Nv12
+        | PixelFormat::P010
+        | PixelFormat::P216
+        | PixelFormat::Rgba16Float
+        | PixelFormat::Uyvy => {
             unreachable!("validated packed RGB input")
         }
     }

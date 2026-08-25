@@ -809,7 +809,11 @@ fn apply_payload(project: &mut Project, payload: &Command) -> Result<()> {
                     "output {id} requires an explicit color format"
                 )));
             }
-            project.outputs.get_mut(id).expect("output existed above").color_format = *format;
+            project
+                .outputs
+                .get_mut(id)
+                .expect("output existed above")
+                .color_format = *format;
         }
         Command::AddMultiview { view } => {
             let owner = view.owner;
@@ -1344,10 +1348,7 @@ mod tests {
         let missing = sequencer
             .apply(
                 &mut project,
-                CommandEnvelope::new(
-                    client,
-                    Command::SetOutputColorFormat { id, format: None },
-                ),
+                CommandEnvelope::new(client, Command::SetOutputColorFormat { id, format: None }),
             )
             .unwrap_err();
         assert!(matches!(missing, CommandError::Rejected(_)));
