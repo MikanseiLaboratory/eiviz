@@ -2179,7 +2179,7 @@ impl DesktopApp {
         for (id, url) in self.engine.declared_omt_sources() {
             match self.engine.bind_omt_source(id, &url) {
                 Ok(source) => {
-                    self.omt_connections.push(source);
+                    self.omt_connections.push((id, source));
                     bound += 1;
                 }
                 Err(error) => failures.push(format!("{url}: {error}")),
@@ -2189,7 +2189,7 @@ impl DesktopApp {
             #[cfg(feature = "ndi")]
             match self.engine.bind_ndi_source(id, &source_name) {
                 Ok(source) => {
-                    self.ndi_connections.push(source);
+                    self.ndi_connections.push((id, source));
                     bound += 1;
                 }
                 Err(error) => failures.push(format!("{source_name}: {error}")),
