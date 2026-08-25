@@ -452,13 +452,36 @@ pub struct Runtime {
     last_multiview_by_format: HashMap<(MultiviewId, eiviz_media::PixelFormat), VideoFrame>,
     #[allow(dead_code)]
     last_gpu_readbacks: u64,
-    generator_pixels: HashMap<(u32, u32, u8, u8, u8, u8, bool), Arc<[u8]>>,
+    generator_pixels: HashMap<GeneratorPixelKey, Arc<[u8]>>,
     #[cfg(feature = "wgpu-backend")]
     scratch_gpu_inputs: HashMap<InputId, WgpuTextureFrame>,
     #[cfg(feature = "wgpu-backend")]
     gpu_source_slots: HashMap<InputId, WgpuTextureFrame>,
     #[cfg(feature = "wgpu-backend")]
     gpu_still_keys: HashMap<InputId, GpuStillKey>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GeneratorPixelKey {
+    width: u32,
+    height: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    bars: bool,
+}
+
+struct StreamEgress<'a> {
+    kind: u8,
+    id: u128,
+    formats: &'a [eiviz_media::PixelFormat],
+}
+
+struct SyntheticInputs<'a> {
+    sources: &'a mut HashMap<InputId, VideoFrame>,
+    reserved: &'a mut HashSet<InputId>,
+    next_id: &'a mut u128,
 }
 
 struct ProducedFrame {
@@ -622,7 +645,15 @@ impl Runtime {
         rgba: (u8, u8, u8, u8),
         bars: bool,
     ) -> VideoFrame {
-        let key = (width, height, rgba.0, rgba.1, rgba.2, rgba.3, bars);
+        let key = GeneratorPixelKey {
+            width,
+            height,
+            r: rgba.0,
+            g: rgba.1,
+            b: rgba.2,
+            a: rgba.3,
+            bars,
+        };
         let pixels = self
             .generator_pixels
             .entry(key)
@@ -1349,9 +1380,11 @@ impl Runtime {
                     &pg,
                     factor.min(1.0),
                     pts,
-                    0,
-                    unit_id.0.as_u128(),
-                    &program_formats,
+                    StreamEgress {
+                        kind: 0,
+                        id: unit_id.0.as_u128(),
+                        formats: &program_formats,
+                    },
                 )?;
                 if transition.remaining_frames <= 1 {
                     self.transitions.remove(&unit_id);
@@ -1603,9 +1636,7 @@ impl Runtime {
         to: &ProducedFrame,
         factor: f32,
         pts: MediaTime,
-        stream_kind: u8,
-        stream_id: u128,
-        formats: &[eiviz_media::PixelFormat],
+        egress: StreamEgress<'_>,
     ) -> Result<ProducedFrame> {
         #[cfg(feature = "wgpu-backend")]
         if let (Some(from_tex), Some(to_tex)) = (&from.gpu, &to.gpu) {
@@ -1616,7 +1647,7 @@ impl Runtime {
             let texture = gpu
                 .mix_textures(from_tex, to_tex, factor, pts, self.frame)
                 .map_err(|error| RuntimeError::Gpu(error.to_string()))?;
-            let cpu = Self::egress_cpu(gpu, &texture, stream_kind, stream_id, formats)?;
+            let cpu = Self::egress_cpu(gpu, &texture, egress.kind, egress.id, egress.formats)?;
             return Ok(ProducedFrame {
                 cpu,
                 gpu: Some(texture),
@@ -1628,7 +1659,7 @@ impl Runtime {
                 "Wgpu transition mix requires GPU-resident textures".into(),
             ));
         }
-        let _ = (stream_kind, stream_id, formats);
+        let _ = (egress.kind, egress.id, egress.formats);
         let from_cpu = from.cpu.values().next().ok_or_else(|| {
             RuntimeError::Other("transition mix is missing a CPU from-frame".into())
         })?;
@@ -1702,31 +1733,6 @@ impl Runtime {
             last.insert(id, frame.clone());
         }
         (primary, by_format)
-    }
-
-    fn composite_plan(
-        &self,
-        plan: &RenderPlan,
-        sources: &HashMap<InputId, VideoFrame>,
-        pts: MediaTime,
-    ) -> Result<VideoFrame> {
-        match self.backend {
-            CompositorBackend::CpuReference => Ok(composite(plan, sources, pts, self.frame)),
-            CompositorBackend::Wgpu => {
-                #[cfg(not(feature = "wgpu-backend"))]
-                {
-                    Err(RuntimeError::WgpuFeatureDisabled)
-                }
-                #[cfg(feature = "wgpu-backend")]
-                {
-                    let gpu = self.wgpu.as_ref().ok_or_else(|| {
-                        RuntimeError::Gpu("wgpu compositor was not constructed".into())
-                    })?;
-                    gpu.composite(plan, sources, pts, self.frame)
-                        .map_err(|e| RuntimeError::Gpu(e.to_string()))
-                }
-            }
-        }
     }
 
     #[cfg(feature = "wgpu-backend")]
@@ -2021,48 +2027,51 @@ impl Runtime {
             let mut layers = Vec::with_capacity(view.tiles.len());
             let mut synthetic = u128::MAX;
             let mut reserved = HashSet::new();
-            for tile in &view.tiles {
-                let input = match tile.source {
-                    MultiviewSource::Black => continue,
-                    MultiviewSource::Input(input) => input,
-                    MultiviewSource::Program(unit) => self.bind_multiview_bus(
-                        view.id,
-                        "Program",
-                        unit,
-                        programs.get(&unit),
-                        #[cfg(feature = "wgpu-backend")]
-                        self.program_textures.get(&unit).cloned(),
-                        #[cfg(not(feature = "wgpu-backend"))]
-                        None,
-                        &mut sources,
-                        &mut reserved,
-                        &mut synthetic,
-                    )?,
-                    MultiviewSource::Preview(unit) => self.bind_multiview_bus(
-                        view.id,
-                        "Preview",
-                        unit,
-                        previews.get(&unit),
-                        #[cfg(feature = "wgpu-backend")]
-                        self.preview_textures.get(&unit).cloned(),
-                        #[cfg(not(feature = "wgpu-backend"))]
-                        None,
-                        &mut sources,
-                        &mut reserved,
-                        &mut synthetic,
-                    )?,
+            {
+                let mut inputs = SyntheticInputs {
+                    sources: &mut sources,
+                    reserved: &mut reserved,
+                    next_id: &mut synthetic,
                 };
-                layers.push(Layer {
-                    input,
-                    transform: Transform2D {
-                        x: tile.column as f32 / view.columns as f32,
-                        y: tile.row as f32 / view.rows as f32,
-                        width: 1.0 / view.columns as f32,
-                        height: 1.0 / view.rows as f32,
-                        ..Transform2D::default()
-                    },
-                    opacity: 1.0,
-                });
+                for tile in &view.tiles {
+                    let input = match tile.source {
+                        MultiviewSource::Black => continue,
+                        MultiviewSource::Input(input) => input,
+                        MultiviewSource::Program(unit) => self.bind_multiview_bus(
+                            view.id,
+                            "Program",
+                            unit,
+                            programs.get(&unit),
+                            #[cfg(feature = "wgpu-backend")]
+                            self.program_textures.get(&unit).cloned(),
+                            #[cfg(not(feature = "wgpu-backend"))]
+                            None,
+                            &mut inputs,
+                        )?,
+                        MultiviewSource::Preview(unit) => self.bind_multiview_bus(
+                            view.id,
+                            "Preview",
+                            unit,
+                            previews.get(&unit),
+                            #[cfg(feature = "wgpu-backend")]
+                            self.preview_textures.get(&unit).cloned(),
+                            #[cfg(not(feature = "wgpu-backend"))]
+                            None,
+                            &mut inputs,
+                        )?,
+                    };
+                    layers.push(Layer {
+                        input,
+                        transform: Transform2D {
+                            x: tile.column as f32 / view.columns as f32,
+                            y: tile.row as f32 / view.rows as f32,
+                            width: 1.0 / view.columns as f32,
+                            height: 1.0 / view.rows as f32,
+                            ..Transform2D::default()
+                        },
+                        opacity: 1.0,
+                    });
+                }
             }
             let plan = RenderPlan {
                 width: scaled_dimension(
@@ -2144,21 +2153,19 @@ impl Runtime {
         unit: MixingUnitId,
         cpu: Option<&VideoFrame>,
         gpu: Option<eiviz_gpu::WgpuTextureFrame>,
-        sources: &mut HashMap<InputId, VideoFrame>,
-        reserved: &mut HashSet<InputId>,
-        synthetic: &mut u128,
+        inputs: &mut SyntheticInputs<'_>,
     ) -> Result<InputId> {
         if let Some(texture) = gpu {
-            let id = next_synthetic_input(sources, reserved, synthetic)?;
-            reserved.insert(id);
+            let id = next_synthetic_input(inputs.sources, inputs.reserved, inputs.next_id)?;
+            inputs.reserved.insert(id);
             self.scratch_gpu_inputs.insert(id, texture);
             return Ok(id);
         }
         let frame = cpu.ok_or_else(|| {
             RuntimeError::Other(format!("multiview {view} missing {bus} for {unit}"))
         })?;
-        let id = next_synthetic_input(sources, reserved, synthetic)?;
-        sources.insert(id, frame.clone());
+        let id = next_synthetic_input(inputs.sources, inputs.reserved, inputs.next_id)?;
+        inputs.sources.insert(id, frame.clone());
         Ok(id)
     }
 
@@ -2170,16 +2177,14 @@ impl Runtime {
         unit: MixingUnitId,
         cpu: Option<&VideoFrame>,
         gpu: Option<()>,
-        sources: &mut HashMap<InputId, VideoFrame>,
-        reserved: &mut HashSet<InputId>,
-        synthetic: &mut u128,
+        inputs: &mut SyntheticInputs<'_>,
     ) -> Result<InputId> {
         let _ = gpu;
         let frame = cpu.ok_or_else(|| {
             RuntimeError::Other(format!("multiview {view} missing {bus} for {unit}"))
         })?;
-        let id = next_synthetic_input(sources, reserved, synthetic)?;
-        sources.insert(id, frame.clone());
+        let id = next_synthetic_input(inputs.sources, inputs.reserved, inputs.next_id)?;
+        inputs.sources.insert(id, frame.clone());
         Ok(id)
     }
 

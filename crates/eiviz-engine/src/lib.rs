@@ -3757,6 +3757,7 @@ mod tests {
                     max_attempts: 1,
                 },
             }),
+            color_format: None,
         }
     }
 

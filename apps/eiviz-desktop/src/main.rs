@@ -724,10 +724,10 @@ impl DesktopApp {
                 .spawn(move || {
                     while !stop.load(Ordering::Acquire) {
                         let started = std::time::Instant::now();
-                        if let Err(error) = engine.tick() {
-                            if let Ok(mut slot) = error_slot.lock() {
-                                *slot = Some(error.to_string());
-                            }
+                        if let Err(error) = engine.tick()
+                            && let Ok(mut slot) = error_slot.lock()
+                        {
+                            *slot = Some(error.to_string());
                         }
                         let period = engine.frame_period();
                         let elapsed = started.elapsed();
@@ -1224,10 +1224,10 @@ impl DesktopApp {
                     ui.label("FDK AAC (optional)");
                     ui.text_edit_singleline(&mut self.fdk_aac_path);
                 });
-                if self.file_browser_open {
-                    if let Some(path) = self.draw_file_browser(ui, &["mp4", "mov", "m4v", "avi"]) {
-                        self.video_path = path;
-                    }
+                if self.file_browser_open
+                    && let Some(path) = self.draw_file_browser(ui, &["mp4", "mov", "m4v", "avi"])
+                {
+                    self.video_path = path;
                 }
                 self.draw_recent_media(ui, true);
             }
@@ -1240,12 +1240,11 @@ impl DesktopApp {
                         self.file_browser_dir = default_pictures_dir();
                     }
                 });
-                if self.file_browser_open {
-                    if let Some(path) =
+                if self.file_browser_open
+                    && let Some(path) =
                         self.draw_file_browser(ui, &["png", "jpg", "jpeg", "bmp", "webp"])
-                    {
-                        self.image_path = path;
-                    }
+                {
+                    self.image_path = path;
                 }
                 self.draw_recent_media(ui, false);
             }
@@ -1390,10 +1389,10 @@ impl DesktopApp {
     fn draw_file_browser(&mut self, ui: &mut egui::Ui, exts: &[&str]) -> Option<String> {
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Up").clicked() {
-                if let Some(parent) = self.file_browser_dir.parent() {
-                    self.file_browser_dir = parent.to_path_buf();
-                }
+            if ui.button("Up").clicked()
+                && let Some(parent) = self.file_browser_dir.parent()
+            {
+                self.file_browser_dir = parent.to_path_buf();
             }
             ui.label(self.file_browser_dir.display().to_string());
             if ui.button("Close browser").clicked() {
@@ -1838,10 +1837,10 @@ impl DesktopApp {
                             .unwrap_or("Mix"),
                         output_feed_label(project, output.video_source)
                     ));
-                    if let Some(command) = output_color_format_combo(ui, output) {
-                        if let Err(error) = self.engine.submit_payload(command) {
-                            self.status = format!("output color format: {error}");
-                        }
+                    if let Some(command) = output_color_format_combo(ui, output)
+                        && let Err(error) = self.engine.submit_payload(command)
+                    {
+                        self.status = format!("output color format: {error}");
                     }
                     if ui.button("Stop").clicked() {
                         match output.kind {
@@ -5518,11 +5517,11 @@ fn resolve_openh264_binary() -> String {
         return String::new();
     };
     let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(file_name));
-            candidates.push(dir.join("runtime").join("openh264").join(file_name));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join(file_name));
+        candidates.push(dir.join("runtime").join("openh264").join(file_name));
     }
     candidates.push(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
