@@ -1,0 +1,257 @@
+using Eiviz.Host.Interop;
+
+namespace Eiviz.Host;
+
+public enum InputKind
+{
+    Color,
+    Bars,
+    Black,
+    Still,
+    Video,
+    Omt,
+    Ndi,
+    Uvc
+}
+
+public enum OutputTransport
+{
+    Omt = 0,
+    Ndi = 1,
+    DeckLink = 2
+}
+
+public enum OutputSourceKind
+{
+    Scene = 0,
+    MuPreview = 1,
+    MuProgram = 2,
+    MuMultiview = 3,
+    Input = 4
+}
+
+public enum MvSlotKind
+{
+    None,
+    Input,
+    Scene,
+    MuPreview,
+    MuProgram
+}
+
+public sealed class MvSlot
+{
+    public MvSlotKind Kind { get; set; }
+    public ulong SourceId { get; set; }
+}
+
+public sealed class InputEntry
+{
+    public ulong Id { get; init; }
+    public required string Name { get; set; }
+    public InputKind Kind { get; init; }
+    public string? PathOrAddress { get; set; }
+    public float ColorR { get; set; } = 1;
+    public float ColorG { get; set; }
+    public float ColorB { get; set; }
+    public bool Scroll { get; set; }
+    public override string ToString() => Name;
+}
+
+public sealed class SceneLayer
+{
+    public ulong InputId { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Width { get; set; } = 1;
+    public float Height { get; set; } = 1;
+    public float Opacity { get; set; } = 1;
+    public int Z { get; set; }
+}
+
+public sealed class SceneEntry
+{
+    public ulong Id { get; set; }
+    public required string Name { get; set; }
+    public ulong MonitorId { get; set; }
+    public List<SceneLayer> Layers { get; } = [];
+    public ulong GpuId => MixerNative.SceneBase | Id;
+    public override string ToString() => Name;
+}
+
+public sealed class TransitionPreset
+{
+    public uint Kind { get; set; } = MixerNative.TransitionFade;
+    public uint DurationFrames { get; set; } = 30;
+    public bool Swap { get; set; } = true;
+    public string Label => Kind switch
+    {
+        0 => "Cut",
+        2 => "Dip",
+        _ => "Fade"
+    };
+}
+
+public sealed class OverlaySlot
+{
+    public ulong SceneGpuId { get; set; }
+    public float X { get; set; } = 0.62f;
+    public float Y { get; set; } = 0.08f;
+    public float Width { get; set; } = 0.32f;
+    public float Height { get; set; } = 0.32f;
+    public float Opacity { get; set; } = 1;
+    public int Z { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
+public sealed class MultiviewLayout
+{
+    public ulong Id { get; set; }
+    public required string Name { get; set; }
+    public ulong MonitorId { get; set; }
+    public List<MvSlot> Tiles { get; } = [];
+    public ulong GpuId => MixerNative.MultiviewBase | Id;
+    public override string ToString() => Name;
+}
+
+public sealed class MixingUnitEntry
+{
+    public ulong Id { get; set; }
+    public required string Name { get; set; }
+    public uint Width { get; set; } = 1920;
+    public uint Height { get; set; } = 1080;
+    public uint FpsNum { get; set; } = 60_000;
+    public uint FpsDen { get; set; } = 1_001;
+    public List<TransitionPreset> Transitions { get; } = [];
+    public List<OverlaySlot> Overlays { get; } = [];
+    public List<MvSlot> MultiviewTiles { get; } = [];
+    public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
+
+    public string FormatFps()
+    {
+        if (FpsNum == 60_000 && FpsDen == 1_001)
+            return "59.94p";
+        if (FpsDen == 1)
+            return $"{FpsNum}p";
+        return $"{FpsNum}/{FpsDen}";
+    }
+
+    public uint DurationMs(uint frames) =>
+        (uint)Math.Max(1, Math.Round(frames * 1000.0 * FpsDen / FpsNum));
+
+    public void EnsureDefaultTransitions()
+    {
+        if (Transitions.Count > 0)
+            return;
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+    }
+
+    public void EnsureDefaultTiles()
+    {
+        if (MultiviewTiles.Count > 0)
+            return;
+        for (var i = 0; i < 8; i++)
+            MultiviewTiles.Add(new MvSlot());
+    }
+}
+
+public sealed class OutputEntry
+{
+    public ulong Id { get; set; }
+    public required string Name { get; set; }
+    public OutputTransport Transport { get; set; } = OutputTransport.Omt;
+    public OutputSourceKind SourceKind { get; set; } = OutputSourceKind.MuProgram;
+    public ulong SourceId { get; set; }
+    public ulong UnitId { get; set; } = 1;
+}
+
+public sealed class SessionSettings
+{
+    public uint MasterFpsNum { get; set; } = 60_000;
+    public uint MasterFpsDen { get; set; } = 1_001;
+    public uint DefaultWidth { get; set; } = 1920;
+    public uint DefaultHeight { get; set; } = 1080;
+    public string Theme { get; set; } = "Charcoal";
+    public ulong DefaultMultiviewUnitId { get; set; } = 1;
+    public uint FrameBufferFrames { get; set; } = 3;
+    public string? LastSessionPath { get; set; }
+}
+
+public sealed class Session
+{
+    public SessionSettings Settings { get; } = new();
+    public List<InputEntry> Inputs { get; } = [];
+    public List<SceneEntry> Scenes { get; } = [];
+    public List<MixingUnitEntry> Units { get; } = [];
+    public List<OutputEntry> Outputs { get; } = [];
+    public List<MultiviewLayout> Multiviews { get; } = [];
+    public ulong NextInputId { get; set; } = 10;
+    public ulong NextSceneId { get; set; } = 1;
+    public ulong NextUnitId { get; set; } = 1;
+    public ulong NextMonitorId { get; set; } = 1000;
+    public ulong NextOutputId { get; set; } = 100;
+    public ulong NextMultiviewId { get; set; } = 1;
+    public ulong SelectedUnitId { get; set; } = 1;
+
+    public static Session Default()
+    {
+        var session = new Session();
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE Bars", Kind = InputKind.Bars });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color });
+        var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+        unit.EnsureDefaultTiles();
+        session.Units.Add(unit);
+        session.NextUnitId = 2;
+        session.AddScene("Scene 1", MixerNative.Bars);
+        session.AddScene("Scene 2", MixerNative.Color);
+        session.Outputs.Add(new OutputEntry
+        {
+            Id = session.NextOutputId++,
+            Name = "eiviz-pgm",
+            Transport = OutputTransport.Omt,
+            SourceKind = OutputSourceKind.MuProgram,
+            UnitId = 1
+        });
+        return session;
+    }
+
+    public SceneEntry AddScene(string name, ulong? fullInput = null)
+    {
+        var scene = new SceneEntry
+        {
+            Id = NextSceneId++,
+            Name = name,
+            MonitorId = NextMonitorId++
+        };
+        if (fullInput is ulong input)
+        {
+            scene.Layers.Add(new SceneLayer
+            {
+                InputId = input,
+                Width = 1,
+                Height = 1,
+                Opacity = 1,
+                Z = 0
+            });
+        }
+        Scenes.Add(scene);
+        return scene;
+    }
+
+    public MultiviewLayout AddMultiview(string? name = null)
+    {
+        var layout = new MultiviewLayout
+        {
+            Id = NextMultiviewId++,
+            Name = name ?? $"Multiview {NextMultiviewId - 1}",
+            MonitorId = NextMonitorId++
+        };
+        Multiviews.Add(layout);
+        return layout;
+    }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "eiviz_mixer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs" }
+pollster = "0.4"
+raw-window-handle = "0.6"
+thiserror = "2"
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs" }
+wgpu = { version = "30.0.1", features = ["dx12"] }
+
+[dev-dependencies]
+pollster = "0.4"

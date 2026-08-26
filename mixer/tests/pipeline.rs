@@ -1,0 +1,251 @@
+use std::ffi::CString;
+use std::thread;
+use std::time::Duration;
+
+use eiviz_mixer::{
+    mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error,
+    mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame,
+    mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
+    mixer_unit_set_state, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK,
+    OUT_NDI, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM,
+};
+use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
+
+#[test]
+fn ping_and_invalid_clock() {
+    assert_eq!(mixer_ping(), 0x4549_5649);
+    assert_eq!(mixer_create(0, 60_000, 0), ERR_INVALID_ARGUMENT);
+}
+
+#[test]
+fn vmx_roundtrip_is_available() {
+    let mut enc = vmx::Codec::new(vmx::Config {
+        width: 64,
+        height: 64,
+        profile: vmx::Profile::OmtHq,
+        color_space: Default::default(),
+    })
+    .expect("codec");
+    let frame = vec![128u8; 64 * 64 * 2];
+    enc.encode_uyvy(&frame, 128).expect("encode");
+    let mut buf = vec![0u8; 1 << 20];
+    let len = enc.save_to(&mut buf).expect("save");
+    assert!(len > 0);
+    let mut dec = vmx::Codec::new(vmx::Config::new(64, 64)).expect("dec");
+    dec.load_from(&buf[..len]).expect("load");
+    let mut out = vec![0u8; 64 * 64 * 2];
+    dec.decode_uyvy(&mut out, 128).expect("decode");
+}
+
+#[test]
+fn dx12_compose_omt_and_program_out() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+
+    let mut state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.5,
+        transition_kind: 1,
+        overlay_count: 1,
+        ..UnitState::default()
+    };
+    state.overlays[0].source_id = SRC_BARS;
+    state.overlays[0].rect.width = 0.3;
+    state.overlays[0].rect.height = 0.3;
+    state.overlays[0].opacity = 0.8;
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(250));
+    unsafe {
+        acquire_or_panic(1);
+    }
+    assert_eq!(mixer_unit_cut(1, 1), OK);
+    assert_eq!(mixer_unit_auto(1, 200, 1), OK);
+
+    let mut sender = Sender::create("eiviz-test-src", FrameType::VIDEO | FrameType::AUDIO)
+        .expect("sender");
+    let url = format!("omt://127.0.0.1:{}", sender.port());
+    let address = CString::new(url).unwrap();
+    unsafe {
+        assert_eq!(mixer_omt_connect(20, address.as_ptr()), OK);
+        assert_eq!(
+            mixer_omt_start_send(1, CString::new("eiviz-test-pgm").unwrap().as_ptr()),
+            OK
+        );
+        state.program_source = 20;
+        state.mix = 0.0;
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+
+    let uyvy = vec![0x80u8, 0xEB, 0x80, 0x10].repeat((64 * 64 / 2) as usize);
+    for _ in 0..24 {
+        let _ = sender.poll_accept();
+        let _ = sender.poll_peer_metadata();
+        if !sender.video_subscribed() {
+            sender.force_subscribe(true, true, false);
+        }
+        sender
+            .send_video(MediaFrame {
+                frame_type: FrameType::VIDEO,
+                codec: Codec::Uyvy as i32,
+                width: 64,
+                height: 64,
+                stride: 128,
+                frame_rate_n: 60,
+                frame_rate_d: 1,
+                data: uyvy.clone(),
+                ..Default::default()
+            })
+            .expect("send");
+        thread::sleep(Duration::from_millis(16));
+    }
+    thread::sleep(Duration::from_millis(120));
+    mixer_destroy();
+}
+
+fn scene_id(id: u64) -> u64 {
+    SCENE_BASE | id
+}
+
+fn full_layer(source_id: u64) -> OverlayDesc {
+    OverlayDesc {
+        source_id,
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        opacity: 1.0,
+        z: 0,
+    }
+}
+
+unsafe fn acquire_or_panic(unit: u64) {
+    for _ in 0..40 {
+        let mut ptr = std::ptr::null();
+        let mut stride = 0u32;
+        let mut pts = 0i64;
+        let mut length = 0u32;
+        let acquired = unsafe {
+            mixer_unit_acquire_frame(unit, &mut ptr, &mut stride, &mut pts, &mut length)
+        };
+        if acquired == OK {
+            assert!(!ptr.is_null());
+            assert!(length > 0);
+            mixer_unit_release_frame(unit);
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let mut buf = [0u8; 512];
+    let n = unsafe { mixer_last_error(buf.as_mut_ptr(), buf.len()) };
+    panic!(
+        "acquire failed: {}",
+        String::from_utf8_lossy(&buf[..n.max(0) as usize])
+    );
+}
+
+#[test]
+fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(mixer_create_unit(2, 320, 180), OK);
+
+    let bars = full_layer(SRC_BARS);
+    let color = full_layer(SRC_COLOR);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &color), OK);
+        assert_eq!(mixer_define_scene(scene_id(3), 320, 180, 0, std::ptr::null()), OK);
+    }
+
+    let mut state = UnitState {
+        program_source: scene_id(2),
+        preview_source: scene_id(1),
+        mix: 0.0,
+        overlay_count: 1,
+        ..UnitState::default()
+    };
+    state.overlays[0] = OverlayDesc {
+        source_id: scene_id(3),
+        rect: Rect {
+            x: 0.6,
+            y: 0.1,
+            width: 0.3,
+            height: 0.3,
+        },
+        opacity: 1.0,
+        z: 0,
+    };
+    state.mv_slots[0] = scene_id(1);
+    state.mv_slots[1] = SRC_BLUE;
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+
+    let other = UnitState {
+        program_source: scene_id(1),
+        preview_source: scene_id(2),
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(2, &other), OK);
+    }
+
+    thread::sleep(Duration::from_millis(250));
+    unsafe {
+        acquire_or_panic(1);
+        acquire_or_panic(2);
+    }
+
+    unsafe {
+        state.mix = 1.0;
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1), OK);
+        let mut after = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut after), OK);
+        assert_eq!(after.program_source, scene_id(1));
+        assert_eq!(after.preview_source, scene_id(2));
+        assert_eq!(after.mix, 0.0);
+        assert_eq!(after.mv_slots[0], scene_id(1));
+        assert_eq!(after.overlay_count, 1);
+
+        let mut still = UnitState::default();
+        assert_eq!(mixer_unit_get_state(2, &mut still), OK);
+        assert_eq!(still.program_source, scene_id(1));
+        assert_eq!(still.preview_source, scene_id(2));
+        assert_eq!(still.mix, 0.0);
+    }
+
+    unsafe {
+        assert_eq!(
+            mixer_output_add(
+                99,
+                OUT_NDI,
+                CString::new("ndi-unlinked").unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1
+            ),
+            ERR_IO
+        );
+        assert_eq!(
+            mixer_output_add(
+                98,
+                OUT_DECKLINK,
+                CString::new("decklink-unlinked").unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1
+            ),
+            ERR_IO
+        );
+    }
+    mixer_destroy();
+}

@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>preview</LangVersion>
+    <MixerProject>$(MSBuildThisFileDirectory)..\mixer</MixerProject>
+    <MixerLibrary>$(MixerProject)\target\release\eiviz_mixer.dll</MixerLibrary>
+  </PropertyGroup>
+
+  <Target Name="BuildMixer" BeforeTargets="Build">
+    <Exec Command="cargo build --release" WorkingDirectory="$(MixerProject)" />
+    <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(OutDir)" />
+  </Target>
+</Project>
