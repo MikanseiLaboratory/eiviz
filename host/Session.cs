@@ -26,7 +26,7 @@ public enum OutputSourceKind
     Scene = 0,
     MuPreview = 1,
     MuProgram = 2,
-    MuMultiview = 3,
+    Multiview = 3,
     Input = 4
 }
 
@@ -67,6 +67,7 @@ public sealed class SceneLayer
     public float Height { get; set; } = 1;
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
+    public bool AudioFollow { get; set; } = true;
 }
 
 public sealed class SceneEntry
@@ -109,9 +110,27 @@ public sealed class MultiviewLayout
     public ulong Id { get; set; }
     public required string Name { get; set; }
     public ulong MonitorId { get; set; }
+    public ulong PreviewUnitId { get; set; } = 1;
+    public ulong ProgramUnitId { get; set; } = 1;
     public List<MvSlot> Tiles { get; } = [];
     public ulong GpuId => MixerNative.MultiviewBase | Id;
     public override string ToString() => Name;
+
+    public void EnsureTiles()
+    {
+        while (Tiles.Count < 8)
+            Tiles.Add(new MvSlot());
+        while (Tiles.Count > 8)
+            Tiles.RemoveAt(Tiles.Count - 1);
+        foreach (var tile in Tiles)
+        {
+            if (tile.Kind is MvSlotKind.MuPreview or MvSlotKind.MuProgram)
+            {
+                tile.Kind = MvSlotKind.None;
+                tile.SourceId = 0;
+            }
+        }
+    }
 }
 
 public sealed class MixingUnitEntry
@@ -166,6 +185,12 @@ public sealed class OutputEntry
     public ulong UnitId { get; set; } = 1;
 }
 
+public enum InternalColorFormat
+{
+    Uyvy = 0,
+    Bgra = 1
+}
+
 public sealed class SessionSettings
 {
     public uint MasterFpsNum { get; set; } = 60_000;
@@ -175,6 +200,7 @@ public sealed class SessionSettings
     public string Theme { get; set; } = "Charcoal";
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
+    public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public string? LastSessionPath { get; set; }
 }
 
@@ -249,8 +275,11 @@ public sealed class Session
         {
             Id = NextMultiviewId++,
             Name = name ?? $"Multiview {NextMultiviewId - 1}",
-            MonitorId = NextMonitorId++
+            MonitorId = NextMonitorId++,
+            PreviewUnitId = Settings.DefaultMultiviewUnitId,
+            ProgramUnitId = Settings.DefaultMultiviewUnitId
         };
+        layout.EnsureTiles();
         Multiviews.Add(layout);
         return layout;
     }

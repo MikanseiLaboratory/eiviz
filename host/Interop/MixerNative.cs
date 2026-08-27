@@ -13,12 +13,14 @@ internal static partial class MixerNative
     internal const ulong Blue = 4;
     internal const ulong SceneBase = 0x0001_0000;
     internal const ulong MultiviewBase = 0x0002_0000;
+    internal const ulong LabelBase = 0x0003_0000;
     internal const uint OutputProgram = 0;
     internal const uint OutputPreview = 1;
     internal const uint OutputMultiview = 2;
     internal const uint TransitionCut = 0;
     internal const uint TransitionFade = 1;
     internal const uint TransitionDip = 2;
+    internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
     internal const uint OutOmt = 0;
@@ -93,8 +95,26 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_register_source")]
     internal static partial int RegisterSource(ulong id, uint width, uint height, uint format);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_destroy_source")]
+    internal static partial int DestroySource(ulong id);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_flush_audio")]
+    internal static partial int FlushAudio(ulong id);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_bind_multiview")]
+    internal static partial int BindMultiview(ulong sceneId, ulong previewUnit, ulong programUnit);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_follow_audio")]
+    internal static unsafe partial int CopyFollowAudio(float* samples, uint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_monitor_audio")]
+    internal static unsafe partial int CopyMonitorAudio(ulong id, float* samples, uint capacity, int* sampleRate, int* channels);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_push_frame")]
     internal static unsafe partial int PushFrame(ulong id, byte* ptr, uint stride, uint height, long pts);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_push_audio")]
+    internal static unsafe partial int PushAudio(ulong id, int sampleRate, int channels, uint frames, long pts, float* planar);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_load_still", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int LoadStill(ulong id, string path);
@@ -128,6 +148,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_stats")]
     internal static unsafe partial int CopyStats(MixerStats* stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_source_usage")]
+    internal static unsafe partial int CopySourceUsage(SourceUsage* usage, uint capacity);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
@@ -188,6 +211,8 @@ internal struct OverlayDesc
     public Rect Rect;
     public float Opacity;
     public int Z;
+    public uint AudioFollow;
+    public uint Pad;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -203,6 +228,16 @@ internal struct MixerStats
 {
     public float RenderMs;
     public float FrameBudgetMs;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SourceUsage
+{
+    public ulong SourceId;
+    public uint Width;
+    public uint Height;
+    public ulong RamBytes;
+    public ulong VramBytes;
 }
 
 [StructLayout(LayoutKind.Sequential)]

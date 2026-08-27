@@ -81,6 +81,7 @@ internal static class SessionStore
             session.Settings.Theme = Settings.Theme;
             session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
             session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
+            session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)
@@ -225,12 +226,16 @@ internal static class SessionStore
     {
         public ulong Id { get; set; }
         public string Name { get; set; } = "";
+        public ulong PreviewUnitId { get; set; }
+        public ulong ProgramUnitId { get; set; }
         public List<MvSlot> Tiles { get; set; } = [];
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
         {
             Id = layout.Id,
             Name = layout.Name,
+            PreviewUnitId = layout.PreviewUnitId,
+            ProgramUnitId = layout.ProgramUnitId,
             Tiles = [.. layout.Tiles]
         };
 
@@ -240,10 +245,13 @@ internal static class SessionStore
             {
                 Id = Id,
                 Name = string.IsNullOrWhiteSpace(Name) ? $"Multiview {Id}" : Name,
-                MonitorId = session.NextMonitorId++
+                MonitorId = session.NextMonitorId++,
+                PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
+                ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);
+            layout.EnsureTiles();
             return layout;
         }
     }

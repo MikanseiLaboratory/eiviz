@@ -6,12 +6,11 @@
         Background="#2B2B2B" Foreground="#EEEEEE">
     <DockPanel Margin="16">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Add tile" Width="88" Click="Add_Click"/>
             <Button Content="OK" Width="88" Margin="8,0,0,0" IsDefault="True" Click="Ok_Click"/>
             <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
         </StackPanel>
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
-                   Text="Add tiles freely. Each tile is exactly one of: Scene, Input, MU Preview, or MU Program."/>
+                   Text="Top left is that Mixing Unit's Preview. Top right is Program. The lower half holds eight Input or Scene windows."/>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="SlotRows"/>
         </ScrollViewer>

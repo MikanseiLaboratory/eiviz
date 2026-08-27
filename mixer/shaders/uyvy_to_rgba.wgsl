@@ -3,20 +3,33 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
 }
 
+struct BlitParams {
+    dst: vec4<f32>,
+    opacity: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+
 @group(0) @binding(0) var packed_tex: texture_2d<f32>;
 @group(0) @binding(1) var packed_samp: sampler;
+@group(0) @binding(2) var<uniform> params: BlitParams;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0),
+    var verts = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
     );
-    let pos = positions[index];
+    let local = verts[index];
+    let dest_uv = params.dst.xy + local * params.dst.zw;
     var out: VsOut;
-    out.clip = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
+    out.clip = vec4<f32>(dest_uv.x * 2.0 - 1.0, (1.0 - dest_uv.y) * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = local;
     return out;
 }
 
@@ -34,5 +47,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let r = clamp(y + 1.402 * v, 0.0, 255.0) / 255.0;
     let g = clamp(y - 0.344136 * u - 0.714136 * v, 0.0, 255.0) / 255.0;
     let b = clamp(y + 1.772 * u, 0.0, 255.0) / 255.0;
-    return vec4<f32>(r, g, b, 1.0);
+    return vec4<f32>(r * params.opacity, g * params.opacity, b * params.opacity, params.opacity);
 }

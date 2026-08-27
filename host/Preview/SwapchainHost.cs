@@ -17,6 +17,9 @@ internal sealed partial class SwapchainHost : HwndHost
     public ulong SourceId { get; set; }
     public bool IsMonitor { get; set; }
 
+    public event EventHandler? SurfaceClicked;
+    public event EventHandler? SurfaceDoubleClicked;
+
     public SwapchainHost()
     {
         SizeChanged += (_, _) => ApplySize();
@@ -40,6 +43,15 @@ internal sealed partial class SwapchainHost : HwndHost
         return new HandleRef(this, _hwnd);
     }
 
+    protected override nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg == WmLButtonUp)
+            SurfaceClicked?.Invoke(this, EventArgs.Empty);
+        else if (msg == WmLButtonDblClk)
+            SurfaceDoubleClicked?.Invoke(this, EventArgs.Empty);
+        return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
+    }
+
     protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
     {
         base.OnRenderSizeChanged(sizeInfo);
@@ -53,6 +65,8 @@ internal sealed partial class SwapchainHost : HwndHost
             throw new InvalidOperationException($"Could not destroy preview HWND: {Marshal.GetLastWin32Error()}");
         _hwnd = nint.Zero;
     }
+
+    public void ReleaseNative() => DetachNative();
 
     public void RetargetUnit(ulong unitId, uint kind)
     {
@@ -127,6 +141,8 @@ internal sealed partial class SwapchainHost : HwndHost
     private const int WsVisible = 0x10000000;
     private const int WsClipSiblings = 0x04000000;
     private const int WsClipChildren = 0x02000000;
+    private const int WmLButtonUp = 0x0202;
+    private const int WmLButtonDblClk = 0x0203;
 
     [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint CreateWindowEx(

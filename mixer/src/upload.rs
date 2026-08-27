@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
 
 const SLOTS: usize = 3;
+pub const AUDIO_RATE: i32 = 48_000;
+const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CpuFormat {
@@ -34,6 +36,9 @@ pub struct SourceRing {
     pub last_pts: i64,
     pub has_frame: bool,
     pub audio: Option<AudioPacket>,
+    fifo: VecDeque<f32>,
+    last_peak: (f32, f32),
+    fifo_primed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +62,9 @@ impl SourceRing {
             last_pts: 0,
             has_frame: false,
             audio: None,
+            fifo: VecDeque::new(),
+            last_peak: (0.0, 0.0),
+            fifo_primed: false,
         }
     }
 
@@ -76,14 +84,53 @@ impl SourceRing {
     }
 
     pub fn peak(&self) -> (f32, f32) {
-        let Some(audio) = self.audio.as_ref() else {
+        self.last_peak
+    }
+
+    pub fn ingest_audio(&mut self, packet: AudioPacket) {
+        self.last_peak = peak_planar(&packet);
+        let stereo = resample_to_stereo_48k(&packet);
+        self.fifo.extend(stereo);
+        let cap = AUDIO_FIFO_FRAMES * 2;
+        while self.fifo.len() > cap {
+            self.fifo.pop_front();
+        }
+        if self.fifo.len() >= (AUDIO_RATE as usize) / 10 * 2 {
+            self.fifo_primed = true;
+        }
+        self.audio = Some(packet);
+    }
+
+    pub fn clear_audio(&mut self) {
+        self.fifo.clear();
+        self.audio = None;
+        self.last_peak = (0.0, 0.0);
+        self.fifo_primed = false;
+    }
+
+    fn pop_stereo(&mut self) -> (f32, f32) {
+        if !self.fifo_primed {
             return (0.0, 0.0);
-        };
-        peak_planar(audio)
+        }
+        let left = self.fifo.pop_front().unwrap_or(0.0);
+        let right = self.fifo.pop_front().unwrap_or(left);
+        (left, right)
     }
 
     pub fn latest_rgba_or_packed(&self) -> &[u8] {
         &self.slots[self.write.load(Ordering::Acquire)]
+    }
+
+    pub fn ram_bytes(&self) -> u64 {
+        self.slots.iter().map(|slot| slot.len() as u64).sum()
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        let bpp = match self.format {
+            CpuFormat::Uyvy | CpuFormat::Uyva => 2,
+            CpuFormat::Bgra | CpuFormat::Rgba => 4,
+        };
+        u64::from(self.width) * u64::from(self.height) * bpp
     }
 }
 
@@ -94,7 +141,26 @@ pub struct UploadStore {
 
 impl UploadStore {
     pub fn register(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
-        self.sources.insert(id, SourceRing::new(width, height, format));
+        let prev = self.sources.remove(&id);
+        let mut ring = SourceRing::new(width, height, format);
+        if let Some(old) = prev {
+            ring.audio = old.audio;
+            ring.fifo = old.fifo;
+            ring.last_peak = old.last_peak;
+            ring.fifo_primed = old.fifo_primed;
+        }
+        self.sources.insert(id, ring);
+    }
+
+    pub fn unregister(&mut self, id: u64) {
+        self.sources.remove(&id);
+    }
+
+    pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
+        match self.sources.get(&id) {
+            Some(ring) if ring.width == width && ring.height == height && ring.format == format => {}
+            _ => self.register(id, width, height, format),
+        }
     }
 
     pub fn push(&mut self, id: u64, src: &[u8], stride: usize, pts: i64) -> Result<(), String> {
@@ -104,6 +170,71 @@ impl UploadStore {
             .ok_or_else(|| format!("unknown source {id}"))?;
         ring.push(src, stride, pts);
         Ok(())
+    }
+
+    pub fn push_audio(
+        &mut self,
+        id: u64,
+        sample_rate: i32,
+        channels: i32,
+        frames: u32,
+        pts: i64,
+        planar: &[f32],
+    ) {
+        let Some(ring) = self.sources.get_mut(&id) else {
+            return;
+        };
+        let mut pcm = Vec::with_capacity(planar.len() * 4);
+        for sample in planar {
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        ring.ingest_audio(AudioPacket {
+            timestamp: pts,
+            sample_rate,
+            channels,
+            samples_per_channel: frames as i32,
+            pcm_planar_f32: pcm,
+        });
+    }
+
+    pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
+        if self.sources.get(&id).is_none() {
+            self.register(id, 16, 16, CpuFormat::Bgra);
+        }
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.ingest_audio(packet);
+        }
+    }
+
+    pub fn flush_audio(&mut self, id: u64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.clear_audio();
+        }
+    }
+
+    pub fn mix_follow(&mut self, gains: &[(u64, f32)], frames: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; frames.saturating_mul(2)];
+        if frames == 0 || gains.is_empty() {
+            return out;
+        }
+        for &(id, gain) in gains {
+            if gain.abs() < 1e-6 {
+                continue;
+            }
+            let Some(ring) = self.sources.get_mut(&id) else {
+                continue;
+            };
+            for i in 0..frames {
+                let (left, right) = ring.pop_stereo();
+                out[i * 2] += left * gain;
+                out[i * 2 + 1] += right * gain;
+            }
+        }
+        out
+    }
+
+    pub fn fifo_frames(&self, id: u64) -> usize {
+        self.sources.get(&id).map(|ring| ring.fifo.len() / 2).unwrap_or(0)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -119,12 +250,52 @@ impl UploadStore {
     }
 }
 
+fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
+    let channels = packet.channels.max(1) as usize;
+    let src_rate = packet.sample_rate.max(1) as usize;
+    let values: Vec<f32> = packet
+        .pcm_planar_f32
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let src_frames = if packet.samples_per_channel > 0 {
+        packet.samples_per_channel as usize
+    } else {
+        values.len() / channels
+    }
+    .max(1)
+    .min(values.len() / channels.max(1));
+    let dst_frames = (src_frames * AUDIO_RATE as usize + src_rate / 2) / src_rate;
+    let mut out = Vec::with_capacity(dst_frames * 2);
+    for i in 0..dst_frames {
+        let src = i as f64 * src_rate as f64 / AUDIO_RATE as f64;
+        let idx = (src as usize).min(src_frames.saturating_sub(1));
+        let left = values[idx];
+        let right = if channels > 1 {
+            values.get(src_frames + idx).copied().unwrap_or(left)
+        } else {
+            left
+        };
+        out.push(left);
+        out.push(right);
+    }
+    out
+}
+
 fn peak_planar(audio: &AudioPacket) -> (f32, f32) {
     let channels = audio.channels.max(1) as usize;
-    let samples = audio.samples_per_channel.max(0) as usize;
-    if samples == 0 || audio.pcm_planar_f32.len() < 4 {
+    let byte_samples = audio.pcm_planar_f32.len() / 4;
+    if byte_samples == 0 {
         return (0.0, 0.0);
     }
+    let samples = if audio.samples_per_channel > 0 {
+        audio.samples_per_channel as usize
+    } else {
+        (byte_samples / channels).max(1)
+    };
     let plane_bytes = samples * 4;
     let left = peak_bytes(&audio.pcm_planar_f32[..plane_bytes.min(audio.pcm_planar_f32.len())]);
     let right = if channels > 1 {
@@ -152,28 +323,24 @@ fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {
 }
 
 fn write_slot(dst: &mut [u8], src: &[u8], stride: usize, width: u32, height: u32, format: CpuFormat) {
+    let bpp = match format {
+        CpuFormat::Bgra | CpuFormat::Rgba => 4usize,
+        CpuFormat::Uyvy | CpuFormat::Uyva => 2,
+    };
+    let row_bytes = width as usize * bpp;
+    if stride < row_bytes {
+        return;
+    }
+    let needed_src = match height {
+        0 => 0,
+        h => (h as usize - 1).saturating_mul(stride).saturating_add(row_bytes),
+    };
+    let needed_dst = slot_bytes(width, height, format);
+    if src.len() < needed_src || dst.len() < needed_dst {
+        return;
+    }
     match format {
-        CpuFormat::Bgra => {
-            for y in 0..height as usize {
-                let row = &src[y * stride..];
-                for x in 0..width as usize {
-                    let i = y * width as usize * 4 + x * 4;
-                    dst[i] = row[x * 4 + 2];
-                    dst[i + 1] = row[x * 4 + 1];
-                    dst[i + 2] = row[x * 4];
-                    dst[i + 3] = row[x * 4 + 3];
-                }
-            }
-        }
-        CpuFormat::Rgba => {
-            let row_bytes = width as usize * 4;
-            for y in 0..height as usize {
-                let src_row = &src[y * stride..y * stride + row_bytes];
-                dst[y * row_bytes..y * row_bytes + row_bytes].copy_from_slice(src_row);
-            }
-        }
-        CpuFormat::Uyvy | CpuFormat::Uyva => {
-            let row_bytes = width as usize * 2;
+        CpuFormat::Bgra | CpuFormat::Rgba | CpuFormat::Uyvy | CpuFormat::Uyva => {
             for y in 0..height as usize {
                 let src_row = &src[y * stride..y * stride + row_bytes];
                 dst[y * row_bytes..y * row_bytes + row_bytes].copy_from_slice(src_row);

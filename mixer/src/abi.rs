@@ -24,6 +24,8 @@ pub const OUTPUT_PREVIEW: u32 = 1;
 pub const OUTPUT_MULTIVIEW: u32 = 2;
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
+pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
+pub const LABEL_BASE: u64 = 0x0003_0000;
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 
 pub const OUT_OMT: u32 = 0;
@@ -61,6 +63,8 @@ pub struct OverlayDesc {
     pub rect: Rect,
     pub opacity: f32,
     pub z: i32,
+    pub audio_follow: u32,
+    pub pad: u32,
 }
 
 #[repr(C)]
@@ -110,6 +114,10 @@ pub fn is_scene(source_id: u64) -> bool {
     source_id >= SCENE_BASE && source_id < MU_SOURCE_FLAG
 }
 
+pub fn is_multiview(source_id: u64) -> bool {
+    source_id >= MULTIVIEW_BASE && source_id < LABEL_BASE
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AudioPeak {
@@ -123,4 +131,14 @@ pub struct AudioPeak {
 pub struct MixerStats {
     pub render_ms: f32,
     pub frame_budget_ms: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SourceUsage {
+    pub source_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub ram_bytes: u64,
+    pub vram_bytes: u64,
 }

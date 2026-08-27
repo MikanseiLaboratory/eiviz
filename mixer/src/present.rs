@@ -1,7 +1,6 @@
 use std::{collections::HashMap, num::NonZeroIsize};
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
-use wgpu::util::DeviceExt;
 
 use crate::device::GpuDevice;
 
@@ -11,6 +10,9 @@ pub struct Presenter {
     blit: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    params: wgpu::Buffer,
+    bind_key: u64,
+    bind: Option<wgpu::BindGroup>,
 }
 
 #[derive(Default)]
@@ -85,47 +87,78 @@ impl Presenters {
         }
     }
 
-    pub fn present_texture(
-        &self,
+    pub fn attached_monitor_sources(&self) -> Vec<u64> {
+        self.monitor_sources.values().copied().collect()
+    }
+
+    pub fn present_unit_buses(
+        &mut self,
         device: &GpuDevice,
-        unit_id: u64,
-        kind: u32,
-        tiles: &[(wgpu::TextureView, [f32; 4])],
+        epoch: u64,
+        view_for: impl Fn(u64, u32) -> Option<wgpu::TextureView>,
     ) -> Result<(), String> {
-        for ((id, k, _), presenter) in &self.by_key {
-            if *id == unit_id && *k == kind {
-                present_tiles(device, presenter, tiles)?;
+        let planned: Vec<_> = self
+            .by_key
+            .keys()
+            .copied()
+            .map(|(unit_id, kind, hwnd)| {
+                let cache_key = unit_id ^ (u64::from(kind) << 48) ^ epoch.rotate_left(8);
+                (unit_id, kind, hwnd, cache_key, view_for(unit_id, kind))
+            })
+            .collect();
+        let mut encoder = device
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz present"),
+            });
+        let mut acquired = Vec::new();
+        for (unit_id, kind, hwnd, cache_key, view) in planned {
+            let Some(presenter) = self.by_key.get_mut(&(unit_id, kind, hwnd)) else {
+                continue;
+            };
+            if let Some(item) = draw_presenter(device, presenter, cache_key, view.as_ref(), &mut encoder)
+            {
+                acquired.push(item);
             }
         }
-        Ok(())
+        submit_presents(device, encoder, acquired)
     }
 
     pub fn present_monitors(
-        &self,
+        &mut self,
         device: &GpuDevice,
+        epoch: u64,
         source_view: impl Fn(u64) -> Option<wgpu::TextureView>,
     ) -> Result<(), String> {
-        for (monitor_id, presenter) in &self.monitors {
-            let Some(source_id) = self.monitor_sources.get(monitor_id) else {
+        let planned: Vec<_> = self
+            .monitors
+            .keys()
+            .copied()
+            .filter_map(|monitor_id| {
+                let source_id = *self.monitor_sources.get(&monitor_id)?;
+                Some((monitor_id, source_id ^ epoch.rotate_left(8), source_view(source_id)))
+            })
+            .collect();
+        let mut encoder = device
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz present"),
+            });
+        let mut acquired = Vec::new();
+        for (monitor_id, source_id, view) in planned {
+            let Some(presenter) = self.monitors.get_mut(&monitor_id) else {
                 continue;
             };
-            let Some(view) = source_view(*source_id) else {
-                present_tiles(device, presenter, &[])?;
-                continue;
-            };
-            present_tiles(device, presenter, &[(view, [0.0, 0.0, 1.0, 1.0])])?;
-        }
-        Ok(())
-    }
-
-    pub fn keys_for_unit(&self, unit_id: u64) -> Vec<u32> {
-        let mut kinds = Vec::new();
-        for (id, kind, _) in self.by_key.keys() {
-            if *id == unit_id && !kinds.contains(kind) {
-                kinds.push(*kind);
+            if let Some(item) = draw_presenter(device, presenter, source_id, view.as_ref(), &mut encoder)
+            {
+                acquired.push(item);
             }
         }
-        kinds
+        submit_presents(device, encoder, acquired)
+    }
+
+    pub fn has_kind(&self, unit_id: u64, kind: u32) -> bool {
+        self.by_key.keys().any(|(id, k, _)| *id == unit_id && *k == kind)
     }
 }
 
@@ -150,15 +183,25 @@ fn create_presenter(
     let mut config = surface
         .get_default_config(&device.adapter, width.max(2), height.max(2))
         .ok_or("DX12 surface exposes no compatible configuration")?;
-    config.present_mode = wgpu::PresentMode::AutoVsync;
+    let caps = surface.get_capabilities(&device.adapter);
+    config.present_mode = pick_present_mode(&caps.present_modes);
     surface.configure(&device.device, &config);
     let (layout, blit, sampler) = present_blit(device, config.format)?;
+    let params = device.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("present params"),
+        size: 256,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     Ok(Presenter {
         surface,
         config,
         blit,
         layout,
         sampler,
+        params,
+        bind_key: 0,
+        bind: None,
     })
 }
 
@@ -173,71 +216,39 @@ fn resize_presenter(device: &GpuDevice, presenter: Option<&mut Presenter>, width
     }
     presenter.config.width = width;
     presenter.config.height = height;
+    presenter.bind = None;
+    presenter.bind_key = 0;
     presenter
         .surface
         .configure(&device.device, &presenter.config);
 }
 
-fn present_tiles(
+fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    const PREFERRED: [wgpu::PresentMode; 4] = [
+        wgpu::PresentMode::Mailbox,
+        wgpu::PresentMode::Immediate,
+        wgpu::PresentMode::AutoNoVsync,
+        wgpu::PresentMode::FifoRelaxed,
+    ];
+    PREFERRED
+        .into_iter()
+        .find(|mode| modes.contains(mode))
+        .unwrap_or(wgpu::PresentMode::Fifo)
+}
+
+fn draw_presenter(
     device: &GpuDevice,
-    presenter: &Presenter,
-    tiles: &[(wgpu::TextureView, [f32; 4])],
-) -> Result<(), String> {
+    presenter: &mut Presenter,
+    cache_key: u64,
+    src: Option<&wgpu::TextureView>,
+    encoder: &mut wgpu::CommandEncoder,
+) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
     let texture = match presenter.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-        result => return Err(format!("could not acquire surface: {result:?}")),
+        _ => return None,
     };
     let dest = texture.texture.create_view(&Default::default());
-    let mut encoder = device
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("eiviz present"),
-        });
-    let binds: Vec<_> = tiles
-        .iter()
-        .map(|(src, dst)| {
-            let params = BlitParams {
-                dst: *dst,
-                opacity: 1.0,
-                pad: [0.0; 3],
-            };
-            let buffer = device
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("present blit"),
-                    contents: bytemuck::bytes_of(&params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            (
-                buffer,
-                src.clone(),
-            )
-        })
-        .collect();
-    let groups: Vec<_> = binds
-        .iter()
-        .map(|(buffer, src)| {
-            device.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("present bg"),
-                layout: &presenter.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(src),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&presenter.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: buffer.as_entire_binding(),
-                    },
-                ],
-            })
-        })
-        .collect();
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("present"),
@@ -255,14 +266,57 @@ fn present_tiles(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&presenter.blit);
-        for group in &groups {
-            pass.set_bind_group(0, group, &[]);
+        if let Some(src) = src {
+            if presenter.bind_key != cache_key || presenter.bind.is_none() {
+                let params = BlitParams {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    opacity: 1.0,
+                    pad: [0.0; 3],
+                };
+                device
+                    .queue
+                    .write_buffer(&presenter.params, 0, bytemuck::bytes_of(&params));
+                presenter.bind = Some(device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("present bg"),
+                    layout: &presenter.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(src),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&presenter.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: presenter.params.as_entire_binding(),
+                        },
+                    ],
+                }));
+                presenter.bind_key = cache_key;
+            }
+            pass.set_pipeline(&presenter.blit);
+            pass.set_bind_group(0, presenter.bind.as_ref().expect("present bind"), &[]);
             pass.draw(0..6, 0..1);
         }
     }
+    Some((texture, dest))
+}
+
+fn submit_presents(
+    device: &GpuDevice,
+    encoder: wgpu::CommandEncoder,
+    acquired: Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>,
+) -> Result<(), String> {
+    if acquired.is_empty() {
+        return Ok(());
+    }
     device.queue.submit(Some(encoder.finish()));
-    device.queue.present(texture);
+    for (texture, dest) in acquired {
+        drop(dest);
+        device.queue.present(texture);
+    }
     Ok(())
 }
 

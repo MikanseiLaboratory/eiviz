@@ -22,7 +22,8 @@ public partial class SettingsWindow : Window
             DefaultHeight = session.Settings.DefaultHeight,
             Theme = session.Settings.Theme,
             DefaultMultiviewUnitId = session.Settings.DefaultMultiviewUnitId,
-            FrameBufferFrames = session.Settings.FrameBufferFrames
+            FrameBufferFrames = session.Settings.FrameBufferFrames,
+            InternalColorFormat = session.Settings.InternalColorFormat
         };
         foreach (var output in session.Outputs)
         {
@@ -32,6 +33,7 @@ public partial class SettingsWindow : Window
         SelectTag(FpsBox, $"{Settings.MasterFpsNum}/{Settings.MasterFpsDen}");
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
+        SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
@@ -59,6 +61,7 @@ public partial class SettingsWindow : Window
         SelectTag(FpsBox, "60000/1001");
         SelectTag(SizeBox, "1920x1080");
         SelectTag(BufferBox, "3");
+        SelectTag(ColorFormatBox, "uyvy");
     }
 
     private void RebuildLayouts()
@@ -93,7 +96,7 @@ public partial class SettingsWindow : Window
     {
         if (MvList.SelectedItem is not MultiviewLayout layout)
             return;
-        var dialog = new MultiviewSlotsWindow(_session, layout.Tiles, 32) { Owner = this };
+        var dialog = new MultiviewSlotsWindow(_session, layout) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         var unit = MvUnitBox.SelectedItem as MixingUnitEntry ?? _session.Units[0];
@@ -113,14 +116,6 @@ public partial class SettingsWindow : Window
 
     private void EditTiles_Click(object sender, RoutedEventArgs e)
     {
-        var unit = MvUnitBox.SelectedItem as MixingUnitEntry
-            ?? _session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
-            ?? _session.Units.FirstOrDefault();
-        if (unit is null)
-            return;
-        var dialog = new MultiviewSlotsWindow(unit, _session) { Owner = this };
-        if (dialog.ShowDialog() == true && Owner is MainWindow main)
-            main.PushAuxFor(unit);
     }
 
     private void AddOutput_Click(object sender, RoutedEventArgs e)
@@ -179,7 +174,7 @@ public partial class SettingsWindow : Window
             AddKind(kinds, output, OutputSourceKind.Scene, "Scene", index);
             AddKind(kinds, output, OutputSourceKind.MuPreview, "MU PRV", index);
             AddKind(kinds, output, OutputSourceKind.MuProgram, "MU PGM", index);
-            AddKind(kinds, output, OutputSourceKind.MuMultiview, "MU MV", index);
+            AddKind(kinds, output, OutputSourceKind.Multiview, "Multiview", index);
 
             var pick = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             FillOutputPick(pick, output);
@@ -232,6 +227,8 @@ public partial class SettingsWindow : Window
         if (BufferBox.SelectedItem is ComboBoxItem buffer && buffer.Tag is string bufferTag
             && uint.TryParse(bufferTag, out var frames))
             Settings.FrameBufferFrames = Math.Clamp(frames, 1u, 8u);
+        if (ColorFormatBox.SelectedItem is ComboBoxItem color && color.Tag is string colorTag)
+            Settings.InternalColorFormat = colorTag == "bgra" ? InternalColorFormat.Bgra : InternalColorFormat.Uyvy;
         DialogResult = true;
     }
 
@@ -285,6 +282,19 @@ public partial class SettingsWindow : Window
                     output.SourceId = _session.Scenes[0].GpuId;
                 }
                 break;
+            case OutputSourceKind.Multiview:
+                box.ItemsSource = _session.Multiviews;
+                box.DisplayMemberPath = "Name";
+                box.SelectedValuePath = "GpuId";
+                box.SelectedValue = output.SourceId;
+                if (box.SelectedItem is MultiviewLayout layout)
+                    output.SourceId = layout.GpuId;
+                else if (_session.Multiviews.Count > 0)
+                {
+                    box.SelectedIndex = 0;
+                    output.SourceId = _session.Multiviews[0].GpuId;
+                }
+                break;
             default:
                 box.ItemsSource = _session.Units;
                 box.DisplayMemberPath = "Name";
@@ -307,6 +317,10 @@ public partial class SettingsWindow : Window
             case OutputSourceKind.Scene:
                 if (box.SelectedItem is SceneEntry scene)
                     output.SourceId = scene.GpuId;
+                break;
+            case OutputSourceKind.Multiview:
+                if (box.SelectedItem is MultiviewLayout layout)
+                    output.SourceId = layout.GpuId;
                 break;
             default:
                 if (box.SelectedItem is MixingUnitEntry unit)

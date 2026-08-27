@@ -49,7 +49,8 @@ public partial class SceneEditorWindow : Window
         Width = layer.Width,
         Height = layer.Height,
         Opacity = layer.Opacity,
-        Z = layer.Z
+        Z = layer.Z,
+        AudioFollow = layer.AudioFollow
     };
 
     private void RefreshLayers()
@@ -125,6 +126,7 @@ public partial class SceneEditorWindow : Window
         WBox.Text = _selected.Width.ToString("0.####");
         HBox.Text = _selected.Height.ToString("0.####");
         OpBox.Text = _selected.Opacity.ToString("0.###");
+        AudioFollowBox.IsChecked = _selected.AudioFollow;
     }
 
     private void PushGpu() => _commands.DefineSceneNow(_scene, _width, _height);
@@ -139,6 +141,7 @@ public partial class SceneEditorWindow : Window
             Width = 1,
             Height = 1,
             Opacity = 1,
+            AudioFollow = true,
             Z = _scene.Layers.Count == 0 ? 0 : _scene.Layers.Max(item => item.Z) + 1
         };
         _scene.Layers.Add(layer);
@@ -194,6 +197,14 @@ public partial class SceneEditorWindow : Window
         if (float.TryParse(HBox.Text, out var h)) _selected.Height = Math.Max(0.01f, h);
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
+        PushGpu();
+    }
+
+    private void AudioFollow_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null)
+            return;
+        _selected.AudioFollow = AudioFollowBox.IsChecked == true;
         PushGpu();
     }
 

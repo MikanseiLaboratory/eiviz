@@ -30,7 +30,7 @@ public partial class MultiviewWindow : Window
 
     private void Tiles_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new MultiviewSlotsWindow(_session, _layout.Tiles, 32) { Owner = this };
+        var dialog = new MultiviewSlotsWindow(_session, _layout) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == _session.Settings.DefaultMultiviewUnitId)

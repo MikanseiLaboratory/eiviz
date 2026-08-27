@@ -33,27 +33,32 @@ impl OmtReceiver {
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
+                {
+                    let mut store = uploads.lock().expect("uploads lock");
+                    store.ensure(
+                        source_id,
+                        16,
+                        16,
+                        CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
+                    );
+                }
                 while !stop_thread.load(Ordering::Relaxed) {
-                    if let Some(frame) = session.recv_video_timeout(Duration::from_millis(8)) {
-                        let mut uploads = uploads.lock().expect("uploads lock");
-                        if uploads.get(source_id).is_none() {
-                            uploads.register(
-                                source_id,
-                                frame.width,
-                                frame.height,
-                                CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                            );
-                        }
+                    if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4)) {
+                        let mut store = uploads.lock().expect("uploads lock");
+                        store.ensure(
+                            source_id,
+                            frame.width.max(2),
+                            frame.height.max(2),
+                            CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
+                        );
                         let stride = frame.stride.max(frame.width * 4) as usize;
-                        uploads
+                        store
                             .push(source_id, &frame.pixels, stride, frame.timestamp)
                             .ok();
                     }
-                    if let Some(audio) = session.try_recv_audio() {
-                        let mut uploads = uploads.lock().expect("uploads lock");
-                        if let Some(ring) = uploads.get_mut(source_id) {
-                            ring.audio = Some(to_audio(audio));
-                        }
+                    let mut store = uploads.lock().expect("uploads lock");
+                    while let Some(audio) = session.try_recv_audio() {
+                        store.ingest_audio(source_id, to_audio(audio));
                     }
                 }
                 session.disconnect();
@@ -111,10 +116,11 @@ impl ProgramSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: &[u8],
+        pixels: Arc<[u8]>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {
+        let data = pixels.to_vec();
         let frame = MediaFrame {
             frame_type: FrameType::VIDEO,
             timestamp: pts,
@@ -125,10 +131,14 @@ impl ProgramSender {
             frame_rate_n: fps_num as i32,
             frame_rate_d: fps_den as i32,
             aspect_ratio: width as f32 / height.max(1) as f32,
-            data: pixels.to_vec(),
+            data,
             ..Default::default()
         };
         self.sender.send_video(frame).map_err(|e| e.to_string())
+    }
+
+    pub fn video_subscribed(&self) -> bool {
+        self.sender.video_subscribed()
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
@@ -183,11 +193,17 @@ fn connect_receiver(address: &str, config: ReceiverConfig) -> Result<ReceiverSes
 }
 
 fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
-    AudioPacket {
-        timestamp: frame.timestamp,
-        sample_rate: frame.sample_rate,
-        channels: frame.channels,
-        samples_per_channel: frame.samples_per_channel,
-        pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
-    }
+        let channels = frame.channels.max(1);
+        let samples = if frame.samples_per_channel > 0 {
+            frame.samples_per_channel
+        } else {
+            (frame.pcm_planar_f32.len() as i32 / 4 / channels).max(1)
+        };
+        AudioPacket {
+            timestamp: frame.timestamp,
+            sample_rate: frame.sample_rate,
+            channels: frame.channels,
+            samples_per_channel: samples,
+            pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
+        }
 }

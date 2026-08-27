@@ -34,10 +34,18 @@ internal sealed class MeterStrip : StackPanel
 
     public void SetLevels(float left, float right)
     {
-        _leftPeak = Math.Max(_leftPeak * 0.82f, left);
-        _rightPeak = Math.Max(_rightPeak * 0.82f, right);
+        _leftPeak = Math.Max(_leftPeak * 0.82f, ToMeter(left));
+        _rightPeak = Math.Max(_rightPeak * 0.82f, ToMeter(right));
         _left.Height = Math.Max(1, BarHeight * _leftPeak);
         _right.Height = Math.Max(1, BarHeight * _rightPeak);
+    }
+
+    private static float ToMeter(float linear)
+    {
+        if (linear <= 1e-5f)
+            return 0;
+        var db = 20f * MathF.Log10(linear);
+        return Math.Clamp((db + 60f) / 60f, 0f, 1f);
     }
 
     public void Decay() => SetLevels(0, 0);

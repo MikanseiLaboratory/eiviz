@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Media;
 
 namespace Eiviz.Host;
 
@@ -30,7 +31,9 @@ public partial class App : Application
 
     internal void ReplaceSession(Session session)
     {
-        Commands.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        var previous = Commands;
+        Commands = null!;
+        previous.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         foreach (var unit in Session.Units.ToArray())
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();
@@ -56,6 +59,9 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");
+        MfFramePump.InternalFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
+            ? MixerNative.FormatBgra
+            : MixerNative.FormatUyvy;
         var primary = Session.Units[0];
         foreach (var scene in Session.Scenes)
             Commands.DefineSceneNow(scene, primary.Width, primary.Height);

@@ -1,9 +1,11 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Eiviz.Host.Dialogs;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Media;
 using Eiviz.Host.Preview;
 
 namespace Eiviz.Host;
@@ -13,14 +15,17 @@ public partial class MainWindow : Window
     private SceneEntry? _selectedScene;
     private int _tbarPresetIndex;
     private bool _tbarLatching;
+    private bool _tbarLocked;
     private bool _suppressUnitChange;
-    private bool _tbarArmed;
     private OverlayWindow? _overlay;
+    private ResourceMonitorWindow? _resourcesWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
     private readonly ResourceMonitor _resources = new();
+    private bool _videoSeeking;
+    private bool _videoSeekSuppress;
 
     public MainWindow()
     {
@@ -44,6 +49,8 @@ public partial class MainWindow : Window
         };
         Loaded += (_, _) =>
         {
+            ApplyAspect();
+            WaveOutMonitor.EnsureStarted();
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
         };
@@ -100,12 +107,25 @@ public partial class MainWindow : Window
 
     private void TBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_tbarLatching || _tbarArmed)
+        if (_tbarLatching)
             return;
+        if (_tbarLocked)
+        {
+            if (e.NewValue < 1)
+            {
+                _tbarLatching = true;
+                TBar.Value = 1;
+                _tbarLatching = false;
+            }
+            return;
+        }
         var mix = (float)e.NewValue;
         if (mix >= 0.999f)
         {
-            _tbarArmed = true;
+            _tbarLocked = true;
+            _tbarLatching = true;
+            TBar.Value = 1;
+            _tbarLatching = false;
             Commands.TryEnqueue(new CutCommand(SelectedUnit.Id, TbarPreset().Swap));
             return;
         }
@@ -118,12 +138,12 @@ public partial class MainWindow : Window
 
     private void FinishTBar()
     {
-        if (!_tbarArmed)
+        if (!_tbarLocked)
             return;
         _tbarLatching = true;
         TBar.Value = 0;
         _tbarLatching = false;
-        _tbarArmed = false;
+        _tbarLocked = false;
     }
 
     private void AddTransition_Click(object sender, RoutedEventArgs e)
@@ -147,23 +167,8 @@ public partial class MainWindow : Window
             var index = i;
             var preset = unit.Transitions[i];
             var selected = index == _tbarPresetIndex;
-            var expander = new Expander
-            {
-                IsExpanded = _transitionExpanded.Contains(index),
-                Margin = new Thickness(0, 0, 0, 6),
-                Foreground = System.Windows.Media.Brushes.White,
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
-                BorderBrush = selected
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x77, 0x22))
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(4)
-            };
-            expander.Expanded += (_, _) => _transitionExpanded.Add(index);
-            expander.Collapsed += (_, _) => _transitionExpanded.Remove(index);
-
-            var header = new DockPanel();
-            var fire = new Button { Content = "TAKE", Width = 52, Height = 22, Margin = new Thickness(0, 0, 6, 0) };
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            var fire = new Button { Content = "TAKE", Width = 48, Height = 22, Margin = new Thickness(4, 0, 0, 0), FontSize = 11 };
             fire.Click += (_, e) =>
             {
                 e.Handled = true;
@@ -172,13 +177,23 @@ public partial class MainWindow : Window
                 RebuildTransitions();
             };
             DockPanel.SetDock(fire, Dock.Right);
-            header.Children.Add(fire);
-            header.Children.Add(new TextBlock
+            row.Children.Add(fire);
+
+            var expander = new Expander
             {
-                Text = $"{preset.Label}  {preset.DurationFrames}f",
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            expander.Header = header;
+                IsExpanded = _transitionExpanded.Contains(index),
+                Foreground = System.Windows.Media.Brushes.White,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
+                BorderBrush = selected
+                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x77, 0x22))
+                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(2),
+                Header = $"{preset.Label}  {preset.DurationFrames}f"
+            };
+
+            expander.Expanded += (_, _) => _transitionExpanded.Add(index);
+            expander.Collapsed += (_, _) => _transitionExpanded.Remove(index);
 
             var stack = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
             var kind = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
@@ -230,7 +245,8 @@ public partial class MainWindow : Window
                 _tbarPresetIndex = index;
                 RebuildTransitions();
             };
-            TransitionPanel.Children.Add(expander);
+            row.Children.Add(expander);
+            TransitionPanel.Children.Add(row);
         }
     }
 
@@ -239,38 +255,22 @@ public partial class MainWindow : Window
         OverlayTogglePanel.Children.Clear();
         var unit = SelectedUnit;
         if (unit.Overlays.Count == 0)
-        {
-            OverlayTogglePanel.Children.Add(new TextBlock
-            {
-                Text = "None",
-                Foreground = System.Windows.Media.Brushes.Silver,
-                VerticalAlignment = VerticalAlignment.Center
-            });
             return;
-        }
+        OverlayTogglePanel.Children.Add(new Border
+        {
+            Width = 1,
+            Margin = new Thickness(4, 4, 12, 4),
+            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x33, 0x33))
+        });
         for (var i = 0; i < unit.Overlays.Count; i++)
         {
             var slot = unit.Overlays[i];
-            var name = _session.Scenes.FirstOrDefault(item => item.GpuId == slot.SceneGpuId)?.Name ?? $"Overlay {i + 1}";
-            var box = new CheckBox
+            var name = _session.Scenes.FirstOrDefault(item => item.GpuId == slot.SceneGpuId)?.Name ?? $"{i + 1}";
+            OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
             {
-                Content = $"{i + 1}  {name}",
-                IsChecked = slot.Enabled,
-                Foreground = System.Windows.Media.Brushes.White,
-                Margin = new Thickness(0, 0, 16, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            box.Checked += (_, _) =>
-            {
-                slot.Enabled = true;
+                slot.Enabled = enabled;
                 PushAuxFor(unit);
-            };
-            box.Unchecked += (_, _) =>
-            {
-                slot.Enabled = false;
-                PushAuxFor(unit);
-            };
-            OverlayTogglePanel.Children.Add(box);
+            }));
         }
     }
 
@@ -301,8 +301,9 @@ public partial class MainWindow : Window
     {
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
         var layout = _session.AddMultiview();
-        layout.Tiles.Add(new MvSlot { Kind = MvSlotKind.MuPreview, SourceId = unit.Id });
-        layout.Tiles.Add(new MvSlot { Kind = MvSlotKind.MuProgram, SourceId = unit.Id });
+        layout.PreviewUnitId = unit.Id;
+        layout.ProgramUnitId = unit.Id;
+        layout.EnsureTiles();
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         OpenMultiviewWindow(layout);
     }
@@ -381,6 +382,142 @@ public partial class MainWindow : Window
         _resources.Sample();
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
+        TickVideo();
+    }
+
+    private void TickVideo()
+    {
+        if (InputList.SelectedItem is not InputEntry { Kind: InputKind.Video } input)
+        {
+            VideoBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var pump = Commands.TryGetVideo(input.Id);
+        if (pump is null || !pump.IsFile)
+        {
+            VideoBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        VideoBar.Visibility = Visibility.Visible;
+        VideoTitle.Text = input.Name;
+        var duration = pump.DurationHns;
+        var position = Math.Max(0, pump.PositionHns);
+        if (duration > 0)
+        {
+            position = Math.Min(position, duration);
+            VideoSeek.IsEnabled = true;
+            VideoTimeText.Text = $"{FormatHns(position)} / {FormatHns(duration - position)} / {FormatHns(duration)}";
+            if (!_videoSeeking)
+            {
+                _videoSeekSuppress = true;
+                VideoSeek.Value = position / (double)duration;
+                _videoSeekSuppress = false;
+            }
+        }
+        else
+        {
+            VideoSeek.IsEnabled = false;
+            VideoTimeText.Text = $"{FormatHns(position)} / -- / --";
+            if (!_videoSeeking)
+            {
+                _videoSeekSuppress = true;
+                VideoSeek.Value = 0;
+                _videoSeekSuppress = false;
+            }
+        }
+        VideoPlay.Content = pump.IsPlaying ? "❚❚" : "▶";
+    }
+
+    private static string FormatHns(long hns)
+    {
+        var time = TimeSpan.FromTicks(Math.Max(0, hns));
+        return time.ToString(time.TotalHours >= 1 ? @"h\:mm\:ss" : @"mm\:ss");
+    }
+
+    private MfFramePump? SelectedVideo() =>
+        InputList.SelectedItem is InputEntry { Kind: InputKind.Video } input
+            ? Commands.TryGetVideo(input.Id)
+            : null;
+
+    private void InputList_SelectionChanged(object sender, SelectionChangedEventArgs e) => TickVideo();
+
+    private void VideoPlay_Click(object sender, RoutedEventArgs e)
+    {
+        var pump = SelectedVideo();
+        if (pump is null)
+            return;
+        pump.SetPlaying(!pump.IsPlaying);
+        TickVideo();
+    }
+
+    private void VideoRestart_Click(object sender, RoutedEventArgs e)
+    {
+        var pump = SelectedVideo();
+        if (pump is null)
+            return;
+        pump.RestartPlayback();
+        pump.SetPlaying(true);
+        TickVideo();
+    }
+
+    private void VideoSeek_DragStarted(object sender, DragStartedEventArgs e) => _videoSeeking = true;
+
+    private void VideoSeek_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        SeekFromSlider();
+        _videoSeeking = false;
+    }
+
+    private void VideoSeek_ClickSeek(object sender, MouseButtonEventArgs e)
+    {
+        if (_videoSeeking)
+            return;
+        SeekFromSlider();
+    }
+
+    private void VideoSeek_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_videoSeekSuppress)
+            return;
+        var pump = SelectedVideo();
+        if (pump is null || pump.DurationHns <= 0)
+            return;
+        var duration = pump.DurationHns;
+        VideoTimeText.Text = $"{FormatHns((long)(e.NewValue * duration))} / {FormatHns((long)((1 - e.NewValue) * duration))} / {FormatHns(duration)}";
+        if (!_videoSeeking)
+            pump.Seek((long)(Math.Clamp(e.NewValue, 0, 1) * duration));
+    }
+
+    private void SeekFromSlider()
+    {
+        var pump = SelectedVideo();
+        if (pump is not null && pump.DurationHns > 0)
+            pump.Seek((long)(Math.Clamp(VideoSeek.Value, 0, 1) * pump.DurationHns));
+    }
+
+    private void ApplyAspect()
+    {
+        var unit = SelectedUnit;
+        PreviewAspect.RatioWidth = unit.Width;
+        PreviewAspect.RatioHeight = unit.Height;
+        ProgramAspect.RatioWidth = unit.Width;
+        ProgramAspect.RatioHeight = unit.Height;
+    }
+
+    private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
+
+    private void ResourceHud_MouseUp(object sender, MouseButtonEventArgs e) => OpenResources();
+
+    private void OpenResources()
+    {
+        if (_resourcesWindow is not null)
+        {
+            _resourcesWindow.Activate();
+            return;
+        }
+        _resourcesWindow = new ResourceMonitorWindow { Owner = this };
+        _resourcesWindow.Closed += (_, _) => _resourcesWindow = null;
+        _resourcesWindow.Show();
     }
 
     private void AddInput_Click(object sender, RoutedEventArgs e)
@@ -443,6 +580,45 @@ public partial class MainWindow : Window
         RebuildMeters();
     }
 
+    private void RemoveInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, "Select an Input to delete.");
+            return;
+        }
+        if (input.Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue)
+        {
+            MessageBox.Show(this, "Built-in generators cannot be deleted.");
+            return;
+        }
+        Commands.TryEnqueue(new DropSourceCommand(input.Id));
+        WaveOutMonitor.Remove(input.Id);
+        foreach (var scene in _session.Scenes)
+            scene.Layers.RemoveAll(layer => layer.InputId == input.Id);
+        foreach (var unit in _session.Units)
+        {
+            foreach (var tile in unit.MultiviewTiles)
+            {
+                if (tile.Kind == MvSlotKind.Input && tile.SourceId == input.Id)
+                {
+                    tile.Kind = MvSlotKind.None;
+                    tile.SourceId = 0;
+                }
+            }
+            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+        }
+        foreach (var scene in _session.Scenes)
+            Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
+        _session.Inputs.Remove(input);
+        InputList.Items.Refresh();
+        RebuildMeters();
+        RebuildScenes();
+        _overlay?.Reload(SelectedUnit);
+        RebuildOverlayToggles();
+        TickVideo();
+    }
+
     private void AddScene_Click(object sender, RoutedEventArgs e)
     {
         var scene = _session.AddScene($"Scene {_session.NextSceneId}");
@@ -454,12 +630,47 @@ public partial class MainWindow : Window
 
     private void RemoveScene_Click(object sender, RoutedEventArgs e)
     {
-        if (_selectedScene is null || _session.Scenes.Count <= 1)
+        if (_selectedScene is null)
+        {
+            MessageBox.Show(this, "Select a Scene to delete.");
             return;
-        Commands.TryEnqueue(new DestroySceneCommand(_selectedScene.GpuId));
-        _session.Scenes.Remove(_selectedScene);
+        }
+        if (_session.Scenes.Count <= 1)
+        {
+            MessageBox.Show(this, "At least one Scene is required.");
+            return;
+        }
+        var removed = _selectedScene;
+        Commands.TryEnqueue(new DestroySceneCommand(removed.GpuId));
+        _session.Scenes.Remove(removed);
+        foreach (var unit in _session.Units)
+        {
+            unit.Overlays.RemoveAll(slot => slot.SceneGpuId == removed.GpuId);
+            foreach (var tile in unit.MultiviewTiles)
+            {
+                if (tile.Kind == MvSlotKind.Scene && tile.SourceId == removed.GpuId)
+                {
+                    tile.Kind = MvSlotKind.None;
+                    tile.SourceId = 0;
+                }
+            }
+            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+        }
+        var fallback = _session.Scenes[0];
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
+            {
+                if (state.ProgramSource == removed.GpuId)
+                    state.ProgramSource = fallback.GpuId;
+                if (state.PreviewSource == removed.GpuId)
+                    state.PreviewSource = fallback.GpuId;
+                MixerNative.SetUnitState(SelectedUnit.Id, &state);
+            }
+        }
         RebuildScenes();
-        SelectScene(_session.Scenes[0]);
+        SelectScene(fallback);
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
     }
@@ -486,6 +697,7 @@ public partial class MainWindow : Window
         _session.SelectedUnitId = unit.Id;
         PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
         ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+        ApplyAspect();
         _overlay?.Reload(unit);
         _tbarPresetIndex = 0;
         RebuildTransitions();
@@ -543,6 +755,7 @@ public partial class MainWindow : Window
         foreach (var layout in _session.Multiviews)
             Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         UnitBox.Items.Refresh();
+        ApplyAspect();
         UpdateStatus();
     }
 
@@ -587,10 +800,13 @@ public partial class MainWindow : Window
             return;
         try
         {
-            ((App)Application.Current).ReplaceSession(SessionStore.Load(dialog.FileName));
             _overlay?.Close();
             foreach (var window in _multiviews.ToArray())
                 window.Close();
+            PreviewHost.ReleaseNative();
+            ProgramHost.ReleaseNative();
+            ScenePanel.Children.Clear();
+            ((App)Application.Current).ReplaceSession(SessionStore.Load(dialog.FileName));
             InputList.ItemsSource = _session.Inputs;
             UnitBox.ItemsSource = _session.Units;
             _suppressUnitChange = true;
@@ -604,6 +820,7 @@ public partial class MainWindow : Window
                 SelectScene(_session.Scenes[0]);
             PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
+            ApplyAspect();
             UpdateStatus();
         }
         catch (Exception ex)
@@ -623,11 +840,29 @@ public partial class MainWindow : Window
         _session.Settings.DefaultHeight = dialog.Settings.DefaultHeight;
         _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
+        _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),
             "Set frame buffer");
+        RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         UpdateStatus();
+    }
+
+    private void RestartMediaPumps()
+    {
+        MfFramePump.InternalFormat = _session.Settings.InternalColorFormat == InternalColorFormat.Bgra
+            ? MixerNative.FormatBgra
+            : MixerNative.FormatUyvy;
+        foreach (var input in _session.Inputs)
+        {
+            if (string.IsNullOrWhiteSpace(input.PathOrAddress))
+                continue;
+            if (input.Kind == InputKind.Video)
+                Commands.TryEnqueue(new StartVideoCommand(input.Id, input.PathOrAddress));
+            else if (input.Kind == InputKind.Uvc)
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
+        }
     }
 
     private void ApplyOutputs(IReadOnlyList<OutputEntry> outputs)

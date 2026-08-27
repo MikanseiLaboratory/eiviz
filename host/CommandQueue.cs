@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Threading.Channels;
+using System.Windows;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
+using Rect = Eiviz.Host.Interop.Rect;
 
 namespace Eiviz.Host;
 
@@ -21,6 +24,7 @@ internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : Mix
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
 internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll) : MixerCommand;
+internal sealed record DropSourceCommand(ulong SourceId) : MixerCommand;
 
 internal sealed class CommandQueue : IAsyncDisposable
 {
@@ -29,10 +33,15 @@ internal sealed class CommandQueue : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _consumer;
     private readonly Dictionary<ulong, IDisposable> _pumps = [];
+    private static readonly ConcurrentDictionary<ulong, string> LabelCache = [];
 
     public CommandQueue()
     {
-        _consumer = ConsumeAsync(_shutdown.Token);
+        _consumer = Task.Factory.StartNew(
+            () => ConsumeAsync(_shutdown.Token).GetAwaiter().GetResult(),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+            TaskScheduler.Default);
     }
 
     public bool TryEnqueue(MixerCommand command) => _commands.Writer.TryWrite(command);
@@ -44,7 +53,8 @@ internal sealed class CommandQueue : IAsyncDisposable
 
     public void PushMultiviewNow(MultiviewLayout layout, uint width, uint height)
     {
-        PushLayout(layout, width, height);
+        var session = Application.Current is App app ? app.Session : null;
+        PushLayout(layout, width, height, session);
     }
 
     public void PushUnitStateNow(ulong unitId, UnitState state)
@@ -95,7 +105,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                     SourceId = slot.SceneGpuId,
                     Rect = new Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
                     Opacity = slot.Opacity,
-                    Z = slot.Z
+                    Z = slot.Z,
+                    AudioFollow = 1
                 };
             SetOverlay(ref state, i, desc);
         }
@@ -158,53 +169,105 @@ internal sealed class CommandQueue : IAsyncDisposable
             SourceId = layer.InputId,
             Rect = new Rect { X = layer.X, Y = layer.Y, Width = layer.Width, Height = layer.Height },
             Opacity = layer.Opacity,
-            Z = layer.Z
+            Z = layer.Z,
+            AudioFollow = layer.AudioFollow ? 1u : 0u
         }).ToArray());
     }
 
-    internal static void PushLayout(MultiviewLayout layout, uint width, uint height)
+    internal static void PushLayout(MultiviewLayout layout, uint width, uint height, Session? session)
     {
-        var tiles = layout.Tiles;
-        if (tiles.Count == 0)
+        layout.EnsureTiles();
+        var layers = new List<OverlayDesc>(20);
+        layers.Add(BusLayer(MixerNative.MuPreview(layout.PreviewUnitId), 0f, 0f, 0.5f, 0.5f, 0));
+        layers.Add(BusLayer(MixerNative.MuProgram(layout.ProgramUnitId), 0.5f, 0f, 0.5f, 0.5f, 1));
+        for (var i = 0; i < 8; i++)
         {
-            PushLayers(layout.GpuId, width, height, []);
-            return;
+            var col = i % 4;
+            var row = i / 4;
+            layers.Add(BusLayer(
+                EncodeSlot(layout.Tiles[i]),
+                col / 4f,
+                0.5f + row / 4f,
+                0.25f,
+                0.25f,
+                2 + i));
         }
-        var (cols, rows) = TileGrid(tiles.Count);
-        var layers = new OverlayDesc[tiles.Count];
-        for (var i = 0; i < tiles.Count; i++)
+        var names = session is null ? Enumerable.Repeat(" ", 10).ToArray() : SlotNames(layout, session);
+        for (var i = 0; i < 10; i++)
         {
-            var col = i % cols;
-            var row = i / cols;
-            layers[i] = new OverlayDesc
+            var id = MixerNative.LabelBase | (layout.Id << 8) | (uint)i;
+            var (x, y, w, h) = i switch
             {
-                SourceId = EncodeSlot(tiles[i]),
-                Rect = new Rect
-                {
-                    X = col / (float)cols,
-                    Y = row / (float)rows,
-                    Width = 1f / cols,
-                    Height = 1f / rows
-                },
-                Opacity = 1,
-                Z = i
+                0 => (0f, 0.42f, 0.5f, 0.08f),
+                1 => (0.5f, 0.42f, 0.5f, 0.08f),
+                _ => ((i - 2) % 4 / 4f, 0.5f + (i - 2) / 4 / 4f + 0.18f, 0.25f, 0.07f)
             };
+            layers.Add(new OverlayDesc
+            {
+                SourceId = id,
+                Rect = new Rect { X = x, Y = y, Width = w, Height = h },
+                Opacity = 1,
+                Z = 100 + i,
+                AudioFollow = 0
+            });
+            UploadLabel(id, names[i]);
         }
-        PushLayers(layout.GpuId, width, height, layers);
+        PushLayers(layout.GpuId, width, height, layers.ToArray());
+        MixerNative.ThrowIfFailed(
+            MixerNative.BindMultiview(layout.GpuId, layout.PreviewUnitId, layout.ProgramUnitId),
+            "Bind multiview");
     }
 
-    internal static (int Cols, int Rows) TileGrid(int count)
+    private static OverlayDesc BusLayer(ulong sourceId, float x, float y, float w, float h, int z) => new()
     {
-        if (count <= 1) return (1, 1);
-        if (count == 2) return (2, 1);
-        if (count <= 4) return (2, 2);
-        if (count <= 6) return (3, 2);
-        if (count <= 8) return (4, 2);
-        if (count <= 12) return (4, 3);
-        if (count <= 16) return (4, 4);
-        var cols = (int)Math.Ceiling(Math.Sqrt(count));
-        var rows = (int)Math.Ceiling(count / (double)cols);
-        return (cols, rows);
+        SourceId = sourceId,
+        Rect = new Rect { X = x, Y = y, Width = w, Height = h },
+        Opacity = 1,
+        Z = z,
+        AudioFollow = 0
+    };
+
+    private static string[] SlotNames(MultiviewLayout layout, Session session)
+    {
+        var prv = session.Units.FirstOrDefault(item => item.Id == layout.PreviewUnitId);
+        var pgm = session.Units.FirstOrDefault(item => item.Id == layout.ProgramUnitId);
+        var names = new string[10];
+        names[0] = $"PRV  {prv?.Name ?? layout.PreviewUnitId.ToString()}";
+        names[1] = $"PGM  {pgm?.Name ?? layout.ProgramUnitId.ToString()}";
+        for (var i = 0; i < 8; i++)
+            names[2 + i] = TileName(layout.Tiles[i], session);
+        return names;
+    }
+
+    private static string TileName(MvSlot tile, Session session) => tile.Kind switch
+    {
+        MvSlotKind.Input => session.Inputs.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? "",
+        MvSlotKind.Scene => session.Scenes.FirstOrDefault(item => item.GpuId == tile.SourceId)?.Name ?? "",
+        _ => ""
+    };
+
+    private static void UploadLabel(ulong id, string text)
+    {
+        if (LabelCache.TryGetValue(id, out var previous) && previous == text)
+            return;
+        byte[] pixels;
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            pixels = dispatcher.Invoke(() => LabelRaster.Bgra(text));
+        else
+            pixels = LabelRaster.Bgra(text);
+        MixerNative.ThrowIfFailed(
+            MixerNative.RegisterSource(id, LabelRaster.Width, LabelRaster.Height, MixerNative.FormatBgra),
+            "Register label");
+        unsafe
+        {
+            fixed (byte* ptr = pixels)
+            {
+                MixerNative.ThrowIfFailed(
+                    MixerNative.PushFrame(id, ptr, LabelRaster.Width * 4, LabelRaster.Height, 0),
+                    "Push label");
+            }
+        }
+        LabelCache[id] = text;
     }
 
     private static void PushLayers(ulong gpuId, uint width, uint height, OverlayDesc[] layers)
@@ -266,10 +329,10 @@ internal sealed class CommandQueue : IAsyncDisposable
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");
                         break;
                     case StartVideoCommand video:
-                        ReplacePump(video.SourceId, MfFramePump.StartFile(video.SourceId, video.Path));
+                        ReplacePump(video.SourceId, () => MfFramePump.StartFile(video.SourceId, video.Path));
                         break;
                     case StartUvcCommand uvc:
-                        ReplacePump(uvc.SourceId, MfFramePump.StartCapture(uvc.SourceId, uvc.SymbolicLink));
+                        ReplacePump(uvc.SourceId, () => MfFramePump.StartCapture(uvc.SourceId, uvc.SymbolicLink));
                         break;
                     case AddOutputCommand add:
                         MixerNative.ThrowIfFailed(
@@ -296,6 +359,11 @@ internal sealed class CommandQueue : IAsyncDisposable
                                 1,
                                 generator.Scroll ? 1u : 0u),
                             "Define colour generator");
+                        break;
+                    case DropSourceCommand drop:
+                        if (_pumps.Remove(drop.SourceId, out var pump))
+                            pump.Dispose();
+                        MixerNative.DestroySource(drop.SourceId);
                         break;
                     default:
                         throw new InvalidOperationException("Unknown command.");
@@ -366,12 +434,15 @@ internal sealed class CommandQueue : IAsyncDisposable
         }
     }
 
-    private void ReplacePump(ulong id, IDisposable pump)
+    private void ReplacePump(ulong id, Func<IDisposable> factory)
     {
         if (_pumps.Remove(id, out var previous))
             previous.Dispose();
-        _pumps[id] = pump;
+        _pumps[id] = factory();
     }
+
+    public MfFramePump? TryGetVideo(ulong id) =>
+        _pumps.TryGetValue(id, out var pump) ? pump as MfFramePump : null;
 
     public async ValueTask DisposeAsync()
     {
@@ -380,7 +451,7 @@ internal sealed class CommandQueue : IAsyncDisposable
         _pumps.Clear();
         _commands.Writer.TryComplete();
         _shutdown.Cancel();
-        try { await _consumer; }
+        try { await _consumer.ConfigureAwait(false); }
         catch (OperationCanceledException) { }
         _shutdown.Dispose();
     }

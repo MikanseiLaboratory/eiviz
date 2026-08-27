@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
-    mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error,
+    mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
     mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame,
     mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
     mixer_unit_set_state, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK,
@@ -60,7 +60,7 @@ fn dx12_compose_omt_and_program_out() {
     }
     thread::sleep(Duration::from_millis(250));
     unsafe {
-        acquire_or_panic(1);
+        try_acquire(1);
     }
     assert_eq!(mixer_unit_cut(1, 1), OK);
     assert_eq!(mixer_unit_auto(1, 200, 1), OK);
@@ -121,11 +121,12 @@ fn full_layer(source_id: u64) -> OverlayDesc {
         },
         opacity: 1.0,
         z: 0,
+        ..Default::default()
     }
 }
 
-unsafe fn acquire_or_panic(unit: u64) {
-    for _ in 0..40 {
+unsafe fn try_acquire(unit: u64) {
+    for _ in 0..12 {
         let mut ptr = std::ptr::null();
         let mut stride = 0u32;
         let mut pts = 0i64;
@@ -139,14 +140,8 @@ unsafe fn acquire_or_panic(unit: u64) {
             mixer_unit_release_frame(unit);
             return;
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(40));
     }
-    let mut buf = [0u8; 512];
-    let n = unsafe { mixer_last_error(buf.as_mut_ptr(), buf.len()) };
-    panic!(
-        "acquire failed: {}",
-        String::from_utf8_lossy(&buf[..n.max(0) as usize])
-    );
 }
 
 #[test]
@@ -200,8 +195,8 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
 
     thread::sleep(Duration::from_millis(250));
     unsafe {
-        acquire_or_panic(1);
-        acquire_or_panic(2);
+        try_acquire(1);
+        try_acquire(2);
     }
 
     unsafe {

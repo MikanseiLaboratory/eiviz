@@ -1,5 +1,4 @@
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 
 namespace Eiviz.Host.Preview;
@@ -9,8 +8,10 @@ public partial class SceneTile : UserControl
     public SceneTile()
     {
         InitializeComponent();
-        MouseLeftButtonUp += OnClicked;
-        MouseDoubleClick += OnDoubleClicked;
+        MouseLeftButtonUp += (_, _) => Select();
+        MouseDoubleClick += (_, _) => Edit();
+        Monitor.SurfaceClicked += (_, _) => Select();
+        Monitor.SurfaceDoubleClicked += (_, _) => Edit();
     }
 
     public SceneEntry? Scene { get; private set; }
@@ -32,13 +33,13 @@ public partial class SceneTile : UserControl
             : new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
     }
 
-    private void OnClicked(object sender, MouseButtonEventArgs e)
+    private void Select()
     {
         if (Scene is { } scene)
             SceneSelected?.Invoke(this, scene);
     }
 
-    private void OnDoubleClicked(object sender, MouseButtonEventArgs e)
+    private void Edit()
     {
         if (Scene is { } scene)
             SceneEditRequested?.Invoke(this, scene);
