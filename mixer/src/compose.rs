@@ -191,6 +191,10 @@ impl Composer {
         self.gpu_epoch
     }
 
+    pub fn unit(&self, unit_id: u64) -> Option<&UnitTargets> {
+        self.units.get(&unit_id)
+    }
+
     pub fn ensure_unit(&mut self, device: &GpuDevice, unit_id: u64, width: u32, height: u32) {
         if self.units.get(&unit_id).is_some_and(|unit| unit.width == width && unit.height == height) {
             return;

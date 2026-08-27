@@ -3,6 +3,7 @@
 mod abi;
 mod audio;
 mod compose;
+mod delay;
 mod convert;
 mod device;
 mod dxgi;
@@ -33,6 +34,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use compose::{Composer, Generator};
+use delay::FrameDelay;
 use device::GpuDevice;
 use dxgi::GpuVideoContext;
 use media::VideoPump;
@@ -1531,11 +1533,13 @@ fn render_loop(
     };
     let mut presenters = Presenters::default();
     let mut readbacks = ReadbackStore::default();
+    let mut frame_delay = FrameDelay::new(3);
     let frame_dt = Duration::from_nanos(1_000_000_000u64 * u64::from(fps_den) / u64::from(fps_num));
     let mut next = Instant::now();
     let clock_start = Instant::now();
     let mut frame_i = 0u64;
     let mut audio_produced = 0u64;
+    let mut audio_carry = 0u64;
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -1602,6 +1606,12 @@ fn render_loop(
             .expect("shared")
             .frame_buffer_frames
             .clamp(1, 8);
+        frame_delay.set_depth(buffer_frames);
+        shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_video_delay(buffer_frames, fps_num, fps_den);
         let now = Instant::now();
         if next + frame_dt.saturating_mul(buffer_frames) < now {
             let target = (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
@@ -1617,8 +1627,8 @@ fn render_loop(
         if next > Instant::now() {
             thread::sleep(next.saturating_duration_since(Instant::now()));
         }
-        let skip_compose = Instant::now().saturating_duration_since(next)
-            > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
+        let overdue = Instant::now().saturating_duration_since(next);
+        let skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
         {
             let mut guard = shared.lock().expect("shared");
             for unit in guard.units.values_mut() {
@@ -1728,6 +1738,75 @@ fn render_loop(
             let need_mv = snapshot
                 .iter()
                 .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
+            let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
+            if let Err(error) = presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                frame_delay
+                    .view(unit_id, kind)
+                    .or_else(|| composer.unit_view(unit_id, kind))
+            }) {
+                shared.lock().expect("shared").last_error = error;
+            }
+            if frame_i % 3 == 1 {
+                if let Err(error) = presenters.present_monitors(&device, present_epoch, |source_id| {
+                    frame_delay
+                        .view_for_source(source_id)
+                        .or_else(|| composer.view_for_source(source_id))
+                        .map(|view| (view, composer.source_is_packed(source_id)))
+                }) {
+                    shared.lock().expect("shared").last_error = error;
+                }
+            }
+            {
+                let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("eiviz delay out"),
+                });
+                let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
+                for (unit_id, ..) in &snapshot {
+                    let pack_pgm = outputs_snap.iter().any(|item| {
+                        item.3 == *unit_id
+                            && item.1 == SRC_KIND_MU_PROGRAM
+                            && item.6.load(Ordering::Relaxed)
+                    });
+                    if pack_pgm {
+                        if let Some(packed) = frame_delay.packed(*unit_id, OUTPUT_PROGRAM) {
+                            let width = packed.size().width.saturating_mul(2).max(2);
+                            let height = packed.size().height.max(1);
+                            let rb = readbacks.ensure(&device, *unit_id, width, height);
+                            rb.copy_from(&mut encoder, packed);
+                            packed_copies.push((*unit_id, width, height));
+                        }
+                    }
+                }
+                for (output_id, source_kind, _, unit_id, _, _, video_sub) in &outputs_snap {
+                    if *source_kind == SRC_KIND_MU_PROGRAM || !video_sub.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let packed = match *source_kind {
+                        SRC_KIND_MU_PREVIEW => frame_delay.packed(*unit_id, OUTPUT_PREVIEW),
+                        SRC_KIND_MU_MULTIVIEW => frame_delay.packed(*unit_id, OUTPUT_MULTIVIEW),
+                        _ => None,
+                    };
+                    if let Some(texture) = packed {
+                        let size = texture.size();
+                        let w = size.width.saturating_mul(2).max(2);
+                        let h = size.height.max(1);
+                        let key = 0x0100_0000_0000_0000 | *output_id;
+                        let rb = readbacks.ensure(&device, key, w, h);
+                        rb.copy_from(&mut encoder, texture);
+                        packed_copies.push((key, w, h));
+                    }
+                }
+                device.queue.submit(Some(encoder.finish()));
+                emit_packed(
+                    &mut readbacks,
+                    &device,
+                    &packed_copies,
+                    &outputs_snap,
+                    &send_tx,
+                    pts,
+                );
+            }
+            frame_delay.consume_display(skip_compose);
             if !skip_compose {
                 composer.sync_scenes(&device, &scene_specs);
                 let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1757,18 +1836,13 @@ fn render_loop(
                         shared.lock().expect("shared").last_error = error;
                     }
                     composer.pack_aux(&device, &mut encoder, *unit_id, need_prv, false);
-                    if pack_pgm {
-                        if let Some(packed) = composer.packed_texture(*unit_id, OUTPUT_PROGRAM) {
-                            let width = packed.size().width.saturating_mul(2).max(2);
-                            let height = packed.size().height.max(1);
-                            let rb = readbacks.ensure(&device, *unit_id, width, height);
-                            rb.copy_from(&mut encoder, packed);
-                            packed_copies.push((*unit_id, width, height));
-                        }
-                    }
                 }
                 for (output_id, source_kind, source_id, unit_id, _, _, video_sub) in &outputs_snap {
-                    if *source_kind == SRC_KIND_MU_PROGRAM || !video_sub.load(Ordering::Relaxed) {
+                    if *source_kind == SRC_KIND_MU_PROGRAM
+                        || *source_kind == SRC_KIND_MU_PREVIEW
+                        || *source_kind == SRC_KIND_MU_MULTIVIEW
+                        || !video_sub.load(Ordering::Relaxed)
+                    {
                         continue;
                     }
                     let packed = match *source_kind {
@@ -1780,10 +1854,7 @@ fn render_loop(
                                 .unwrap_or((1920, 1080));
                             composer.pack_source(&device, &mut encoder, *source_id, w, h)
                         }
-                        SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
-                            composer.pack_scene(&device, &mut encoder, *source_id)
-                        }
-                        SRC_KIND_MU_PREVIEW => composer.packed_texture(*unit_id, OUTPUT_PREVIEW),
+                        SRC_KIND_SCENE => composer.pack_scene(&device, &mut encoder, *source_id),
                         _ => None,
                     };
                     if let Some(texture) = packed {
@@ -1796,75 +1867,38 @@ fn render_loop(
                         packed_copies.push((key, w, h));
                     }
                 }
+                frame_delay.capture(
+                    &device,
+                    &mut encoder,
+                    &composer,
+                    snapshot.iter().map(|(id, ..)| *id),
+                );
                 device.queue.submit(Some(encoder.finish()));
-                for (key, width, height) in packed_copies {
-                    if let Some(rb) = readbacks.get_mut(key) {
-                        rb.advance(&device);
-                        if let Some(packed) = rb.latest() {
-                            let data: Arc<[u8]> = packed.to_vec().into();
-                            last_frames().lock().expect("frames").insert(
-                                key,
-                                Acquired {
-                                    data: Arc::clone(&data),
-                                    stride: width * 2,
-                                    pts,
-                                },
-                            );
-                            for (output_id, source_kind, _, unit_id, fps_n, fps_d, video_sub) in
-                                &outputs_snap
-                            {
-                                if !video_sub.load(Ordering::Relaxed) {
-                                    continue;
-                                }
-                                let out_key = if *source_kind == SRC_KIND_MU_PROGRAM {
-                                    *unit_id
-                                } else {
-                                    0x0100_0000_0000_0000 | *output_id
-                                };
-                                if out_key != key {
-                                    continue;
-                                }
-                                let _ = send_tx.send(SendCmd::Video {
-                                    output_id: *output_id,
-                                    width,
-                                    height,
-                                    stride: width * 2,
-                                    pts,
-                                    data: Arc::clone(&data),
-                                    fps_n: *fps_n,
-                                    fps_d: *fps_d,
-                                });
-                            }
-                        }
-                    }
-                }
+                emit_packed(
+                    &mut readbacks,
+                    &device,
+                    &packed_copies,
+                    &outputs_snap,
+                    &send_tx,
+                    pts,
+                );
             }
-            if !skip_compose {
-                if let Err(error) = presenters.present_unit_buses(&device, composer.gpu_epoch(), |unit_id, kind| {
-                    composer.unit_view(unit_id, kind)
-                }) {
-                    shared.lock().expect("shared").last_error = error;
-                }
-                if frame_i % 3 == 1 {
-                    if let Err(error) = presenters.present_monitors(&device, composer.gpu_epoch(), |source_id| {
-                        composer.view_for_source(source_id).map(|view| {
-                            (view, composer.source_is_packed(source_id))
-                        })
-                    }) {
-                        shared.lock().expect("shared").last_error = error;
-                    }
-                }
-            }
-            let target = (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
-            let deficit = target.saturating_sub(audio_produced);
-            let audio_frames = deficit.min(AUDIO_RATE as u64 / 10) as usize;
-            audio_produced += audio_frames as u64;
+            audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
+            let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;
+            audio_carry %= u64::from(fps_num.max(1));
+            audio_produced = audio_produced.saturating_add(audio_frames as u64);
             let audio = {
                 let guard = shared.lock().expect("shared");
                 guard.audio.clone()
             };
             let mut upload_guard = uploads.lock().expect("uploads");
-            let mixed = audio.mix(&mut upload_guard, &snapshot, &scene_specs, audio_frames);
+            let mixed = audio.mix(
+                &mut upload_guard,
+                &snapshot,
+                &scene_specs,
+                audio_frames,
+                !skip_compose,
+            );
             drop(upload_guard);
             {
                 let mut guard = shared.lock().expect("shared");
@@ -1889,6 +1923,58 @@ fn render_loop(
             }
         }
         next += frame_dt;
+        if skip_compose && next < Instant::now() {
+            next = Instant::now();
+        }
+    }
+}
+
+fn emit_packed(
+    readbacks: &mut ReadbackStore,
+    device: &GpuDevice,
+    packed_copies: &[(u64, u32, u32)],
+    outputs_snap: &[(u64, u32, u64, u64, u32, u32, Arc<AtomicBool>)],
+    send_tx: &mpsc::Sender<SendCmd>,
+    pts: i64,
+) {
+    for (key, width, height) in packed_copies {
+        if let Some(rb) = readbacks.get_mut(*key) {
+            rb.advance(device);
+            if let Some(packed) = rb.latest() {
+                let data: Arc<[u8]> = packed.to_vec().into();
+                last_frames().lock().expect("frames").insert(
+                    *key,
+                    Acquired {
+                        data: Arc::clone(&data),
+                        stride: width * 2,
+                        pts,
+                    },
+                );
+                for (output_id, source_kind, _, unit_id, fps_n, fps_d, video_sub) in outputs_snap {
+                    if !video_sub.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let out_key = if *source_kind == SRC_KIND_MU_PROGRAM {
+                        *unit_id
+                    } else {
+                        0x0100_0000_0000_0000 | *output_id
+                    };
+                    if out_key != *key {
+                        continue;
+                    }
+                    let _ = send_tx.send(SendCmd::Video {
+                        output_id: *output_id,
+                        width: *width,
+                        height: *height,
+                        stride: width * 2,
+                        pts,
+                        data: Arc::clone(&data),
+                        fps_n: *fps_n,
+                        fps_d: *fps_d,
+                    });
+                }
+            }
+        }
     }
 }
 

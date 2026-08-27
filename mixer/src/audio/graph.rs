@@ -8,6 +8,7 @@ use crate::upload::{UploadStore, AUDIO_FIFO_FRAMES};
 
 use super::DeviceKey;
 use super::AUDIO_PRIME_FRAMES;
+use super::AudioDelay;
 
 pub const MASTER_BUS: u64 = 1;
 pub const HEADPHONE_BUS: u64 = 2;
@@ -266,68 +267,90 @@ impl AudioGraph {
         snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
         frames: usize,
+        delay: &mut AudioDelay,
+        produce: bool,
     ) -> Vec<f32> {
         if frames == 0 {
             return Vec::new();
         }
-        let mut ids: Vec<u64> = uploads.primed_ids();
-        for id in self.inputs.keys() {
-            if !ids.contains(id) {
-                ids.push(*id);
+        let mut live_master = vec![0.0f32; frames * 2];
+        if produce {
+            let mut ids: Vec<u64> = uploads.primed_ids();
+            for id in self.inputs.keys() {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
             }
-        }
-        let mut popped: HashMap<u64, Vec<(f32, f32)>> = HashMap::new();
-        for id in ids {
-            popped.insert(id, uploads.pop_frames(id, frames));
-        }
-        let spec_map: HashMap<u64, &[OverlayDesc]> =
-            scenes.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
-        let mut master = vec![0.0f32; frames * 2];
-        let bus_ids: Vec<u64> = self.buses.iter().map(|bus| bus.id).collect();
-        for bus_id in bus_ids {
-            let (role, bit, copy_master, ring, fader) = {
-                let Some(bus) = self.buses.iter().find(|bus| bus.id == bus_id) else {
-                    continue;
+            let mut popped: HashMap<u64, Vec<(f32, f32)>> = HashMap::new();
+            for id in ids {
+                popped.insert(id, uploads.pop_frames(id, frames));
+            }
+            let spec_map: HashMap<u64, &[OverlayDesc]> =
+                scenes.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
+            let bus_ids: Vec<u64> = self.buses.iter().map(|bus| bus.id).collect();
+            for bus_id in bus_ids {
+                let (role, bit, copy_master, fader) = {
+                    let Some(bus) = self.buses.iter().find(|bus| bus.id == bus_id) else {
+                        continue;
+                    };
+                    let fader = if bus.mute { 0.0 } else { bus.gain.max(0.0) };
+                    (
+                        bus.role,
+                        bus.bit,
+                        self.headphone_copy_master && bus.role == ROLE_HEADPHONE,
+                        fader,
+                    )
                 };
-                let fader = if bus.mute { 0.0 } else { bus.gain.max(0.0) };
-                (bus.role, bus.bit, self.headphone_copy_master && bus.role == ROLE_HEADPHONE, Arc::clone(&bus.ring), fader)
-            };
-            if copy_master {
-                let mut mixed = master.clone();
+                if copy_master {
+                    let mut mixed = live_master.clone();
+                    for sample in &mut mixed {
+                        *sample *= fader;
+                    }
+                    if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
+                        bus.peak = peak_interleaved(&mixed);
+                    }
+                    delay.push(bus_id, &mixed);
+                    continue;
+                }
+                let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map);
+                let mut mixed = vec![0.0f32; frames * 2];
+                for (id, gain) in gains {
+                    if gain.abs() < 1e-6 {
+                        continue;
+                    }
+                    let Some(samples) = popped.get(&id) else {
+                        continue;
+                    };
+                    for (i, (left, right)) in samples.iter().enumerate() {
+                        mixed[i * 2] += left * gain;
+                        mixed[i * 2 + 1] += right * gain;
+                    }
+                }
                 for sample in &mut mixed {
                     *sample *= fader;
+                }
+                if role == ROLE_MASTER {
+                    live_master.copy_from_slice(&mixed);
+                    self.master_peak = peak_interleaved(&mixed);
                 }
                 if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
                     bus.peak = peak_interleaved(&mixed);
                 }
-                ring.push(&mixed);
-                continue;
+                delay.push(bus_id, &mixed);
             }
-            let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map);
-            let mut mixed = vec![0.0f32; frames * 2];
-            for (id, gain) in gains {
-                if gain.abs() < 1e-6 {
-                    continue;
-                }
-                let Some(samples) = popped.get(&id) else {
-                    continue;
-                };
-                for (i, (left, right)) in samples.iter().enumerate() {
-                    mixed[i * 2] += left * gain;
-                    mixed[i * 2 + 1] += right * gain;
-                }
-            }
-            for sample in &mut mixed {
-                *sample *= fader;
-            }
+        }
+        let mut master = vec![0.0f32; frames * 2];
+        let bus_ids: Vec<(u64, u32, Arc<BusRing>)> = self
+            .buses
+            .iter()
+            .map(|bus| (bus.id, bus.role, Arc::clone(&bus.ring)))
+            .collect();
+        for (bus_id, role, ring) in bus_ids {
+            let delayed = delay.pop(bus_id, frames, !produce);
             if role == ROLE_MASTER {
-                master.copy_from_slice(&mixed);
-                self.master_peak = peak_interleaved(&mixed);
+                master.copy_from_slice(&delayed);
             }
-            if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
-                bus.peak = peak_interleaved(&mixed);
-            }
-            ring.push(&mixed);
+            ring.push(&delayed);
         }
         master
     }

@@ -3,7 +3,7 @@ mod device;
 mod graph;
 mod wasapi;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -16,10 +16,78 @@ pub use graph::{AudioGraph, BusRing, DEVICE_ASIO, DEVICE_NONE, DEVICE_WASAPI, LI
 
 pub(crate) const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
+pub struct AudioDelay {
+    delay_frames: usize,
+    fifos: HashMap<u64, VecDeque<f32>>,
+    last: HashMap<u64, (f32, f32)>,
+}
+
+impl AudioDelay {
+    pub fn new() -> Self {
+        Self {
+            delay_frames: 0,
+            fifos: HashMap::new(),
+            last: HashMap::new(),
+        }
+    }
+
+    pub fn set_delay_frames(&mut self, frames: usize) {
+        self.delay_frames = frames;
+        let cap = frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        for fifo in self.fifos.values_mut() {
+            while fifo.len() > cap {
+                fifo.pop_front();
+            }
+        }
+    }
+
+    pub fn push(&mut self, id: u64, pcm: &[f32]) {
+        let fifo = self.fifos.entry(id).or_default();
+        fifo.extend(pcm.iter().copied());
+        let cap = self.delay_frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        while fifo.len() > cap {
+            fifo.pop_front();
+        }
+    }
+
+    pub fn pop(&mut self, id: u64, frames: usize, drain: bool) -> Vec<f32> {
+        let mut out = Vec::with_capacity(frames.saturating_mul(2));
+        let delay = self.delay_frames;
+        let fifo = self.fifos.entry(id).or_default();
+        for _ in 0..frames {
+            let queued = fifo.len() / 2;
+            let keep = if drain { 0 } else { delay };
+            if queued > keep && fifo.len() >= 2 {
+                let left = fifo.pop_front().unwrap_or(0.0);
+                let right = fifo.pop_front().unwrap_or(left);
+                self.last.insert(id, (left, right));
+                out.push(left);
+                out.push(right);
+            } else {
+                let (left, right) = self.last.get(&id).copied().unwrap_or((0.0, 0.0));
+                out.push(left);
+                out.push(right);
+            }
+        }
+        out
+    }
+
+    pub fn skip_frames(&mut self, frames: usize) {
+        let n = frames.saturating_mul(2);
+        for fifo in self.fifos.values_mut() {
+            let drop = n.min(fifo.len());
+            if drop > 0 {
+                fifo.drain(..drop);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AudioEngine {
     graph: Arc<Mutex<AudioGraph>>,
     outputs: Arc<Mutex<Vec<DeviceOutput>>>,
+    delay: Arc<Mutex<AudioDelay>>,
 }
 
 struct DeviceOutput {
@@ -40,6 +108,7 @@ impl AudioEngine {
         let engine = Self {
             graph: Arc::new(Mutex::new(AudioGraph::with_defaults())),
             outputs: Arc::new(Mutex::new(Vec::new())),
+            delay: Arc::new(Mutex::new(AudioDelay::new())),
         };
         engine.sync_outputs();
         engine
@@ -115,17 +184,23 @@ impl AudioEngine {
         self.graph.lock().expect("audio").headphone_copy_master = enabled != 0;
     }
 
+    pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
+        let samples = (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
+            / u64::from(fps_num.max(1))) as usize;
+        self.delay.lock().expect("audio delay").set_delay_frames(samples);
+    }
+
     pub fn mix(
         &self,
         uploads: &mut UploadStore,
         snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
         frames: usize,
+        produce: bool,
     ) -> Vec<f32> {
-        self.graph
-            .lock()
-            .expect("audio")
-            .mix(uploads, snapshot, scenes, frames)
+        let mut graph = self.graph.lock().expect("audio");
+        let mut delay = self.delay.lock().expect("audio delay");
+        graph.mix(uploads, snapshot, scenes, frames, &mut delay, produce)
     }
 
     pub fn master_peak(&self) -> (f32, f32) {
@@ -146,6 +221,7 @@ impl AudioEngine {
         if frames == 0 {
             return;
         }
+        self.delay.lock().expect("audio delay").skip_frames(frames);
         let graph = self.graph.lock().expect("audio");
         for bus in &graph.buses {
             bus.ring.skip_frames(frames);
