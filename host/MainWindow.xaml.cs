@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly ResourceMonitor _resources = new();
     private bool _videoSeeking;
     private bool _videoSeekSuppress;
+    private long _lastSeekSentMs;
 
     public MainWindow()
     {
@@ -456,7 +457,6 @@ public partial class MainWindow : Window
         if (SelectedVideoId() is not ulong id)
             return;
         MixerNative.VideoSeek(id, 0);
-        MixerNative.VideoSetPlaying(id, 1);
         TickVideo();
     }
 
@@ -464,7 +464,7 @@ public partial class MainWindow : Window
 
     private void VideoSeek_DragCompleted(object sender, DragCompletedEventArgs e)
     {
-        SeekFromSlider();
+        SeekFromSlider(force: true);
         _videoSeeking = false;
     }
 
@@ -472,7 +472,7 @@ public partial class MainWindow : Window
     {
         if (_videoSeeking)
             return;
-        SeekFromSlider();
+        SeekFromSlider(force: true);
     }
 
     private void VideoSeek_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -483,14 +483,25 @@ public partial class MainWindow : Window
             return;
         var duration = info.DurationHns;
         VideoTimeText.Text = $"{FormatHns((long)(e.NewValue * duration))} / {FormatHns((long)((1 - e.NewValue) * duration))} / {FormatHns(duration)}";
-        if (!_videoSeeking)
-            MixerNative.VideoSeek(id, (long)(Math.Clamp(e.NewValue, 0, 1) * duration));
+        SeekFromSlider(force: !_videoSeeking);
     }
 
-    private void SeekFromSlider()
+    private void SeekFromSlider(bool force)
     {
-        if (SelectedVideoId() is ulong id && TryVideoInfo(id, out var info) && info.DurationHns > 0)
-            MixerNative.VideoSeek(id, (long)(Math.Clamp(VideoSeek.Value, 0, 1) * info.DurationHns));
+        if (SelectedVideoId() is not ulong id || !TryVideoInfo(id, out var info) || info.DurationHns <= 0)
+            return;
+        if (!force)
+        {
+            var now = Environment.TickCount64;
+            if (now - _lastSeekSentMs < 120)
+                return;
+            _lastSeekSentMs = now;
+        }
+        else
+        {
+            _lastSeekSentMs = Environment.TickCount64;
+        }
+        MixerNative.VideoSeek(id, (long)(Math.Clamp(VideoSeek.Value, 0, 1) * info.DurationHns));
     }
 
     private void ApplyAspect()

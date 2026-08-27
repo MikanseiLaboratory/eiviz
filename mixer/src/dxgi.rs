@@ -141,6 +141,9 @@ impl DxgiVideo {
                 let ctx = self.context.lock().expect("d3d11 context");
                 ctx.Flush();
             }
+            if let Ok(resource) = tex11.cast::<ID3D11Resource>() {
+                self.on12.ReleaseWrappedResources(&[Some(resource)]);
+            }
             let (resource12, wrapped) = self.unwrap_or_share(&tex11)?;
             let frame = match desc.Format {
                 DXGI_FORMAT_NV12 => gpu.convert.convert_nv12(
