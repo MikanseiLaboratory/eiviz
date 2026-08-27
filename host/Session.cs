@@ -58,6 +58,8 @@ public sealed class InputEntry
     public uint BusMask { get; set; } = 1;
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
+    public bool UseGpu { get; set; }
+    public uint FrameBufferFrames { get; set; } = 1;
     public override string ToString() => Name;
 }
 
@@ -188,6 +190,7 @@ public sealed class OutputEntry
     public OutputSourceKind SourceKind { get; set; } = OutputSourceKind.MuProgram;
     public ulong SourceId { get; set; }
     public ulong UnitId { get; set; } = 1;
+    public bool UseGpu { get; set; }
 }
 
 public enum InternalColorFormat
@@ -286,7 +289,8 @@ public sealed class Session
             Name = "eiviz-pgm",
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
-            UnitId = 1
+            UnitId = 1,
+            UseGpu = true
         });
         return session;
     }

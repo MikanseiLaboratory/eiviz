@@ -169,7 +169,7 @@ internal static partial class MixerNative
     internal static unsafe partial int CopyVideoInfo(ulong id, MixerVideoInfo* info);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_connect", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int ConnectOmt(ulong id, string address);
+    internal static partial int ConnectOmt(ulong id, string address, uint useGpu, uint frameBufferFrames);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_define_scene")]
     internal static unsafe partial int DefineScene(ulong sceneId, uint width, uint height, uint count, OverlayDesc* layers);
@@ -181,7 +181,7 @@ internal static partial class MixerNative
     internal static partial int DefineGenerator(ulong id, uint kind, float r, float g, float b, float a, uint scroll);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId);
+    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_remove")]
     internal static partial int OutputRemove(ulong outputId);

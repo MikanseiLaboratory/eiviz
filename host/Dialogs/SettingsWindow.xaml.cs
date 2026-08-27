@@ -316,7 +316,8 @@ public partial class SettingsWindow : Window
             Name = NextOutputName(),
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
-            UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1
+            UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
+            UseGpu = true
         });
         RebuildOutputs();
     }
@@ -357,6 +358,17 @@ public partial class SettingsWindow : Window
             {
                 if (transport.SelectedItem is ComboBoxItem item && item.Tag is OutputTransport value)
                     output.Transport = value;
+                RebuildOutputs();
+            };
+
+            var path = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = output.Transport == OutputTransport.Omt };
+            path.Items.Add(new ComboBoxItem { Content = "GPU", Tag = true });
+            path.Items.Add(new ComboBoxItem { Content = "CPU", Tag = false });
+            path.SelectedIndex = output.UseGpu ? 0 : 1;
+            path.SelectionChanged += (_, _) =>
+            {
+                if (path.SelectedItem is ComboBoxItem item && item.Tag is bool value)
+                    output.UseGpu = value;
             };
 
             var kinds = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
@@ -382,6 +394,8 @@ public partial class SettingsWindow : Window
             Grid.SetRow(remove, 0);
             Grid.SetColumn(remove, 3);
             Grid.SetRow(transport, 1);
+            Grid.SetRow(path, 1);
+            Grid.SetColumn(path, 1);
             Grid.SetRow(kinds, 2);
             Grid.SetColumnSpan(kinds, 4);
             Grid.SetRow(pick, 3);
@@ -389,6 +403,7 @@ public partial class SettingsWindow : Window
             grid.Children.Add(name);
             grid.Children.Add(remove);
             grid.Children.Add(transport);
+            grid.Children.Add(path);
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
             box.Child = grid;
@@ -543,7 +558,8 @@ public partial class SettingsWindow : Window
         Transport = output.Transport,
         SourceKind = output.SourceKind,
         SourceId = output.SourceId,
-        UnitId = output.UnitId
+        UnitId = output.UnitId,
+        UseGpu = output.UseGpu
     };
 
     private static void SelectTag(ComboBox box, string tag)

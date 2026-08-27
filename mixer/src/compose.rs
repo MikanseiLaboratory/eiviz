@@ -330,7 +330,8 @@ impl Composer {
                     ring.height,
                     wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::COPY_DST
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::COPY_SRC,
                     format,
                 );
                 let view = texture.create_view(&Default::default());
@@ -1089,6 +1090,14 @@ impl Composer {
                 _ => unit.mixed_view.clone(),
             })
         })
+    }
+
+    pub fn source_texture(&self, source_id: u64) -> Option<&wgpu::Texture> {
+        self.sources.get(&source_id).map(|gpu| &gpu.texture)
+    }
+
+    pub fn scene_texture(&self, scene_id: u64) -> Option<&wgpu::Texture> {
+        self.scenes.get(&scene_id).map(|scene| &scene.texture)
     }
 
     pub fn source_is_packed(&self, source_id: u64) -> bool {

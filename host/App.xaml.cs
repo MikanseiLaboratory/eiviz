@@ -113,7 +113,11 @@ public partial class App : Application
                         Commands.TryEnqueue(new StartVideoCommand(input.Id, input.PathOrAddress));
                         break;
                     case InputKind.Omt when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new ConnectOmtCommand(input.Id, input.PathOrAddress));
+                        Commands.TryEnqueue(new ConnectOmtCommand(
+                            input.Id,
+                            input.PathOrAddress,
+                            input.UseGpu,
+                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)));
                         break;
                     case InputKind.Uvc when !string.IsNullOrWhiteSpace(input.PathOrAddress):
                         Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));

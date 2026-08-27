@@ -569,7 +569,9 @@ public partial class MainWindow : Window
             ColorG = dialog.ColorG,
             ColorB = dialog.ColorB,
             Scroll = dialog.Scroll,
-            BusMask = 1
+            BusMask = 1,
+            UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu,
+            FrameBufferFrames = dialog.Kind == InputKind.Omt ? dialog.ResultFrameBufferFrames : 1
         };
         try
         {
@@ -592,7 +594,11 @@ public partial class MainWindow : Window
                     Commands.TryEnqueue(new StartVideoCommand(id, dialog.ResultPath!));
                     break;
                 case InputKind.Omt:
-                    Commands.TryEnqueue(new ConnectOmtCommand(id, dialog.ResultPath!));
+                    Commands.TryEnqueue(new ConnectOmtCommand(
+                        id,
+                        dialog.ResultPath!,
+                        dialog.ResultUseGpu,
+                        dialog.ResultFrameBufferFrames));
                     break;
                 case InputKind.Uvc:
                     Commands.TryEnqueue(new StartUvcCommand(id, dialog.ResultPath!));
@@ -949,7 +955,8 @@ public partial class MainWindow : Window
         && left.Transport == right.Transport
         && left.SourceKind == right.SourceKind
         && left.SourceId == right.SourceId
-        && left.UnitId == right.UnitId;
+        && left.UnitId == right.UnitId
+        && left.UseGpu == right.UseGpu;
 
     private void UpdateStatus()
     {

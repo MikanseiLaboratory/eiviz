@@ -43,6 +43,8 @@ public partial class AddInputWindow : Window
     public float ColorG { get; private set; }
     public float ColorB { get; private set; }
     public bool Scroll { get; private set; }
+    public bool ResultUseGpu { get; private set; } = true;
+    public uint ResultFrameBufferFrames { get; private set; } = 1;
 
     private void Category_Click(object sender, RoutedEventArgs e)
     {
@@ -173,6 +175,11 @@ public partial class AddInputWindow : Window
                     return;
                 ResultPath = OmtAddress.Text.Trim();
                 ResultName = ResultPath;
+                ResultUseGpu = OmtPathBox.SelectedItem is ComboBoxItem { Tag: "gpu" };
+                ResultFrameBufferFrames = 1;
+                if (OmtBufferBox.SelectedItem is ComboBoxItem buffer && buffer.Tag is string tag
+                    && uint.TryParse(tag, out var frames))
+                    ResultFrameBufferFrames = Math.Clamp(frames, 1u, 8u);
                 break;
             case InputKind.Uvc:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))

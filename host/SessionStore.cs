@@ -63,7 +63,8 @@ internal static class SessionStore
                 Transport = output.Transport,
                 SourceKind = output.SourceKind,
                 SourceId = output.SourceId,
-                UnitId = output.UnitId
+                UnitId = output.UnitId,
+                UseGpu = output.UseGpu
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),
@@ -134,6 +135,8 @@ internal static class SessionStore
         public uint BusMask { get; set; } = 1;
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
+        public bool UseGpu { get; set; }
+        public uint FrameBufferFrames { get; set; } = 1;
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -147,7 +150,9 @@ internal static class SessionStore
             Scroll = input.Scroll,
             BusMask = input.BusMask == 0 ? 1u : input.BusMask,
             Gain = input.Gain,
-            Mute = input.Mute
+            Mute = input.Mute,
+            UseGpu = input.UseGpu,
+            FrameBufferFrames = input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)
         };
 
         public InputEntry ToEntry() => new()
@@ -162,7 +167,9 @@ internal static class SessionStore
             Scroll = Scroll,
             BusMask = BusMask == 0 ? 1u : BusMask,
             Gain = MixerNative.MixerGain(Gain),
-            Mute = Mute
+            Mute = Mute,
+            UseGpu = UseGpu,
+            FrameBufferFrames = FrameBufferFrames == 0 ? 1 : Math.Clamp(FrameBufferFrames, 1u, 8u)
         };
     }
 

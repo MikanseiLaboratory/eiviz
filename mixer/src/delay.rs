@@ -123,6 +123,16 @@ impl FrameDelay {
         }
     }
 
+    pub fn rgba(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {
+        let ring = self.units.get(&unit_id)?;
+        let slot = ring.display_slot()?;
+        match kind {
+            OUTPUT_PREVIEW => Some(&slot.preview),
+            OUTPUT_MULTIVIEW => slot.multiview.as_ref().or(Some(&slot.mixed)),
+            _ => Some(&slot.mixed),
+        }
+    }
+
     pub fn view_for_source(&self, source_id: u64) -> Option<wgpu::TextureView> {
         let unit_id = mixing_unit_from_source(source_id)?;
         self.view(unit_id, mixing_unit_bus(source_id))

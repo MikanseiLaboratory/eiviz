@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs" }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", features = ["wgpu"] }
 pollster = "0.4"
 raw-window-handle = "0.6"
 thiserror = "2"

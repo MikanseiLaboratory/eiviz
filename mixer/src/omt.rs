@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,12 +6,22 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use openmediatransport::{
-    Codec, DecodedAudioFrame, Discovery, FrameType, MediaFrame, ReceiverConfig, ReceiverSession,
-    Sender,
+    Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, ReceiverConfig,
+    ReceiverSession, Sender, VideoTextureMeta,
 };
 
 use crate::abi::FMT_BGRA;
-use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore};
+use crate::device::GpuDevice;
+use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore};
+
+pub type OmtGpu = GpuVideoContext;
+
+pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
+    GpuVideoContext {
+        device: Arc::new(device.device.clone()),
+        queue: Arc::new(device.queue.clone()),
+    }
+}
 
 pub struct OmtReceiver {
     stop: Arc<AtomicBool>,
@@ -22,10 +33,15 @@ impl OmtReceiver {
         source_id: u64,
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
+        gpu: Option<OmtGpu>,
+        frame_buffer_frames: u32,
     ) -> Result<Self, String> {
+        let depth = frame_buffer_frames.clamp(1, 8);
+        let use_gpu = gpu.is_some();
         let config = ReceiverConfig {
             frame_types: FrameType::VIDEO | FrameType::AUDIO,
             connect_timeout: Duration::from_secs(5),
+            gpu: gpu.clone(),
             ..ReceiverConfig::default()
         };
         let session = connect_receiver(&address, config)?;
@@ -36,25 +52,56 @@ impl OmtReceiver {
             .spawn(move || {
                 {
                     let mut store = uploads.lock().expect("uploads lock");
-                    store.ensure(
-                        source_id,
-                        16,
-                        16,
-                        CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                    );
+                    let format = if use_gpu {
+                        CpuFormat::GpuRgba
+                    } else {
+                        CpuFormat::from_abi(FMT_BGRA).expect("BGRA")
+                    };
+                    store.ensure_playout(source_id, 16, 16, format, depth);
                 }
                 while !stop_thread.load(Ordering::Relaxed) {
-                    if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4)) {
+                    if use_gpu {
+                        if let Some(frame) = session.recv_video_gpu_timeout(Duration::from_millis(4))
+                        {
+                            let width = frame.width.max(2);
+                            let height = frame.height.max(2);
+                            let gpu_frame = if depth > 1 {
+                                if let Some(ctx) = gpu.as_ref() {
+                                    copy_gpu_frame(
+                                        ctx,
+                                        &frame.texture,
+                                        width,
+                                        height,
+                                        frame.timestamp,
+                                    )
+                                } else {
+                                    gpu_frame_from_omt(frame)
+                                }
+                            } else {
+                                gpu_frame_from_omt(frame)
+                            };
+                            let mut store = uploads.lock().expect("uploads lock");
+                            store.ensure_playout(
+                                source_id,
+                                gpu_frame.width,
+                                gpu_frame.height,
+                                CpuFormat::GpuRgba,
+                                depth,
+                            );
+                            store.push_playout_gpu(source_id, gpu_frame).ok();
+                        }
+                    } else if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4)) {
                         let mut store = uploads.lock().expect("uploads lock");
-                        store.ensure(
+                        store.ensure_playout(
                             source_id,
                             frame.width.max(2),
                             frame.height.max(2),
                             CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
+                            depth,
                         );
                         let stride = frame.stride.max(frame.width * 4) as usize;
                         store
-                            .push(source_id, &frame.pixels, stride, frame.timestamp)
+                            .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
                             .ok();
                     }
                     while let Some(audio) = session.try_recv_audio() {
@@ -142,6 +189,29 @@ impl ProgramSender {
         self.sender.send_video(frame).map_err(|e| e.to_string())
     }
 
+    pub fn send_video_texture(
+        &mut self,
+        ctx: &OmtGpu,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pts: i64,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> Result<(), String> {
+        let meta = VideoTextureMeta {
+            width,
+            height,
+            timestamp: pts,
+            frame_rate_n: fps_num as i32,
+            frame_rate_d: fps_den as i32,
+            ..Default::default()
+        };
+        self.sender
+            .send_video_texture(ctx, texture, meta)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn video_subscribed(&self) -> bool {
         self.sender.video_subscribed()
     }
@@ -165,6 +235,116 @@ impl Drop for ProgramSender {
     fn drop(&mut self) {
         if let Some(discovery) = self.discovery.as_mut() {
             let _ = discovery.deregister(&self.name);
+        }
+    }
+}
+
+const SEND_SLOTS: usize = 3;
+
+struct GpuSendSlot {
+    texture: wgpu::Texture,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    busy: Arc<AtomicBool>,
+}
+
+struct GpuSendRing {
+    slots: Vec<GpuSendSlot>,
+    next: usize,
+}
+
+#[derive(Default)]
+pub struct GpuSendStore {
+    rings: HashMap<u64, GpuSendRing>,
+}
+
+impl GpuSendStore {
+    pub fn copy(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        output_id: u64,
+        src: &wgpu::Texture,
+    ) -> Option<(wgpu::Texture, u32, u32, Arc<AtomicBool>)> {
+        if !src.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+            return None;
+        }
+        let size = src.size();
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+        if width < 16 || height < 16 {
+            return None;
+        }
+        let format = src.format();
+        let ring = self
+            .rings
+            .entry(output_id)
+            .or_insert_with(|| GpuSendRing::new(device, width, height, format));
+        for i in 0..SEND_SLOTS {
+            let idx = (ring.next + i) % ring.slots.len();
+            let slot = &mut ring.slots[idx];
+            if slot.busy.load(Ordering::Acquire) {
+                continue;
+            }
+            if slot.width != width || slot.height != height || slot.format != format {
+                *slot = GpuSendSlot::new(device, width, height, format);
+            }
+            encoder.copy_texture_to_texture(
+                src.as_image_copy(),
+                slot.texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            slot.busy.store(true, Ordering::Release);
+            let texture = slot.texture.clone();
+            let busy = Arc::clone(&slot.busy);
+            let slot_count = ring.slots.len();
+            ring.next = (idx + 1) % slot_count;
+            return Some((texture, width, height, busy));
+        }
+        None
+    }
+}
+
+impl GpuSendRing {
+    fn new(device: &GpuDevice, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+        Self {
+            slots: (0..SEND_SLOTS)
+                .map(|_| GpuSendSlot::new(device, width, height, format))
+                .collect(),
+            next: 0,
+        }
+    }
+}
+
+impl GpuSendSlot {
+    fn new(device: &GpuDevice, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+        let texture = device.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz omt gpu send"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        Self {
+            texture,
+            width,
+            height,
+            format,
+            busy: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -197,18 +377,75 @@ fn connect_receiver(address: &str, config: ReceiverConfig) -> Result<ReceiverSes
     Err(format!("OMT source not found: {trimmed}"))
 }
 
+fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame) -> GpuVideoFrame {
+    GpuVideoFrame {
+        pts: frame.timestamp,
+        width: frame.width.max(2),
+        height: frame.height.max(2),
+        view: frame.texture.create_view(&Default::default()),
+        texture: frame.texture,
+    }
+}
+
+fn copy_gpu_frame(
+    ctx: &OmtGpu,
+    src: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    pts: i64,
+) -> GpuVideoFrame {
+    let width = width.max(1);
+    let height = height.max(1);
+    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eiviz omt jitter"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: src.format(),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("eiviz omt jitter copy"),
+    });
+    encoder.copy_texture_to_texture(
+        src.as_image_copy(),
+        texture.as_image_copy(),
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    ctx.queue.submit(Some(encoder.finish()));
+    GpuVideoFrame {
+        pts,
+        width,
+        height,
+        view: texture.create_view(&Default::default()),
+        texture,
+    }
+}
+
 fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
-        let channels = frame.channels.max(1);
-        let samples = if frame.samples_per_channel > 0 {
-            frame.samples_per_channel
-        } else {
-            (frame.pcm_planar_f32.len() as i32 / 4 / channels).max(1)
-        };
-        AudioPacket {
-            timestamp: frame.timestamp,
-            sample_rate: frame.sample_rate,
-            channels: frame.channels,
-            samples_per_channel: samples,
-            pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
-        }
+    let channels = frame.channels.max(1);
+    let samples = if frame.samples_per_channel > 0 {
+        frame.samples_per_channel
+    } else {
+        (frame.pcm_planar_f32.len() as i32 / 4 / channels).max(1)
+    };
+    AudioPacket {
+        timestamp: frame.timestamp,
+        sample_rate: frame.sample_rate,
+        channels: frame.channels,
+        samples_per_channel: samples,
+        pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
+    }
 }

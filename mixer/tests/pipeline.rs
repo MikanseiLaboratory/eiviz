@@ -72,7 +72,7 @@ fn dx12_compose_omt_and_program_out() {
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
-        assert_eq!(mixer_omt_connect(20, address.as_ptr()), OK);
+        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1), OK);
         assert_eq!(
             mixer_omt_start_send(1, CString::new("eiviz-test-pgm").unwrap().as_ptr()),
             OK
@@ -113,7 +113,8 @@ fn dx12_compose_omt_and_program_out() {
                 CString::new("eiviz-out-a").unwrap().as_ptr(),
                 SRC_KIND_MU_PROGRAM,
                 0,
-                1
+                1,
+                0
             ),
             OK
         );
@@ -124,11 +125,71 @@ fn dx12_compose_omt_and_program_out() {
                 CString::new("eiviz-out-b").unwrap().as_ptr(),
                 SRC_KIND_MU_PROGRAM,
                 0,
-                1
+                1,
+                0
             ),
             OK
         );
     }
+    mixer_destroy();
+}
+
+#[test]
+fn dx12_omt_gpu_in_and_out() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+
+    let mut sender = Sender::create("eiviz-test-gpu-src", FrameType::VIDEO | FrameType::AUDIO)
+        .expect("sender");
+    let url = format!("omt://127.0.0.1:{}", sender.port());
+    let address = CString::new(url).unwrap();
+    unsafe {
+        assert_eq!(mixer_omt_connect(21, address.as_ptr(), 1, 3), OK);
+        assert_eq!(
+            mixer_output_add(
+                201,
+                OUT_OMT,
+                CString::new("eiviz-gpu-pgm").unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1,
+                1
+            ),
+            OK
+        );
+        let state = UnitState {
+            program_source: 21,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+
+    let uyvy = vec![0x80u8, 0xEB, 0x80, 0x10].repeat((64 * 64 / 2) as usize);
+    for _ in 0..16 {
+        let _ = sender.poll_accept();
+        let _ = sender.poll_peer_metadata();
+        if !sender.video_subscribed() {
+            sender.force_subscribe(true, true, false);
+        }
+        sender
+            .send_video(MediaFrame {
+                frame_type: FrameType::VIDEO,
+                codec: Codec::Uyvy as i32,
+                width: 64,
+                height: 64,
+                stride: 128,
+                frame_rate_n: 60,
+                frame_rate_d: 1,
+                data: uyvy.clone(),
+                ..Default::default()
+            })
+            .expect("send");
+        thread::sleep(Duration::from_millis(16));
+    }
+    thread::sleep(Duration::from_millis(120));
     mixer_destroy();
 }
 
@@ -253,7 +314,8 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 CString::new("ndi-unlinked").unwrap().as_ptr(),
                 SRC_KIND_MU_PROGRAM,
                 0,
-                1
+                1,
+                0
             ),
             ERR_IO
         );
@@ -264,7 +326,8 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 CString::new("decklink-unlinked").unwrap().as_ptr(),
                 SRC_KIND_MU_PROGRAM,
                 0,
-                1
+                1,
+                0
             ),
             ERR_IO
         );

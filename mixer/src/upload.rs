@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -34,6 +34,11 @@ impl CpuFormat {
     }
 }
 
+struct CpuQueuedFrame {
+    pts: i64,
+    pixels: Vec<u8>,
+}
+
 pub struct SourceRing {
     pub width: u32,
     pub height: u32,
@@ -44,6 +49,9 @@ pub struct SourceRing {
     pub has_frame: bool,
     pub audio: Option<AudioPacket>,
     pub gpu: Option<GpuVideoFrame>,
+    playout_depth: usize,
+    cpu_fifo: VecDeque<CpuQueuedFrame>,
+    gpu_fifo: VecDeque<GpuVideoFrame>,
     fifo: VecDeque<f32>,
     last_peak: (f32, f32),
     last_hold: (f32, f32),
@@ -81,6 +89,9 @@ impl SourceRing {
             has_frame: false,
             audio: None,
             gpu: None,
+            playout_depth: 1,
+            cpu_fifo: VecDeque::new(),
+            gpu_fifo: VecDeque::new(),
             fifo: VecDeque::new(),
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
@@ -108,6 +119,71 @@ impl SourceRing {
         self.last_pts = frame.pts;
         self.has_frame = true;
         self.gpu = Some(frame);
+    }
+
+    pub fn set_playout_depth(&mut self, depth: u32) {
+        self.playout_depth = depth.clamp(1, 8) as usize;
+        while self.cpu_fifo.len() > self.playout_depth {
+            self.cpu_fifo.pop_front();
+        }
+        while self.gpu_fifo.len() > self.playout_depth {
+            self.gpu_fifo.pop_front();
+        }
+    }
+
+    pub fn push_playout_cpu(&mut self, src: &[u8], stride: usize, pts: i64) {
+        if self.playout_depth <= 1 {
+            self.push(src, stride, pts);
+            return;
+        }
+        let mut pixels = vec![0u8; slot_bytes(self.width, self.height, self.format)];
+        write_slot(
+            &mut pixels,
+            src,
+            stride,
+            self.width,
+            self.height,
+            self.format,
+        );
+        self.cpu_fifo.push_back(CpuQueuedFrame { pts, pixels });
+        while self.cpu_fifo.len() > self.playout_depth {
+            self.cpu_fifo.pop_front();
+        }
+    }
+
+    pub fn push_playout_gpu(&mut self, frame: GpuVideoFrame) {
+        if self.playout_depth <= 1 {
+            self.push_gpu(frame);
+            return;
+        }
+        self.gpu_fifo.push_back(frame);
+        while self.gpu_fifo.len() > self.playout_depth {
+            self.gpu_fifo.pop_front();
+        }
+    }
+
+    pub fn advance_playout(&mut self) {
+        if self.playout_depth <= 1 {
+            return;
+        }
+        if self.format == CpuFormat::GpuRgba {
+            if let Some(frame) = self.gpu_fifo.pop_front() {
+                self.push_gpu(frame);
+            }
+            return;
+        }
+        if let Some(queued) = self.cpu_fifo.pop_front() {
+            let idx = (self.write.load(Ordering::Relaxed) + 1) % SLOTS;
+            if self.slots[idx].len() == queued.pixels.len() {
+                self.slots[idx].copy_from_slice(&queued.pixels);
+            } else {
+                self.slots[idx] = queued.pixels;
+            }
+            self.write.store(idx, Ordering::Release);
+            self.last_pts = queued.pts;
+            self.has_frame = true;
+            self.gpu = None;
+        }
     }
 
     pub fn peak(&self) -> (f32, f32) {
@@ -162,7 +238,12 @@ impl SourceRing {
     }
 
     pub fn ram_bytes(&self) -> u64 {
-        self.slots.iter().map(|slot| slot.len() as u64).sum()
+        self.slots.iter().map(|slot| slot.len() as u64).sum::<u64>()
+            + self
+                .cpu_fifo
+                .iter()
+                .map(|frame| frame.pixels.len() as u64)
+                .sum::<u64>()
     }
 
     pub fn vram_bytes(&self) -> u64 {
@@ -189,7 +270,14 @@ impl UploadStore {
             ring.last_peak = old.last_peak;
             ring.last_hold = old.last_hold;
             ring.fifo_primed = old.fifo_primed;
-            ring.gpu = old.gpu;
+            ring.playout_depth = old.playout_depth;
+            if old.width == width && old.height == height && old.format == format {
+                ring.gpu = old.gpu;
+                ring.cpu_fifo = old.cpu_fifo;
+                ring.gpu_fifo = old.gpu_fifo;
+                ring.has_frame = old.has_frame;
+                ring.last_pts = old.last_pts;
+            }
         }
         self.sources.insert(id, ring);
     }
@@ -202,6 +290,58 @@ impl UploadStore {
         match self.sources.get(&id) {
             Some(ring) if ring.width == width && ring.height == height && ring.format == format => {}
             _ => self.register(id, width, height, format),
+        }
+    }
+
+    pub fn ensure_playout(
+        &mut self,
+        id: u64,
+        width: u32,
+        height: u32,
+        format: CpuFormat,
+        depth: u32,
+    ) {
+        self.ensure(id, width, height, format);
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.set_playout_depth(depth);
+        }
+    }
+
+    pub fn push_playout_cpu(
+        &mut self,
+        id: u64,
+        src: &[u8],
+        stride: usize,
+        pts: i64,
+    ) -> Result<(), String> {
+        let ring = self
+            .sources
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown source {id}"))?;
+        ring.push_playout_cpu(src, stride, pts);
+        Ok(())
+    }
+
+    pub fn push_playout_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
+        self.ensure(
+            id,
+            frame.width.max(2),
+            frame.height.max(2),
+            CpuFormat::GpuRgba,
+        );
+        let ring = self
+            .sources
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown source {id}"))?;
+        ring.push_playout_gpu(frame);
+        Ok(())
+    }
+
+    pub fn advance_playout(&mut self, needed: &HashSet<u64>) {
+        for id in needed {
+            if let Some(ring) = self.sources.get_mut(id) {
+                ring.advance_playout();
+            }
         }
     }
 
