@@ -40,12 +40,15 @@ internal static class SessionStore
         public List<UnitDto> Units { get; set; } = [];
         public List<OutputEntry> Outputs { get; set; } = [];
         public List<MultiviewDto> Multiviews { get; set; } = [];
+        public List<AudioBusEntry> Buses { get; set; } = [];
         public ulong NextInputId { get; set; }
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
         public ulong NextOutputId { get; set; }
         public ulong NextMultiviewId { get; set; }
+        public ulong NextBusId { get; set; }
         public ulong SelectedUnitId { get; set; }
+        public bool HeadphoneCopyMaster { get; set; }
 
         public static Document From(Session session) => new()
         {
@@ -63,17 +66,20 @@ internal static class SessionStore
                 UnitId = output.UnitId
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
+            Buses = session.Buses.Select(CloneBus).ToList(),
             NextInputId = session.NextInputId,
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
             NextOutputId = session.NextOutputId,
             NextMultiviewId = session.NextMultiviewId,
-            SelectedUnitId = session.SelectedUnitId
+            NextBusId = session.NextBusId,
+            SelectedUnitId = session.SelectedUnitId,
+            HeadphoneCopyMaster = session.HeadphoneCopyMaster
         };
 
         public Session ToSession()
         {
-            var session = new Session { SelectedUnitId = SelectedUnitId };
+            var session = new Session { SelectedUnitId = SelectedUnitId, HeadphoneCopyMaster = HeadphoneCopyMaster };
             session.Settings.MasterFpsNum = Settings.MasterFpsNum;
             session.Settings.MasterFpsDen = Settings.MasterFpsDen;
             session.Settings.DefaultWidth = Settings.DefaultWidth;
@@ -92,11 +98,15 @@ internal static class SessionStore
                 session.Outputs.Add(output);
             foreach (var layout in Multiviews)
                 session.Multiviews.Add(layout.ToEntry(session));
+            foreach (var bus in Buses)
+                session.Buses.Add(CloneBus(bus));
+            session.EnsureDefaultBuses();
             session.NextInputId = Math.Max(NextInputId, session.Inputs.Count == 0 ? 10 : session.Inputs.Max(item => item.Id) + 1);
             session.NextSceneId = Math.Max(NextSceneId, session.Scenes.Count == 0 ? 1 : session.Scenes.Max(item => item.Id) + 1);
             session.NextUnitId = Math.Max(NextUnitId, session.Units.Count == 0 ? 1 : session.Units.Max(item => item.Id) + 1);
             session.NextOutputId = Math.Max(NextOutputId, session.Outputs.Count == 0 ? 100 : session.Outputs.Max(item => item.Id) + 1);
             session.NextMultiviewId = Math.Max(NextMultiviewId, session.Multiviews.Count == 0 ? 1 : session.Multiviews.Max(item => item.Id) + 1);
+            session.NextBusId = Math.Max(NextBusId, session.Buses.Count == 0 ? 3 : session.Buses.Max(item => item.Id) + 1);
             if (session.Units.Count == 0)
             {
                 var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
@@ -121,6 +131,9 @@ internal static class SessionStore
         public float ColorG { get; set; }
         public float ColorB { get; set; }
         public bool Scroll { get; set; }
+        public uint BusMask { get; set; } = 1;
+        public float Gain { get; set; } = 1;
+        public bool Mute { get; set; }
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -131,7 +144,10 @@ internal static class SessionStore
             ColorR = input.ColorR,
             ColorG = input.ColorG,
             ColorB = input.ColorB,
-            Scroll = input.Scroll
+            Scroll = input.Scroll,
+            BusMask = input.BusMask == 0 ? 1u : input.BusMask,
+            Gain = input.Gain,
+            Mute = input.Mute
         };
 
         public InputEntry ToEntry() => new()
@@ -143,7 +159,10 @@ internal static class SessionStore
             ColorR = ColorR,
             ColorG = ColorG,
             ColorB = ColorB,
-            Scroll = Scroll
+            Scroll = Scroll,
+            BusMask = BusMask == 0 ? 1u : BusMask,
+            Gain = MixerNative.MixerGain(Gain),
+            Mute = Mute
         };
     }
 
@@ -185,6 +204,8 @@ internal static class SessionStore
         public List<TransitionPreset> Transitions { get; set; } = [];
         public List<OverlaySlot> Overlays { get; set; } = [];
         public List<MvSlot> MultiviewTiles { get; set; } = [];
+        public ulong AudioBusId { get; set; } = 1;
+        public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
 
         public static UnitDto From(MixingUnitEntry unit) => new()
         {
@@ -196,7 +217,9 @@ internal static class SessionStore
             FpsDen = unit.FpsDen,
             Transitions = [.. unit.Transitions],
             Overlays = [.. unit.Overlays],
-            MultiviewTiles = [.. unit.MultiviewTiles]
+            MultiviewTiles = [.. unit.MultiviewTiles],
+            AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
+            AudioLink = unit.AudioLink
         };
 
         public MixingUnitEntry ToEntry()
@@ -208,7 +231,9 @@ internal static class SessionStore
                 Width = Width == 0 ? 1920 : Width,
                 Height = Height == 0 ? 1080 : Height,
                 FpsNum = FpsNum == 0 ? 60_000 : FpsNum,
-                FpsDen = FpsDen == 0 ? 1_001 : FpsDen
+                FpsDen = FpsDen == 0 ? 1_001 : FpsDen,
+                AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
+                AudioLink = AudioLink
             };
             foreach (var preset in Transitions)
                 unit.Transitions.Add(preset);
@@ -255,4 +280,19 @@ internal static class SessionStore
             return layout;
         }
     }
+
+    private static AudioBusEntry CloneBus(AudioBusEntry bus) => new()
+    {
+        Id = bus.Id,
+        Name = bus.Name,
+        Role = bus.Role,
+        DeviceKind = bus.DeviceKind,
+        DeviceId = bus.DeviceId,
+        MapLeft = bus.MapLeft,
+        MapRight = bus.MapRight,
+        Exclusive = bus.Exclusive,
+        Bit = bus.Bit,
+        Gain = MixerNative.MixerGain(bus.Gain),
+        Mute = bus.Mute
+    };
 }

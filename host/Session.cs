@@ -55,6 +55,9 @@ public sealed class InputEntry
     public float ColorG { get; set; }
     public float ColorB { get; set; }
     public bool Scroll { get; set; }
+    public uint BusMask { get; set; } = 1;
+    public float Gain { get; set; } = 1;
+    public bool Mute { get; set; }
     public override string ToString() => Name;
 }
 
@@ -144,6 +147,8 @@ public sealed class MixingUnitEntry
     public List<TransitionPreset> Transitions { get; } = [];
     public List<OverlaySlot> Overlays { get; } = [];
     public List<MvSlot> MultiviewTiles { get; } = [];
+    public ulong AudioBusId { get; set; } = 1;
+    public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
 
     public string FormatFps()
@@ -191,6 +196,42 @@ public enum InternalColorFormat
     Bgra = 1
 }
 
+public enum AudioBusRole
+{
+    Master = 0,
+    Headphone = 1,
+    Aux = 2
+}
+
+public enum AudioDeviceKind
+{
+    None = 0,
+    Wasapi = 1,
+    Asio = 2
+}
+
+public enum AudioLinkMode
+{
+    Follow = 0,
+    Independent = 1
+}
+
+public sealed class AudioBusEntry
+{
+    public ulong Id { get; set; }
+    public required string Name { get; set; }
+    public AudioBusRole Role { get; set; }
+    public AudioDeviceKind DeviceKind { get; set; }
+    public string DeviceId { get; set; } = "";
+    public int MapLeft { get; set; }
+    public int MapRight { get; set; } = 1;
+    public bool Exclusive { get; set; }
+    public uint Bit { get; set; }
+    public float Gain { get; set; } = 1;
+    public bool Mute { get; set; }
+    public override string ToString() => Name;
+}
+
 public sealed class SessionSettings
 {
     public uint MasterFpsNum { get; set; } = 60_000;
@@ -212,22 +253,26 @@ public sealed class Session
     public List<MixingUnitEntry> Units { get; } = [];
     public List<OutputEntry> Outputs { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
+    public List<AudioBusEntry> Buses { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
     public ulong NextMonitorId { get; set; } = 1000;
     public ulong NextOutputId { get; set; } = 100;
     public ulong NextMultiviewId { get; set; } = 1;
+    public ulong NextBusId { get; set; } = 3;
     public ulong SelectedUnitId { get; set; } = 1;
+    public bool HeadphoneCopyMaster { get; set; }
 
     public static Session Default()
     {
         var session = new Session();
+        session.EnsureDefaultBuses();
         session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE Bars", Kind = InputKind.Bars });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color });
-        var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
+        var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
         unit.EnsureDefaultTiles();
@@ -282,5 +327,54 @@ public sealed class Session
         layout.EnsureTiles();
         Multiviews.Add(layout);
         return layout;
+    }
+
+    public void EnsureDefaultBuses()
+    {
+        if (Buses.All(bus => bus.Role != AudioBusRole.Master))
+        {
+            Buses.Insert(0, new AudioBusEntry
+            {
+                Id = 1,
+                Name = "Master",
+                Role = AudioBusRole.Master,
+                DeviceKind = AudioDeviceKind.Wasapi,
+                MapLeft = 0,
+                MapRight = 1,
+                Bit = 0
+            });
+        }
+        if (Buses.All(bus => bus.Role != AudioBusRole.Headphone))
+        {
+            var insert = Buses.Count > 0 && Buses[0].Role == AudioBusRole.Master ? 1 : 0;
+            Buses.Insert(insert, new AudioBusEntry
+            {
+                Id = 2,
+                Name = "Headphone",
+                Role = AudioBusRole.Headphone,
+                DeviceKind = AudioDeviceKind.None,
+                MapLeft = 0,
+                MapRight = 1,
+                Bit = 1
+            });
+        }
+        if (NextBusId < 3)
+            NextBusId = 3;
+        foreach (var unit in Units)
+        {
+            if (unit.AudioBusId == 0)
+                unit.AudioBusId = 1;
+        }
+    }
+
+    public string NextAuxBusName()
+    {
+        for (var letter = 'A'; letter <= 'H'; letter++)
+        {
+            var name = $"Bus {letter}";
+            if (Buses.TrueForAll(bus => bus.Name != name))
+                return name;
+        }
+        return $"Bus {NextBusId}";
     }
 }

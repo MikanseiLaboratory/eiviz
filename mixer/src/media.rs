@@ -25,7 +25,7 @@ use windows::core::{GUID, PCWSTR};
 
 use crate::abi::FMT_BGRA;
 use crate::dxgi::GpuVideoContext;
-use crate::upload::{AudioPacket, CpuFormat, UploadStore};
+use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore, AUDIO_RATE};
 
 static MF_ONCE: Once = Once::new();
 
@@ -246,8 +246,8 @@ fn run_loop(
             };
             match sample {
                 Decoded::Audio { pts, packet } => {
-                    if is_playing && (clock_pts >= 0 || capture) {
-                        uploads.lock().expect("uploads").ingest_audio(source_id, packet);
+                    if is_playing {
+                        ingest_audio_throttled(&uploads, source_id, packet);
                     }
                     let _ = pts;
                 }
@@ -259,10 +259,19 @@ fn run_loop(
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
                     if is_playing && !preview && !capture {
+                        drain_audio(&reader, audio.as_ref(), &uploads, source_id, is_playing);
                         let wait = Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100)
                             .saturating_sub(clock_start.elapsed());
                         if wait > Duration::ZERO && wait < Duration::from_secs(2) {
-                            thread::sleep(wait);
+                            let deadline = Instant::now() + wait;
+                            while Instant::now() < deadline {
+                                drain_audio(&reader, audio.as_ref(), &uploads, source_id, is_playing);
+                                let remain = deadline.saturating_duration_since(Instant::now());
+                                if remain.is_zero() {
+                                    break;
+                                }
+                                thread::sleep(remain.min(Duration::from_millis(4)));
+                            }
                         }
                     }
                     if layout.gpu {
@@ -536,6 +545,63 @@ fn seek_to(reader: &IMFSourceReader, hns: i64) {
             pad: 0,
         };
         let _ = reader.SetCurrentPosition(&GUID::zeroed(), std::ptr::from_ref(&pos).cast());
+    }
+}
+
+fn drain_audio(
+    reader: &IMFSourceReader,
+    audio: Option<&AudioLayout>,
+    uploads: &Mutex<UploadStore>,
+    source_id: u64,
+    is_playing: bool,
+) {
+    let Some(layout) = audio else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_millis(6);
+    let mut packets = 0u32;
+    while Instant::now() < deadline && packets < 16 {
+        let frames = uploads.lock().expect("uploads").fifo_frames(source_id);
+        if frames >= AUDIO_RATE as usize / 25 {
+            break;
+        }
+        match read_audio_sample(reader, layout) {
+            Ok(Some(packet)) => {
+                if is_playing {
+                    ingest_audio_throttled(uploads, source_id, packet);
+                }
+                packets += 1;
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+}
+
+fn read_audio_sample(reader: &IMFSourceReader, layout: &AudioLayout) -> Result<Option<AudioPacket>, bool> {
+    unsafe {
+        let mut stream_index = 0u32;
+        let mut flags = 0u32;
+        let mut pts = 0i64;
+        let mut sample = None;
+        reader
+            .ReadSample(
+                stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM),
+                0,
+                Some(&mut stream_index),
+                Some(&mut flags),
+                Some(&mut pts),
+                Some(&mut sample),
+            )
+            .map_err(|_| false)?;
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            return Ok(None);
+        }
+        if flags & MF_SOURCE_READERF_STREAMTICK.0 as u32 != 0 || sample.is_none() {
+            return Ok(None);
+        }
+        let sample = sample.ok_or(false)?;
+        Ok(decode_audio(&sample, pts, layout))
     }
 }
 

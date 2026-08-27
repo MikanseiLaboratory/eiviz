@@ -15,6 +15,7 @@
                 <ListBoxItem Content="Display" IsSelected="True"/>
                 <ListBoxItem Content="Outputs"/>
                 <ListBoxItem Content="Multiview"/>
+                <ListBoxItem Content="Audio Buses"/>
                 <ListBoxItem Content="About"/>
             </ListBox>
         </Border>
@@ -92,6 +93,19 @@
                 <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
                            Text="Each Multiview window is a vMix-style mosaic: Preview and Program on top, eight Input or Scene windows below. Outputs can send a Multiview by picking it from the list. Fullscreen: F11."/>
             </StackPanel>
+            <DockPanel x:Name="AudioBusPanel" Margin="20" Visibility="Collapsed">
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddBus_Click"/>
+                    <TextBlock Text="Audio Buses" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
+                           Text="Internal mix is 48 kHz stereo. Assign each bus to a WASAPI or ASIO device and map Left/Right onto device channels. Master and Headphone cannot be removed. A–H are optional aux buses."/>
+                <CheckBox x:Name="HeadphoneCopyBox" DockPanel.Dock="Top" Content="Headphone copies Master"
+                          Margin="0,0,0,8" Foreground="#EEEEEE"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="BusRows"/>
+                </ScrollViewer>
+            </DockPanel>
             <StackPanel x:Name="AboutPanel" Margin="20" Visibility="Collapsed">
                 <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"

@@ -3,11 +3,12 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
-    mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_omt_connect,
-    mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame, mixer_unit_auto,
-    mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
-    mixer_video_start, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK,
-    OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM,
+    mixer_audio_bus_count, mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
+    mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame,
+    mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
+    mixer_unit_set_state, mixer_video_start, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT,
+    ERR_IO, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_MU_PROGRAM,
 };
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
 
@@ -41,6 +42,7 @@ fn vmx_roundtrip_is_available() {
 fn dx12_compose_omt_and_program_out() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert!(mixer_audio_bus_count() >= 2);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
 
     let mut state = UnitState {

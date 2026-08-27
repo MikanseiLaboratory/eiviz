@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod abi;
+mod audio;
 mod compose;
 mod convert;
 mod device;
@@ -19,6 +20,7 @@ pub use abi::{
     SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
     SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
 };
+pub use audio::{AudioBusInfo, AudioDeviceInfo};
 pub use media::MixerVideoInfo;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -81,6 +83,7 @@ struct Shared {
     frame_buffer_frames: u32,
     follow_primed: bool,
     monitor_pcm: VecDeque<f32>,
+    audio: audio::AudioEngine,
 }
 
 enum SendCmd {
@@ -205,6 +208,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         }
     };
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
+    let audio = audio::AudioEngine::new();
     let shared = Arc::new(Mutex::new(Shared {
         master_fps_num: fps_num,
         master_fps_den: fps_den,
@@ -221,6 +225,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         frame_buffer_frames: 3,
         follow_primed: false,
         monitor_pcm: VecDeque::new(),
+        audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
     let (tx, rx) = mpsc::channel();
@@ -265,6 +270,9 @@ pub extern "C" fn mixer_destroy() {
     let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
     if let Some(mut mixer) = slot.take() {
         mixer.stop.store(true, Ordering::Relaxed);
+        if let Ok(shared) = mixer.shared.lock() {
+            shared.audio.shutdown();
+        }
         let _ = mixer.cmds.send(GpuCmd::Shutdown);
         if let Some(join) = mixer.render.take() {
             let _ = join.join();
@@ -305,6 +313,9 @@ pub extern "C" fn mixer_create_unit(unit_id: u64, width: u32, height: u32) -> i3
                 auto: None,
             },
         );
+        shared
+            .audio
+            .set_unit_link(unit_id, audio::MASTER_BUS, audio::LINK_FOLLOW);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1078,6 +1089,199 @@ pub extern "C" fn mixer_flush_audio(id: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_bus_upsert(
+    id: u64,
+    name: *const c_char,
+    role: u32,
+    device_kind: u32,
+    device_id: *const c_char,
+    map_left: i32,
+    map_right: i32,
+    exclusive: u32,
+) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let name = read_cstr(name);
+    let device_id = read_cstr(device_id);
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").audio.upsert_bus(
+            id,
+            &name,
+            role,
+            device_kind,
+            &device_id,
+            map_left,
+            map_right,
+            exclusive,
+        );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_bus_remove(id: u64) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").audio.remove_bus(id);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_bus_count() -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .graph()
+            .lock()
+            .expect("audio")
+            .buses
+            .len() as i32
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let graph = mixer.shared.lock().expect("shared").audio.graph();
+        let graph = graph.lock().expect("audio");
+        let Some(bus) = graph.buses.get(index as usize) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        unsafe {
+            *out = AudioBusInfo {
+                id: bus.id,
+                role: bus.role,
+                device_kind: bus.device_kind,
+                map_left: bus.map_left,
+                map_right: bus.map_right,
+                exclusive: u32::from(bus.exclusive),
+                bit: bus.bit,
+                name: write_fixed::<64>(&bus.name),
+                device_id: write_fixed::<256>(&bus.device_id),
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_input(id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_input(id, bus_mask, gain, mute);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_bus_gain(id: u64, gain: f32, mute: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_bus_gain(id, gain, mute);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_unit_link(unit_id: u64, bus_id: u64, mode: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_unit_link(unit_id, bus_id, mode);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_headphone_cue(unit_id: u64) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_headphone_cue(unit_id);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_headphone_copy_master(enabled: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .audio
+            .set_headphone_copy_master(enabled);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_enum_devices(
+    kind: u32,
+    out: *mut AudioDeviceInfo,
+    cap: u32,
+) -> i32 {
+    if out.is_null() || cap == 0 {
+        return 0;
+    }
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
+    audio::enumerate_devices(kind, dest) as i32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_device_channels(kind: u32, device_id: *const c_char) -> i32 {
+    audio::device_channels(kind, &read_cstr(device_id))
+}
+
+fn read_cstr(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn write_fixed<const N: usize>(text: &str) -> [u8; N] {
+    let mut buf = [0u8; N];
+    let bytes = text.as_bytes();
+    let n = bytes.len().min(N.saturating_sub(1));
+    buf[..n].copy_from_slice(&bytes[..n]);
+    buf
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_bind_multiview(scene_id: u64, preview_unit: u64, program_unit: u64) -> i32 {
     with_mixer(|mixer| {
         mixer
@@ -1107,11 +1311,9 @@ pub unsafe extern "C" fn mixer_copy_follow_audio(out: *mut f32, cap: u32) -> i32
         for slot in dest.iter_mut().take(n) {
             *slot = shared.monitor_pcm.pop_front().unwrap_or(0.0);
         }
+        let hold = dest.get(n.saturating_sub(1).min(dest.len().saturating_sub(1))).copied().unwrap_or(0.0);
         for slot in dest.iter_mut().skip(n) {
-            *slot = 0.0;
-        }
-        if shared.monitor_pcm.is_empty() {
-            shared.follow_primed = false;
+            *slot = hold;
         }
         n as i32
     })
@@ -1147,6 +1349,30 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
         let shared = mixer.shared.lock().expect("shared");
         let uploads = shared.uploads.lock().expect("uploads");
         let mut n = 0u32;
+        if n < cap {
+            let (left, right) = shared.audio.master_peak();
+            unsafe {
+                *out.add(n as usize) = AudioPeak {
+                    source_id: 0,
+                    left,
+                    right,
+                };
+            }
+            n += 1;
+        }
+        for (id, left, right) in shared.audio.bus_peaks() {
+            if n >= cap {
+                break;
+            }
+            unsafe {
+                *out.add(n as usize) = AudioPeak {
+                    source_id: crate::abi::AUDIO_BUS_PEAK_BASE | id,
+                    left,
+                    right,
+                };
+            }
+            n += 1;
+        }
         for id in uploads.ids() {
             if n >= cap {
                 break;
@@ -1309,7 +1535,7 @@ fn render_loop(
     let mut next = Instant::now();
     let clock_start = Instant::now();
     let mut frame_i = 0u64;
-    let mut audio_acc = 0.0f64;
+    let mut audio_produced = 0u64;
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -1377,8 +1603,19 @@ fn render_loop(
             .frame_buffer_frames
             .clamp(1, 8);
         let now = Instant::now();
-        if next > now {
-            thread::sleep(next - now);
+        if next + frame_dt.saturating_mul(buffer_frames) < now {
+            let target = (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
+            let skip = target.saturating_sub(audio_produced) as usize;
+            if skip > 0 {
+                let audio = shared.lock().expect("shared").audio.clone();
+                uploads.lock().expect("uploads").skip_audio_frames(skip);
+                audio.skip_bus_frames(skip);
+            }
+            audio_produced = target;
+            next = now;
+        }
+        if next > Instant::now() {
+            thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         let skip_compose = Instant::now().saturating_duration_since(next)
             > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
@@ -1618,12 +1855,16 @@ fn render_loop(
                     }
                 }
             }
-            audio_acc += f64::from(AUDIO_RATE) * f64::from(fps_den) / f64::from(fps_num);
-            let audio_frames = audio_acc.floor() as usize;
-            audio_acc -= audio_frames as f64;
+            let target = (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
+            let deficit = target.saturating_sub(audio_produced);
+            let audio_frames = deficit.min(AUDIO_RATE as u64 / 10) as usize;
+            audio_produced += audio_frames as u64;
+            let audio = {
+                let guard = shared.lock().expect("shared");
+                guard.audio.clone()
+            };
             let mut upload_guard = uploads.lock().expect("uploads");
-            let gains = follow_gains(&snapshot, &scene_specs, &upload_guard);
-            let mixed = upload_guard.mix_follow(&gains, audio_frames);
+            let mixed = audio.mix(&mut upload_guard, &snapshot, &scene_specs, audio_frames);
             drop(upload_guard);
             {
                 let mut guard = shared.lock().expect("shared");
@@ -1648,10 +1889,6 @@ fn render_loop(
             }
         }
         next += frame_dt;
-        let now = Instant::now();
-        if next + frame_dt.saturating_mul(buffer_frames) < now {
-            next = now;
-        }
     }
 }
 
@@ -1673,6 +1910,7 @@ fn interleaved_to_packet(interleaved: &[f32], pts: i64) -> AudioPacket {
     }
 }
 
+#[allow(dead_code)]
 fn follow_gains(
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
     scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],

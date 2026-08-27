@@ -26,6 +26,7 @@ pub const OUTPUT_MULTIVIEW: u32 = 2;
 pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
 pub const LABEL_BASE: u64 = 0x0003_0000;
+pub const AUDIO_BUS_PEAK_BASE: u64 = 0x0004_0000;
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 
 pub const OUT_OMT: u32 = 0;

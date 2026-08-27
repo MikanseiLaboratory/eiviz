@@ -1,11 +1,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
 
 const SLOTS: usize = 3;
 pub const AUDIO_RATE: i32 = 48_000;
-const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 4;
+/// ~500 ms of stereo frames at 48 kHz.
+pub const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 2;
+const AUDIO_FIFO_HIGH_FRAMES: usize = AUDIO_FIFO_FRAMES * 4 / 5;
+const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CpuFormat {
@@ -40,6 +46,7 @@ pub struct SourceRing {
     pub gpu: Option<GpuVideoFrame>,
     fifo: VecDeque<f32>,
     last_peak: (f32, f32),
+    last_hold: (f32, f32),
     fifo_primed: bool,
 }
 
@@ -76,6 +83,7 @@ impl SourceRing {
             gpu: None,
             fifo: VecDeque::new(),
             last_peak: (0.0, 0.0),
+            last_hold: (0.0, 0.0),
             fifo_primed: false,
         }
     }
@@ -114,7 +122,7 @@ impl SourceRing {
         while self.fifo.len() > cap {
             self.fifo.pop_front();
         }
-        if self.fifo.len() >= (AUDIO_RATE as usize) / 10 * 2 {
+        if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.fifo_primed = true;
         }
         self.audio = Some(packet);
@@ -124,6 +132,7 @@ impl SourceRing {
         self.fifo.clear();
         self.audio = None;
         self.last_peak = (0.0, 0.0);
+        self.last_hold = (0.0, 0.0);
         self.fifo_primed = false;
     }
 
@@ -131,9 +140,21 @@ impl SourceRing {
         if !self.fifo_primed {
             return (0.0, 0.0);
         }
-        let left = self.fifo.pop_front().unwrap_or(0.0);
-        let right = self.fifo.pop_front().unwrap_or(left);
-        (left, right)
+        if self.fifo.len() >= 2 {
+            let left = self.fifo.pop_front().unwrap_or(self.last_hold.0);
+            let right = self.fifo.pop_front().unwrap_or(left);
+            self.last_hold = (left, right);
+            (left, right)
+        } else {
+            self.last_hold
+        }
+    }
+
+    pub fn skip_audio_frames(&mut self, frames: usize) {
+        let n = frames.saturating_mul(2).min(self.fifo.len());
+        if n > 0 {
+            self.fifo.drain(..n);
+        }
     }
 
     pub fn latest_rgba_or_packed(&self) -> &[u8] {
@@ -166,6 +187,7 @@ impl UploadStore {
             ring.audio = old.audio;
             ring.fifo = old.fifo;
             ring.last_peak = old.last_peak;
+            ring.last_hold = old.last_hold;
             ring.fifo_primed = old.fifo_primed;
             ring.gpu = old.gpu;
         }
@@ -236,6 +258,34 @@ impl UploadStore {
         }
     }
 
+    pub fn fifo_over_high_water(&self, id: u64) -> bool {
+        self.fifo_frames(id) >= AUDIO_FIFO_HIGH_FRAMES
+    }
+
+    pub fn primed_ids(&self) -> Vec<u64> {
+        self.sources
+            .iter()
+            .filter(|(_, ring)| ring.fifo_primed)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
+        let Some(ring) = self.sources.get_mut(&id) else {
+            return vec![(0.0, 0.0); frames];
+        };
+        (0..frames).map(|_| ring.pop_stereo()).collect()
+    }
+
+    pub fn skip_audio_frames(&mut self, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        for ring in self.sources.values_mut() {
+            ring.skip_audio_frames(frames);
+        }
+    }
+
     pub fn flush_audio(&mut self, id: u64) {
         if let Some(ring) = self.sources.get_mut(&id) {
             ring.clear_audio();
@@ -280,6 +330,20 @@ impl UploadStore {
     }
 }
 
+pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
+    for _ in 0..8 {
+        let over = uploads
+            .lock()
+            .expect("uploads")
+            .fifo_over_high_water(id);
+        if !over {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    uploads.lock().expect("uploads").ingest_audio(id, packet);
+}
+
 fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
     let channels = packet.channels.max(1) as usize;
     let src_rate = packet.sample_rate.max(1) as usize;
@@ -298,14 +362,33 @@ fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
     }
     .max(1)
     .min(values.len() / channels.max(1));
+    if src_rate == AUDIO_RATE as usize {
+        let mut out = Vec::with_capacity(src_frames * 2);
+        for i in 0..src_frames {
+            let left = values[i];
+            let right = if channels > 1 {
+                values.get(src_frames + i).copied().unwrap_or(left)
+            } else {
+                left
+            };
+            out.push(left);
+            out.push(right);
+        }
+        return out;
+    }
     let dst_frames = (src_frames * AUDIO_RATE as usize + src_rate / 2) / src_rate;
     let mut out = Vec::with_capacity(dst_frames * 2);
+    let last = src_frames.saturating_sub(1);
     for i in 0..dst_frames {
         let src = i as f64 * src_rate as f64 / AUDIO_RATE as f64;
-        let idx = (src as usize).min(src_frames.saturating_sub(1));
-        let left = values[idx];
+        let idx = (src.floor() as usize).min(last);
+        let frac = (src - idx as f64) as f32;
+        let nxt = (idx + 1).min(last);
+        let left = values[idx] * (1.0 - frac) + values[nxt] * frac;
         let right = if channels > 1 {
-            values.get(src_frames + idx).copied().unwrap_or(left)
+            let a = values.get(src_frames + idx).copied().unwrap_or(left);
+            let b = values.get(src_frames + nxt).copied().unwrap_or(a);
+            a * (1.0 - frac) + b * frac
         } else {
             left
         };
@@ -313,6 +396,31 @@ fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
         out.push(right);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linear_resample_48k_passthrough() {
+        let mut pcm = Vec::new();
+        for sample in [0.0f32, 0.5, 1.0] {
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        let packet = AudioPacket {
+            timestamp: 0,
+            sample_rate: 48_000,
+            channels: 1,
+            samples_per_channel: 3,
+            pcm_planar_f32: pcm,
+        };
+        let out = resample_to_stereo_48k(&packet);
+        assert_eq!(out.len(), 6);
+        assert!((out[0] - 0.0).abs() < 1e-6);
+        assert!((out[2] - 0.5).abs() < 1e-6);
+        assert!((out[4] - 1.0).abs() < 1e-6);
+    }
 }
 
 fn peak_planar(audio: &AudioPacket) -> (f32, f32) {

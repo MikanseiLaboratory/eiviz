@@ -14,6 +14,7 @@ internal static partial class MixerNative
     internal const ulong SceneBase = 0x0001_0000;
     internal const ulong MultiviewBase = 0x0002_0000;
     internal const ulong LabelBase = 0x0003_0000;
+    internal const ulong AudioBusPeakBase = 0x0004_0000UL;
     internal const uint OutputProgram = 0;
     internal const uint OutputPreview = 1;
     internal const uint OutputMultiview = 2;
@@ -37,6 +38,8 @@ internal static partial class MixerNative
     internal const ulong MuBusPreview = 0x1000_0000_0000_0000UL;
     internal const ulong MuIdMask = 0x0FFF_FFFF_FFFF_FFFFUL;
     internal static uint VideoFormat = FormatUyvy;
+
+    internal static float MixerGain(float gain) => gain < 0f ? 1f : gain;
 
     internal static ulong SceneGpuId(ulong sceneId) => SceneBase | sceneId;
     internal static ulong MuProgram(ulong unitId) => MuSourceFlag | (unitId & MuIdMask);
@@ -101,6 +104,39 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_flush_audio")]
     internal static partial int FlushAudio(ulong id);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_upsert", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioBusUpsert(ulong id, string name, uint role, uint deviceKind, string deviceId, int mapLeft, int mapRight, uint exclusive);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_remove")]
+    internal static partial int AudioBusRemove(ulong id);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_count")]
+    internal static partial int AudioBusCount();
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_get")]
+    internal static unsafe partial int AudioBusGet(uint index, MixerAudioBusInfo* info);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_input")]
+    internal static partial int AudioSetInput(ulong id, uint busMask, float gain, uint mute);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_bus_gain")]
+    internal static partial int AudioSetBusGain(ulong id, float gain, uint mute);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_unit_link")]
+    internal static partial int AudioSetUnitLink(ulong unitId, ulong busId, uint mode);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_headphone_cue")]
+    internal static partial int AudioSetHeadphoneCue(ulong unitId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_headphone_copy_master")]
+    internal static partial int AudioSetHeadphoneCopyMaster(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_enum_devices")]
+    internal static unsafe partial int AudioEnumDevices(uint kind, MixerAudioDeviceInfo* devices, uint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_channels", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioDeviceChannels(uint kind, string deviceId);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_bind_multiview")]
     internal static partial int BindMultiview(ulong sceneId, ulong previewUnit, ulong programUnit);
@@ -306,4 +342,27 @@ internal struct UnitState
     public ulong Mv13;
     public ulong Mv14;
     public ulong Mv15;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixerAudioBusInfo
+{
+    public ulong Id;
+    public uint Role;
+    public uint DeviceKind;
+    public int MapLeft;
+    public int MapRight;
+    public uint Exclusive;
+    public uint Bit;
+    public fixed byte Name[64];
+    public fixed byte DeviceId[256];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixerAudioDeviceInfo
+{
+    public uint Kind;
+    public uint Channels;
+    public fixed byte Id[256];
+    public fixed byte Name[256];
 }

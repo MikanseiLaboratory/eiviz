@@ -10,7 +10,7 @@ use openmediatransport::{
 };
 
 use crate::abi::FMT_BGRA;
-use crate::upload::{AudioPacket, CpuFormat, UploadStore};
+use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore};
 
 pub struct OmtReceiver {
     stop: Arc<AtomicBool>,
@@ -57,9 +57,8 @@ impl OmtReceiver {
                             .push(source_id, &frame.pixels, stride, frame.timestamp)
                             .ok();
                     }
-                    let mut store = uploads.lock().expect("uploads lock");
                     while let Some(audio) = session.try_recv_audio() {
-                        store.ingest_audio(source_id, to_audio(audio));
+                        ingest_audio_throttled(&uploads, source_id, to_audio(audio));
                     }
                 }
                 session.disconnect();

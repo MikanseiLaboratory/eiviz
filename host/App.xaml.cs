@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Media;
 
 namespace Eiviz.Host;
 
@@ -73,6 +74,7 @@ public partial class App : Application
             Commands.PushUnitStateNow(unit.Id, CommandQueue.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
         }
         AttachInputs();
+        AudioGraphSync.Push(Session);
         foreach (var output in Session.Outputs)
         {
             if (output.Transport != OutputTransport.Omt)

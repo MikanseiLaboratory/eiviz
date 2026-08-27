@@ -51,7 +51,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             ApplyAspect();
-            WaveOutMonitor.EnsureStarted();
+            AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
         };
@@ -337,22 +337,48 @@ public partial class MainWindow : Window
     {
         MeterPanel.Children.Clear();
         _meters.Clear();
-        AddMeter(0, "Master");
+        foreach (var bus in _session.Buses)
+            AddBusMeter(bus);
         foreach (var input in _session.Inputs)
-            AddMeter(input.Id, input.Name);
+            AddInputMeter(input);
     }
 
-    private void AddMeter(ulong id, string name)
+    private void AddBusMeter(AudioBusEntry bus)
     {
-        var strip = new MeterStrip(name);
-        _meters[id] = strip;
+        var strip = new MeterStrip(MeterKind.Bus, bus.Id, bus.Name, bus.Gain, bus.Mute);
+        strip.FaderChanged += (_, gain, mute) =>
+        {
+            bus.Gain = gain;
+            bus.Mute = mute;
+            MixerNative.AudioSetBusGain(bus.Id, gain, mute ? 1u : 0u);
+        };
+        _meters[MixerNative.AudioBusPeakBase | bus.Id] = strip;
+        MeterPanel.Children.Add(strip);
+    }
+
+    private void AddInputMeter(InputEntry input)
+    {
+        var strip = new MeterStrip(MeterKind.Input, input.Id, input.Name, input.Gain, input.Mute);
+        strip.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
+        strip.BusMaskChanged += (_, mask) =>
+        {
+            input.BusMask = mask;
+            MixerNative.AudioSetInput(input.Id, mask, MixerNative.MixerGain(input.Gain), input.Mute ? 1u : 0u);
+        };
+        strip.FaderChanged += (_, gain, mute) =>
+        {
+            input.Gain = gain;
+            input.Mute = mute;
+            MixerNative.AudioSetInput(input.Id, input.BusMask == 0 ? 1u : input.BusMask, gain, mute ? 1u : 0u);
+        };
+        _meters[input.Id] = strip;
         MeterPanel.Children.Add(strip);
     }
 
     private void TickMeters()
     {
         var peaks = new Dictionary<ulong, (float L, float R)>();
-        var buffer = new AudioPeak[32];
+        var buffer = new AudioPeak[64];
         unsafe
         {
             fixed (AudioPeak* ptr = buffer)
@@ -362,20 +388,15 @@ public partial class MainWindow : Window
                     peaks[buffer[i].SourceId] = (buffer[i].Left, buffer[i].Right);
             }
         }
-        foreach (var (id, strip) in _meters)
+        foreach (var (_, strip) in _meters)
         {
-            if (id == 0)
+            var key = strip.Kind == MeterKind.Bus ? MixerNative.AudioBusPeakBase | strip.TargetId : strip.TargetId;
+            if (strip.Kind == MeterKind.Bus && strip.TargetId == 1 && peaks.TryGetValue(0, out var master))
             {
-                float left = 0, right = 0;
-                foreach (var peak in peaks.Values)
-                {
-                    left = Math.Max(left, peak.L);
-                    right = Math.Max(right, peak.R);
-                }
-                strip.SetLevels(left, right);
+                strip.SetLevels(master.L, master.R);
                 continue;
             }
-            if (peaks.TryGetValue(id, out var pair))
+            if (peaks.TryGetValue(key, out var pair))
                 strip.SetLevels(pair.L, pair.R);
             else
                 strip.Decay();
@@ -547,7 +568,8 @@ public partial class MainWindow : Window
             ColorR = dialog.ColorR,
             ColorG = dialog.ColorG,
             ColorB = dialog.ColorB,
-            Scroll = dialog.Scroll
+            Scroll = dialog.Scroll,
+            BusMask = 1
         };
         try
         {
@@ -585,6 +607,7 @@ public partial class MainWindow : Window
             return;
         }
         _session.Inputs.Add(input);
+        MixerNative.AudioSetInput(input.Id, input.BusMask, 1, 0);
         InputList.Items.Refresh();
         RebuildMeters();
     }
@@ -602,7 +625,7 @@ public partial class MainWindow : Window
             return;
         }
         Commands.TryEnqueue(new DropSourceCommand(input.Id));
-        WaveOutMonitor.Remove(input.Id);
+        MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
             scene.Layers.RemoveAll(layer => layer.InputId == input.Id);
         foreach (var unit in _session.Units)
@@ -711,6 +734,7 @@ public partial class MainWindow : Window
         _tbarPresetIndex = 0;
         RebuildTransitions();
         RebuildOverlayToggles();
+        MixerNative.AudioSetHeadphoneCue(unit.Id);
         UpdateStatus();
     }
 
@@ -726,17 +750,20 @@ public partial class MainWindow : Window
             FpsDen = _session.Settings.MasterFpsDen
         };
         draft.EnsureDefaultTransitions();
-        var dialog = new MixingUnitWindow(draft) { Owner = this };
+        var dialog = new MixingUnitWindow(draft, _session.Buses) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         var unit = dialog.Result;
         unit.Id = _session.NextUnitId++;
         unit.EnsureDefaultTransitions();
         unit.EnsureDefaultTiles();
+        unit.AudioBusId = dialog.Result.AudioBusId == 0 ? 1 : dialog.Result.AudioBusId;
+        unit.AudioLink = dialog.Result.AudioLink;
         MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
             "Configure Mixing Unit");
+        MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
         var preview = _session.Scenes.Count > 0 ? _session.Scenes[0].GpuId : MixerNative.Bars;
         var program = _session.Scenes.Count > 1 ? _session.Scenes[1].GpuId : preview;
         Commands.PushUnitStateNow(unit.Id, CommandQueue.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
@@ -748,7 +775,7 @@ public partial class MainWindow : Window
     private void EditUnit_Click(object sender, RoutedEventArgs e)
     {
         var unit = SelectedUnit;
-        var dialog = new MixingUnitWindow(unit) { Owner = this };
+        var dialog = new MixingUnitWindow(unit, _session.Buses) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         unit.Name = dialog.Result.Name;
@@ -756,9 +783,12 @@ public partial class MainWindow : Window
         unit.Height = dialog.Result.Height;
         unit.FpsNum = dialog.Result.FpsNum;
         unit.FpsDen = dialog.Result.FpsDen;
+        unit.AudioBusId = dialog.Result.AudioBusId;
+        unit.AudioLink = dialog.Result.AudioLink;
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
             "Configure Mixing Unit");
+        MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
         foreach (var scene in _session.Scenes)
             Commands.TryEnqueue(new DefineSceneCommand(scene, unit.Width, unit.Height));
         foreach (var layout in _session.Multiviews)
@@ -850,11 +880,17 @@ public partial class MainWindow : Window
         _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
+        _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
+        _session.Buses.Clear();
+        foreach (var bus in dialog.Buses)
+            _session.Buses.Add(bus);
+        AudioGraphSync.Push(_session);
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),
             "Set frame buffer");
         RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
+        RebuildMeters();
         UpdateStatus();
     }
 
