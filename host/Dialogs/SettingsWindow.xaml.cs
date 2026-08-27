@@ -123,7 +123,7 @@ public partial class SettingsWindow : Window
         Outputs.Add(new OutputEntry
         {
             Id = _nextOutputId++,
-            Name = "eiviz-out",
+            Name = NextOutputName(),
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1
@@ -326,6 +326,21 @@ public partial class SettingsWindow : Window
                 if (box.SelectedItem is MixingUnitEntry unit)
                     output.UnitId = unit.Id;
                 break;
+        }
+    }
+
+    private string NextOutputName()
+    {
+        const string prefix = "eiviz-out";
+        if (Outputs.TrueForAll(item => item.Name != prefix)
+            && _session.Outputs.TrueForAll(item => item.Name != prefix))
+            return prefix;
+        for (var i = 2; ; i++)
+        {
+            var name = $"{prefix}-{i}";
+            if (Outputs.TrueForAll(item => item.Name != name)
+                && _session.Outputs.TrueForAll(item => item.Name != name))
+                return name;
         }
     }
 

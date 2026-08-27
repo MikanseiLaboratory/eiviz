@@ -1,3 +1,4 @@
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -92,10 +93,15 @@ impl ProgramSender {
         let sender = Sender::create(name, FrameType::VIDEO | FrameType::AUDIO)
             .map_err(|error| error.to_string())?;
         let port = sender.port();
-        let discovery = Discovery::new().ok().and_then(|mut discovery| {
-            discovery.register(name, port).ok()?;
-            Some(discovery)
-        });
+        let advertised = name.to_string();
+        let discovery = panic::catch_unwind(AssertUnwindSafe(|| {
+            Discovery::new().ok().and_then(|mut discovery| {
+                discovery.register(&advertised, port).ok()?;
+                Some(discovery)
+            })
+        }))
+        .ok()
+        .flatten();
         Ok(Self {
             sender,
             unit_id: 0,

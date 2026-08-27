@@ -867,12 +867,18 @@ public partial class MainWindow : Window
 
     private void ApplyOutputs(IReadOnlyList<OutputEntry> outputs)
     {
-        foreach (var existing in _session.Outputs)
+        var next = outputs.ToList();
+        var previous = _session.Outputs.ToList();
+        var nextIds = next.Select(item => item.Id).ToHashSet();
+        foreach (var existing in previous.Where(item => !nextIds.Contains(item.Id)))
             Commands.TryEnqueue(new RemoveOutputCommand(existing.Id));
-        _session.Outputs.Clear();
-        foreach (var output in outputs)
+        foreach (var output in next)
         {
-            _session.Outputs.Add(output);
+            var prior = previous.FirstOrDefault(item => item.Id == output.Id);
+            if (prior is not null && SameOutput(prior, output))
+                continue;
+            if (prior is not null)
+                Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
             if (output.Transport == OutputTransport.Omt)
             {
                 Commands.TryEnqueue(new AddOutputCommand(output));
@@ -887,7 +893,18 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, ex.Message, "Output");
             }
         }
+        _session.Outputs.Clear();
+        foreach (var output in next)
+            _session.Outputs.Add(output);
     }
+
+    private static bool SameOutput(OutputEntry left, OutputEntry right) =>
+        left.Id == right.Id
+        && left.Name == right.Name
+        && left.Transport == right.Transport
+        && left.SourceKind == right.SourceKind
+        && left.SourceId == right.SourceId
+        && left.UnitId == right.UnitId;
 
     private void UpdateStatus()
     {

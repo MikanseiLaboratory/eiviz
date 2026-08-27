@@ -7,7 +7,7 @@ use eiviz_mixer::{
     mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame,
     mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
     mixer_unit_set_state, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK,
-    OUT_NDI, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM,
+    OUT_NDI, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, OUT_OMT,
 };
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
 
@@ -103,6 +103,30 @@ fn dx12_compose_omt_and_program_out() {
         thread::sleep(Duration::from_millis(16));
     }
     thread::sleep(Duration::from_millis(120));
+    unsafe {
+        assert_eq!(
+            mixer_output_add(
+                101,
+                OUT_OMT,
+                CString::new("eiviz-out-a").unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1
+            ),
+            OK
+        );
+        assert_eq!(
+            mixer_output_add(
+                102,
+                OUT_OMT,
+                CString::new("eiviz-out-b").unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1
+            ),
+            OK
+        );
+    }
     mixer_destroy();
 }
 
@@ -176,6 +200,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
         },
         opacity: 1.0,
         z: 0,
+        ..OverlayDesc::default()
     };
     state.mv_slots[0] = scene_id(1);
     state.mv_slots[1] = SRC_BLUE;

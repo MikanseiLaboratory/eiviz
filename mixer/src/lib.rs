@@ -19,6 +19,7 @@ pub use abi::{
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, CStr};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -818,30 +819,38 @@ pub unsafe extern "C" fn mixer_output_add(
         OUT_OMT => {}
         _ => return ERR_INVALID_ARGUMENT,
     }
-    with_mixer(|mixer| match ProgramSender::start(&name) {
-        Ok(sender) => {
-            let video_sub = Arc::new(AtomicBool::new(false));
-            mixer.shared.lock().expect("shared").outputs.insert(
-                output_id,
-                LiveOutput {
-                    transport,
-                    source_kind,
-                    source_id,
-                    unit_id,
-                    video_sub: Arc::clone(&video_sub),
-                },
-            );
-            let _ = mixer.send_tx.send(SendCmd::Add {
-                output_id,
-                sender,
-                video_sub,
+    let started = panic::catch_unwind(AssertUnwindSafe(|| ProgramSender::start(&name)));
+    let sender = match started {
+        Ok(Ok(sender)) => sender,
+        Ok(Err(error)) => {
+            let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+            return ERR_IO;
+        }
+        Err(_) => {
+            let _ = with_mixer(|mixer| {
+                set_error(&mixer.shared, "OMT sender panicked during create")
             });
-            OK
+            return ERR_IO;
         }
-        Err(error) => {
-            set_error(&mixer.shared, error);
-            ERR_IO
-        }
+    };
+    with_mixer(|mixer| {
+        let video_sub = Arc::new(AtomicBool::new(false));
+        mixer.shared.lock().expect("shared").outputs.insert(
+            output_id,
+            LiveOutput {
+                transport,
+                source_kind,
+                source_id,
+                unit_id,
+                video_sub: Arc::clone(&video_sub),
+            },
+        );
+        let _ = mixer.send_tx.send(SendCmd::Add {
+            output_id,
+            sender,
+            video_sub,
+        });
+        OK
     })
     .unwrap_or_else(|code| code)
 }
@@ -1395,9 +1404,11 @@ fn render_loop(
                     composer.pack_aux(&device, &mut encoder, *unit_id, need_prv, false);
                     if pack_pgm {
                         if let Some(packed) = composer.packed_texture(*unit_id, OUTPUT_PROGRAM) {
-                            let rb = readbacks.ensure(&device, *unit_id, *width, *height);
+                            let width = packed.size().width.saturating_mul(2).max(2);
+                            let height = packed.size().height.max(1);
+                            let rb = readbacks.ensure(&device, *unit_id, width, height);
                             rb.copy_from(&mut encoder, packed);
-                            packed_copies.push((*unit_id, *width, *height));
+                            packed_copies.push((*unit_id, width, height));
                         }
                     }
                 }
@@ -1421,17 +1432,9 @@ fn render_loop(
                         _ => None,
                     };
                     if let Some(texture) = packed {
-                        let (w, h) = snapshot
-                            .iter()
-                            .find(|(id, ..)| *id == *unit_id)
-                            .map(|(_, w, h, ..)| (*w, *h))
-                            .or_else(|| {
-                                scene_specs
-                                    .iter()
-                                    .find(|(id, ..)| *id == *source_id)
-                                    .map(|(_, w, h, _)| (*w, *h))
-                            })
-                            .unwrap_or((1920, 1080));
+                        let size = texture.size();
+                        let w = size.width.saturating_mul(2).max(2);
+                        let h = size.height.max(1);
                         let key = 0x0100_0000_0000_0000 | *output_id;
                         let rb = readbacks.ensure(&device, key, w, h);
                         rb.copy_from(&mut encoder, texture);
@@ -1688,9 +1691,16 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>) {
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
-        for (sender, video_sub) in senders.values_mut() {
-            let _ = sender.pump();
-            video_sub.store(sender.video_subscribed(), Ordering::Relaxed);
+        let mut dead = Vec::new();
+        for (&id, (sender, video_sub)) in senders.iter_mut() {
+            let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump()));
+            match pumped {
+                Ok(_) => video_sub.store(sender.video_subscribed(), Ordering::Relaxed),
+                Err(_) => dead.push(id),
+            }
+        }
+        for id in dead {
+            senders.remove(&id);
         }
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(SendCmd::Shutdown) => return,
@@ -1727,12 +1737,14 @@ fn apply_send_cmd(
             fps_d,
         } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _ = sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d);
+                let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+                    sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
+                }));
             }
         }
         SendCmd::Audio { output_id, packet } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _ = sender.send_audio(&packet);
+                let _ = panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet)));
             }
         }
         SendCmd::Shutdown => {}

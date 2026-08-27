@@ -197,6 +197,8 @@ impl Composer {
         }
         self.mix_groups.remove(&unit_id);
         self.pack_groups.remove(&unit_id);
+        self.pack_groups.remove(&mixing_unit_preview(unit_id));
+        self.pack_groups.remove(&mixing_unit_multiview(unit_id));
         self.blit_groups.remove(&mixing_unit_source(unit_id));
         self.blit_groups.remove(&mixing_unit_preview(unit_id));
         self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
@@ -689,9 +691,13 @@ impl Composer {
             },
         );
         let dest = self.units.get(&unit_id).ok_or("unit missing")?.mixed_view.clone();
+        let group = self
+            .mix_groups
+            .get(&unit_id)
+            .ok_or("mix bind group missing")?;
         let mut pass = begin(encoder, &dest);
         pass.set_pipeline(&self.mix);
-        pass.set_bind_group(0, &self.mix_groups[&unit_id], &[offset]);
+        pass.set_bind_group(0, group, &[offset]);
         pass.draw(0..3, 0..1);
         Ok(())
     }
@@ -708,9 +714,13 @@ impl Composer {
             .get(&unit_id)
             .and_then(|unit| unit.packed_view.clone())
             .ok_or("packed missing")?;
-        let mut pass = begin(encoder, &dest);
+        let group = self
+            .pack_groups
+            .get(&unit_id)
+            .ok_or("pack bind group missing")?;
+        let mut pass = begin_clear(encoder, &dest);
         pass.set_pipeline(&self.pack);
-        pass.set_bind_group(0, &self.pack_groups[&unit_id], &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
         Ok(())
     }
@@ -1183,9 +1193,12 @@ impl Composer {
         dest: &wgpu::TextureView,
     ) {
         self.ensure_pack_src(device, key, src);
-        let mut pass = begin(encoder, dest);
+        let Some(group) = self.pack_groups.get(&key) else {
+            return;
+        };
+        let mut pass = begin_clear(encoder, dest);
         pass.set_pipeline(&self.pack);
-        pass.set_bind_group(0, &self.pack_groups[&key], &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 

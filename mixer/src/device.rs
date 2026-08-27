@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -32,6 +34,9 @@ impl GpuDevice {
 
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        device.on_uncaptured_error(Arc::new(|error| {
+            eprintln!("eiviz wgpu: {error}");
+        }));
 
         Ok(Self {
             instance,

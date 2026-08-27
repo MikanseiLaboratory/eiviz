@@ -50,6 +50,11 @@ impl UnitReadback {
         if self.slots[self.write].waiting {
             return;
         }
+        let size = packed.size();
+        let packed_w = (self.width / 2).max(1);
+        if size.width != packed_w || size.height != self.height {
+            return;
+        }
         let slot = &self.slots[self.write];
         encoder.copy_texture_to_buffer(
             packed.as_image_copy(),
@@ -62,7 +67,7 @@ impl UnitReadback {
                 },
             },
             wgpu::Extent3d {
-                width: (self.width / 2).max(1),
+                width: packed_w,
                 height: self.height,
                 depth_or_array_layers: 1,
             },
