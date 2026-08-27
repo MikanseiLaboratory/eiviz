@@ -221,6 +221,7 @@ dependencies = [
  "thiserror",
  "vmx",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

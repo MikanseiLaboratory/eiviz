@@ -392,16 +392,15 @@ public partial class MainWindow : Window
             VideoBar.Visibility = Visibility.Collapsed;
             return;
         }
-        var pump = Commands.TryGetVideo(input.Id);
-        if (pump is null || !pump.IsFile)
+        if (!TryVideoInfo(input.Id, out var info) || info.IsFile == 0)
         {
             VideoBar.Visibility = Visibility.Collapsed;
             return;
         }
         VideoBar.Visibility = Visibility.Visible;
         VideoTitle.Text = input.Name;
-        var duration = pump.DurationHns;
-        var position = Math.Max(0, pump.PositionHns);
+        var duration = info.DurationHns;
+        var position = Math.Max(0, info.PositionHns);
         if (duration > 0)
         {
             position = Math.Min(position, duration);
@@ -425,8 +424,18 @@ public partial class MainWindow : Window
                 _videoSeekSuppress = false;
             }
         }
-        VideoPlay.Content = pump.IsPlaying ? "❚❚" : "▶";
+        VideoPlay.Content = info.Playing != 0 ? "❚❚" : "▶";
     }
+
+    private static bool TryVideoInfo(ulong id, out MixerVideoInfo info) =>
+        MixerNative.TryCopyVideoInfo(id, out info);
+
+    private ulong? SelectedVideoId() =>
+        InputList.SelectedItem is InputEntry { Kind: InputKind.Video } input
+            ? input.Id
+            : null;
+
+    private void InputList_SelectionChanged(object sender, SelectionChangedEventArgs e) => TickVideo();
 
     private static string FormatHns(long hns)
     {
@@ -434,29 +443,20 @@ public partial class MainWindow : Window
         return time.ToString(time.TotalHours >= 1 ? @"h\:mm\:ss" : @"mm\:ss");
     }
 
-    private MfFramePump? SelectedVideo() =>
-        InputList.SelectedItem is InputEntry { Kind: InputKind.Video } input
-            ? Commands.TryGetVideo(input.Id)
-            : null;
-
-    private void InputList_SelectionChanged(object sender, SelectionChangedEventArgs e) => TickVideo();
-
     private void VideoPlay_Click(object sender, RoutedEventArgs e)
     {
-        var pump = SelectedVideo();
-        if (pump is null)
+        if (SelectedVideoId() is not ulong id || !TryVideoInfo(id, out var info))
             return;
-        pump.SetPlaying(!pump.IsPlaying);
+        MixerNative.VideoSetPlaying(id, info.Playing == 0 ? 1u : 0u);
         TickVideo();
     }
 
     private void VideoRestart_Click(object sender, RoutedEventArgs e)
     {
-        var pump = SelectedVideo();
-        if (pump is null)
+        if (SelectedVideoId() is not ulong id)
             return;
-        pump.RestartPlayback();
-        pump.SetPlaying(true);
+        MixerNative.VideoSeek(id, 0);
+        MixerNative.VideoSetPlaying(id, 1);
         TickVideo();
     }
 
@@ -479,20 +479,18 @@ public partial class MainWindow : Window
     {
         if (_videoSeekSuppress)
             return;
-        var pump = SelectedVideo();
-        if (pump is null || pump.DurationHns <= 0)
+        if (SelectedVideoId() is not ulong id || !TryVideoInfo(id, out var info) || info.DurationHns <= 0)
             return;
-        var duration = pump.DurationHns;
+        var duration = info.DurationHns;
         VideoTimeText.Text = $"{FormatHns((long)(e.NewValue * duration))} / {FormatHns((long)((1 - e.NewValue) * duration))} / {FormatHns(duration)}";
         if (!_videoSeeking)
-            pump.Seek((long)(Math.Clamp(e.NewValue, 0, 1) * duration));
+            MixerNative.VideoSeek(id, (long)(Math.Clamp(e.NewValue, 0, 1) * duration));
     }
 
     private void SeekFromSlider()
     {
-        var pump = SelectedVideo();
-        if (pump is not null && pump.DurationHns > 0)
-            pump.Seek((long)(Math.Clamp(VideoSeek.Value, 0, 1) * pump.DurationHns));
+        if (SelectedVideoId() is ulong id && TryVideoInfo(id, out var info) && info.DurationHns > 0)
+            MixerNative.VideoSeek(id, (long)(Math.Clamp(VideoSeek.Value, 0, 1) * info.DurationHns));
     }
 
     private void ApplyAspect()
@@ -851,7 +849,7 @@ public partial class MainWindow : Window
 
     private void RestartMediaPumps()
     {
-        MfFramePump.InternalFormat = _session.Settings.InternalColorFormat == InternalColorFormat.Bgra
+        MixerNative.VideoFormat = _session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra
             : MixerNative.FormatUyvy;
         foreach (var input in _session.Inputs)

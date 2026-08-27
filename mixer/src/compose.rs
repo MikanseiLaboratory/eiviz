@@ -265,6 +265,35 @@ impl Composer {
             }
             let packed = matches!(ring.format, CpuFormat::Uyvy | CpuFormat::Uyva);
             let bgra = ring.format == CpuFormat::Bgra;
+            if let Some(frame) = ring.gpu.as_ref() {
+                let needs_new = self.sources.get(id).is_none_or(|gpu| {
+                    gpu.width != frame.width
+                        || gpu.height != frame.height
+                        || gpu.packed
+                        || gpu.uploaded_pts != frame.pts
+                });
+                if needs_new {
+                    self.blit_groups.remove(id);
+                    self.uyvy_groups.remove(id);
+                    self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+                    self.sources.insert(
+                        *id,
+                        SourceGpu {
+                            texture: frame.texture.clone(),
+                            view: frame.view.clone(),
+                            width: frame.width,
+                            height: frame.height,
+                            packed: false,
+                            bgra: false,
+                            uploaded_pts: frame.pts,
+                        },
+                    );
+                }
+                continue;
+            }
+            if ring.format == CpuFormat::GpuRgba {
+                continue;
+            }
             let tex_w = if packed { ring.width / 2 } else { ring.width };
             let needs_new = self.sources.get(id).is_none_or(|gpu| {
                 gpu.width != tex_w
@@ -1056,6 +1085,10 @@ impl Composer {
                 _ => unit.mixed_view.clone(),
             })
         })
+    }
+
+    pub fn source_is_packed(&self, source_id: u64) -> bool {
+        self.sources.get(&source_id).is_some_and(|gpu| gpu.packed)
     }
 
     pub fn packed_texture(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {

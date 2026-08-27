@@ -36,6 +36,7 @@ internal static partial class MixerNative
     internal const ulong MuSourceFlag = 0x8000_0000_0000_0000UL;
     internal const ulong MuBusPreview = 0x1000_0000_0000_0000UL;
     internal const ulong MuIdMask = 0x0FFF_FFFF_FFFF_FFFFUL;
+    internal static uint VideoFormat = FormatUyvy;
 
     internal static ulong SceneGpuId(ulong sceneId) => SceneBase | sceneId;
     internal static ulong MuProgram(ulong unitId) => MuSourceFlag | (unitId & MuIdMask);
@@ -119,6 +120,18 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_load_still", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int LoadStill(ulong id, string path);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_start", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int VideoStart(ulong id, string path, uint capture, uint format);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_playing")]
+    internal static partial int VideoSetPlaying(ulong id, uint playing);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_seek")]
+    internal static partial int VideoSeek(ulong id, long hns);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_copy_info")]
+    internal static unsafe partial int CopyVideoInfo(ulong id, MixerVideoInfo* info);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_connect", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ConnectOmt(ulong id, string address);
 
@@ -186,6 +199,17 @@ internal static partial class MixerNative
         }
     }
 
+    internal static bool TryCopyVideoInfo(ulong id, out MixerVideoInfo info)
+    {
+        unsafe
+        {
+            var local = stackalloc MixerVideoInfo[1];
+            var code = CopyVideoInfo(id, local);
+            info = local[0];
+            return code == 0;
+        }
+    }
+
     internal static void ThrowIfFailed(int code, string action)
     {
         if (code == 0)
@@ -193,6 +217,15 @@ internal static partial class MixerNative
         var detail = LastErrorText();
         throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? $"{action} failed ({code})." : $"{action}: {detail}");
     }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerVideoInfo
+{
+    public uint Playing;
+    public uint IsFile;
+    public long PositionHns;
+    public long DurationHns;
 }
 
 [StructLayout(LayoutKind.Sequential)]

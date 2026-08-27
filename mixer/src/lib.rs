@@ -2,7 +2,10 @@
 
 mod abi;
 mod compose;
+mod convert;
 mod device;
+mod dxgi;
+mod media;
 mod omt;
 mod pool;
 mod present;
@@ -16,6 +19,7 @@ pub use abi::{
     SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
     SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
 };
+pub use media::MixerVideoInfo;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, CStr};
@@ -28,6 +32,8 @@ use std::time::{Duration, Instant};
 
 use compose::{Composer, Generator};
 use device::GpuDevice;
+use dxgi::GpuVideoContext;
+use media::VideoPump;
 use omt::{OmtReceiver, ProgramSender};
 use present::Presenters;
 use readback::ReadbackStore;
@@ -64,7 +70,9 @@ struct Shared {
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, (u32, u32, Arc<[crate::abi::OverlayDesc]>)>,
     uploads: Arc<Mutex<UploadStore>>,
+    gpu_video: GpuVideoContext,
     receivers: HashMap<u64, OmtReceiver>,
+    videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
     multiview_binds: HashMap<u64, (u64, u64)>,
@@ -189,6 +197,13 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         Ok(device) => device,
         Err(_) => return ERR_DEVICE,
     };
+    let gpu_video = match GpuVideoContext::new(&device) {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            eprintln!("eiviz dxgi video: {error}");
+            return ERR_DEVICE;
+        }
+    };
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let shared = Arc::new(Mutex::new(Shared {
         master_fps_num: fps_num,
@@ -196,7 +211,9 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         units: HashMap::new(),
         scenes: HashMap::new(),
         uploads: Arc::clone(&uploads),
+        gpu_video: gpu_video.clone(),
         receivers: HashMap::new(),
+        videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
         last_error: String::new(),
@@ -755,6 +772,90 @@ pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_start(
+    id: u64,
+    path: *const c_char,
+    capture: u32,
+    format: u32,
+) -> i32 {
+    if path.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let path = unsafe { CStr::from_ptr(path) }
+        .to_str()
+        .unwrap_or_default()
+        .to_string();
+    if path.is_empty() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let (uploads, gpu) = {
+            let mut shared = mixer.shared.lock().expect("shared");
+            let previous = shared.videos.remove(&id);
+            drop(shared.receivers.remove(&id));
+            let uploads = shared.uploads.clone();
+            let gpu = shared.gpu_video.clone();
+            drop(shared);
+            drop(previous);
+            (uploads, gpu)
+        };
+        match VideoPump::start(id, path, capture != 0, format, uploads, gpu) {
+            Ok(pump) => {
+                mixer.shared.lock().expect("shared").videos.insert(id, pump);
+                OK
+            }
+            Err(error) => {
+                set_error(&mixer.shared, error);
+                ERR_IO
+            }
+        }
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let Some(pump) = shared.videos.get(&id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        pump.set_playing(playing != 0);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let Some(pump) = shared.videos.get(&id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        pump.seek(hns);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let Some(pump) = shared.videos.get(&id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        unsafe { *out = pump.info() };
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_omt_connect(id: u64, address: *const c_char) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -764,7 +865,15 @@ pub unsafe extern "C" fn mixer_omt_connect(id: u64, address: *const c_char) -> i
         .unwrap_or_default()
         .to_string();
     with_mixer(|mixer| {
-        let uploads = mixer.shared.lock().expect("shared").uploads.clone();
+        let uploads = {
+            let mut shared = mixer.shared.lock().expect("shared");
+            let previous = shared.videos.remove(&id);
+            drop(shared.receivers.remove(&id));
+            let uploads = shared.uploads.clone();
+            drop(shared);
+            drop(previous);
+            uploads
+        };
         match OmtReceiver::start(id, address, uploads) {
             Ok(receiver) => {
                 mixer.shared.lock().expect("shared").receivers.insert(id, receiver);
@@ -934,10 +1043,19 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
-        shared.receivers.remove(&id);
-        shared.generators.remove(&id);
-        shared.uploads.lock().expect("uploads").unregister(id);
+        let (previous, uploads) = {
+            let mut shared = mixer.shared.lock().expect("shared");
+            (
+                shared.videos.remove(&id),
+                {
+                    shared.receivers.remove(&id);
+                    shared.generators.remove(&id);
+                    shared.uploads.clone()
+                },
+            )
+        };
+        drop(previous);
+        uploads.lock().expect("uploads").unregister(id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1492,7 +1610,9 @@ fn render_loop(
                 }
                 if frame_i % 3 == 1 {
                     if let Err(error) = presenters.present_monitors(&device, composer.gpu_epoch(), |source_id| {
-                        composer.view_for_source(source_id)
+                        composer.view_for_source(source_id).map(|view| {
+                            (view, composer.source_is_packed(source_id))
+                        })
                     }) {
                         shared.lock().expect("shared").last_error = error;
                     }

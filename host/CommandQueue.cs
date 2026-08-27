@@ -32,7 +32,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _consumer;
-    private readonly Dictionary<ulong, IDisposable> _pumps = [];
     private static readonly ConcurrentDictionary<ulong, string> LabelCache = [];
 
     public CommandQueue()
@@ -329,10 +328,16 @@ internal sealed class CommandQueue : IAsyncDisposable
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");
                         break;
                     case StartVideoCommand video:
-                        ReplacePump(video.SourceId, () => MfFramePump.StartFile(video.SourceId, video.Path));
+                        if (!File.Exists(video.Path))
+                            throw new FileNotFoundException("Video file not found.", video.Path);
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat),
+                            "Video start");
                         break;
                     case StartUvcCommand uvc:
-                        ReplacePump(uvc.SourceId, () => MfFramePump.StartCapture(uvc.SourceId, uvc.SymbolicLink));
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat),
+                            "UVC start");
                         break;
                     case AddOutputCommand add:
                         MixerNative.ThrowIfFailed(
@@ -361,8 +366,6 @@ internal sealed class CommandQueue : IAsyncDisposable
                             "Define colour generator");
                         break;
                     case DropSourceCommand drop:
-                        if (_pumps.Remove(drop.SourceId, out var pump))
-                            pump.Dispose();
                         MixerNative.DestroySource(drop.SourceId);
                         break;
                     default:
@@ -434,21 +437,8 @@ internal sealed class CommandQueue : IAsyncDisposable
         }
     }
 
-    private void ReplacePump(ulong id, Func<IDisposable> factory)
-    {
-        if (_pumps.Remove(id, out var previous))
-            previous.Dispose();
-        _pumps[id] = factory();
-    }
-
-    public MfFramePump? TryGetVideo(ulong id) =>
-        _pumps.TryGetValue(id, out var pump) ? pump as MfFramePump : null;
-
     public async ValueTask DisposeAsync()
     {
-        foreach (var pump in _pumps.Values)
-            pump.Dispose();
-        _pumps.Clear();
         _commands.Writer.TryComplete();
         _shutdown.Cancel();
         try { await _consumer.ConfigureAwait(false); }

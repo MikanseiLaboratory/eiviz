@@ -13,6 +13,7 @@ pub enum CpuFormat {
     Bgra,
     Rgba,
     Uyva,
+    GpuRgba,
 }
 
 impl CpuFormat {
@@ -36,9 +37,19 @@ pub struct SourceRing {
     pub last_pts: i64,
     pub has_frame: bool,
     pub audio: Option<AudioPacket>,
+    pub gpu: Option<GpuVideoFrame>,
     fifo: VecDeque<f32>,
     last_peak: (f32, f32),
     fifo_primed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GpuVideoFrame {
+    pub pts: i64,
+    pub width: u32,
+    pub height: u32,
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +73,7 @@ impl SourceRing {
             last_pts: 0,
             has_frame: false,
             audio: None,
+            gpu: None,
             fifo: VecDeque::new(),
             last_peak: (0.0, 0.0),
             fifo_primed: false,
@@ -81,6 +93,13 @@ impl SourceRing {
         self.write.store(idx, Ordering::Release);
         self.last_pts = pts;
         self.has_frame = true;
+        self.gpu = None;
+    }
+
+    pub fn push_gpu(&mut self, frame: GpuVideoFrame) {
+        self.last_pts = frame.pts;
+        self.has_frame = true;
+        self.gpu = Some(frame);
     }
 
     pub fn peak(&self) -> (f32, f32) {
@@ -128,7 +147,7 @@ impl SourceRing {
     pub fn vram_bytes(&self) -> u64 {
         let bpp = match self.format {
             CpuFormat::Uyvy | CpuFormat::Uyva => 2,
-            CpuFormat::Bgra | CpuFormat::Rgba => 4,
+            CpuFormat::Bgra | CpuFormat::Rgba | CpuFormat::GpuRgba => 4,
         };
         u64::from(self.width) * u64::from(self.height) * bpp
     }
@@ -148,6 +167,7 @@ impl UploadStore {
             ring.fifo = old.fifo;
             ring.last_peak = old.last_peak;
             ring.fifo_primed = old.fifo_primed;
+            ring.gpu = old.gpu;
         }
         self.sources.insert(id, ring);
     }
@@ -161,6 +181,16 @@ impl UploadStore {
             Some(ring) if ring.width == width && ring.height == height && ring.format == format => {}
             _ => self.register(id, width, height, format),
         }
+    }
+
+    pub fn push_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
+        self.ensure(id, frame.width.max(2), frame.height.max(2), CpuFormat::GpuRgba);
+        let ring = self
+            .sources
+            .get_mut(&id)
+            .ok_or_else(|| format!("unknown source {id}"))?;
+        ring.push_gpu(frame);
+        Ok(())
     }
 
     pub fn push(&mut self, id: u64, src: &[u8], stride: usize, pts: i64) -> Result<(), String> {
@@ -319,6 +349,7 @@ fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {
     match format {
         CpuFormat::Uyvy | CpuFormat::Uyva => (width as usize) * (height as usize) * 2,
         CpuFormat::Bgra | CpuFormat::Rgba => (width as usize) * (height as usize) * 4,
+        CpuFormat::GpuRgba => 0,
     }
 }
 
@@ -326,6 +357,7 @@ fn write_slot(dst: &mut [u8], src: &[u8], stride: usize, width: u32, height: u32
     let bpp = match format {
         CpuFormat::Bgra | CpuFormat::Rgba => 4usize,
         CpuFormat::Uyvy | CpuFormat::Uyva => 2,
+        CpuFormat::GpuRgba => return,
     };
     let row_bytes = width as usize * bpp;
     if stride < row_bytes {
@@ -346,5 +378,6 @@ fn write_slot(dst: &mut [u8], src: &[u8], stride: usize, width: u32, height: u32
                 dst[y * row_bytes..y * row_bytes + row_bytes].copy_from_slice(src_row);
             }
         }
+        CpuFormat::GpuRgba => {}
     }
 }

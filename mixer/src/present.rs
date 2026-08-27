@@ -7,7 +7,8 @@ use crate::device::GpuDevice;
 pub struct Presenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    blit: wgpu::RenderPipeline,
+    present: wgpu::RenderPipeline,
+    uyvy: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
@@ -116,7 +117,7 @@ impl Presenters {
             let Some(presenter) = self.by_key.get_mut(&(unit_id, kind, hwnd)) else {
                 continue;
             };
-            if let Some(item) = draw_presenter(device, presenter, cache_key, view.as_ref(), &mut encoder)
+            if let Some(item) = draw_presenter(device, presenter, cache_key, view.as_ref(), false, &mut encoder)
             {
                 acquired.push(item);
             }
@@ -128,7 +129,7 @@ impl Presenters {
         &mut self,
         device: &GpuDevice,
         epoch: u64,
-        source_view: impl Fn(u64) -> Option<wgpu::TextureView>,
+        source_view: impl Fn(u64) -> Option<(wgpu::TextureView, bool)>,
     ) -> Result<(), String> {
         let planned: Vec<_> = self
             .monitors
@@ -136,7 +137,11 @@ impl Presenters {
             .copied()
             .filter_map(|monitor_id| {
                 let source_id = *self.monitor_sources.get(&monitor_id)?;
-                Some((monitor_id, source_id ^ epoch.rotate_left(8), source_view(source_id)))
+                let (view, packed) = match source_view(source_id) {
+                    Some((view, packed)) => (Some(view), packed),
+                    None => (None, false),
+                };
+                Some((monitor_id, source_id ^ epoch.rotate_left(8), view, packed))
             })
             .collect();
         let mut encoder = device
@@ -145,11 +150,12 @@ impl Presenters {
                 label: Some("eiviz present"),
             });
         let mut acquired = Vec::new();
-        for (monitor_id, source_id, view) in planned {
+        for (monitor_id, cache_key, view, packed) in planned {
             let Some(presenter) = self.monitors.get_mut(&monitor_id) else {
                 continue;
             };
-            if let Some(item) = draw_presenter(device, presenter, source_id, view.as_ref(), &mut encoder)
+            if let Some(item) =
+                draw_presenter(device, presenter, cache_key, view.as_ref(), packed, &mut encoder)
             {
                 acquired.push(item);
             }
@@ -184,9 +190,11 @@ fn create_presenter(
         .get_default_config(&device.adapter, width.max(2), height.max(2))
         .ok_or("DX12 surface exposes no compatible configuration")?;
     let caps = surface.get_capabilities(&device.adapter);
+    config.format = pick_surface_format(&caps.formats);
+    config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
     surface.configure(&device.device, &config);
-    let (layout, blit, sampler) = present_blit(device, config.format)?;
+    let (layout, present, uyvy, sampler) = present_pipelines(device, config.format)?;
     let params = device.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("present params"),
         size: 256,
@@ -196,7 +204,8 @@ fn create_presenter(
     Ok(Presenter {
         surface,
         config,
-        blit,
+        present,
+        uyvy,
         layout,
         sampler,
         params,
@@ -236,11 +245,35 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
         .unwrap_or(wgpu::PresentMode::Fifo)
 }
 
+fn pick_surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
+    const PREFERRED: [wgpu::TextureFormat; 2] = [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ];
+    PREFERRED
+        .into_iter()
+        .find(|format| formats.contains(format))
+        .or_else(|| formats.first().copied())
+        .unwrap_or(wgpu::TextureFormat::Bgra8Unorm)
+}
+
+fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+    const PREFERRED: [wgpu::CompositeAlphaMode; 2] = [
+        wgpu::CompositeAlphaMode::Opaque,
+        wgpu::CompositeAlphaMode::Auto,
+    ];
+    PREFERRED
+        .into_iter()
+        .find(|mode| modes.contains(mode))
+        .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+}
+
 fn draw_presenter(
     device: &GpuDevice,
     presenter: &mut Presenter,
     cache_key: u64,
     src: Option<&wgpu::TextureView>,
+    packed: bool,
     encoder: &mut wgpu::CommandEncoder,
 ) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
     let texture = match presenter.surface.get_current_texture() {
@@ -296,7 +329,11 @@ fn draw_presenter(
                 }));
                 presenter.bind_key = cache_key;
             }
-            pass.set_pipeline(&presenter.blit);
+            pass.set_pipeline(if packed {
+                &presenter.uyvy
+            } else {
+                &presenter.present
+            });
             pass.set_bind_group(0, presenter.bind.as_ref().expect("present bind"), &[]);
             pass.draw(0..6, 0..1);
         }
@@ -328,12 +365,20 @@ struct BlitParams {
     pad: [f32; 3],
 }
 
-fn present_blit(
+fn present_pipelines(
     device: &GpuDevice,
     format: wgpu::TextureFormat,
-) -> Result<(wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::Sampler), String> {
+) -> Result<
+    (
+        wgpu::BindGroupLayout,
+        wgpu::RenderPipeline,
+        wgpu::RenderPipeline,
+        wgpu::Sampler,
+    ),
+    String,
+> {
     let layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("present blit"),
+        label: Some("present"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -363,18 +408,47 @@ fn present_blit(
             },
         ],
     });
-    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("present blit"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/blit.wgsl").into()),
-    });
     let pipeline_layout = device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("present blit"),
+        label: Some("present"),
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let blit = device.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("present blit"),
-        layout: Some(&pipeline_layout),
+    let present = make_present_pipeline(
+        device,
+        &pipeline_layout,
+        format,
+        include_str!("../shaders/present.wgsl"),
+        "present",
+    );
+    let uyvy = make_present_pipeline(
+        device,
+        &pipeline_layout,
+        format,
+        include_str!("../shaders/uyvy_to_rgba.wgsl"),
+        "present uyvy",
+    );
+    let sampler = device.device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    Ok((layout, present, uyvy, sampler))
+}
+
+fn make_present_pipeline(
+    device: &GpuDevice,
+    pipeline_layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    source: &str,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    device.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
@@ -387,7 +461,7 @@ fn present_blit(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -396,11 +470,5 @@ fn present_blit(
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
-    });
-    let sampler = device.device.create_sampler(&wgpu::SamplerDescriptor {
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
-    Ok((layout, blit, sampler))
+    })
 }
