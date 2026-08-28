@@ -16,4 +16,8 @@
     <Exec Command="cargo build --release" WorkingDirectory="$(MixerProject)" />
     <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(OutDir)" />
   </Target>
+
+  <Target Name="PublishMixer" AfterTargets="Publish">
+    <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(PublishDir)" />
+  </Target>
 </Project>

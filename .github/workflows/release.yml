@@ -1,0 +1,128 @@
+# GitHub Releases for version tags. See #10.
+#   v1.2.3           -> Release
+#   v1.2.3-alpha.1   -> Pre-release
+#   v1.2.3-beta.1    -> Pre-release
+#   v1.2.3-rc.1      -> Pre-release
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v0.0.0-alpha.1)"
+        required: true
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  windows-x64:
+    name: Release Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          TAG="${TAG#refs/tags/}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([.-].*)?)?$ ]]; then
+            echo "Unsupported tag '$TAG'. Expected vX.Y.Z or vX.Y.Z-(alpha|beta|rc)[...]" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          BASE="${VERSION%%-*}"
+          if [[ "$TAG" =~ -(alpha|beta|rc)([.-]|$) ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG (assembly $BASE, prerelease=$PRERELEASE)"
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mixer
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Test mixer
+        working-directory: mixer
+        run: cargo test --locked --release -- --test-threads=1
+
+      - name: Publish host (win-x64)
+        run: |
+          dotnet publish host\Eiviz.Host.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o "${{ github.workspace }}\publish\win-x64" `
+            -p:Version=${{ steps.meta.outputs.base }} `
+            -p:InformationalVersion=${{ steps.meta.outputs.version }}
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Host.exe")) {
+            throw "Published output is missing Eiviz.Host.exe"
+          }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_mixer.dll")) {
+            throw "Published output is missing eiviz_mixer.dll"
+          }
+
+      - name: Package zip
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          STAGING="eiviz-${TAG}-win-x64"
+          mkdir -p "$STAGING"
+          cp -a publish/win-x64/. "$STAGING/"
+          7z a -tzip "${STAGING}.zip" "$STAGING"
+          sha256sum "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+
+      - name: Upload GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.meta.outputs.prerelease != 'true' }}
+          generate_release_notes: true
+          files: |
+            eiviz-${{ steps.meta.outputs.tag }}-win-x64.zip
+            eiviz-${{ steps.meta.outputs.tag }}-win-x64.zip.sha256
