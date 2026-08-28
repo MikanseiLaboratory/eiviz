@@ -13,3 +13,11 @@ dotnet build eiviz.slnx -c Release
 dotnet run --project host\Eiviz.Host.csproj -c Release
 cargo test --manifest-path mixer\Cargo.toml
 ```
+
+## License
+
+eiviz original source is licensed under the [PolyForm Shield License 1.0.0](LICENSE).
+
+Internal use is allowed, including at for-profit organizations. Competing with eiviz is not: shipping a vision mixer (paid or free) that is a practical substitute for this software, or for another product Shugo Kawamura / Mikansei Laboratory provides using it. A separate license from Shugo Kawamura / Mikansei Laboratory is required for that.
+
+Third-party crates and libraries stay under their original MIT / Apache-2.0 / Zlib terms. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
