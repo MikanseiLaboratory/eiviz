@@ -1,8 +1,12 @@
 # eiviz
+This project is work-in-progress!  
+eiviz / 映像(eizou) + visual
 
-C# WPF host + Rust wgpu (DX12) mixer. OMT/VMX use the pure-Rust crates
-[`openmediatransport-rs`](https://github.com/MikanseiLaboratory/openmediatransport-rs)
-and [`vmx-rs`](https://github.com/MikanseiLaboratory/vmx-rs).
+<img width="1916" height="1030" alt="image" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
+
+
+Proof-of-Concept multi M/E vision mixer.  
+Rust wgpu (DX12) mixer with C# WPF UI. 　
 
 ```powershell
 dotnet build eiviz.slnx -c Release
