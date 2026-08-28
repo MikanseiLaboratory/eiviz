@@ -16,8 +16,8 @@ cargo test --manifest-path mixer\Cargo.toml
 
 ## License
 
-eiviz original source is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+eiviz original source is licensed under the [PolyForm Shield License 1.0.0](LICENSE).
 
-Non-commercial use is allowed: personal, hobby, education, research, and use by qualifying noncommercial organizations. Selling eiviz, bundling it as a product, or other commercial purposes are not allowed under this license. A separate commercial license from Shugo Kawamura / Mikansei Laboratory is required for those uses.
+Internal use is allowed, including at for-profit organizations. Competing with eiviz is not: shipping a vision mixer (paid or free) that is a practical substitute for this software, or for another product Shugo Kawamura / Mikansei Laboratory provides using it. A separate license from the copyright holders is required for that.
 
 Third-party crates and libraries stay under their original MIT / Apache-2.0 / Zlib terms. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

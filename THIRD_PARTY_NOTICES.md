@@ -1,6 +1,6 @@
 # Third-party notices
 
-eiviz original source is licensed under the PolyForm Noncommercial License 1.0.0.
+eiviz original source is licensed under the PolyForm Shield License 1.0.0.
 See `LICENSE` and `NOTICE`.
 
 This file covers components that eiviz uses but does **not** relicense.
@@ -43,7 +43,7 @@ interface. It does not redistribute Steinberg's ASIO SDK.
 ASIO is a trademark of Steinberg Media Technologies GmbH. Using the ASIO
 name or shipping an ASIO-enabled **commercial** product may require a
 separate arrangement with Steinberg. That is independent of this
-repository's PolyForm Noncommercial terms.
+repository's PolyForm Shield terms.
 
 ## Binary releases
 
