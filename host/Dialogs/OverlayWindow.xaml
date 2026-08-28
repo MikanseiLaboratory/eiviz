@@ -1,0 +1,75 @@
+<Window x:Class="Eiviz.Host.Dialogs.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:preview="clr-namespace:Eiviz.Host.Preview"
+        Title="Overlays" Height="720" Width="1280"
+        WindowStartupLocation="CenterOwner"
+        Background="#2B2B2B" Foreground="#EEEEEE">
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="320"/>
+        </Grid.ColumnDefinitions>
+        <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <Button DockPanel.Dock="Right" Content="+" Width="28" Click="Add_Click"/>
+                <TextBlock Text="Overlays" FontWeight="Bold" VerticalAlignment="Center"/>
+            </DockPanel>
+            <StackPanel DockPanel.Dock="Bottom">
+                <Button Content="Z up" Height="28" Click="ZUp_Click"/>
+                <Button Content="Z down" Height="28" Margin="0,6,0,0" Click="ZDown_Click"/>
+                <Button Content="Delete" Height="28" Margin="0,6,0,0" Click="Delete_Click"/>
+            </StackPanel>
+            <ListBox x:Name="SlotList" Background="#222" Foreground="#EEE" BorderBrush="#444"
+                     SelectionChanged="SlotList_SelectionChanged"/>
+        </DockPanel>
+        <DockPanel Grid.Column="1" Margin="12,0">
+            <TextBlock DockPanel.Dock="Top" Text="Layout (16:9 Program)" FontWeight="Bold" Margin="0,0,0,6"/>
+            <Border Background="#111" BorderBrush="#555" BorderThickness="1">
+                <Viewbox Stretch="Uniform">
+                    <Canvas x:Name="WireCanvas" Width="1600" Height="900" Background="#0A0A0A"
+                            MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
+                            MouseMove="WireCanvas_MouseMove"
+                            MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"/>
+                </Viewbox>
+            </Border>
+        </DockPanel>
+        <DockPanel Grid.Column="2">
+            <TextBlock DockPanel.Dock="Top" Text="Scene preview" FontWeight="Bold" Margin="0,0,0,6"/>
+            <StackPanel DockPanel.Dock="Bottom">
+                <CheckBox x:Name="OnBox" Content="ON" Foreground="#EEE" Margin="0,8,0,8"
+                          Checked="OnBox_Changed" Unchecked="OnBox_Changed"/>
+                <TextBlock Text="Scene"/>
+                <ComboBox x:Name="SceneBox" Margin="0,4,0,8" DisplayMemberPath="Name"
+                          SelectionChanged="SceneBox_SelectionChanged"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="X" VerticalAlignment="Center"/>
+                    <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="YBox" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock Grid.Row="1" Text="W" VerticalAlignment="Center"/>
+                    <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="H" VerticalAlignment="Center"/>
+                    <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock Grid.Row="2" Text="Op" VerticalAlignment="Center"/>
+                    <TextBox x:Name="OpBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                </Grid>
+            </StackPanel>
+            <Border Background="#111" BorderBrush="#555" BorderThickness="1" MinHeight="180" Margin="0,0,0,12">
+                <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True" MinHeight="180"/>
+            </Border>
+        </DockPanel>
+    </Grid>
+</Window>

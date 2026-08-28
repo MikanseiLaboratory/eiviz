@@ -1,0 +1,125 @@
+<Window x:Class="Eiviz.Host.Dialogs.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings" Height="560" Width="820"
+        WindowStartupLocation="CenterOwner"
+        Background="#2B2B2B" Foreground="#EEEEEE">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Border Background="#1E1E1E">
+            <ListBox x:Name="CategoryList" Background="Transparent" Foreground="#EEE" BorderThickness="0"
+                     SelectionChanged="CategoryList_SelectionChanged">
+                <ListBoxItem Content="Display" IsSelected="True"/>
+                <ListBoxItem Content="Outputs"/>
+                <ListBoxItem Content="Multiview"/>
+                <ListBoxItem Content="Audio Auxiliary"/>
+                <ListBoxItem Content="About"/>
+            </ListBox>
+        </Border>
+        <DockPanel Grid.Column="1">
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="16">
+                <Button Content="Default" Width="88" Click="Default_Click"/>
+                <CheckBox Content="Show Advanced Settings" Margin="16,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Width="280">
+                    <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
+                    <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
+                </StackPanel>
+            </StackPanel>
+            <StackPanel x:Name="DisplayPanel" Margin="20">
+                <TextBlock Text="Theme"/>
+                <ComboBox x:Name="ThemeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Charcoal" IsSelected="True"/>
+                </ComboBox>
+                <TextBlock Text="Master Frame Rate"/>
+                <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
+                    <ComboBoxItem Content="50p" Tag="50/1"/>
+                    <ComboBoxItem Content="30p" Tag="30/1"/>
+                    <ComboBoxItem Content="24p" Tag="24/1"/>
+                    <ComboBoxItem Content="60p" Tag="60/1"/>
+                </ComboBox>
+                <TextBlock Text="Default Mixing Unit Size"/>
+                <ComboBox x:Name="SizeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="1920x1080" Tag="1920x1080" IsSelected="True"/>
+                    <ComboBoxItem Content="1280x720" Tag="1280x720"/>
+                    <ComboBoxItem Content="3840x2160" Tag="3840x2160"/>
+                </ComboBox>
+                <TextBlock Text="Frame buffer (frames)"/>
+                <ComboBox x:Name="BufferBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="1" Tag="1"/>
+                    <ComboBoxItem Content="2" Tag="2"/>
+                    <ComboBoxItem Content="3" Tag="3" IsSelected="True"/>
+                    <ComboBoxItem Content="4" Tag="4"/>
+                    <ComboBoxItem Content="6" Tag="6"/>
+                    <ComboBoxItem Content="8" Tag="8"/>
+                </ComboBox>
+                <TextBlock Text="Internal color format"/>
+                <ComboBox x:Name="ColorFormatBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="UYVY 4:2:2 (recommended)" Tag="uyvy" IsSelected="True"/>
+                    <ComboBoxItem Content="BGRA 8-bit 4:4:4" Tag="bgra"/>
+                </ComboBox>
+                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
+                           Text="Master frame rate clocks the render thread. The frame buffer holds that many completed frames so a compose spike does not hitch the output; audio is delayed by the same amount. If the buffer runs out, compose is skipped until the clock catches up. Internal color format is how video is kept in RAM and uploaded to the GPU. UYVY is half the size of BGRA; the mixer converts to RGB only for frames that are actually composed. Each Mixing Unit can override resolution and output frame rate from the Mixing Unit dialog."/>
+            </StackPanel>
+            <DockPanel x:Name="OutputPanel" Margin="20" Visibility="Collapsed">
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddOutput_Click"/>
+                    <TextBlock Text="Outputs" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
+                           Text="OMT is sent from the mixer. NDI and DeckLink are listed here but fail immediately until those SDKs are linked. For OMT, Encode path chooses GPU encode (frame stays on the GPU) or CPU encode (UYVY pack and readback)."/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="OutputRows"/>
+                </ScrollViewer>
+            </DockPanel>
+            <StackPanel x:Name="MultiviewPanel" Margin="20" Visibility="Collapsed">
+                <DockPanel Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddMv_Click"/>
+                    <TextBlock Text="Multiviews" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <ListBox x:Name="MvList" Height="140" Background="#222" Foreground="#EEE" BorderBrush="#444"
+                         DisplayMemberPath="Name"/>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,12">
+                    <Button Content="Open" Width="88" Click="OpenMv_Click"/>
+                    <Button Content="Layout…" Width="88" Margin="8,0,0,0" Click="EditLayoutTiles_Click"/>
+                    <Button Content="Delete" Width="88" Margin="8,0,0,0" Click="DeleteMv_Click"/>
+                </StackPanel>
+                <TextBlock Text="Default Mixing Unit for new Multiview windows"/>
+                <ComboBox x:Name="MvUnitBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left"
+                          DisplayMemberPath="Name"/>
+                <TextBlock Text="Project default preview refresh interval"/>
+                <ComboBox x:Name="MvPresentBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Every frame" Tag="1"/>
+                    <ComboBoxItem Content="Every 2 frames" Tag="2"/>
+                    <ComboBoxItem Content="Every 3 frames" Tag="3" IsSelected="True"/>
+                    <ComboBoxItem Content="Every 4 frames" Tag="4"/>
+                    <ComboBoxItem Content="Every 6 frames" Tag="6"/>
+                    <ComboBoxItem Content="Every 8 frames" Tag="8"/>
+                </ComboBox>
+                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
+                           Text="Each Multiview window is a vMix-style mosaic: Preview and Program on top, eight Input or Scene windows below. Outputs can send a Multiview by picking it from the list. Fullscreen: F11. Windows set to Follow project use the interval above. Program, Preview, and outputs stay at the master frame rate. Every 3 frames is about 20 fps at 59.94."/>
+            </StackPanel>
+            <DockPanel x:Name="AudioBusPanel" Margin="20" Visibility="Collapsed">
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddBus_Click"/>
+                    <TextBlock Text="Audio Auxiliary" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
+                           Text="Internal mix is 48 kHz stereo. Enabled keeps the bus in the mix with no hardware device. WASAPI and ASIO send that mix to a device; map Left/Right onto device channels. Master and Headphone cannot be removed. A–H are optional aux buses."/>
+                <CheckBox x:Name="HeadphoneCopyBox" DockPanel.Dock="Top" Content="Headphone copies Master"
+                          Margin="0,0,0,8" Foreground="#EEEEEE"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="BusRows"/>
+                </ScrollViewer>
+            </DockPanel>
+            <StackPanel x:Name="AboutPanel" Margin="20" Visibility="Collapsed">
+                <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
+                <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
+                           Text="WPF host + Rust wgpu DX12 mixer. OMT/VMX use openmediatransport-rs and vmx-rs."/>
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>

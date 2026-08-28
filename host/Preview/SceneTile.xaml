@@ -1,0 +1,14 @@
+<UserControl x:Class="Eiviz.Host.Preview.SceneTile"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:preview="clr-namespace:Eiviz.Host.Preview"
+             Width="176" Margin="0,0,8,8">
+    <Border x:Name="Chrome" BorderThickness="2" BorderBrush="#555" Background="#111" Cursor="Hand">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Background="#333" Padding="6,3">
+                <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"/>
+            </Border>
+            <preview:SwapchainHost x:Name="Monitor" Height="90" IsMonitor="True"/>
+        </DockPanel>
+    </Border>
+</UserControl>

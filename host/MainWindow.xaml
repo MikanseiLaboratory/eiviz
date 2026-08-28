@@ -1,0 +1,161 @@
+﻿<Window x:Class="Eiviz.Host.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:preview="clr-namespace:Eiviz.Host.Preview"
+        Title="eiviz" Height="980" Width="1680"
+        Background="#1A1A1A" Foreground="#EEEEEE">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="#252525" Padding="8,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Mixing Unit" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="UnitBox" Width="280" SelectionChanged="UnitBox_SelectionChanged"/>
+                    <Button Content="Add" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
+                    <Button Content="Edit" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
+                    <Button Content="Delete" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Content="Save" Width="72" Click="SaveSession_Click"/>
+                    <Button Content="Load" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
+                    <Button Content="Overlay" Width="88" Margin="8,0,0,0" Click="OpenOverlay_Click"/>
+                    <Button Content="Multiview" Width="96" Margin="8,0,0,0" Click="OpenMultiview_Click"/>
+                    <Button Content="Resources" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
+                    <Button Content="Settings" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        <Border DockPanel.Dock="Bottom" Background="#111" Padding="8,4">
+            <DockPanel>
+                <TextBlock x:Name="ResourceText" DockPanel.Dock="Right" Foreground="#9CCC65" Margin="16,0,0,0"
+                           Cursor="Hand" MouseLeftButtonUp="ResourceHud_MouseUp"/>
+                <TextBlock x:Name="WarnText" DockPanel.Dock="Right" Foreground="#FFB74D" Margin="0,0,12,0"/>
+                <TextBlock x:Name="StatusText" Foreground="#7CFC7C"/>
+            </DockPanel>
+        </Border>
+        <Border DockPanel.Dock="Bottom" Background="#161616" Padding="8,6">
+            <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                    <TextBlock Text="Audio" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel Orientation="Horizontal">
+                        <StackPanel x:Name="MeterPanel" Orientation="Horizontal"/>
+                        <StackPanel x:Name="OverlayTogglePanel" Orientation="Horizontal" Margin="8,0,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+        <Grid Margin="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="1.2*"/>
+            </Grid.RowDefinitions>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="168"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border BorderBrush="#E87722" BorderThickness="2" Background="#000">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Background="#E87722" Padding="8,4">
+                                <TextBlock Text="PREVIEW" FontWeight="Bold" Foreground="#111"/>
+                            </Border>
+                            <preview:SwapchainHost x:Name="PreviewHost" OutputKind="1" UnitId="1"/>
+                        </DockPanel>
+                    </Border>
+                </preview:AspectBox>
+                <DockPanel Grid.Column="1" Margin="8,0">
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTransition_Click"/>
+                        <TextBlock Text="Transitions" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <Slider x:Name="TBar" DockPanel.Dock="Bottom" Orientation="Horizontal" Minimum="0" Maximum="1"
+                            Width="132" HorizontalAlignment="Center" Margin="0,10,0,0" Height="18"
+                            IsMoveToPointEnabled="True"
+                            ValueChanged="TBar_ValueChanged"
+                            PreviewMouseLeftButtonUp="TBar_MouseUp"
+                            LostMouseCapture="TBar_LostMouseCapture"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="TransitionPanel"/>
+                    </ScrollViewer>
+                </DockPanel>
+                <preview:AspectBox x:Name="ProgramAspect" Grid.Column="2" HeaderHeight="28"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border BorderBrush="#2E7D32" BorderThickness="2" Background="#000">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Background="#2E7D32" Padding="8,4">
+                                <TextBlock Text="PROGRAM" FontWeight="Bold"/>
+                            </Border>
+                            <preview:SwapchainHost x:Name="ProgramHost" OutputKind="0" UnitId="1"/>
+                        </DockPanel>
+                    </Border>
+                </preview:AspectBox>
+            </Grid>
+            <DockPanel Grid.Row="1">
+                <Border x:Name="VideoBar" DockPanel.Dock="Bottom" Background="#141414" Padding="8,6" Margin="0,8,0,0"
+                        Visibility="Collapsed">
+                    <DockPanel>
+                        <TextBlock x:Name="VideoTitle" DockPanel.Dock="Top" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="VideoTimeText" DockPanel.Dock="Top" FontSize="16" Margin="0,0,0,4"
+                                   HorizontalAlignment="Center"/>
+                        <Button x:Name="VideoPlay" DockPanel.Dock="Right" Width="44" Height="32" Margin="8,0,0,0"
+                                Content="▶" Click="VideoPlay_Click"/>
+                        <Button x:Name="VideoRestart" DockPanel.Dock="Right" Width="72" Height="32"
+                                Content="Restart" Click="VideoRestart_Click"/>
+                        <Slider x:Name="VideoSeek" Minimum="0" Maximum="1" VerticalAlignment="Center"
+                                IsMoveToPointEnabled="True"
+                                ValueChanged="VideoSeek_ValueChanged"
+                                PreviewMouseLeftButtonUp="VideoSeek_ClickSeek"
+                                Thumb.DragStarted="VideoSeek_DragStarted"
+                                Thumb.DragCompleted="VideoSeek_DragCompleted"/>
+                    </DockPanel>
+                </Border>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Top" Text="Inputs" FontWeight="Bold" Margin="0,0,0,6"/>
+                        <Grid DockPanel.Dock="Bottom">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Content="Add" Height="32" Click="AddInput_Click"/>
+                            <Button Grid.Column="2" Content="Edit" Height="32" Click="EditInput_Click"/>
+                            <Button Grid.Column="4" Content="Delete" Height="32" Click="RemoveInput_Click"/>
+                        </Grid>
+                        <ListBox x:Name="InputList" Background="#222" Foreground="#EEE" BorderBrush="#444"
+                                 SelectionChanged="InputList_SelectionChanged"
+                                 MouseDoubleClick="InputList_DoubleClick"/>
+                    </DockPanel>
+                    <DockPanel Grid.Column="1" Margin="8,0,0,0">
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="+" Width="28" Click="AddScene_Click"/>
+                                <Button Content="-" Width="28" Margin="4,0,0,0" Click="RemoveScene_Click"/>
+                                <Button Content="Edit" Width="48" Margin="4,0,0,0" Click="EditScene_Click"/>
+                            </StackPanel>
+                            <TextBlock Text="Scenes" FontWeight="Bold" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <WrapPanel x:Name="ScenePanel"/>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Grid>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>
