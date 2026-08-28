@@ -16,7 +16,7 @@ Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Prog
 The mixer is Rust + wgpu (DX12). The UI is C# WPF. Proof of concept.
 
 Inputs: colour, bars, still, video file, UVC, OMT.  
-Output: OMT (GPU or CPU encode). NDI and DeckLink are in the UI but not linked.  
+Output: OMT (GPU or CPU encode).  
 Scenes, overlays, multiview. Audio buses over WASAPI / ASIO.
 
 ## Build
