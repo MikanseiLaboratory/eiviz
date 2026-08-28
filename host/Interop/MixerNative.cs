@@ -204,6 +204,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_monitor_present_interval")]
+    internal static partial int SetMonitorPresentInterval(ulong monitorId, uint frames);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_last_error")]
     internal static unsafe partial int LastError(byte* buffer, nuint capacity);
 

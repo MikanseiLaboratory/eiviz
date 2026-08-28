@@ -21,6 +21,7 @@ pub struct Presenters {
     by_key: HashMap<(u64, u32, isize), Presenter>,
     monitors: HashMap<u64, Presenter>,
     monitor_sources: HashMap<u64, u64>,
+    monitor_intervals: HashMap<u64, u32>,
 }
 
 impl Presenters {
@@ -70,6 +71,7 @@ impl Presenters {
         let presenter = create_presenter(device, hwnd, width, height)?;
         self.monitors.insert(monitor_id, presenter);
         self.monitor_sources.insert(monitor_id, source_id);
+        self.monitor_intervals.entry(monitor_id).or_insert(1);
         Ok(())
     }
 
@@ -80,6 +82,7 @@ impl Presenters {
     pub fn detach_monitor(&mut self, monitor_id: u64) {
         self.monitors.remove(&monitor_id);
         self.monitor_sources.remove(&monitor_id);
+        self.monitor_intervals.remove(&monitor_id);
     }
 
     pub fn set_monitor_source(&mut self, monitor_id: u64, source_id: u64) {
@@ -88,8 +91,30 @@ impl Presenters {
         }
     }
 
-    pub fn attached_monitor_sources(&self) -> Vec<u64> {
-        self.monitor_sources.values().copied().collect()
+    pub fn set_monitor_interval(&mut self, monitor_id: u64, frames: u32) {
+        self.monitor_intervals.insert(monitor_id, frames.clamp(1, 8));
+    }
+
+    fn interval_for(&self, monitor_id: u64) -> u32 {
+        self.monitor_intervals
+            .get(&monitor_id)
+            .copied()
+            .unwrap_or(1)
+            .clamp(1, 8)
+    }
+
+    pub fn attached_monitor_sources_due(&self, frame_i: u64) -> Vec<u64> {
+        self.monitor_sources
+            .iter()
+            .filter(|(id, _)| frame_i % u64::from(self.interval_for(**id)) == 0)
+            .map(|(_, source)| *source)
+            .collect()
+    }
+
+    pub fn any_monitor_due(&self, frame_i: u64) -> bool {
+        self.monitors
+            .keys()
+            .any(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
     }
 
     pub fn present_unit_buses(
@@ -129,12 +154,17 @@ impl Presenters {
         &mut self,
         device: &GpuDevice,
         epoch: u64,
+        frame_i: u64,
         source_view: impl Fn(u64) -> Option<(wgpu::TextureView, bool)>,
     ) -> Result<(), String> {
-        let planned: Vec<_> = self
+        let due: Vec<u64> = self
             .monitors
             .keys()
             .copied()
+            .filter(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
+            .collect();
+        let planned: Vec<_> = due
+            .into_iter()
             .filter_map(|monitor_id| {
                 let source_id = *self.monitor_sources.get(&monitor_id)?;
                 let (view, packed) = match source_view(source_id) {

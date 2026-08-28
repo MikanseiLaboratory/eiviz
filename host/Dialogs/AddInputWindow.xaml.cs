@@ -12,6 +12,7 @@ public partial class AddInputWindow : Window
     private static readonly List<string> StillHistory = [];
     private static readonly List<string> VideoHistory = [];
     private InputKind _kind = InputKind.Still;
+    private bool _lockKind;
 
     public AddInputWindow()
     {
@@ -20,7 +21,7 @@ public partial class AddInputWindow : Window
         {
             var button = new Button
             {
-                Content = kind == InputKind.Color ? "Colours" : kind.ToString(),
+                Content = InputKindNames.Category(kind),
                 Height = 36,
                 Margin = new Thickness(8, 2, 8, 2),
                 Tag = kind,
@@ -46,13 +47,51 @@ public partial class AddInputWindow : Window
     public bool ResultUseGpu { get; private set; } = true;
     public uint ResultFrameBufferFrames { get; private set; } = 1;
 
+    public void Load(InputEntry input)
+    {
+        Title = "Input Properties";
+        NameBox.Text = input.Name;
+        _lockKind = input.IsBuiltin;
+        _kind = input.Kind is InputKind.Bars or InputKind.Black ? InputKind.Color : input.Kind;
+        if (input.Kind == InputKind.Bars)
+            BarsRadio.IsChecked = true;
+        else
+            SolidRadio.IsChecked = true;
+        RSlider.Value = Math.Clamp(input.ColorR * 255.0, 0, 255);
+        GSlider.Value = Math.Clamp(input.ColorG * 255.0, 0, 255);
+        BSlider.Value = Math.Clamp(input.ColorB * 255.0, 0, 255);
+        ScrollBox.IsChecked = input.Scroll;
+        StillPath.Text = input.Kind == InputKind.Still ? input.PathOrAddress ?? "" : "";
+        VideoPath.Text = input.Kind == InputKind.Video ? input.PathOrAddress ?? "" : "";
+        OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
+        SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
+        SelectTag(OmtBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
+        if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
+        {
+            foreach (var item in UvcList.Items)
+            {
+                if (item is CameraItem camera && camera.Link == input.PathOrAddress)
+                {
+                    UvcList.SelectedItem = item;
+                    break;
+                }
+            }
+        }
+        Highlight();
+        foreach (Button button in CategoryPanel.Children)
+        {
+            if (button.Tag is not InputKind kind)
+                continue;
+            button.IsEnabled = !_lockKind || SameCategory(kind, input.Kind);
+        }
+    }
+
     private void Category_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { Tag: InputKind kind })
-        {
-            _kind = kind;
-            Highlight();
-        }
+        if (sender is not Button { Tag: InputKind kind } || (_lockKind && !SameCategory(kind, _kind)))
+            return;
+        _kind = kind;
+        Highlight();
     }
 
     private void Highlight()
@@ -71,6 +110,12 @@ public partial class AddInputWindow : Window
     }
 
     private Visibility VisibleIf(InputKind kind) => _kind == kind ? Visibility.Visible : Visibility.Collapsed;
+
+    private static bool SameCategory(InputKind left, InputKind right) =>
+        IsColour(left) && IsColour(right) || left == right;
+
+    private static bool IsColour(InputKind kind) =>
+        kind is InputKind.Color or InputKind.Bars or InputKind.Black;
 
     private void Colour_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -190,7 +235,21 @@ public partial class AddInputWindow : Window
             default:
                 return;
         }
+        if (!string.IsNullOrWhiteSpace(NameBox.Text))
+            ResultName = NameBox.Text.Trim();
         DialogResult = true;
+    }
+
+    private static void SelectTag(ComboBox box, string tag)
+    {
+        foreach (ComboBoxItem item in box.Items)
+        {
+            if (Equals(item.Tag, tag))
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
     }
 
     private static void Remember(List<string> history, string path)

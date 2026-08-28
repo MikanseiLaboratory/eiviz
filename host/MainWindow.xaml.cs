@@ -325,6 +325,16 @@ public partial class MainWindow : Window
         window.Show();
     }
 
+    internal void SyncMultiviewPresent(MultiviewLayout layout)
+    {
+        layout.PushPresentInterval(_session.Settings);
+        foreach (var window in _multiviews)
+        {
+            if (window.LayoutId == layout.Id)
+                window.SyncPresentInterval();
+        }
+    }
+
     internal void OpenMultiviewFor(ulong unitId) => OpenNewMultiview(unitId);
 
     internal void CloseMultiview(ulong layoutId)
@@ -558,54 +568,16 @@ public partial class MainWindow : Window
         if (dialog.Kind is not (InputKind.Color or InputKind.Bars) && dialog.ResultPath is null)
             return;
         var id = _session.NextInputId++;
-        var name = dialog.ResultName ?? $"Input {id}";
         var input = new InputEntry
         {
             Id = id,
-            Name = name,
+            Name = dialog.ResultName ?? $"Input {id}",
             Kind = dialog.Kind,
-            PathOrAddress = dialog.ResultPath,
-            ColorR = dialog.ColorR,
-            ColorG = dialog.ColorG,
-            ColorB = dialog.ColorB,
-            Scroll = dialog.Scroll,
-            BusMask = 1,
-            UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu,
-            FrameBufferFrames = dialog.Kind == InputKind.Omt ? dialog.ResultFrameBufferFrames : 1
+            BusMask = 1
         };
         try
         {
-            switch (dialog.Kind)
-            {
-                case InputKind.Color:
-                case InputKind.Bars:
-                    Commands.TryEnqueue(new DefineGeneratorCommand(
-                        id,
-                        dialog.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
-                        dialog.ColorR,
-                        dialog.ColorG,
-                        dialog.ColorB,
-                        dialog.Scroll));
-                    break;
-                case InputKind.Still:
-                    Commands.TryEnqueue(new LoadStillCommand(id, dialog.ResultPath!));
-                    break;
-                case InputKind.Video:
-                    Commands.TryEnqueue(new StartVideoCommand(id, dialog.ResultPath!));
-                    break;
-                case InputKind.Omt:
-                    Commands.TryEnqueue(new ConnectOmtCommand(
-                        id,
-                        dialog.ResultPath!,
-                        dialog.ResultUseGpu,
-                        dialog.ResultFrameBufferFrames));
-                    break;
-                case InputKind.Uvc:
-                    Commands.TryEnqueue(new StartUvcCommand(id, dialog.ResultPath!));
-                    break;
-                default:
-                    throw new InvalidOperationException($"{dialog.Kind} is not available.");
-            }
+            ApplyInputSource(input, dialog, replacing: false);
         }
         catch (Exception ex)
         {
@@ -618,6 +590,87 @@ public partial class MainWindow : Window
         RebuildMeters();
     }
 
+    private void InputList_DoubleClick(object sender, MouseButtonEventArgs e) => EditInput_Click(sender, e);
+
+    private void EditInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, "Select an Input to edit.");
+            return;
+        }
+        var dialog = new AddInputWindow { Owner = this };
+        dialog.Load(input);
+        if (dialog.ShowDialog() != true)
+            return;
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars) && dialog.ResultPath is null)
+            return;
+        try
+        {
+            ApplyInputSource(input, dialog, replacing: true);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Edit Input");
+            return;
+        }
+        InputList.Items.Refresh();
+        RebuildMeters();
+        TickVideo();
+    }
+
+    private void ApplyInputSource(InputEntry input, AddInputWindow dialog, bool replacing)
+    {
+        var previousKind = input.Kind;
+        var wasGenerator = previousKind is InputKind.Color or InputKind.Bars or InputKind.Black;
+        var nowGenerator = dialog.Kind is InputKind.Color or InputKind.Bars;
+        if (replacing && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
+        {
+            Commands.TryEnqueue(new DropSourceCommand(input.Id));
+            MixerNative.FlushAudio(input.Id);
+        }
+        input.Name = dialog.ResultName ?? input.Name;
+        input.Kind = dialog.Kind;
+        input.PathOrAddress = dialog.ResultPath;
+        input.ColorR = dialog.ColorR;
+        input.ColorG = dialog.ColorG;
+        input.ColorB = dialog.ColorB;
+        input.Scroll = dialog.Scroll;
+        input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
+        input.FrameBufferFrames = dialog.Kind == InputKind.Omt ? dialog.ResultFrameBufferFrames : 1;
+        switch (dialog.Kind)
+        {
+            case InputKind.Color:
+            case InputKind.Bars:
+                Commands.TryEnqueue(new DefineGeneratorCommand(
+                    input.Id,
+                    dialog.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
+                    dialog.ColorR,
+                    dialog.ColorG,
+                    dialog.ColorB,
+                    dialog.Scroll));
+                break;
+            case InputKind.Still:
+                Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
+                break;
+            case InputKind.Video:
+                Commands.TryEnqueue(new StartVideoCommand(input.Id, dialog.ResultPath!));
+                break;
+            case InputKind.Omt:
+                Commands.TryEnqueue(new ConnectOmtCommand(
+                    input.Id,
+                    dialog.ResultPath!,
+                    dialog.ResultUseGpu,
+                    dialog.ResultFrameBufferFrames));
+                break;
+            case InputKind.Uvc:
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!));
+                break;
+            default:
+                throw new InvalidOperationException($"{dialog.Kind} is not available.");
+        }
+    }
+
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
     {
         if (InputList.SelectedItem is not InputEntry input)
@@ -625,7 +678,7 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Select an Input to delete.");
             return;
         }
-        if (input.Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue)
+        if (input.IsBuiltin)
         {
             MessageBox.Show(this, "Built-in generators cannot be deleted.");
             return;
@@ -885,6 +938,7 @@ public partial class MainWindow : Window
         _session.Settings.DefaultHeight = dialog.Settings.DefaultHeight;
         _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
+        _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
         _session.Buses.Clear();
@@ -894,6 +948,10 @@ public partial class MainWindow : Window
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),
             "Set frame buffer");
+        foreach (var layout in _session.Multiviews)
+            layout.PushPresentInterval(_session.Settings);
+        foreach (var window in _multiviews)
+            window.SyncPresentInterval();
         RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();

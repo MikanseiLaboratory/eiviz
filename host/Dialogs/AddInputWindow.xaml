@@ -17,6 +17,10 @@
                 <Button x:Name="OkButton" Content="OK" Width="88" Height="28" IsDefault="True" Click="Ok_Click"/>
                 <Button Content="Cancel" Width="88" Height="28" Margin="8,0,0,0" IsCancel="True"/>
             </StackPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                <TextBlock Text="Name"/>
+                <TextBox x:Name="NameBox" Margin="0,4,0,0"/>
+            </StackPanel>
             <Grid>
                 <StackPanel x:Name="ColourPanel" Visibility="Collapsed">
                     <TextBlock Text="Colour generator" Margin="0,0,0,8"/>
@@ -47,7 +51,7 @@
                         <TextBox x:Name="StillPath" Margin="0,0,8,0"/>
                     </DockPanel>
                     <TextBlock Text="Recent" Margin="0,12,0,4"/>
-                    <ListBox x:Name="StillRecent" Height="280" Background="#333" Foreground="#EEE"
+                    <ListBox x:Name="StillRecent" Height="240" Background="#333" Foreground="#EEE"
                              MouseDoubleClick="StillRecent_DoubleClick"/>
                 </StackPanel>
                 <StackPanel x:Name="VideoPanel" Visibility="Collapsed">
@@ -57,22 +61,22 @@
                         <TextBox x:Name="VideoPath" Margin="0,0,8,0"/>
                     </DockPanel>
                     <TextBlock Text="Recent" Margin="0,12,0,4"/>
-                    <ListBox x:Name="VideoRecent" Height="280" Background="#333" Foreground="#EEE"
+                    <ListBox x:Name="VideoRecent" Height="240" Background="#333" Foreground="#EEE"
                              MouseDoubleClick="VideoRecent_DoubleClick"/>
                 </StackPanel>
                 <StackPanel x:Name="OmtPanel" Visibility="Collapsed">
                     <TextBlock Text="OMT source address" Margin="0,0,0,8"/>
                     <TextBox x:Name="OmtAddress"/>
                     <Button Content="Refresh discovery" Margin="0,12,0,8" HorizontalAlignment="Left" Click="RefreshOmt_Click"/>
-                    <ListBox x:Name="OmtList" Height="200" Background="#333" Foreground="#EEE"
+                    <ListBox x:Name="OmtList" Height="180" Background="#333" Foreground="#EEE"
                              SelectionChanged="OmtList_SelectionChanged"/>
                     <TextBlock Text="Decode path" Margin="0,12,0,4"/>
                     <ComboBox x:Name="OmtPathBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
-                        <ComboBoxItem Content="GPU" Tag="gpu" IsSelected="True"/>
-                        <ComboBoxItem Content="CPU" Tag="cpu"/>
+                        <ComboBoxItem Content="GPU decode" Tag="gpu" IsSelected="True"/>
+                        <ComboBoxItem Content="CPU decode" Tag="cpu"/>
                     </ComboBox>
                     <TextBlock Text="Frame buffer (frames)"/>
-                    <ComboBox x:Name="OmtBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,0">
+                    <ComboBox x:Name="OmtBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,8">
                         <ComboBoxItem Content="1" Tag="1" IsSelected="True"/>
                         <ComboBoxItem Content="2" Tag="2"/>
                         <ComboBoxItem Content="3" Tag="3"/>
@@ -80,6 +84,8 @@
                         <ComboBoxItem Content="6" Tag="6"/>
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
+                    <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source."/>
                 </StackPanel>
                 <StackPanel x:Name="NdiPanel" Visibility="Collapsed">
                     <TextBlock TextWrapping="Wrap"

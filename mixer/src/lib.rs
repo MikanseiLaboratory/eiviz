@@ -192,6 +192,10 @@ enum GpuCmd {
         monitor_id: u64,
         source_id: u64,
     },
+    SetMonitorInterval {
+        monitor_id: u64,
+        frames: u32,
+    },
     Shutdown,
 }
 
@@ -1546,6 +1550,16 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
+    let frames = frames.clamp(1, 8);
+    with_mixer(|mixer| {
+        let _ = mixer.cmds.send(GpuCmd::SetMonitorInterval { monitor_id, frames });
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
 #[derive(Clone)]
 struct Acquired {
     data: Arc<[u8]>,
@@ -1649,6 +1663,9 @@ fn render_loop(
                     monitor_id,
                     source_id,
                 } => presenters.set_monitor_source(monitor_id, source_id),
+                GpuCmd::SetMonitorInterval { monitor_id, frames } => {
+                    presenters.set_monitor_interval(monitor_id, frames)
+                }
                 GpuCmd::Shutdown => return,
             }
         }
@@ -1758,19 +1775,13 @@ fn render_loop(
                     .unwrap_or(0);
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
-            let (mut used_scenes, mut used_uploads) = collect_live_ids(
+            frame_i = frame_i.wrapping_add(1);
+            let (used_scenes, used_uploads) = collect_live_ids(
                 &scene_specs,
                 &snapshot,
-                presenters.attached_monitor_sources(),
+                presenters.attached_monitor_sources_due(frame_i),
                 &outputs_snap,
             );
-            frame_i = frame_i.wrapping_add(1);
-            if frame_i % 3 != 0 {
-                let (hot_scenes, hot_uploads) =
-                    collect_live_ids(&scene_specs, &snapshot, Vec::new(), &outputs_snap);
-                used_scenes = hot_scenes;
-                used_uploads = hot_uploads;
-            }
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
@@ -1797,8 +1808,8 @@ fn render_loop(
             }) {
                 shared.lock().expect("shared").last_error = error;
             }
-            if frame_i % 3 == 1 {
-                if let Err(error) = presenters.present_monitors(&device, present_epoch, |source_id| {
+            if presenters.any_monitor_due(frame_i) {
+                if let Err(error) = presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
                     frame_delay
                         .view_for_source(source_id)
                         .or_else(|| composer.view_for_source(source_id))

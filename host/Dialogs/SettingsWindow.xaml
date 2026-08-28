@@ -15,7 +15,7 @@
                 <ListBoxItem Content="Display" IsSelected="True"/>
                 <ListBoxItem Content="Outputs"/>
                 <ListBoxItem Content="Multiview"/>
-                <ListBoxItem Content="Audio Buses"/>
+                <ListBoxItem Content="Audio Auxiliary"/>
                 <ListBoxItem Content="About"/>
             </ListBox>
         </Border>
@@ -70,7 +70,7 @@
                     <TextBlock Text="Outputs" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                           Text="OMT is sent from the mixer. NDI and DeckLink are listed here but fail immediately until those SDKs are linked."/>
+                           Text="OMT is sent from the mixer. NDI and DeckLink are listed here but fail immediately until those SDKs are linked. For OMT, Encode path chooses GPU encode (frame stays on the GPU) or CPU encode (UYVY pack and readback)."/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="OutputRows"/>
                 </ScrollViewer>
@@ -90,16 +90,25 @@
                 <TextBlock Text="Default Mixing Unit for new Multiview windows"/>
                 <ComboBox x:Name="MvUnitBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left"
                           DisplayMemberPath="Name"/>
+                <TextBlock Text="Project default preview refresh interval"/>
+                <ComboBox x:Name="MvPresentBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Every frame" Tag="1"/>
+                    <ComboBoxItem Content="Every 2 frames" Tag="2"/>
+                    <ComboBoxItem Content="Every 3 frames" Tag="3" IsSelected="True"/>
+                    <ComboBoxItem Content="Every 4 frames" Tag="4"/>
+                    <ComboBoxItem Content="Every 6 frames" Tag="6"/>
+                    <ComboBoxItem Content="Every 8 frames" Tag="8"/>
+                </ComboBox>
                 <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="Each Multiview window is a vMix-style mosaic: Preview and Program on top, eight Input or Scene windows below. Outputs can send a Multiview by picking it from the list. Fullscreen: F11."/>
+                           Text="Each Multiview window is a vMix-style mosaic: Preview and Program on top, eight Input or Scene windows below. Outputs can send a Multiview by picking it from the list. Fullscreen: F11. Windows set to Follow project use the interval above. Program, Preview, and outputs stay at the master frame rate. Every 3 frames is about 20 fps at 59.94."/>
             </StackPanel>
             <DockPanel x:Name="AudioBusPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddBus_Click"/>
-                    <TextBlock Text="Audio Buses" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="Audio Auxiliary" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                           Text="Internal mix is 48 kHz stereo. Assign each bus to a WASAPI or ASIO device and map Left/Right onto device channels. Master and Headphone cannot be removed. A–H are optional aux buses."/>
+                           Text="Internal mix is 48 kHz stereo. Enabled keeps the bus in the mix with no hardware device. WASAPI and ASIO send that mix to a device; map Left/Right onto device channels. Master and Headphone cannot be removed. A–H are optional aux buses."/>
                 <CheckBox x:Name="HeadphoneCopyBox" DockPanel.Dock="Top" Content="Headphone copies Master"
                           Margin="0,0,0,8" Foreground="#EEEEEE"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">

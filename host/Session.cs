@@ -49,7 +49,7 @@ public sealed class InputEntry
 {
     public ulong Id { get; init; }
     public required string Name { get; set; }
-    public InputKind Kind { get; init; }
+    public InputKind Kind { get; set; }
     public string? PathOrAddress { get; set; }
     public float ColorR { get; set; } = 1;
     public float ColorG { get; set; }
@@ -60,7 +60,22 @@ public sealed class InputEntry
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
     public uint FrameBufferFrames { get; set; } = 1;
+    public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
     public override string ToString() => Name;
+}
+
+internal static class InputKindNames
+{
+    public static string Category(InputKind kind) => kind switch
+    {
+        InputKind.Color or InputKind.Bars or InputKind.Black => "Colours",
+        InputKind.Still => "Still",
+        InputKind.Video => "Video",
+        InputKind.Omt => "OMT",
+        InputKind.Ndi => "NDI®",
+        InputKind.Uvc => "Video Capture",
+        _ => kind.ToString()
+    };
 }
 
 public sealed class SceneLayer
@@ -117,9 +132,22 @@ public sealed class MultiviewLayout
     public ulong MonitorId { get; set; }
     public ulong PreviewUnitId { get; set; } = 1;
     public ulong ProgramUnitId { get; set; } = 1;
+    public uint PresentInterval { get; set; }
     public List<MvSlot> Tiles { get; } = [];
     public ulong GpuId => MixerNative.MultiviewBase | Id;
     public override string ToString() => Name;
+
+    public static uint ClampPresentInterval(uint frames) => Math.Clamp(frames, 1u, 8u);
+
+    public uint ResolvedPresentInterval(SessionSettings settings)
+    {
+        if (PresentInterval == 0)
+            return ClampPresentInterval(settings.DefaultPresentInterval == 0 ? 3 : settings.DefaultPresentInterval);
+        return ClampPresentInterval(PresentInterval);
+    }
+
+    public void PushPresentInterval(SessionSettings settings) =>
+        MixerNative.SetMonitorPresentInterval(MonitorId, ResolvedPresentInterval(settings));
 
     public void EnsureTiles()
     {
@@ -244,6 +272,7 @@ public sealed class SessionSettings
     public string Theme { get; set; } = "Charcoal";
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
+    public uint DefaultPresentInterval { get; set; } = 3;
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public string? LastSessionPath { get; set; }
 }
@@ -271,10 +300,10 @@ public sealed class Session
     {
         var session = new Session();
         session.EnsureDefaultBuses();
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE Bars", Kind = InputKind.Bars });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });

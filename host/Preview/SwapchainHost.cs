@@ -93,11 +93,14 @@ internal sealed partial class SwapchainHost : HwndHost
             MixerNative.ThrowIfFailed(MixerNative.SetMonitorSource(MonitorId, sourceId), "Update monitor source");
     }
 
+    public void RefreshSize() => ApplySize();
+
     private void ApplySize()
     {
         if (_hwnd == nint.Zero)
             return;
         var (width, height) = PixelSize();
+        MoveWindow(_hwnd, 0, 0, (int)width, (int)height, true);
         if (!_attached)
         {
             if (IsMonitor)
@@ -149,6 +152,10 @@ internal sealed partial class SwapchainHost : HwndHost
         int extendedStyle, string className, string? windowName, int style,
         int x, int y, int width, int height, nint parent, nint menu,
         nint instance, nint parameter);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MoveWindow(nint hwnd, int x, int y, int width, int height, [MarshalAs(UnmanagedType.Bool)] bool repaint);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

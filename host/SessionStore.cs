@@ -88,6 +88,7 @@ internal static class SessionStore
             session.Settings.Theme = Settings.Theme;
             session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
             session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
+            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 3 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
@@ -260,6 +261,7 @@ internal static class SessionStore
         public string Name { get; set; } = "";
         public ulong PreviewUnitId { get; set; }
         public ulong ProgramUnitId { get; set; }
+        public uint PresentInterval { get; set; }
         public List<MvSlot> Tiles { get; set; } = [];
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
@@ -268,6 +270,7 @@ internal static class SessionStore
             Name = layout.Name,
             PreviewUnitId = layout.PreviewUnitId,
             ProgramUnitId = layout.ProgramUnitId,
+            PresentInterval = layout.PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(layout.PresentInterval),
             Tiles = [.. layout.Tiles]
         };
 
@@ -279,7 +282,8 @@ internal static class SessionStore
                 Name = string.IsNullOrWhiteSpace(Name) ? $"Multiview {Id}" : Name,
                 MonitorId = session.NextMonitorId++,
                 PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
-                ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId
+                ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId,
+                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval)
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);

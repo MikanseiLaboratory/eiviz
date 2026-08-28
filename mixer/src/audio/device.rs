@@ -1,11 +1,13 @@
 use windows::core::PCWSTR;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     DEVICE_STATE_ACTIVE,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY_LOCAL_MACHINE, KEY_READ,
     RRF_RT_REG_SZ,
@@ -93,12 +95,13 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
                 continue;
             };
             let id = device_id_string(&device);
+            let name = wasapi_friendly_name(&device).unwrap_or_else(|| id.clone());
             let channels = mix_channels(&device).unwrap_or(2);
             dest[n] = AudioDeviceInfo {
                 kind: DEVICE_WASAPI,
                 channels,
                 id: cbuf(&id),
-                name: cbuf(&id),
+                name: cbuf(&name),
             };
             n += 1;
         }
@@ -172,6 +175,20 @@ fn cbuf(text: &str) -> [u8; 256] {
     let n = bytes.len().min(255);
     buf[..n].copy_from_slice(&bytes[..n]);
     buf
+}
+
+fn wasapi_friendly_name(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let store: IPropertyStore = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        let text = value.to_string();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
 }
 
 fn device_id_string(device: &IMMDevice) -> String {

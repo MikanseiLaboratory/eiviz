@@ -24,6 +24,7 @@ public partial class SettingsWindow : Window
             Theme = session.Settings.Theme,
             DefaultMultiviewUnitId = session.Settings.DefaultMultiviewUnitId,
             FrameBufferFrames = session.Settings.FrameBufferFrames,
+            DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             InternalColorFormat = session.Settings.InternalColorFormat
         };
         foreach (var output in session.Outputs)
@@ -35,6 +36,7 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
         SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
+        SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 3 : Settings.DefaultPresentInterval).ToString());
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
@@ -76,6 +78,7 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, "1920x1080");
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
+        SelectTag(MvPresentBox, "3");
     }
 
     private void RebuildLayouts()
@@ -145,7 +148,7 @@ public partial class SettingsWindow : Window
             var name = new TextBox { Text = bus.Name, Margin = new Thickness(0, 0, 8, 6), IsReadOnly = bus.Role != AudioBusRole.Aux };
             name.TextChanged += (_, _) => bus.Name = name.Text.Trim();
             var kind = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
-            kind.Items.Add(new ComboBoxItem { Content = "None", Tag = AudioDeviceKind.None });
+            kind.Items.Add(new ComboBoxItem { Content = "Enabled", Tag = AudioDeviceKind.None });
             kind.Items.Add(new ComboBoxItem { Content = "WASAPI", Tag = AudioDeviceKind.Wasapi });
             kind.Items.Add(new ComboBoxItem { Content = "ASIO", Tag = AudioDeviceKind.Asio });
             kind.SelectedIndex = (int)bus.DeviceKind;
@@ -154,11 +157,14 @@ public partial class SettingsWindow : Window
                 if (kind.SelectedItem is ComboBoxItem item && item.Tag is AudioDeviceKind value)
                 {
                     bus.DeviceKind = value;
+                    if (value == AudioDeviceKind.None)
+                        bus.DeviceId = "";
                     RebuildBuses();
                 }
             };
             var device = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             FillDeviceBox(device, bus);
+            device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
             device.SelectionChanged += (_, _) =>
             {
                 if (device.SelectedItem is ComboBoxItem item && item.Tag is string id)
@@ -192,8 +198,11 @@ public partial class SettingsWindow : Window
                 RebuildBuses();
             };
 
-            var leftLabel = new TextBlock { Text = "L ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2) };
-            var rightLabel = new TextBlock { Text = "R ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2) };
+            var mapVisible = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
+            var leftLabel = new TextBlock { Text = "L ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
+            var rightLabel = new TextBlock { Text = "R ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
+            left.Visibility = mapVisible;
+            right.Visibility = mapVisible;
 
             Grid.SetRow(name, 0);
             Grid.SetColumnSpan(name, 4);
@@ -362,8 +371,8 @@ public partial class SettingsWindow : Window
             };
 
             var path = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = output.Transport == OutputTransport.Omt };
-            path.Items.Add(new ComboBoxItem { Content = "GPU", Tag = true });
-            path.Items.Add(new ComboBoxItem { Content = "CPU", Tag = false });
+            path.Items.Add(new ComboBoxItem { Content = "GPU encode", Tag = true });
+            path.Items.Add(new ComboBoxItem { Content = "CPU encode", Tag = false });
             path.SelectedIndex = output.UseGpu ? 0 : 1;
             path.SelectionChanged += (_, _) =>
             {
@@ -434,6 +443,9 @@ public partial class SettingsWindow : Window
             Settings.FrameBufferFrames = Math.Clamp(frames, 1u, 8u);
         if (ColorFormatBox.SelectedItem is ComboBoxItem color && color.Tag is string colorTag)
             Settings.InternalColorFormat = colorTag == "bgra" ? InternalColorFormat.Bgra : InternalColorFormat.Uyvy;
+        if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
+            && uint.TryParse(presentTag, out var interval))
+            Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
         DialogResult = true;
