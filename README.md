@@ -1,18 +1,35 @@
 # eiviz
-This project is work-in-progress!  
+
+Work in progress. Multi M/E vision mixer for Windows.  
 eiviz / 映像(eizou) + visual
 
-<img width="1916" height="1030" alt="image" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
+<img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
 
+[Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [all releases](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-Proof-of-Concept multi M/E vision mixer.  
-Rust wgpu (DX12) mixer with C# WPF UI. 　
+Windows x64 zip. Unzip and run `Eiviz.Host.exe`.
+
+## What it is
+
+Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
+
+The mixer is Rust + wgpu (DX12). The UI is C# WPF. Proof of concept.
+
+Inputs: colour, bars, still, video file, UVC, OMT.  
+Output: OMT (GPU or CPU encode). NDI and DeckLink are in the UI but not linked.  
+Scenes, overlays, multiview. Audio buses over WASAPI / ASIO.
+
+## Build
+
+Windows, .NET 10, Rust 1.97, a DirectX 12 GPU.
 
 ```powershell
 dotnet build eiviz.slnx -c Release
 dotnet run --project host\Eiviz.Host.csproj -c Release
 cargo test --manifest-path mixer\Cargo.toml
 ```
+
+`dotnet build` compiles the mixer DLL first.
 
 ## License
 
