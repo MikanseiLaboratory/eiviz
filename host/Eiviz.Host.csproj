@@ -8,8 +8,8 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>preview</LangVersion>
-    <Authors>MikanseiLaboratory</Authors>
-    <Copyright>Copyright 2026 MikanseiLaboratory</Copyright>
+    <Authors>Shugo Kawamura; Mikansei Laboratory</Authors>
+    <Copyright>Copyright 2026 Shugo Kawamura / Mikansei Laboratory</Copyright>
     <PackageLicenseExpression>PolyForm-Noncommercial-1.0.0</PackageLicenseExpression>
     <MixerProject>$(MSBuildThisFileDirectory)..\mixer</MixerProject>
     <MixerLibrary>$(MixerProject)\target\release\eiviz_mixer.dll</MixerLibrary>

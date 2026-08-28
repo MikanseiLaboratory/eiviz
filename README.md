@@ -18,6 +18,6 @@ cargo test --manifest-path mixer\Cargo.toml
 
 eiviz original source is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 
-Non-commercial use is allowed: personal, hobby, education, research, and use by qualifying noncommercial organizations. Selling eiviz, bundling it as a product, or other commercial purposes are not allowed under this license. A separate commercial license from the copyright holder is required for those uses.
+Non-commercial use is allowed: personal, hobby, education, research, and use by qualifying noncommercial organizations. Selling eiviz, bundling it as a product, or other commercial purposes are not allowed under this license. A separate commercial license from Shugo Kawamura / Mikansei Laboratory is required for those uses.
 
 Third-party crates and libraries stay under their original MIT / Apache-2.0 / Zlib terms. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

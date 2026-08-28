@@ -3,6 +3,7 @@ name = "eiviz_mixer"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
+authors = ["Shugo Kawamura", "Mikansei Laboratory"]
 license = "PolyForm-Noncommercial-1.0.0"
 
 [lib]
