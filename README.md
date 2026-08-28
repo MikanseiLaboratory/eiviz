@@ -1,4 +1,6 @@
 # eiviz
+[![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
+[![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
 Work in progress. Multi M/E vision mixer for Windows.  
 eiviz / 映像(eizou) + visual
