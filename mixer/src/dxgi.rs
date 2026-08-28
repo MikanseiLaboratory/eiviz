@@ -76,25 +76,43 @@ impl DxgiVideo {
                 })
                 .map_err(|e| e.to_string())?
         };
-        let flags = (D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT).0;
+        let flags_video = (D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT).0;
+        let flags_basic = D3D11_CREATE_DEVICE_BGRA_SUPPORT.0;
         let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
         let queue_unknown: IUnknown = queue_11on12.cast().map_err(|e| e.to_string())?;
         let queues = [Some(queue_unknown)];
         let mut d3d11 = None;
         let mut context = None;
         let mut chosen = D3D_FEATURE_LEVEL::default();
+        // WARP / VMs (GitHub-hosted runners) reject VIDEO_SUPPORT (DXGI_ERROR_UNSUPPORTED).
+        // Compose and OMT still work without DXVA; file/UVC GPU import can fall back to CPU.
         unsafe {
-            D3D11On12CreateDevice(
+            if let Err(error) = D3D11On12CreateDevice(
                 &device12,
-                flags,
+                flags_video,
                 Some(&levels),
                 Some(&queues),
                 0,
                 Some(&mut d3d11),
                 Some(&mut context),
                 Some(&mut chosen),
-            )
-            .map_err(|e| e.to_string())?;
+            ) {
+                eprintln!("eiviz dxgi video: {error}; retrying without video support");
+                d3d11 = None;
+                context = None;
+                chosen = D3D_FEATURE_LEVEL::default();
+                D3D11On12CreateDevice(
+                    &device12,
+                    flags_basic,
+                    Some(&levels),
+                    Some(&queues),
+                    0,
+                    Some(&mut d3d11),
+                    Some(&mut context),
+                    Some(&mut chosen),
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
         let d3d11 = d3d11.ok_or("D3D11On12 device")?;
         let context = context.ok_or("D3D11On12 context")?;
