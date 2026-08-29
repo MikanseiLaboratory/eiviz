@@ -60,7 +60,7 @@ public partial class ResourceMonitorWindow : Window
             usages.TryGetValue(input.Id, out var usage);
             var ram = usage.RamBytes;
             var vram = usage.VramBytes;
-            var cpu = input.Kind is InputKind.Omt or InputKind.Uvc or InputKind.Video ? "live" : "—";
+            var cpu = input.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Uvc or InputKind.Video ? "live" : "—";
             var gpu = vram == 0 ? "—" : $"{vram / (double)totalVram * gpuLoad:0}%";
             rows.Add(new Row(
                 input.Name,

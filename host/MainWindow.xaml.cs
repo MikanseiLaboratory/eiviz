@@ -637,7 +637,9 @@ public partial class MainWindow : Window
         input.ColorB = dialog.ColorB;
         input.Scroll = dialog.Scroll;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind == InputKind.Omt ? dialog.ResultFrameBufferFrames : 1;
+        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
+            ? dialog.ResultFrameBufferFrames
+            : 1;
         switch (dialog.Kind)
         {
             case InputKind.Color:
@@ -661,6 +663,12 @@ public partial class MainWindow : Window
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultUseGpu,
+                    dialog.ResultFrameBufferFrames));
+                break;
+            case InputKind.Ndi:
+                Commands.TryEnqueue(new ConnectNdiCommand(
+                    input.Id,
+                    dialog.ResultPath!,
                     dialog.ResultFrameBufferFrames));
                 break;
             case InputKind.Uvc:
@@ -988,7 +996,7 @@ public partial class MainWindow : Window
                 continue;
             if (prior is not null)
                 Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
-            if (output.Transport == OutputTransport.Omt)
+            if (output.Transport is OutputTransport.Omt or OutputTransport.Ndi)
             {
                 Commands.TryEnqueue(new AddOutputCommand(output));
                 continue;

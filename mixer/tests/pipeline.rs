@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use eiviz_mixer::{
     mixer_audio_bus_count, mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
-    mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_unit_acquire_frame,
-    mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
-    mixer_unit_set_state, mixer_video_start, OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT,
-    ERR_IO, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_MU_PROGRAM,
+    mixer_ndi_discover, mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_output_remove,
+    mixer_ping, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_start, OverlayDesc, Rect, UnitState,
+    ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_MU_PROGRAM,
 };
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
 
@@ -311,14 +311,18 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
             mixer_output_add(
                 99,
                 OUT_NDI,
-                CString::new("ndi-unlinked").unwrap().as_ptr(),
+                CString::new("eiviz-ndi-test").unwrap().as_ptr(),
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
                 0
             ),
-            ERR_IO
+            OK
         );
+        assert_eq!(mixer_output_remove(99), OK);
+        let mut ndi_names = vec![0u8; 4096];
+        let discovered = mixer_ndi_discover(ndi_names.as_mut_ptr(), ndi_names.len());
+        assert!(discovered >= 0);
         assert_eq!(
             mixer_output_add(
                 98,

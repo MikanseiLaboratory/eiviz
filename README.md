@@ -17,13 +17,13 @@ Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Prog
 
 The mixer is Rust + wgpu (DX12). The UI is C# WPF. Proof of concept.
 
-Inputs: colour, bars, still, video file, UVC, OMT.  
-Output: OMT (GPU or CPU encode).  
+Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
+Output: OMT (GPU or CPU encode), NDI® (CPU / UYVY).  
 Scenes, overlays, multiview. Audio buses over WASAPI / ASIO.
 
 ## Build
 
-Windows, .NET 10, Rust 1.97, a DirectX 12 GPU.
+Windows, .NET 10, Rust 1.97, a DirectX 12 GPU, the [NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/) (set `NDI_SDK_DIR` if it is not installed to the default path), and LLVM/Clang for bindgen.
 
 ```powershell
 dotnet build eiviz.slnx -c Release

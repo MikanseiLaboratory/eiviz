@@ -34,6 +34,7 @@ public partial class AddInputWindow : Window
         VideoRecent.ItemsSource = VideoHistory.ToArray();
         Highlight();
         RefreshOmt();
+        RefreshNdi();
         RefreshUvc();
     }
 
@@ -64,8 +65,10 @@ public partial class AddInputWindow : Window
         StillPath.Text = input.Kind == InputKind.Still ? input.PathOrAddress ?? "" : "";
         VideoPath.Text = input.Kind == InputKind.Video ? input.PathOrAddress ?? "" : "";
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
+        NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
         SelectTag(OmtBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
+        SelectTag(NdiBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
@@ -102,7 +105,6 @@ public partial class AddInputWindow : Window
         OmtPanel.Visibility = VisibleIf(InputKind.Omt);
         NdiPanel.Visibility = VisibleIf(InputKind.Ndi);
         UvcPanel.Visibility = VisibleIf(InputKind.Uvc);
-        OkButton.IsEnabled = _kind != InputKind.Ndi;
         foreach (Button button in CategoryPanel.Children)
             button.Background = Equals(button.Tag, _kind)
                 ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0x6B, 0x3C))
@@ -161,6 +163,22 @@ public partial class AddInputWindow : Window
         OmtList.ItemsSource = string.IsNullOrWhiteSpace(text)
             ? Array.Empty<string>()
             : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private void RefreshNdi_Click(object sender, RoutedEventArgs e) => RefreshNdi();
+
+    private void RefreshNdi()
+    {
+        var text = MixerNative.DiscoverNdiText();
+        NdiList.ItemsSource = string.IsNullOrWhiteSpace(text)
+            ? Array.Empty<string>()
+            : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private void NdiList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (NdiList.SelectedItem is string address)
+            NdiAddress.Text = address;
     }
 
     private void OmtList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -225,6 +243,17 @@ public partial class AddInputWindow : Window
                 if (OmtBufferBox.SelectedItem is ComboBoxItem buffer && buffer.Tag is string tag
                     && uint.TryParse(tag, out var frames))
                     ResultFrameBufferFrames = Math.Clamp(frames, 1u, 8u);
+                break;
+            case InputKind.Ndi:
+                if (string.IsNullOrWhiteSpace(NdiAddress.Text))
+                    return;
+                ResultPath = NdiAddress.Text.Trim();
+                ResultName = ResultPath;
+                ResultUseGpu = false;
+                ResultFrameBufferFrames = 1;
+                if (NdiBufferBox.SelectedItem is ComboBoxItem ndiBuffer && ndiBuffer.Tag is string ndiTag
+                    && uint.TryParse(ndiTag, out var ndiFrames))
+                    ResultFrameBufferFrames = Math.Clamp(ndiFrames, 1u, 8u);
                 break;
             case InputKind.Uvc:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))

@@ -19,6 +19,8 @@ env:
   CARGO_INCREMENTAL: "0"
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
+  LLVM_VERSION: "20.1.8"
 
 jobs:
   windows-x64:
@@ -28,6 +30,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Setup NDI SDK and LLVM
+        uses: ./.github/actions/setup-ndi-windows
 
       - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@stable

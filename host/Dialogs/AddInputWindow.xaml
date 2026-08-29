@@ -88,8 +88,22 @@
                                Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source."/>
                 </StackPanel>
                 <StackPanel x:Name="NdiPanel" Visibility="Collapsed">
-                    <TextBlock TextWrapping="Wrap"
-                               Text="NDI receive is not linked in this build. Use OMT for AV-over-IP until the NDI SDK is added. This dialog will not create a fake source."/>
+                    <TextBlock Text="NDI® source" Margin="0,0,0,8"/>
+                    <TextBox x:Name="NdiAddress"/>
+                    <Button Content="Refresh discovery" Margin="0,12,0,8" HorizontalAlignment="Left" Click="RefreshNdi_Click"/>
+                    <ListBox x:Name="NdiList" Height="180" Background="#333" Foreground="#EEE"
+                             SelectionChanged="NdiList_SelectionChanged"/>
+                    <TextBlock Text="Frame buffer (frames)" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="NdiBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,8">
+                        <ComboBoxItem Content="1" Tag="1" IsSelected="True"/>
+                        <ComboBoxItem Content="2" Tag="2"/>
+                        <ComboBoxItem Content="3" Tag="3"/>
+                        <ComboBoxItem Content="4" Tag="4"/>
+                        <ComboBoxItem Content="6" Tag="6"/>
+                        <ComboBoxItem Content="8" Tag="8"/>
+                    </ComboBox>
+                    <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source."/>
                 </StackPanel>
                 <StackPanel x:Name="UvcPanel" Visibility="Collapsed">
                     <TextBlock Text="Select a UVC / Media Foundation capture device." Margin="0,0,0,8"/>
