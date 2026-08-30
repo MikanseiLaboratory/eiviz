@@ -134,14 +134,21 @@ impl AudioEngine {
     }
 
     pub fn shutdown(&self) {
-        let mut outputs = self.outputs.lock().expect("audio outputs");
-        for output in outputs.iter_mut() {
-            output.stop.store(true, Ordering::Relaxed);
-            if let Some(join) = output.join.take() {
-                let _ = join.join();
+        let joins = {
+            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut joins = Vec::new();
+            for output in outputs.iter_mut() {
+                output.stop.store(true, Ordering::Relaxed);
+                if let Some(join) = output.join.take() {
+                    joins.push(join);
+                }
             }
+            outputs.clear();
+            joins
+        };
+        for join in joins {
+            let _ = join.join();
         }
-        outputs.clear();
     }
 
     pub fn upsert_bus(
@@ -252,47 +259,47 @@ impl AudioEngine {
 
     fn sync_outputs(&self) {
         let desired = self.graph.lock().expect("audio").device_groups();
-        let mut outputs = self.outputs.lock().expect("audio outputs");
-        let mut keep = Vec::new();
-        for mut output in outputs.drain(..) {
-            if desired.iter().any(|(key, _)| *key == output.key) {
-                keep.push(output);
-            } else {
-                output.stop.store(true, Ordering::Relaxed);
-                if let Some(join) = output.join.take() {
-                    let _ = join.join();
+        let mut stale = Vec::new();
+        {
+            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut keep = Vec::new();
+            for mut output in outputs.drain(..) {
+                if desired.iter().any(|(key, _)| *key == output.key) {
+                    keep.push(output);
+                } else {
+                    output.stop.store(true, Ordering::Relaxed);
+                    if let Some(join) = output.join.take() {
+                        stale.push(join);
+                    }
                 }
             }
+            for (key, maps) in desired {
+                if keep.iter().any(|output| output.key == key) {
+                    continue;
+                }
+                if key.kind == DEVICE_NONE || maps.is_empty() {
+                    continue;
+                }
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_t = Arc::clone(&stop);
+                let key_t = key.clone();
+                let join = std::thread::Builder::new()
+                    .name(format!("eiviz-audio-{}", key.kind))
+                    .spawn(move || run_device(key_t, maps, stop_t))
+                    .ok();
+                if let Some(join) = join {
+                    keep.push(DeviceOutput {
+                        key,
+                        stop,
+                        join: Some(join),
+                    });
+                }
+            }
+            *outputs = keep;
         }
-        for (key, maps) in desired {
-            if keep.iter().any(|output| output.key == key) {
-                continue;
-            }
-            if key.kind == DEVICE_NONE || maps.is_empty() {
-                continue;
-            }
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_t = Arc::clone(&stop);
-            let key_t = key.clone();
-            let join = std::thread::Builder::new()
-                .name(format!("eiviz-audio-{}", key.kind))
-                .spawn(move || run_device(key_t, maps, stop_t))
-                .ok();
-            if let Some(join) = join {
-                keep.push(DeviceOutput {
-                    key,
-                    stop,
-                    join: Some(join),
-                });
-            }
+        for join in stale {
+            let _ = join.join();
         }
-        *outputs = keep;
-    }
-}
-
-impl Drop for AudioEngine {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }
 

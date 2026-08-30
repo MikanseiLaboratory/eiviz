@@ -135,7 +135,11 @@ impl AudioGraph {
             headphone_copy_master: false,
             master_peak: (0.0, 0.0),
         };
-        let master_kind = if cfg!(windows) {
+        // Tests must not open the machine's output. HAL Start can block forever
+        // on CI runners, and AudioEngine used to join that thread from Drop.
+        let master_kind = if cfg!(test) {
+            DEVICE_NONE
+        } else if cfg!(windows) {
             DEVICE_WASAPI
         } else if cfg!(target_os = "macos") {
             DEVICE_COREAUDIO

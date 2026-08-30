@@ -474,20 +474,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    if let Some(mut mixer) = slot.take() {
-        mixer.stop.store(true, Ordering::Relaxed);
-        if let Ok(shared) = mixer.shared.lock() {
-            shared.audio.shutdown();
-        }
-        let _ = mixer.cmds.send(GpuCmd::Shutdown);
-        if let Some(join) = mixer.render.take() {
-            let _ = join.join();
-        }
-        let _ = mixer.send_tx.send(SendCmd::Shutdown);
-        if let Some(join) = mixer.send.take() {
-            let _ = join.join();
-        }
+    let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
+        return;
+    };
+    mixer.stop.store(true, Ordering::Relaxed);
+    let audio = mixer.shared.lock().expect("shared").audio.clone();
+    audio.shutdown();
+    let _ = mixer.cmds.send(GpuCmd::Shutdown);
+    if let Some(join) = mixer.render.take() {
+        let _ = join.join();
+    }
+    let _ = mixer.send_tx.send(SendCmd::Shutdown);
+    if let Some(join) = mixer.send.take() {
+        let _ = join.join();
     }
 }
 
