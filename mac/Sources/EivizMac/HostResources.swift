@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Metal
 
+@MainActor
 enum HostResources {
     private static var lastCpu: Double = 0
     private static var lastStamp = Date.distantPast
