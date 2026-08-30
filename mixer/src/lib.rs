@@ -2310,7 +2310,7 @@ fn render_loop(
             frame_i = frame_i.wrapping_add(1);
             let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) =
-                collect_live_ids(&scene_specs, &snapshot, monitor_sources, &outputs_snap);
+                collect_live_ids(&scene_specs, &snapshot, &monitor_sources, &outputs_snap);
             let output_refs: Vec<(u32, u64)> = outputs_snap
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
@@ -2777,7 +2777,7 @@ fn audio_for_source(
 fn collect_live_ids(
     scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
-    monitor_sources: Vec<u64>,
+    monitor_sources: &[u64],
     outputs: &[OutputSnap],
 ) -> (HashSet<u64>, HashSet<u64>) {
     let spec_map: HashMap<u64, &[OverlayDesc]> = scene_specs
@@ -2820,7 +2820,7 @@ fn collect_live_ids(
             add(*slot, &spec_map, &mut scenes, &mut uploads);
         }
     }
-    for id in monitor_sources {
+    for &id in monitor_sources {
         add(id, &spec_map, &mut scenes, &mut uploads);
     }
     for output in outputs {
