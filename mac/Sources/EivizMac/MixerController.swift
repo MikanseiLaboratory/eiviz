@@ -504,11 +504,13 @@ final class MixerController: ObservableObject {
         let enabled = unit.overlays.filter(\.enabled).prefix(8)
         state.overlay_count = UInt32(enabled.count)
         for (index, slot) in enabled.enumerated() {
-            state.overlays[index].source_id = slot.sceneGpuId
-            state.overlays[index].rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
-            state.overlays[index].opacity = slot.opacity
-            state.overlays[index].z = slot.z
-            state.overlays[index].audio_follow = 1
+            var desc = MixerFFI.emptyOverlay()
+            desc.source_id = slot.sceneGpuId
+            desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
+            desc.opacity = slot.opacity
+            desc.z = slot.z
+            desc.audio_follow = 1
+            MixerFFI.setOverlay(&state, index: index, desc)
         }
         return state
     }
