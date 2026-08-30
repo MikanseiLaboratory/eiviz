@@ -41,7 +41,6 @@ pub fn warm_finder() {
 
 pub struct NdiReceiver {
     stop: Arc<AtomicBool>,
-    want_full: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -55,11 +54,12 @@ impl NdiReceiver {
         let depth = frame_buffer_frames.clamp(1, 8);
         let ndi = runtime()?;
         let source = resolve_source(&address)?;
-        let want_full = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
-        let want_full_thread = Arc::clone(&want_full);
-        let mut receiver = open_receiver(ndi, &source, source_id, true)?;
+        // NDI public SDK sets bandwidth at create time only. Dynamic Highest/Lowest
+        // needs Advanced SDK 6.1 `NDIlib_recv_set_bandwidth` (Vendor ID). Implement
+        // that path when Advanced SDK is available.
+        let receiver = open_receiver(ndi, &source, source_id)?;
         let join = thread::Builder::new()
             .name(format!("eiviz-ndi-{source_id}"))
             .spawn(move || {
@@ -73,15 +73,7 @@ impl NdiReceiver {
                         depth,
                     );
                 }
-                let mut full = true;
                 while !stop_thread.load(Ordering::Relaxed) {
-                    let next_full = want_full_thread.load(Ordering::Relaxed);
-                    if next_full != full
-                        && let Ok(next) = open_receiver(ndi, &source, source_id, next_full)
-                    {
-                        receiver = next;
-                        full = next_full;
-                    }
                     match receiver.video().try_capture(Duration::from_millis(4)) {
                         Ok(Some(frame)) => ingest_video(&uploads, source_id, depth, &frame),
                         Ok(None) => {}
@@ -100,13 +92,8 @@ impl NdiReceiver {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             stop,
-            want_full,
             join: Some(join),
         })
-    }
-
-    pub fn apply_save(&self, full: bool) {
-        self.want_full.store(full, Ordering::Relaxed);
     }
 }
 
@@ -202,19 +189,10 @@ impl NdiSender {
     }
 }
 
-fn open_receiver(
-    ndi: &NDI,
-    source: &Source,
-    source_id: u64,
-    full: bool,
-) -> Result<Receiver, String> {
+fn open_receiver(ndi: &NDI, source: &Source, source_id: u64) -> Result<Receiver, String> {
     let options = ReceiverOptions::builder(source.clone())
         .color(ReceiverColorFormat::BGRX_BGRA)
-        .bandwidth(if full {
-            ReceiverBandwidth::Highest
-        } else {
-            ReceiverBandwidth::Lowest
-        })
+        .bandwidth(ReceiverBandwidth::Highest)
         .allow_video_fields(false)
         .name(format!("eiviz-ndi-{source_id}"))
         .build();

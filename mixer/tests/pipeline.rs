@@ -74,7 +74,7 @@ fn dx12_compose_omt_and_program_out() {
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
-        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1), OK);
+        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0), OK);
         assert_eq!(
             mixer_omt_start_send(1, CString::new("eiviz-test-pgm").unwrap().as_ptr()),
             OK
@@ -147,7 +147,7 @@ fn dx12_omt_gpu_in_and_out() {
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
-        assert_eq!(mixer_omt_connect(21, address.as_ptr(), 1, 3), OK);
+        assert_eq!(mixer_omt_connect(21, address.as_ptr(), 1, 3, 0), OK);
         assert_eq!(
             mixer_output_add(
                 201,

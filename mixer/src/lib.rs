@@ -126,7 +126,8 @@ impl LiveReceiver {
     fn apply_save(&self, full: bool, on_program: bool, on_preview: bool) {
         match self {
             Self::Omt(receiver) => receiver.apply_save(full, on_program, on_preview),
-            Self::Ndi(receiver) => receiver.apply_save(full),
+            // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
+            Self::Ndi(_) => {}
         }
     }
 }
@@ -1000,6 +1001,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
     address: *const c_char,
     use_gpu: u32,
     frame_buffer_frames: u32,
+    quality: u32,
 ) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1024,7 +1026,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
             drop(previous);
             (uploads, gpu)
         };
-        match OmtReceiver::start(id, address, uploads, gpu, depth) {
+        match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
             Ok(receiver) => {
                 mixer
                     .shared
@@ -1099,6 +1101,21 @@ pub extern "C" fn mixer_set_live_save(id: u64, mode: u32, flags: u32) -> i32 {
                 flags: flags & SAVE_FLAG_MULTIVIEW,
             },
         );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_omt_set_quality(id: u64, quality: u32) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        if let Some(LiveReceiver::Omt(receiver)) = shared.receivers.get(&id) {
+            receiver.set_quality(quality);
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1960,11 +1977,12 @@ fn render_loop(
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
             frame_i = frame_i.wrapping_add(1);
-            let monitor_sources = presenters.attached_monitor_sources_due(frame_i);
+            let monitor_sources_due = presenters.attached_monitor_sources_due(frame_i);
+            let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) = collect_live_ids(
                 &scene_specs,
                 &snapshot,
-                monitor_sources.clone(),
+                monitor_sources_due,
                 &outputs_snap,
             );
             let output_refs: Vec<(u32, u64)> = outputs_snap

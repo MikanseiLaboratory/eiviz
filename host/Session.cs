@@ -22,6 +22,14 @@ public enum BandwidthSave
     AlwaysFull = 3
 }
 
+public enum OmtQuality
+{
+    Default = 0,
+    Low = 1,
+    Medium = 50,
+    High = 100
+}
+
 public enum OutputTransport
 {
     Omt = 0,
@@ -70,6 +78,7 @@ public sealed class InputEntry
     public uint FrameBufferFrames { get; set; } = 1;
     public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool KeepFullOnMultiview { get; set; }
+    public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
     public override string ToString() => Name;
 }

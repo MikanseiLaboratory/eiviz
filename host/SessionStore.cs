@@ -140,6 +140,7 @@ internal static class SessionStore
         public uint FrameBufferFrames { get; set; } = 1;
         public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
         public bool KeepFullOnMultiview { get; set; }
+        public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -157,7 +158,8 @@ internal static class SessionStore
             UseGpu = input.UseGpu,
             FrameBufferFrames = input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
             BandwidthSave = input.BandwidthSave,
-            KeepFullOnMultiview = input.KeepFullOnMultiview
+            KeepFullOnMultiview = input.KeepFullOnMultiview,
+            OmtQuality = input.OmtQuality
         };
 
         public InputEntry ToEntry() => new()
@@ -176,7 +178,8 @@ internal static class SessionStore
             UseGpu = UseGpu,
             FrameBufferFrames = FrameBufferFrames == 0 ? 1 : Math.Clamp(FrameBufferFrames, 1u, 8u),
             BandwidthSave = BandwidthSave,
-            KeepFullOnMultiview = KeepFullOnMultiview
+            KeepFullOnMultiview = KeepFullOnMultiview,
+            OmtQuality = OmtQuality
         };
     }
 

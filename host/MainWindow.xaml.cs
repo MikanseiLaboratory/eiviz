@@ -646,17 +646,22 @@ public partial class MainWindow : Window
         input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
             ? dialog.ResultFrameBufferFrames
             : 1;
-        input.BandwidthSave = dialog.Kind is InputKind.Omt or InputKind.Ndi
+        input.BandwidthSave = dialog.Kind == InputKind.Omt
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
-        input.KeepFullOnMultiview = dialog.Kind is InputKind.Omt or InputKind.Ndi
+        input.KeepFullOnMultiview = dialog.Kind == InputKind.Omt
             && dialog.ResultKeepFullOnMultiview;
+        input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
         if (keepLive)
         {
-            Commands.TryEnqueue(new LiveSaveCommand(
-                input.Id,
-                input.BandwidthSave,
-                input.KeepFullOnMultiview));
+            if (dialog.Kind == InputKind.Omt)
+            {
+                Commands.TryEnqueue(new LiveSaveCommand(
+                    input.Id,
+                    input.BandwidthSave,
+                    input.KeepFullOnMultiview,
+                    input.OmtQuality));
+            }
             return;
         }
         switch (dialog.Kind)
@@ -684,15 +689,14 @@ public partial class MainWindow : Window
                     dialog.ResultUseGpu,
                     dialog.ResultFrameBufferFrames,
                     input.BandwidthSave,
-                    input.KeepFullOnMultiview));
+                    input.KeepFullOnMultiview,
+                    input.OmtQuality));
                 break;
             case InputKind.Ndi:
                 Commands.TryEnqueue(new ConnectNdiCommand(
                     input.Id,
                     dialog.ResultPath!,
-                    dialog.ResultFrameBufferFrames,
-                    input.BandwidthSave,
-                    input.KeepFullOnMultiview));
+                    dialog.ResultFrameBufferFrames));
                 break;
             case InputKind.Uvc:
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!));

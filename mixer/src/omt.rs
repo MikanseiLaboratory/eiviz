@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use openmediatransport::{
     Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, Quality,
@@ -13,6 +13,7 @@ use openmediatransport::protocol::metadata::{suggested_quality_xml, PREVIEW_OFF,
 
 use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
+use crate::save::debounce_want_full;
 use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore};
 
 pub type OmtGpu = GpuVideoContext;
@@ -29,6 +30,7 @@ pub struct OmtReceiver {
     want_full: Arc<AtomicBool>,
     on_program: Arc<AtomicBool>,
     on_preview: Arc<AtomicBool>,
+    quality: Arc<AtomicU32>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -39,13 +41,16 @@ impl OmtReceiver {
         uploads: Arc<Mutex<UploadStore>>,
         gpu: Option<OmtGpu>,
         frame_buffer_frames: u32,
+        quality: u32,
     ) -> Result<Self, String> {
         let depth = frame_buffer_frames.clamp(1, 8);
         let use_gpu = gpu.is_some();
+        let quality = quality_from_abi(quality);
         let config = ReceiverConfig {
             frame_types: FrameType::VIDEO | FrameType::AUDIO,
             connect_timeout: Duration::from_secs(5),
             gpu: gpu.clone(),
+            quality,
             ..ReceiverConfig::default()
         };
         let session = connect_receiver(&address, config)?;
@@ -53,10 +58,12 @@ impl OmtReceiver {
         let want_full = Arc::new(AtomicBool::new(true));
         let on_program = Arc::new(AtomicBool::new(false));
         let on_preview = Arc::new(AtomicBool::new(false));
+        let quality_atom = Arc::new(AtomicU32::new(quality_to_abi(quality)));
         let stop_thread = Arc::clone(&stop);
         let want_full_thread = Arc::clone(&want_full);
         let on_program_thread = Arc::clone(&on_program);
         let on_preview_thread = Arc::clone(&on_preview);
+        let quality_thread = Arc::clone(&quality_atom);
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
@@ -69,13 +76,19 @@ impl OmtReceiver {
                     };
                     store.ensure_playout(source_id, 16, 16, format, depth);
                 }
-                let mut sent: Option<(bool, bool, bool)> = None;
+                let mut sent: Option<(bool, bool, bool, u32)> = None;
+                let mut drop_full_at: Option<Instant> = None;
                 while !stop_thread.load(Ordering::Relaxed) {
+                    let full = debounce_want_full(
+                        want_full_thread.load(Ordering::Relaxed),
+                        &mut drop_full_at,
+                    );
                     apply_omt_save(
                         &session,
-                        want_full_thread.load(Ordering::Relaxed),
+                        full,
                         on_program_thread.load(Ordering::Relaxed),
                         on_preview_thread.load(Ordering::Relaxed),
+                        quality_from_abi(quality_thread.load(Ordering::Relaxed)),
                         &mut sent,
                     );
                     if use_gpu {
@@ -134,6 +147,7 @@ impl OmtReceiver {
             want_full,
             on_program,
             on_preview,
+            quality: quality_atom,
             join: Some(join),
         })
     }
@@ -142,6 +156,11 @@ impl OmtReceiver {
         self.want_full.store(full, Ordering::Relaxed);
         self.on_program.store(on_program, Ordering::Relaxed);
         self.on_preview.store(on_preview, Ordering::Relaxed);
+    }
+
+    pub fn set_quality(&self, quality: u32) {
+        self.quality
+            .store(quality_to_abi(quality_from_abi(quality)), Ordering::Relaxed);
     }
 }
 
@@ -376,24 +395,41 @@ impl GpuSendSlot {
     }
 }
 
+fn quality_from_abi(value: u32) -> Quality {
+    match value {
+        1 => Quality::Low,
+        50 => Quality::Medium,
+        100 => Quality::High,
+        _ => Quality::Default,
+    }
+}
+
+fn quality_to_abi(quality: Quality) -> u32 {
+    match quality {
+        Quality::Low => 1,
+        Quality::Medium => 50,
+        Quality::High => 100,
+        Quality::Default => 0,
+    }
+}
+
+/// libomtnet matches Preview and Quality as exact tokens. A combined
+/// `<OMTSettings Preview="…" Quality="…" />` is ignored and Preview never turns on.
 fn apply_omt_save(
     session: &ReceiverSession,
     full: bool,
     on_program: bool,
     on_preview: bool,
-    sent: &mut Option<(bool, bool, bool)>,
+    quality: Quality,
+    sent: &mut Option<(bool, bool, bool, u32)>,
 ) {
-    let next = (full, on_program, on_preview);
+    let next = (full, on_program, on_preview, quality_to_abi(quality));
     if *sent == Some(next) {
         return;
     }
     *sent = Some(next);
     let _ = session.send_metadata(if full { PREVIEW_OFF } else { PREVIEW_ON });
-    let _ = session.send_metadata(suggested_quality_xml(if full {
-        Quality::High
-    } else {
-        Quality::Low
-    }));
+    let _ = session.send_metadata(suggested_quality_xml(quality));
     let _ = session.set_tally(Tally::new(
         i32::from(on_preview),
         i32::from(on_program),
@@ -498,5 +534,25 @@ fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
         channels: frame.channels,
         samples_per_channel: samples,
         pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use openmediatransport::protocol::metadata::{suggested_quality_xml, PREVIEW_OFF, PREVIEW_ON};
+    use openmediatransport::Quality;
+
+    #[test]
+    fn preview_and_quality_are_exact_tokens() {
+        assert_eq!(PREVIEW_ON, r#"<OMTSettings Preview="true" />"#);
+        assert_eq!(PREVIEW_OFF, r#"<OMTSettings Preview="false" />"#);
+        assert_eq!(
+            suggested_quality_xml(Quality::Default),
+            r#"<OMTSettings Quality="Default" />"#
+        );
+        assert_eq!(
+            suggested_quality_xml(Quality::Medium),
+            r#"<OMTSettings Quality="Medium" />"#
+        );
     }
 }

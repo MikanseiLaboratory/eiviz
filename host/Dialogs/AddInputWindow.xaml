@@ -75,6 +75,13 @@
                         <ComboBoxItem Content="GPU decode" Tag="gpu" IsSelected="True"/>
                         <ComboBoxItem Content="CPU decode" Tag="cpu"/>
                     </ComboBox>
+                    <TextBlock Text="Quality" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="OmtQualityBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Default" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Low" Tag="1"/>
+                        <ComboBoxItem Content="Medium" Tag="50"/>
+                        <ComboBoxItem Content="High" Tag="100"/>
+                    </ComboBox>
                     <TextBlock Text="Frame buffer (frames)"/>
                     <ComboBox x:Name="OmtBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,8">
                         <ComboBoxItem Content="1" Tag="1" IsSelected="True"/>
@@ -93,7 +100,7 @@
                     </ComboBox>
                     <CheckBox x:Name="OmtMvBox" Content="Keep full quality on Multiview" Foreground="#EEE" Margin="0,0,0,8"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source. Unused OMT sources can request preview (1/8) and Low quality."/>
+                               Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source. Quality is requested from the sender. Unused sources stay connected and also request Preview (1/8 decode)."/>
                 </StackPanel>
                 <StackPanel x:Name="NdiPanel" Visibility="Collapsed">
                     <TextBlock Text="NDI® source" Margin="0,0,0,8"/>
@@ -110,17 +117,9 @@
                         <ComboBoxItem Content="6" Tag="6"/>
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
-                    <TextBlock Text="Save bandwidth when" Margin="0,4,0,4"/>
-                    <ComboBox x:Name="NdiSaveBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
-                        <ComboBoxItem Content="Always (low quality)" Tag="0"/>
-                        <ComboBoxItem Content="Not on Program (any MU)" Tag="1"/>
-                        <ComboBoxItem Content="Not on Preview/Program (any MU)" Tag="2" IsSelected="True"/>
-                        <ComboBoxItem Content="None (always full)" Tag="3"/>
-                    </ComboBox>
-                    <CheckBox x:Name="NdiMvBox" Content="Keep full quality on Multiview" Foreground="#EEE" Margin="0,0,0,8"/>
                     <TextBlock x:Name="NdiStatus" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="#C88"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source. Unused NDI sources drop to NDI Lowest bandwidth."/>
+                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source."/>
                 </StackPanel>
                 <StackPanel x:Name="UvcPanel" Visibility="Collapsed">
                     <TextBlock Text="Select a UVC / Media Foundation capture device." Margin="0,0,0,8"/>

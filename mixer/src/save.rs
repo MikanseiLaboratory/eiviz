@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::abi::{
     is_scene, mixing_unit_from_source, OverlayDesc, UnitState, SAVE_ALWAYS_FULL, SAVE_ALWAYS_LOW,
@@ -41,6 +42,20 @@ impl Default for LiveSave {
             flags: 0,
         }
     }
+}
+
+/// Hold full quality this long after the source leaves Preview/Program so TAKE
+/// and T-bar flicker do not thrash OMT metadata or recreate the NDI receiver.
+pub const DROP_FULL_HOLD: Duration = Duration::from_millis(280);
+
+/// Raise immediately; drop to low only after `DROP_FULL_HOLD` of continuous unused.
+pub fn debounce_want_full(want: bool, drop_at: &mut Option<Instant>) -> bool {
+    if want {
+        *drop_at = None;
+        return true;
+    }
+    let started = drop_at.get_or_insert_with(Instant::now);
+    Instant::now().saturating_duration_since(*started) < DROP_FULL_HOLD
 }
 
 pub fn want_full(save: LiveSave, roles: SourceRoles) -> bool {
@@ -226,5 +241,16 @@ mod tests {
         assert!(want_full(not_pvw, prv));
         assert!(!want_full(not_pvw, mv));
         assert!(want_full(not_pvw_mv, mv));
+    }
+
+    #[test]
+    fn debounce_raises_immediately_and_holds_drop() {
+        let mut drop_at = None;
+        assert!(debounce_want_full(true, &mut drop_at));
+        assert!(debounce_want_full(false, &mut drop_at));
+        std::thread::sleep(DROP_FULL_HOLD + Duration::from_millis(40));
+        assert!(!debounce_want_full(false, &mut drop_at));
+        assert!(debounce_want_full(true, &mut drop_at));
+        assert!(drop_at.is_none());
     }
 }

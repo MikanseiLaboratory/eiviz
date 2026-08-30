@@ -49,6 +49,7 @@ public partial class AddInputWindow : Window
     public uint ResultFrameBufferFrames { get; private set; } = 1;
     public BandwidthSave ResultSaveMode { get; private set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool ResultKeepFullOnMultiview { get; private set; }
+    public OmtQuality ResultOmtQuality { get; private set; } = OmtQuality.Default;
 
     public void Load(InputEntry input)
     {
@@ -69,12 +70,11 @@ public partial class AddInputWindow : Window
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
+        SelectTag(OmtQualityBox, ((int)input.OmtQuality).ToString());
         SelectTag(OmtBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         SelectTag(NdiBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         SelectTag(OmtSaveBox, ((int)input.BandwidthSave).ToString());
-        SelectTag(NdiSaveBox, ((int)input.BandwidthSave).ToString());
         OmtMvBox.IsChecked = input.KeepFullOnMultiview;
-        NdiMvBox.IsChecked = input.KeepFullOnMultiview;
         if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
@@ -254,6 +254,7 @@ public partial class AddInputWindow : Window
                     ResultFrameBufferFrames = Math.Clamp(frames, 1u, 8u);
                 ResultSaveMode = ReadSaveMode(OmtSaveBox);
                 ResultKeepFullOnMultiview = OmtMvBox.IsChecked == true;
+                ResultOmtQuality = ReadOmtQuality(OmtQualityBox);
                 break;
             case InputKind.Ndi:
                 if (string.IsNullOrWhiteSpace(NdiAddress.Text))
@@ -265,8 +266,6 @@ public partial class AddInputWindow : Window
                 if (NdiBufferBox.SelectedItem is ComboBoxItem ndiBuffer && ndiBuffer.Tag is string ndiTag
                     && uint.TryParse(ndiTag, out var ndiFrames))
                     ResultFrameBufferFrames = Math.Clamp(ndiFrames, 1u, 8u);
-                ResultSaveMode = ReadSaveMode(NdiSaveBox);
-                ResultKeepFullOnMultiview = NdiMvBox.IsChecked == true;
                 break;
             case InputKind.Uvc:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
@@ -280,6 +279,21 @@ public partial class AddInputWindow : Window
         if (!string.IsNullOrWhiteSpace(NameBox.Text))
             ResultName = NameBox.Text.Trim();
         DialogResult = true;
+    }
+
+    private static OmtQuality ReadOmtQuality(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var value))
+        {
+            return value switch
+            {
+                1 => OmtQuality.Low,
+                50 => OmtQuality.Medium,
+                100 => OmtQuality.High,
+                _ => OmtQuality.Default
+            };
+        }
+        return OmtQuality.Default;
     }
 
     private static BandwidthSave ReadSaveMode(ComboBox box)

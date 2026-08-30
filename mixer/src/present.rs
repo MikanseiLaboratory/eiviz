@@ -103,6 +103,10 @@ impl Presenters {
             .clamp(1, 8)
     }
 
+    pub fn attached_monitor_sources(&self) -> Vec<u64> {
+        self.monitor_sources.values().copied().collect()
+    }
+
     pub fn attached_monitor_sources_due(&self, frame_i: u64) -> Vec<u64> {
         self.monitor_sources
             .iter()
