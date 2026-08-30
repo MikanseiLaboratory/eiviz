@@ -1,7 +1,8 @@
-use std::{collections::HashMap, num::NonZeroIsize};
+use std::collections::HashMap;
 
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
+use crate::abi::NativeSurface;
 use crate::device::GpuDevice;
 
 pub struct Presenter {
@@ -18,7 +19,7 @@ pub struct Presenter {
 
 #[derive(Default)]
 pub struct Presenters {
-    by_key: HashMap<(u64, u32, isize), Presenter>,
+    by_key: HashMap<(u64, u32, NativeSurface), Presenter>,
     monitors: HashMap<u64, Presenter>,
     monitor_sources: HashMap<u64, u64>,
     monitor_intervals: HashMap<u64, u32>,
@@ -30,12 +31,12 @@ impl Presenters {
         device: &GpuDevice,
         unit_id: u64,
         kind: u32,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let presenter = create_presenter(device, hwnd, width, height)?;
-        self.by_key.insert((unit_id, kind, hwnd), presenter);
+        let presenter = create_presenter(device, surface, width, height)?;
+        self.by_key.insert((unit_id, kind, surface), presenter);
         Ok(())
     }
 
@@ -44,15 +45,20 @@ impl Presenters {
         device: &GpuDevice,
         unit_id: u64,
         kind: u32,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
     ) {
-        resize_presenter(device, self.by_key.get_mut(&(unit_id, kind, hwnd)), width, height);
+        resize_presenter(
+            device,
+            self.by_key.get_mut(&(unit_id, kind, surface)),
+            width,
+            height,
+        );
     }
 
-    pub fn detach(&mut self, unit_id: u64, kind: u32, hwnd: isize) {
-        self.by_key.remove(&(unit_id, kind, hwnd));
+    pub fn detach(&mut self, unit_id: u64, kind: u32, surface: NativeSurface) {
+        self.by_key.remove(&(unit_id, kind, surface));
     }
 
     pub fn detach_unit(&mut self, unit_id: u64) {
@@ -64,11 +70,11 @@ impl Presenters {
         device: &GpuDevice,
         monitor_id: u64,
         source_id: u64,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        let presenter = create_presenter(device, hwnd, width, height)?;
+        let presenter = create_presenter(device, surface, width, height)?;
         self.monitors.insert(monitor_id, presenter);
         self.monitor_sources.insert(monitor_id, source_id);
         self.monitor_intervals.entry(monitor_id).or_insert(1);
@@ -92,7 +98,8 @@ impl Presenters {
     }
 
     pub fn set_monitor_interval(&mut self, monitor_id: u64, frames: u32) {
-        self.monitor_intervals.insert(monitor_id, frames.clamp(1, 8));
+        self.monitor_intervals
+            .insert(monitor_id, frames.clamp(1, 8));
     }
 
     fn interval_for(&self, monitor_id: u64) -> u32 {
@@ -131,9 +138,9 @@ impl Presenters {
             .by_key
             .keys()
             .copied()
-            .map(|(unit_id, kind, hwnd)| {
+            .map(|(unit_id, kind, surface)| {
                 let cache_key = unit_id ^ (u64::from(kind) << 48) ^ epoch.rotate_left(8);
-                (unit_id, kind, hwnd, cache_key, view_for(unit_id, kind))
+                (unit_id, kind, surface, cache_key, view_for(unit_id, kind))
             })
             .collect();
         let mut encoder = device
@@ -142,12 +149,18 @@ impl Presenters {
                 label: Some("eiviz present"),
             });
         let mut acquired = Vec::new();
-        for (unit_id, kind, hwnd, cache_key, view) in planned {
-            let Some(presenter) = self.by_key.get_mut(&(unit_id, kind, hwnd)) else {
+        for (unit_id, kind, surface, cache_key, view) in planned {
+            let Some(presenter) = self.by_key.get_mut(&(unit_id, kind, surface)) else {
                 continue;
             };
-            if let Some(item) = draw_presenter(device, presenter, cache_key, view.as_ref(), false, &mut encoder)
-            {
+            if let Some(item) = draw_presenter(
+                device,
+                presenter,
+                cache_key,
+                view.as_ref(),
+                false,
+                &mut encoder,
+            ) {
                 acquired.push(item);
             }
         }
@@ -188,9 +201,14 @@ impl Presenters {
             let Some(presenter) = self.monitors.get_mut(&monitor_id) else {
                 continue;
             };
-            if let Some(item) =
-                draw_presenter(device, presenter, cache_key, view.as_ref(), packed, &mut encoder)
-            {
+            if let Some(item) = draw_presenter(
+                device,
+                presenter,
+                cache_key,
+                view.as_ref(),
+                packed,
+                &mut encoder,
+            ) {
                 acquired.push(item);
             }
         }
@@ -198,31 +216,63 @@ impl Presenters {
     }
 
     pub fn has_kind(&self, unit_id: u64, kind: u32) -> bool {
-        self.by_key.keys().any(|(id, k, _)| *id == unit_id && *k == kind)
+        self.by_key
+            .keys()
+            .any(|(id, k, _)| *id == unit_id && *k == kind)
+    }
+}
+
+fn raw_handles(surface: NativeSurface) -> Result<(RawDisplayHandle, RawWindowHandle), String> {
+    match surface.kind {
+        #[cfg(windows)]
+        crate::abi::NATIVE_WIN32_HWND => {
+            use std::num::NonZeroIsize;
+
+            use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+
+            let hwnd = NonZeroIsize::new(surface.handle).ok_or("HWND cannot be null")?;
+            Ok((
+                RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+                RawWindowHandle::Win32(Win32WindowHandle::new(hwnd)),
+            ))
+        }
+        #[cfg(target_os = "macos")]
+        crate::abi::NATIVE_APPKIT_NSVIEW => {
+            use std::ptr::NonNull;
+
+            use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle};
+
+            let ns_view = NonNull::new(surface.handle as *mut core::ffi::c_void)
+                .ok_or("NSView cannot be null")?;
+            Ok((
+                RawDisplayHandle::AppKit(AppKitDisplayHandle::new()),
+                RawWindowHandle::AppKit(AppKitWindowHandle::new(ns_view)),
+            ))
+        }
+        _ => Err("native surface is not supported on this OS".into()),
     }
 }
 
 fn create_presenter(
     device: &GpuDevice,
-    hwnd: isize,
+    surface: NativeSurface,
     width: u32,
     height: u32,
 ) -> Result<Presenter, String> {
-    let hwnd = NonZeroIsize::new(hwnd).ok_or("HWND cannot be null")?;
-    let raw_window_handle = RawWindowHandle::Win32(Win32WindowHandle::new(hwnd));
-    // SAFETY: C# owns the HwndHost and detaches the surface before destroying the HWND.
+    let (raw_display_handle, raw_window_handle) = raw_handles(surface)?;
+    // SAFETY: the host owns the HWND / NSView and detaches the surface before destroying it.
     let surface = unsafe {
         device
             .instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: Some(RawDisplayHandle::Windows(WindowsDisplayHandle::new())),
+                raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
             })
             .map_err(|error| error.to_string())?
     };
     let mut config = surface
         .get_default_config(&device.adapter, width.max(2), height.max(2))
-        .ok_or("DX12 surface exposes no compatible configuration")?;
+        .ok_or("surface exposes no compatible configuration")?;
     let caps = surface.get_capabilities(&device.adapter);
     config.format = pick_surface_format(&caps.formats);
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
@@ -248,7 +298,12 @@ fn create_presenter(
     })
 }
 
-fn resize_presenter(device: &GpuDevice, presenter: Option<&mut Presenter>, width: u32, height: u32) {
+fn resize_presenter(
+    device: &GpuDevice,
+    presenter: Option<&mut Presenter>,
+    width: u32,
+    height: u32,
+) {
     let Some(presenter) = presenter else {
         return;
     };
@@ -343,24 +398,25 @@ fn draw_presenter(
                 device
                     .queue
                     .write_buffer(&presenter.params, 0, bytemuck::bytes_of(&params));
-                presenter.bind = Some(device.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("present bg"),
-                    layout: &presenter.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(src),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&presenter.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: presenter.params.as_entire_binding(),
-                        },
-                    ],
-                }));
+                presenter.bind =
+                    Some(device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("present bg"),
+                        layout: &presenter.layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(src),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&presenter.sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: presenter.params.as_entire_binding(),
+                            },
+                        ],
+                    }));
                 presenter.bind_key = cache_key;
             }
             pass.set_pipeline(if packed {
@@ -411,42 +467,46 @@ fn present_pipelines(
     ),
     String,
 > {
-    let layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("present"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+    let layout = device
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("present"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
                 },
-                count: None,
-            },
-        ],
-    });
-    let pipeline_layout = device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("present"),
-        bind_group_layouts: &[Some(&layout)],
-        immediate_size: 0,
-    });
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+    let pipeline_layout = device
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("present"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
     let present = make_present_pipeline(
         device,
         &pipeline_layout,
@@ -476,33 +536,37 @@ fn make_present_pipeline(
     source: &str,
     label: &str,
 ) -> wgpu::RenderPipeline {
-    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    device.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    let shader = device
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+    device
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
 }

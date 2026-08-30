@@ -3,13 +3,15 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
+    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect,
+    SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
     mixer_audio_bus_count, mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
-    mixer_ndi_discover, mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_output_remove,
-    mixer_ping, mixer_set_live_save, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_start, OverlayDesc, Rect, UnitState,
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_MU_PROGRAM,
+    mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
+    mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_start,
 };
+#[cfg(windows)]
+use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
 
 #[test]
@@ -40,6 +42,7 @@ fn vmx_roundtrip_is_available() {
     dec.decode_uyvy(&mut out, 128).expect("decode");
 }
 
+/// Headless contract: compose + OMT + cut/auto without attach / HWND.
 #[test]
 fn dx12_compose_omt_and_program_out() {
     mixer_destroy();
@@ -69,8 +72,8 @@ fn dx12_compose_omt_and_program_out() {
     assert_eq!(mixer_unit_cut(1, 1), OK);
     assert_eq!(mixer_unit_auto(1, 200, 1), OK);
 
-    let mut sender = Sender::create("eiviz-test-src", FrameType::VIDEO | FrameType::AUDIO)
-        .expect("sender");
+    let mut sender =
+        Sender::create("eiviz-test-src", FrameType::VIDEO | FrameType::AUDIO).expect("sender");
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
@@ -142,8 +145,8 @@ fn dx12_omt_gpu_in_and_out() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
 
-    let mut sender = Sender::create("eiviz-test-gpu-src", FrameType::VIDEO | FrameType::AUDIO)
-        .expect("sender");
+    let mut sender =
+        Sender::create("eiviz-test-gpu-src", FrameType::VIDEO | FrameType::AUDIO).expect("sender");
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
@@ -220,9 +223,8 @@ unsafe fn try_acquire(unit: u64) {
         let mut stride = 0u32;
         let mut pts = 0i64;
         let mut length = 0u32;
-        let acquired = unsafe {
-            mixer_unit_acquire_frame(unit, &mut ptr, &mut stride, &mut pts, &mut length)
-        };
+        let acquired =
+            unsafe { mixer_unit_acquire_frame(unit, &mut ptr, &mut stride, &mut pts, &mut length) };
         if acquired == OK {
             assert!(!ptr.is_null());
             assert!(length > 0);
@@ -245,7 +247,10 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
     unsafe {
         assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
         assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &color), OK);
-        assert_eq!(mixer_define_scene(scene_id(3), 320, 180, 0, std::ptr::null()), OK);
+        assert_eq!(
+            mixer_define_scene(scene_id(3), 320, 180, 0, std::ptr::null()),
+            OK
+        );
     }
 
     let mut state = UnitState {
@@ -309,22 +314,25 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
     }
 
     unsafe {
-        assert_eq!(
-            mixer_output_add(
-                99,
-                OUT_NDI,
-                CString::new("eiviz-ndi-test").unwrap().as_ptr(),
-                SRC_KIND_MU_PROGRAM,
-                0,
-                1,
-                0
-            ),
-            OK
-        );
-        assert_eq!(mixer_output_remove(99), OK);
-        let mut ndi_names = vec![0u8; 4096];
-        let discovered = mixer_ndi_discover(ndi_names.as_mut_ptr(), ndi_names.len());
-        assert!(discovered >= 0);
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                mixer_output_add(
+                    99,
+                    OUT_NDI,
+                    CString::new("eiviz-ndi-test").unwrap().as_ptr(),
+                    SRC_KIND_MU_PROGRAM,
+                    0,
+                    1,
+                    0
+                ),
+                OK
+            );
+            assert_eq!(mixer_output_remove(99), OK);
+            let mut ndi_names = vec![0u8; 4096];
+            let discovered = mixer_ndi_discover(ndi_names.as_mut_ptr(), ndi_names.len());
+            assert!(discovered >= 0);
+        }
         assert_eq!(
             mixer_output_add(
                 98,

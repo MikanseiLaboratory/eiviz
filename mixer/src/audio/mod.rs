@@ -1,6 +1,10 @@
+#[cfg(windows)]
 mod asio;
+#[cfg(windows)]
 mod device;
 mod graph;
+mod info;
+#[cfg(windows)]
 mod wasapi;
 
 use std::collections::{HashMap, VecDeque};
@@ -9,10 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::{OverlayDesc, UnitState};
-use crate::upload::{UploadStore, AUDIO_RATE};
+use crate::upload::{AUDIO_RATE, UploadStore};
 
-pub use device::{AudioBusInfo, AudioDeviceInfo};
-pub use graph::{AudioGraph, BusRing, DEVICE_ASIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS};
+#[cfg_attr(not(windows), allow(unused_imports))]
+pub use graph::{
+    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS,
+};
+pub use info::{AudioBusInfo, AudioDeviceInfo};
 
 pub(crate) const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
@@ -33,7 +40,9 @@ impl AudioDelay {
 
     pub fn set_delay_frames(&mut self, frames: usize) {
         self.delay_frames = frames;
-        let cap = frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        let cap = frames
+            .saturating_mul(2)
+            .saturating_add((AUDIO_RATE as usize / 5) * 2);
         for fifo in self.fifos.values_mut() {
             while fifo.len() > cap {
                 fifo.pop_front();
@@ -44,7 +53,10 @@ impl AudioDelay {
     pub fn push(&mut self, id: u64, pcm: &[f32]) {
         let fifo = self.fifos.entry(id).or_default();
         fifo.extend(pcm.iter().copied());
-        let cap = self.delay_frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        let cap = self
+            .delay_frames
+            .saturating_mul(2)
+            .saturating_add((AUDIO_RATE as usize / 5) * 2);
         while fifo.len() > cap {
             fifo.pop_front();
         }
@@ -166,7 +178,10 @@ impl AudioEngine {
     }
 
     pub fn set_bus_gain(&self, id: u64, gain: f32, mute: u32) {
-        self.graph.lock().expect("audio").set_bus_gain(id, gain, mute != 0);
+        self.graph
+            .lock()
+            .expect("audio")
+            .set_bus_gain(id, gain, mute != 0);
     }
 
     pub fn set_unit_link(&self, unit_id: u64, bus_id: u64, mode: u32) {
@@ -185,9 +200,13 @@ impl AudioEngine {
     }
 
     pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
-        let samples = (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
-            / u64::from(fps_num.max(1))) as usize;
-        self.delay.lock().expect("audio delay").set_delay_frames(samples);
+        let samples =
+            (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
+                / u64::from(fps_num.max(1))) as usize;
+        self.delay
+            .lock()
+            .expect("audio delay")
+            .set_delay_frames(samples);
     }
 
     pub fn mix(
@@ -274,11 +293,8 @@ impl Drop for AudioEngine {
     }
 }
 
-fn run_device(
-    key: DeviceKey,
-    maps: Vec<(Arc<BusRing>, i32, i32)>,
-    stop: Arc<AtomicBool>,
-) {
+fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
+    #[cfg(windows)]
     match key.kind {
         DEVICE_WASAPI => {
             if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
@@ -291,6 +307,10 @@ fn run_device(
             }
         }
         _ => {}
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (key, maps, stop);
     }
 }
 
@@ -320,7 +340,11 @@ pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: 
     out
 }
 
-pub fn pop_stereo_rate(maps: &[(Arc<BusRing>, i32, i32)], dst_frames: usize, dst_rate: u32) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
+pub fn pop_stereo_rate(
+    maps: &[(Arc<BusRing>, i32, i32)],
+    dst_frames: usize,
+    dst_rate: u32,
+) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
     let src_frames = ((dst_frames as u64 * AUDIO_RATE as u64 + u64::from(dst_rate.max(1)) / 2)
         / u64::from(dst_rate.max(1))) as usize;
     let mut by_map = HashMap::new();
@@ -347,9 +371,25 @@ pub fn pop_stereo_rate(maps: &[(Arc<BusRing>, i32, i32)], dst_frames: usize, dst
 }
 
 pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
-    device::enumerate(kind, dest)
+    #[cfg(windows)]
+    {
+        device::enumerate(kind, dest)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (kind, dest);
+        0
+    }
 }
 
 pub fn device_channels(kind: u32, device_id: &str) -> i32 {
-    device::channel_count(kind, device_id)
+    #[cfg(windows)]
+    {
+        device::channel_count(kind, device_id)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (kind, device_id);
+        0
+    }
 }

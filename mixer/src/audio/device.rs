@@ -1,42 +1,20 @@
-use windows::core::PCWSTR;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    DEVICE_STATE_ACTIVE,
+    DEVICE_STATE_ACTIVE, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    eConsole, eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
+};
+use windows::Win32::System::Registry::{
+    HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW,
+    RegOpenKeyExW,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
-use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY_LOCAL_MACHINE, KEY_READ,
-    RRF_RT_REG_SZ,
-};
+use windows::core::PCWSTR;
 
 use super::graph::{DEVICE_ASIO, DEVICE_WASAPI};
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AudioDeviceInfo {
-    pub kind: u32,
-    pub channels: u32,
-    pub id: [u8; 256],
-    pub name: [u8; 256],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct AudioBusInfo {
-    pub id: u64,
-    pub role: u32,
-    pub device_kind: u32,
-    pub map_left: i32,
-    pub map_right: i32,
-    pub exclusive: u32,
-    pub bit: u32,
-    pub name: [u8; 64],
-    pub device_id: [u8; 256],
-}
+use super::info::AudioDeviceInfo;
 
 pub fn enumerate(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
     let mut n = 0usize;
@@ -55,7 +33,8 @@ pub fn channel_count(kind: u32, device_id: &str) -> i32 {
     }
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        let Ok(enumerator) =
+            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
         else {
             return 2;
         };
@@ -112,7 +91,10 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
 pub fn enumerate_asio_registry(dest: &mut [AudioDeviceInfo]) -> usize {
     unsafe {
         let mut key = windows::Win32::System::Registry::HKEY::default();
-        let path: Vec<u16> = "SOFTWARE\\ASIO".encode_utf16().chain(std::iter::once(0)).collect();
+        let path: Vec<u16> = "SOFTWARE\\ASIO"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         if RegOpenKeyExW(
             HKEY_LOCAL_MACHINE,
             PCWSTR(path.as_ptr()),

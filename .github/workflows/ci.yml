@@ -57,3 +57,25 @@ jobs:
 
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
+
+  macos-check:
+    name: Check mixer (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mixer
+
+      - name: Check mixer
+        working-directory: mixer
+        run: cargo check --locked --release
