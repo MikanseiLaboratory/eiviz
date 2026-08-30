@@ -97,6 +97,15 @@ enum MvSlotKind: String, Codable {
     case scene = "Scene"
     case muPreview = "MuPreview"
     case muProgram = "MuProgram"
+
+    func encoded(_ sourceId: UInt64) -> UInt64 {
+        switch self {
+        case .none: return 0
+        case .input, .scene: return sourceId
+        case .muPreview: return EIVIZ_MU_SOURCE_FLAG | EIVIZ_MU_BUS_PREVIEW | (sourceId & EIVIZ_MU_ID_MASK)
+        case .muProgram: return EIVIZ_MU_SOURCE_FLAG | (sourceId & EIVIZ_MU_ID_MASK)
+        }
+    }
 }
 
 enum AudioBusRole: String, Codable {
@@ -341,7 +350,7 @@ struct MixerSessionData: Codable {
         ]
         session.units = [unit]
         session.buses = [
-            AudioBusEntry(id: 1, name: "Master", role: .master, deviceKind: .wasapi, mapLeft: 0, mapRight: 1, bit: 0),
+            AudioBusEntry(id: 1, name: "Master", role: .master, deviceKind: .coreAudio, mapLeft: 0, mapRight: 1, bit: 0),
             AudioBusEntry(id: 2, name: "Headphone", role: .headphone, deviceKind: .none, mapLeft: 0, mapRight: 1, bit: 1)
         ]
         session.addScene(name: "Scene 1", input: EIVIZ_SRC_BARS)
@@ -367,6 +376,21 @@ struct MixerSessionData: Codable {
         return scene
     }
 
+    @discardableResult
+    mutating func addMultiview(unitId: UInt64) -> MultiviewLayout {
+        let layout = MultiviewLayout(
+            id: nextMultiviewId,
+            name: "Multiview \(nextMultiviewId)",
+            monitorId: nextMonitorId,
+            previewUnitId: unitId,
+            programUnitId: unitId
+        )
+        nextMultiviewId += 1
+        nextMonitorId += 1
+        multiviews.append(layout)
+        return layout
+    }
+
     mutating func assignMonitors() {
         if nextMonitorId < 1000 { nextMonitorId = 1000 }
         for i in scenes.indices where scenes[i].monitorId == 0 {
@@ -376,6 +400,9 @@ struct MixerSessionData: Codable {
         for i in multiviews.indices where multiviews[i].monitorId == 0 {
             multiviews[i].monitorId = nextMonitorId
             nextMonitorId += 1
+        }
+        for i in buses.indices where buses[i].deviceKind == .wasapi {
+            buses[i].deviceKind = .coreAudio
         }
     }
 }

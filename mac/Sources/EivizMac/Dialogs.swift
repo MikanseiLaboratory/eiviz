@@ -8,6 +8,7 @@ struct SettingsView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
+    @State private var selectedMultiviewId: UInt64?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -43,6 +44,7 @@ struct SettingsView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
+        .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
     }
 
     private var display: some View {
@@ -82,7 +84,11 @@ struct SettingsView: View {
                 Text("Outputs").fontWeight(.bold)
                 Spacer()
                 Button("+") {
-                    let output = OutputEntry(id: mixer.session.nextOutputId, name: "eiviz-out-\(mixer.session.nextOutputId)")
+                    let output = OutputEntry(
+                        id: mixer.session.nextOutputId,
+                        name: "eiviz-out-\(mixer.session.nextOutputId)",
+                        unitId: mixer.selectedUnitId
+                    )
                     mixer.session.nextOutputId += 1
                     mixer.session.outputs.append(output)
                     mixer.addOutput(output)
@@ -91,55 +97,150 @@ struct SettingsView: View {
             Text("OMT and NDI® are sent from the mixer. NDI uses CPU encode.")
                 .foregroundStyle(EivizTheme.dim)
             ForEach($mixer.session.outputs) { $output in
-                HStack {
-                    TextField("Name", text: $output.name)
-                    Picker("", selection: $output.transport) {
-                        Text("OMT").tag(OutputTransport.omt)
-                        Text("NDI®").tag(OutputTransport.ndi)
+                outputRow($output)
+            }
+        }
+    }
+
+    private func outputRow(_ output: Binding<OutputEntry>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                TextField("Name", text: output.name)
+                    .mixerField()
+                Picker("", selection: Binding(
+                    get: { output.wrappedValue.transport },
+                    set: { value in
+                        output.wrappedValue.transport = value
+                        if value != .omt {
+                            output.wrappedValue.useGpu = false
+                        }
                     }
-                    Picker("", selection: $output.sourceKind) {
-                        Text("MU Program").tag(OutputSourceKind.muProgram)
-                        Text("MU Preview").tag(OutputSourceKind.muPreview)
-                        Text("Scene").tag(OutputSourceKind.scene)
-                    }
-                    Toggle("GPU", isOn: $output.useGpu)
-                    Button("Apply") { mixer.addOutput(output) }
-                    Button("−") {
-                        _ = mixer_output_remove(output.id)
-                        mixer.session.outputs.removeAll { $0.id == output.id }
-                    }
+                )) {
+                    Text("OMT").tag(OutputTransport.omt)
+                    Text("NDI®").tag(OutputTransport.ndi)
+                }
+                if output.wrappedValue.transport == .omt {
+                    Toggle("GPU", isOn: output.useGpu)
+                }
+                Button("Apply") { mixer.addOutput(output.wrappedValue) }
+                Button("−") {
+                    _ = mixer_output_remove(output.wrappedValue.id)
+                    mixer.session.outputs.removeAll { $0.id == output.wrappedValue.id }
+                }
+            }
+            HStack {
+                Picker("", selection: output.sourceKind) {
+                    Text("Input").tag(OutputSourceKind.input)
+                    Text("Scene").tag(OutputSourceKind.scene)
+                    Text("MU PRV").tag(OutputSourceKind.muPreview)
+                    Text("MU PGM").tag(OutputSourceKind.muProgram)
+                    Text("Multiview").tag(OutputSourceKind.multiview)
+                }
+                outputSourcePick(output)
+            }
+        }
+        .padding(6)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func outputSourcePick(_ output: Binding<OutputEntry>) -> some View {
+        switch output.wrappedValue.sourceKind {
+        case .scene:
+            Picker("", selection: output.sourceId) {
+                ForEach(mixer.session.scenes) { scene in
+                    Text(scene.name).tag(scene.gpuId)
+                }
+            }
+        case .input:
+            Picker("", selection: output.sourceId) {
+                ForEach(mixer.session.inputs) { input in
+                    Text(input.name).tag(input.id)
+                }
+            }
+        case .multiview:
+            Picker("", selection: output.sourceId) {
+                ForEach(mixer.session.multiviews) { layout in
+                    Text(layout.name).tag(layout.gpuId)
+                }
+            }
+        case .muPreview, .muProgram:
+            Picker("", selection: output.unitId) {
+                ForEach(mixer.session.units) { unit in
+                    Text(unit.name).tag(unit.id)
                 }
             }
         }
     }
 
     private var multiview: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Multiviews").fontWeight(.bold)
                 Spacer()
+                Button("Open") { openSelectedMultiview() }
+                Button("Layout…") { editSelectedLayout() }
+                Button("Delete") {
+                    if let id = selectedMultiviewId {
+                        mixer.deleteMultiview(id)
+                    }
+                }
                 Button("+") {
-                    let layout = MultiviewLayout(
-                        id: mixer.session.nextMultiviewId,
-                        name: "Multiview \(mixer.session.nextMultiviewId)",
-                        monitorId: mixer.session.nextMonitorId
-                    )
-                    mixer.session.nextMultiviewId += 1
-                    mixer.session.nextMonitorId += 1
-                    mixer.session.multiviews.append(layout)
+                    mixer.openNewMultiview()
+                    dismiss()
                 }
             }
-            ForEach(mixer.session.multiviews) { layout in
-                Text(layout.name)
+            .buttonStyle(MixerButtonStyle())
+            List(mixer.session.multiviews, selection: $selectedMultiviewId) { layout in
+                Text(layout.name).tag(Optional(layout.id))
             }
+            .frame(minHeight: 120)
+            Text("Default Mixing Unit for new Multiview windows")
+            Picker("", selection: $mixer.session.settings.defaultMultiviewUnitId) {
+                ForEach(mixer.session.units) { unit in
+                    Text(unit.name).tag(unit.id)
+                }
+            }
+            .frame(width: 280)
+            Text("Project default preview refresh interval")
+            Picker("", selection: $mixer.session.settings.defaultPresentInterval) {
+                Text("Every frame").tag(UInt32(1))
+                Text("Every 2 frames").tag(UInt32(2))
+                Text("Every 3 frames").tag(UInt32(3))
+                Text("Every 4 frames").tag(UInt32(4))
+                Text("Every 6 frames").tag(UInt32(6))
+                Text("Every 8 frames").tag(UInt32(8))
+            }
+            .frame(width: 280)
             Text("Each Multiview window is a mosaic: Preview and Program on top, eight Input or Scene windows below.")
                 .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func openSelectedMultiview() {
+        if let id = selectedMultiviewId,
+           let layout = mixer.session.multiviews.first(where: { $0.id == id })
+        {
+            mixer.openMultiviewWindow(layout)
+        } else {
+            mixer.openNewMultiview()
+            selectedMultiviewId = mixer.openMultiview?.id
+        }
+        dismiss()
+    }
+
+    private func editSelectedLayout() {
+        guard let id = selectedMultiviewId,
+              let layout = mixer.session.multiviews.first(where: { $0.id == id })
+        else { return }
+        mixer.openMultiview = layout
+        mixer.showMultiviewSlots = true
     }
 
     private var audio: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Internal mix is 48 kHz stereo. Master and Headphone cannot be removed.")
+            Text("Internal mix is 48 kHz stereo. Enabled keeps the bus in the mix with no hardware device. Core Audio sends that mix to a device. Master and Headphone cannot be removed.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Headphone copies Master", isOn: $mixer.session.headphoneCopyMaster)
@@ -184,6 +285,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 TextField("Name", text: bus.name)
+                    .mixerField()
                     .disabled(bus.wrappedValue.role != .aux)
                 if bus.wrappedValue.role == .aux {
                     Button("−") {
@@ -195,7 +297,6 @@ struct SettingsView: View {
                 Picker("", selection: bus.deviceKind) {
                     Text("Enabled").tag(AudioDeviceKind.none)
                     Text("Core Audio").tag(AudioDeviceKind.coreAudio)
-                    Text("WASAPI").tag(AudioDeviceKind.wasapi)
                 }
                 .frame(width: 140)
                 if bus.wrappedValue.deviceKind != .none {
@@ -210,9 +311,9 @@ struct SettingsView: View {
             if bus.wrappedValue.deviceKind != .none {
                 HStack {
                     Text("L ch")
-                    TextField("0", value: bus.mapLeft, format: .number).frame(width: 48)
+                    mixerInt32Field(bus.mapLeft).frame(width: 48)
                     Text("R ch")
-                    TextField("1", value: bus.mapRight, format: .number).frame(width: 48)
+                    mixerInt32Field(bus.mapRight).frame(width: 48)
                 }
             }
             HStack {
@@ -228,7 +329,6 @@ struct SettingsView: View {
         MixerFFI.audioDevices().filter {
             $0.kind == kind.rawUInt
                 || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
-                || (kind == .wasapi && $0.kind == AudioDeviceKind.coreAudio.rawUInt)
         }
     }
 
@@ -274,6 +374,7 @@ struct AddInputView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Name")
                 TextField("Name", text: $name)
+                    .mixerField()
                 form
                 Spacer()
                 HStack {
@@ -287,13 +388,7 @@ struct AddInputView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
-        .onAppear {
-            name = editing?.name ?? ""
-            stillPath = editing?.pathOrAddress ?? ""
-            refreshOmt()
-            refreshNdi()
-            refreshUvc()
-        }
+        .onAppear(perform: loadEditing)
     }
 
     @ViewBuilder
@@ -306,20 +401,25 @@ struct AddInputView: View {
                 colorSlider("G", $g)
                 colorSlider("B", $b)
                 Rectangle().fill(Color(red: r / 255, green: g / 255, blue: b / 255)).frame(height: 48)
-                Toggle("Scroll", isOn: $scroll)
             }
+            Toggle("Scroll", isOn: $scroll)
+            Text("Scroll moves a white ident on solid colours, or shifts SMPTE bars.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
         case "Still":
             pathRow($stillPath) { pick(["public.image"], $stillPath) }
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
         case "OMT":
             TextField("OMT source address", text: $omtAddress)
+                .mixerField()
             Button("Refresh discovery") { refreshOmt() }
             List(omtList, id: \.self, selection: $omtAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("GPU decode", isOn: $useGpu)
         case "NDI®":
             TextField("NDI® source", text: $ndiAddress)
+                .mixerField()
             Button("Refresh discovery") { refreshNdi() }
             List(ndiList, id: \.self, selection: $ndiAddress) { Text($0) }
                 .frame(height: 120)
@@ -344,6 +444,7 @@ struct AddInputView: View {
     private func pathRow(_ text: Binding<String>, browse: @escaping () -> Void) -> some View {
         HStack {
             TextField("Path", text: text)
+                .mixerField()
             Button("Browse", action: browse)
         }
     }
@@ -364,9 +465,6 @@ struct AddInputView: View {
 
     private func refreshNdi() {
         ndiList = MixerFFI.discover { mixer_ndi_discover($0, $1) }
-        if mixer.errorText.contains("NDI") == false, ndiList.isEmpty {
-            // discovery can be empty until sources appear
-        }
     }
 
     private func refreshUvc() {
@@ -378,8 +476,52 @@ struct AddInputView: View {
         uvcList = session.devices
     }
 
+    private func loadEditing() {
+        refreshOmt()
+        refreshNdi()
+        refreshUvc()
+        guard let editing else { return }
+        name = editing.name
+        category = editing.kind.category
+        stillPath = editing.kind == .still ? (editing.pathOrAddress ?? "") : stillPath
+        videoPath = editing.kind == .video ? (editing.pathOrAddress ?? "") : videoPath
+        omtAddress = editing.kind == .omt ? (editing.pathOrAddress ?? "") : omtAddress
+        ndiAddress = editing.kind == .ndi ? (editing.pathOrAddress ?? "") : ndiAddress
+        selectedUvc = editing.kind == .uvc ? (editing.pathOrAddress ?? "") : selectedUvc
+        r = Double(editing.colorR) * 255
+        g = Double(editing.colorG) * 255
+        b = Double(editing.colorB) * 255
+        bars = editing.kind == .bars
+        scroll = editing.scroll
+        useGpu = editing.useGpu
+        buffer = editing.frameBufferFrames
+        ndiLow = editing.ndiBandwidth == .lowest
+        quality = editing.omtQuality.rawUInt
+    }
+
+    private func defaultName() -> String {
+        switch category {
+        case "Colours":
+            if bars {
+                return scroll ? "SMPTE Bars (scroll)" : "SMPTE Bars"
+            }
+            return String(format: "Colour %02X%02X%02X", Int(r), Int(g), Int(b))
+        case "Still":
+            return URL(fileURLWithPath: stillPath).lastPathComponent
+        case "Video":
+            return URL(fileURLWithPath: videoPath).lastPathComponent
+        case "OMT":
+            return omtAddress
+        case "NDI®":
+            return ndiAddress
+        default:
+            return uvcList.first { $0.uniqueID == selectedUvc }?.localizedName ?? "Video Capture"
+        }
+    }
+
     private func commit() {
-        var input = InputEntry(id: mixer.session.nextInputId, name: name.isEmpty ? category : name, kind: .still)
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        var input = InputEntry(id: editing?.id ?? 0, name: trimmed.isEmpty ? defaultName() : trimmed, kind: .still)
         switch category {
         case "Colours":
             input.kind = bars ? .bars : .color
@@ -388,12 +530,15 @@ struct AddInputView: View {
             input.colorB = Float(b / 255)
             input.scroll = scroll
         case "Still":
+            guard !stillPath.isEmpty else { return }
             input.kind = .still
             input.pathOrAddress = stillPath
         case "Video":
+            guard !videoPath.isEmpty else { return }
             input.kind = .video
             input.pathOrAddress = videoPath
         case "OMT":
+            guard !omtAddress.isEmpty else { return }
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
@@ -405,15 +550,18 @@ struct AddInputView: View {
             default: .default
             }
         case "NDI®":
+            guard !ndiAddress.isEmpty else { return }
             input.kind = .ndi
             input.pathOrAddress = ndiAddress
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
+            input.useGpu = false
         default:
+            guard !selectedUvc.isEmpty else { return }
             input.kind = .uvc
             input.pathOrAddress = selectedUvc
         }
-        mixer.addInput(input)
+        mixer.upsertInput(input, replacing: editing?.id)
     }
 }
 
@@ -424,9 +572,30 @@ struct MixingUnitView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            labeled("Name") { TextField("Name", text: $unit.name) }
-            labeled("Width") { TextField("Width", value: $unit.width, format: .number) }
-            labeled("Height") { TextField("Height", value: $unit.height, format: .number) }
+            labeled("Name") {
+                TextField("Name", text: $unit.name)
+                    .mixerField()
+            }
+            labeled("Width") { mixerUintField($unit.width) }
+            labeled("Height") { mixerUintField($unit.height) }
+            labeled("Frame rate") {
+                Picker("", selection: Binding(
+                    get: { "\(unit.fpsNum)/\(unit.fpsDen)" },
+                    set: { value in
+                        let parts = value.split(separator: "/").compactMap { UInt32($0) }
+                        if parts.count == 2 {
+                            unit.fpsNum = parts[0]
+                            unit.fpsDen = parts[1]
+                        }
+                    }
+                )) {
+                    Text("59.94p").tag("60000/1001")
+                    Text("50p").tag("50/1")
+                    Text("30p").tag("30/1")
+                    Text("24p").tag("24/1")
+                    Text("60p").tag("60/1")
+                }
+            }
             labeled("Audio") {
                 Picker("", selection: $unit.audioBusId) {
                     ForEach(mixer.session.buses) { bus in
@@ -450,7 +619,7 @@ struct MixingUnitView: View {
             }
         }
         .padding(16)
-        .frame(width: 420, height: 280)
+        .frame(width: 420, height: 360)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
     }
@@ -466,83 +635,217 @@ struct MixingUnitView: View {
 struct MultiviewView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
-    @State private var layout: MultiviewLayout?
+
+    private var layout: MultiviewLayout? {
+        if let open = mixer.openMultiview,
+           let live = mixer.session.multiviews.first(where: { $0.id == open.id })
+        {
+            return live
+        }
+        return mixer.session.multiviews.last
+    }
 
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
-                Text("Multiview").fontWeight(.bold)
+                Text(layout?.name ?? "Multiview").fontWeight(.bold)
                 Spacer()
+                Button("Layout…") {
+                    mixer.showMultiviewSlots = true
+                }
                 Button("Close") { dismiss() }
             }
-            if mixer.session.multiviews.isEmpty {
+            .buttonStyle(MixerButtonStyle())
+            if let layout {
+                MetalPreviewRepresentable(role: .monitor(monitorId: layout.monitorId, sourceId: layout.gpuId))
+                    .frame(minHeight: 280)
+                    .clipped()
+                    .background(Color.black)
+            } else {
                 Text("Add a Multiview in Settings.")
                     .foregroundStyle(EivizTheme.dim)
-            }
-            ForEach(mixer.session.multiviews) { item in
-                VStack(alignment: .leading) {
-                    Text(item.name).fontWeight(.bold)
-                    MetalPreviewRepresentable(role: .monitor(monitorId: item.monitorId, sourceId: item.gpuId))
-                        .frame(minHeight: 280)
-                        .background(Color.black)
-                }
             }
         }
         .padding(12)
         .frame(minWidth: 960, minHeight: 540)
+        .clipped()
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
-        .onAppear { pushLayouts() }
-    }
-
-    private func pushLayouts() {
-        for layout in mixer.session.multiviews {
-            var layers: [EivizOverlayDesc] = []
-            func layer(_ source: UInt64, _ x: Float, _ y: Float, _ w: Float, _ h: Float, _ z: Int32) {
-                var desc = MixerFFI.emptyOverlay()
-                desc.source_id = source
-                desc.rect = EivizRect(x: x, y: y, width: w, height: h)
-                desc.opacity = 1
-                desc.z = z
-                layers.append(desc)
+        .onAppear {
+            if let layout {
+                mixer.pushMultiview(layout)
             }
-            layer(EIVIZ_MU_SOURCE_FLAG | EIVIZ_MU_BUS_PREVIEW | (layout.previewUnitId & EIVIZ_MU_ID_MASK), 0, 0, 0.5, 0.5, 0)
-            layer(EIVIZ_MU_SOURCE_FLAG | (layout.programUnitId & EIVIZ_MU_ID_MASK), 0.5, 0, 0.5, 0.5, 1)
-            for i in 0..<8 {
-                let col = Float(i % 4)
-                let row = Float(i / 4)
-                layer(0, col / 4, 0.5 + row / 4, 0.25, 0.25, Int32(2 + i))
-            }
-            layers.withUnsafeMutableBufferPointer { ptr in
-                _ = mixer_define_scene(layout.gpuId, mixer.selectedUnit.width, mixer.selectedUnit.height, UInt32(ptr.count), ptr.baseAddress)
-            }
-            _ = mixer_bind_multiview(layout.gpuId, layout.previewUnitId, layout.programUnitId)
         }
     }
+}
+
+struct MultiviewSlotsView: View {
+    @EnvironmentObject private var mixer: MixerController
+    @Environment(\.dismiss) private var dismiss
+    @State private var previewUnit: UInt64 = 1
+    @State private var programUnit: UInt64 = 1
+    @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
+
+    private var layoutId: UInt64? { mixer.openMultiview?.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Top left is that Mixing Unit's Preview. Top right is Program. The lower half holds eight Input or Scene windows.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            unitRow("PRV (top left)", $previewUnit)
+            unitRow("PGM (top right)", $programUnit)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(0..<8, id: \.self) { index in
+                        tileRow(index)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("OK") { commit(); dismiss() }
+                Button("Cancel") { dismiss() }
+            }
+        }
+        .padding(16)
+        .frame(width: 640, height: 560)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear {
+            if let id = layoutId, let layout = mixer.session.multiviews.first(where: { $0.id == id }) {
+                previewUnit = layout.previewUnitId
+                programUnit = layout.programUnitId
+                tiles = layout.tiles
+                if tiles.count < 8 {
+                    tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - tiles.count))
+                }
+            }
+        }
+    }
+
+    private func unitRow(_ title: String, _ unit: Binding<UInt64>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).fontWeight(.bold)
+            Picker("", selection: unit) {
+                ForEach(mixer.session.units) { item in
+                    Text(item.name).tag(item.id)
+                }
+            }
+        }
+        .padding(8)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+    }
+
+    private func tileRow(_ index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Window \(index + 1)").fontWeight(.bold)
+            Picker("", selection: Binding(
+                get: { tiles[index].kind },
+                set: { tiles[index].kind = $0; tiles[index].sourceId = 0 }
+            )) {
+                Text("None").tag(MvSlotKind.none)
+                Text("Input").tag(MvSlotKind.input)
+                Text("Scene").tag(MvSlotKind.scene)
+            }
+            .pickerStyle(.segmented)
+            if tiles[index].kind == .input {
+                Picker("", selection: Binding(
+                    get: { tiles[index].sourceId },
+                    set: { tiles[index].sourceId = $0 }
+                )) {
+                    ForEach(mixer.session.inputs) { input in
+                        Text(input.name).tag(input.id)
+                    }
+                }
+            } else if tiles[index].kind == .scene {
+                Picker("", selection: Binding(
+                    get: { tiles[index].sourceId },
+                    set: { tiles[index].sourceId = $0 }
+                )) {
+                    ForEach(mixer.session.scenes) { scene in
+                        Text(scene.name).tag(scene.gpuId)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+    }
+
+    private func commit() {
+        guard let id = layoutId,
+              let index = mixer.session.multiviews.firstIndex(where: { $0.id == id })
+        else { return }
+        mixer.session.multiviews[index].previewUnitId = previewUnit
+        mixer.session.multiviews[index].programUnitId = programUnit
+        mixer.session.multiviews[index].tiles = tiles
+        mixer.openMultiview = mixer.session.multiviews[index]
+        mixer.pushMultiview(mixer.session.multiviews[index])
+    }
+}
+
+private struct ResourceRow: Identifiable {
+    var id: UInt64
+    var name: String
+    var kind: String
+    var size: String
+    var cpu: String
+    var gpu: String
+    var ram: String
+    var vram: String
 }
 
 struct ResourcesView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
-    @State private var rows: [EivizSourceUsage] = []
+    @State private var rows: [ResourceRow] = []
+    @State private var summary = ""
 
     var body: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Resources").fontWeight(.bold)
-            Text(mixer.resourceText)
-            Button("Refresh") { load() }
-            List(rows, id: \.source_id) { row in
-                Text(String(format: "id %llu  %ux%u  RAM %llu  VRAM %llu", row.source_id, row.width, row.height, row.ram_bytes, row.vram_bytes))
+            Text(summary.isEmpty ? mixer.resourceText : summary)
+                .foregroundStyle(EivizTheme.hud)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                GridRow {
+                    Text("Input").fontWeight(.bold)
+                    Text("Kind").fontWeight(.bold)
+                    Text("Size").fontWeight(.bold)
+                    Text("CPU").fontWeight(.bold)
+                    Text("GPU").fontWeight(.bold)
+                    Text("RAM").fontWeight(.bold)
+                    Text("VRAM").fontWeight(.bold)
+                }
+                ForEach(rows) { row in
+                    GridRow {
+                        Text(row.name)
+                        Text(row.kind)
+                        Text(row.size)
+                        Text(row.cpu)
+                        Text(row.gpu)
+                        Text(row.ram)
+                        Text(row.vram)
+                    }
+                }
             }
+            .font(.system(size: 12, design: .monospaced))
+            Spacer()
             HStack {
                 Spacer()
                 Button("Close") { dismiss() }
             }
         }
         .padding(12)
-        .frame(width: 640, height: 420)
+        .frame(width: 820, height: 480)
         .background(EivizTheme.dialog)
-        .onAppear(perform: load)
+        .foregroundStyle(EivizTheme.text)
+        .task {
+            while !Task.isCancelled {
+                load()
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
     }
 
     private func load() {
@@ -550,8 +853,43 @@ struct ResourcesView: View {
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_source_usage(ptr.baseAddress, UInt32(ptr.count))
         }
+        var usages: [UInt64: EivizSourceUsage] = [:]
         if n > 0 {
-            rows = Array(buffer.prefix(Int(n)))
+            for usage in buffer.prefix(Int(n)) {
+                usages[usage.source_id] = usage
+            }
         }
+        var totalRam: UInt64 = 0
+        var totalVram: UInt64 = 0
+        for usage in usages.values {
+            totalRam += usage.ram_bytes
+            totalVram += usage.vram_bytes
+        }
+        if totalRam == 0 { totalRam = 1 }
+        if totalVram == 0 { totalVram = 1 }
+        var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
+        _ = mixer_copy_stats(&stats)
+        let gpuLoad = stats.frame_budget_ms > 0.1
+            ? min(100, stats.render_ms / stats.frame_budget_ms * 100)
+            : 0
+        rows = mixer.session.inputs.map { input in
+            let usage = usages[input.id]
+            let ram = usage?.ram_bytes ?? 0
+            let vram = usage?.vram_bytes ?? 0
+            let width = usage?.width ?? 0
+            let height = usage?.height ?? 0
+            let live = input.kind == .omt || input.kind == .ndi || input.kind == .uvc || input.kind == .video
+            return ResourceRow(
+                id: input.id,
+                name: input.name,
+                kind: input.kind.rawValue,
+                size: width == 0 ? "—" : "\(width)x\(height)",
+                cpu: live ? "live" : "—",
+                gpu: vram == 0 ? "—" : String(format: "%.0f%%", Double(vram) / Double(totalVram) * Double(gpuLoad)),
+                ram: formatBytes(ram),
+                vram: formatBytes(vram)
+            )
+        }
+        summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }

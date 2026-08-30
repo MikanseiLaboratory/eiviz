@@ -16,8 +16,10 @@ struct SceneEditorView: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading) {
                 Text("Layers").fontWeight(.bold)
-                List(layers, selection: $selectedLayer) { layer in
-                    Text(label(layer)).tag(layer.id)
+                List(selection: $selectedLayer) {
+                    ForEach(layers) { layer in
+                        Text(label(layer)).tag(Optional(layer.id))
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
@@ -48,17 +50,21 @@ struct SceneEditorView: View {
                     selected: $selectedLayer,
                     onChange: applyWire
                 )
+                .clipped()
             }
+            .clipped()
 
             VStack(alignment: .leading) {
                 Text("Live preview").fontWeight(.bold)
                 if let scene = current {
                     MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
                         .frame(height: 180)
+                        .clipped()
                         .background(Color.black)
                 }
                 Text("Name").padding(.top, 8)
                 TextField("Name", text: $name)
+                    .mixerField()
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
                 }
@@ -211,6 +217,7 @@ struct SceneEditorView: View {
                 set(&mixer.session.scenes[i].layers[index], value)
             }
         ))
+        .mixerField()
         .onSubmit { push() }
         .frame(width: 72)
     }
@@ -230,9 +237,11 @@ struct OverlayView: View {
                     Spacer()
                     Button("+") { add() }
                 }
-                List(unit.overlays, selection: $selected) { slot in
-                    Text("\(slot.enabled ? "ON" : "off")  \(sceneName(slot))")
-                        .tag(slot.id)
+                List(selection: $selected) {
+                    ForEach(unit.overlays) { slot in
+                        Text("\(slot.enabled ? "ON" : "off")  \(sceneName(slot))")
+                            .tag(Optional(slot.id))
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
@@ -252,7 +261,9 @@ struct OverlayView: View {
                     selected: $selected,
                     onChange: applyWire
                 )
+                .clipped()
             }
+            .clipped()
 
             VStack(alignment: .leading) {
                 Text("Scene preview").fontWeight(.bold)
@@ -261,13 +272,13 @@ struct OverlayView: View {
                     sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
                 ))
                 .frame(height: 180)
+                .clipped()
                 .background(Color.black)
                 if let slot = current {
                     Toggle("ON", isOn: Binding(
                         get: { slot.enabled },
                         set: { value in
-                            mutate { $0.enabled = value }
-                            mixer.pushOverlays()
+                            mixer.setOverlayEnabled(slot.id, enabled: value)
                         }
                     ))
                     Picker("Scene", selection: Binding(
@@ -388,6 +399,7 @@ struct OverlayView: View {
                 mutate { $0[keyPath: key] = value }
             }
         ))
+        .mixerField()
         .onSubmit { mixer.pushOverlays() }
         .frame(width: 72)
     }

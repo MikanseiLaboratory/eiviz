@@ -42,6 +42,13 @@ enum MixerFFI {
         }
     }
 
+    static func setMv(_ state: inout EivizUnitState, index: Int, _ id: UInt64) {
+        guard (0..<16).contains(index) else { return }
+        withUnsafeMutableBytes(of: &state.mv_slots) { raw in
+            raw.bindMemory(to: UInt64.self)[index] = id
+        }
+    }
+
     static func audioDevices() -> [AudioDevice] {
         var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

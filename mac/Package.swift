@@ -20,6 +20,10 @@ let package = Package(
                     "-leiviz_mixer",
                     "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
                     "-Xlinker", "-rpath", "-Xlinker", mixerLib,
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "\(Context.packageDirectory)/Sources/EivizMac/Info.plist",
                 ])
             ]
         ),

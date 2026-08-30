@@ -2308,10 +2308,9 @@ fn render_loop(
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
             frame_i = frame_i.wrapping_add(1);
-            let monitor_sources_due = presenters.attached_monitor_sources_due(frame_i);
             let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) =
-                collect_live_ids(&scene_specs, &snapshot, monitor_sources_due, &outputs_snap);
+                collect_live_ids(&scene_specs, &snapshot, monitor_sources, &outputs_snap);
             let output_refs: Vec<(u32, u64)> = outputs_snap
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
@@ -2353,18 +2352,6 @@ fn render_loop(
                 })
             {
                 shared.lock().expect("shared").last_error = error;
-            }
-            if presenters.any_monitor_due(frame_i) {
-                if let Err(error) =
-                    presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
-                        frame_delay
-                            .view_for_source(source_id)
-                            .or_else(|| composer.view_for_source(source_id))
-                            .map(|view| (view, composer.source_is_packed(source_id)))
-                    })
-                {
-                    shared.lock().expect("shared").last_error = error;
-                }
             }
             {
                 let mut encoder =
@@ -2561,6 +2548,18 @@ fn render_loop(
                     pts,
                 );
                 emit_gpu(&gpu_copies, &send_tx, pts);
+            }
+            if presenters.any_monitor_due(frame_i) {
+                if let Err(error) =
+                    presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
+                        frame_delay
+                            .view_for_source(source_id)
+                            .or_else(|| composer.view_for_source(source_id))
+                            .map(|view| (view, composer.source_is_packed(source_id)))
+                    })
+                {
+                    shared.lock().expect("shared").last_error = error;
+                }
             }
             audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
             let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;

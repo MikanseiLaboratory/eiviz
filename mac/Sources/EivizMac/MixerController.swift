@@ -24,14 +24,17 @@ final class MixerController: ObservableObject {
     @Published var videoTitle = ""
     @Published var showSettings = false
     @Published var showAddInput = false
-    @Published var showEditInput = false
+    @Published var editingInput: InputEntry?
     @Published var showMixingUnit = false
     @Published var showSceneEditor = false
     @Published var showOverlay = false
     @Published var showMultiview = false
+    @Published var showMultiviewSlots = false
     @Published var showResources = false
     @Published var editingUnit: MixingUnitEntry?
     @Published var editingScene: SceneEntry?
+    @Published var openMultiview: MultiviewLayout?
+    @Published var expandedTransitions: Set<UUID> = []
 
     let pumps = FramePump()
     private var booted = false
@@ -86,6 +89,9 @@ final class MixerController: ObservableObject {
             pushState(unitId: unit.id, program: program, preview: preview, mix: 0, kind: EIVIZ_TRANSITION_FADE)
         }
         attachInputs()
+        for layout in session.multiviews {
+            pushMultiview(layout)
+        }
         for output in session.outputs where output.transport != .deckLink {
             addOutput(output)
         }
@@ -213,14 +219,28 @@ final class MixerController: ObservableObject {
     }
 
     func addInput(_ input: InputEntry) {
+        upsertInput(input, replacing: nil)
+    }
+
+    func upsertInput(_ input: InputEntry, replacing: UInt64?) {
         var entry = input
-        if entry.id == 0 {
-            entry.id = session.nextInputId
-            session.nextInputId += 1
+        if let id = replacing, let index = session.inputs.firstIndex(where: { $0.id == id }) {
+            if !session.inputs[index].isBuiltin {
+                pumps.stop(id)
+                _ = mixer_destroy_source(id)
+            }
+            entry.id = id
+            session.inputs[index] = entry
+        } else {
+            if entry.id == 0 || session.inputs.contains(where: { $0.id == entry.id }) {
+                entry.id = session.nextInputId
+                session.nextInputId += 1
+            }
+            session.inputs.append(entry)
         }
-        session.inputs.append(entry)
         attach(entry)
         selectedInputId = entry.id
+        objectWillChange.send()
     }
 
     func deleteSelectedInput() {
@@ -235,7 +255,7 @@ final class MixerController: ObservableObject {
     }
 
     func addScene() {
-        let scene = session.addScene(name: "Scene \(session.scenes.count + 1)", input: selectedInputId ?? EIVIZ_SRC_BARS)
+        let scene = session.addScene(name: "Scene \(session.nextSceneId)", input: nil)
         pushScene(scene)
         previewScene(scene)
     }
@@ -290,29 +310,106 @@ final class MixerController: ObservableObject {
     }
 
     func toggleOverlay(_ slot: OverlaySlot) {
-        guard let index = session.units.firstIndex(where: { $0.id == selectedUnitId }) else { return }
-        if let slotIndex = session.units[index].overlays.firstIndex(where: { $0.id == slot.id }) {
-            session.units[index].overlays[slotIndex].enabled.toggle()
-            overlayOn[slot.id] = session.units[index].overlays[slotIndex].enabled
-        }
-        pushOverlays()
+        guard let index = session.units.firstIndex(where: { $0.id == selectedUnitId }),
+              let slotIndex = session.units[index].overlays.firstIndex(where: { $0.id == slot.id })
+        else { return }
+        let enabled = !session.units[index].overlays[slotIndex].enabled
+        setOverlayEnabled(slot.id, enabled: enabled)
     }
 
     func addOutput(_ output: OutputEntry) {
-        MixerFFI.withCString(output.name) { name in
+        var entry = output
+        if entry.transport != .omt {
+            entry.useGpu = false
+        }
+        if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
+            session.outputs[index] = entry
+        }
+        _ = mixer_output_remove(entry.id)
+        MixerFFI.withCString(entry.name) { name in
             fail(
                 mixer_output_add(
-                    output.id,
-                    output.transport.rawValueU32,
+                    entry.id,
+                    entry.transport.rawValueU32,
                     name,
-                    output.sourceKind.rawValueU32,
-                    output.sourceId,
-                    output.unitId,
-                    output.useGpu ? 1 : 0
+                    entry.sourceKind.rawValueU32,
+                    entry.sourceId,
+                    entry.unitId,
+                    entry.useGpu ? 1 : 0
                 ),
                 "Add output"
             )
         }
+    }
+
+    func openNewMultiview() {
+        let unitId = session.settings.defaultMultiviewUnitId == 0
+            ? selectedUnitId
+            : session.settings.defaultMultiviewUnitId
+        let layout = session.addMultiview(unitId: unitId)
+        pushMultiview(layout)
+        openMultiviewWindow(layout)
+    }
+
+    func openMultiviewWindow(_ layout: MultiviewLayout) {
+        pushMultiview(layout)
+        openMultiview = layout
+        showMultiview = true
+    }
+
+    func deleteMultiview(_ id: UInt64) {
+        if let layout = session.multiviews.first(where: { $0.id == id }) {
+            _ = mixer_destroy_scene(layout.gpuId)
+            _ = mixer_detach_monitor(layout.monitorId)
+        }
+        session.multiviews.removeAll { $0.id == id }
+        if openMultiview?.id == id {
+            showMultiview = false
+            openMultiview = nil
+        }
+    }
+
+    func pushMultiview(_ layout: MultiviewLayout) {
+        guard let index = session.multiviews.firstIndex(where: { $0.id == layout.id }) else { return }
+        var item = layout
+        if item.tiles.count < 8 {
+            item.tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - item.tiles.count))
+        }
+        session.multiviews[index] = item
+        var layers: [EivizOverlayDesc] = []
+        func layer(_ source: UInt64, _ x: Float, _ y: Float, _ w: Float, _ h: Float, _ z: Int32) {
+            var desc = MixerFFI.emptyOverlay()
+            desc.source_id = source
+            desc.rect = EivizRect(x: x, y: y, width: w, height: h)
+            desc.opacity = 1
+            desc.z = z
+            layers.append(desc)
+        }
+        layer(MvSlotKind.muPreview.encoded(item.previewUnitId), 0, 0, 0.5, 0.5, 0)
+        layer(MvSlotKind.muProgram.encoded(item.programUnitId), 0.5, 0, 0.5, 0.5, 1)
+        for i in 0..<8 {
+            let col = Float(i % 4)
+            let row = Float(i / 4)
+            layer(item.tiles[i].kind.encoded(item.tiles[i].sourceId), col / 4, 0.5 + row / 4, 0.25, 0.25, Int32(2 + i))
+        }
+        layers.withUnsafeMutableBufferPointer { ptr in
+            fail(
+                mixer_define_scene(item.gpuId, selectedUnit.width, selectedUnit.height, UInt32(ptr.count), ptr.baseAddress),
+                "Define Multiview"
+            )
+        }
+        fail(mixer_bind_multiview(item.gpuId, item.previewUnitId, item.programUnitId), "Bind Multiview")
+        let interval = item.presentInterval == 0 ? session.settings.defaultPresentInterval : item.presentInterval
+        _ = mixer_set_monitor_present_interval(item.monitorId, max(1, interval))
+    }
+
+    func setOverlayEnabled(_ id: UUID, enabled: Bool) {
+        guard let unitIndex = session.units.firstIndex(where: { $0.id == selectedUnitId }),
+              let slotIndex = session.units[unitIndex].overlays.firstIndex(where: { $0.id == id })
+        else { return }
+        session.units[unitIndex].overlays[slotIndex].enabled = enabled
+        overlayOn[id] = enabled
+        pushOverlays()
     }
 
     func saveSession() {
@@ -366,14 +463,21 @@ final class MixerController: ObservableObject {
         }
     }
 
+    var selectedVideoId: UInt64? {
+        guard let id = selectedInputId,
+              session.inputs.first(where: { $0.id == id })?.kind == .video
+        else { return nil }
+        return id
+    }
+
     func videoPlayToggle() {
-        guard let id = pumps.activeFileId else { return }
+        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
         videoPlaying.toggle()
         pumps.setPlaying(id, playing: videoPlaying)
     }
 
     func videoRestart() {
-        guard let id = pumps.activeFileId else { return }
+        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
         pumps.seek(id, fraction: 0)
         pumps.setPlaying(id, playing: true)
         videoPlaying = true
@@ -381,7 +485,7 @@ final class MixerController: ObservableObject {
     }
 
     func videoSeek(_ value: Double) {
-        guard let id = pumps.activeFileId else { return }
+        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
         pumps.seek(id, fraction: value)
         videoFraction = value
     }
@@ -395,7 +499,7 @@ final class MixerController: ObservableObject {
     private func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
-            if input.isBuiltin { return }
+            if input.isBuiltin && !input.scroll { return }
             fail(
                 mixer_define_generator(
                     input.id,
@@ -494,6 +598,8 @@ final class MixerController: ObservableObject {
         state.preview_source = preview
         state.mix = mix
         state.transition_kind = kind
+        let unit = session.units.first { $0.id == unitId } ?? selectedUnit
+        fillAux(&state, unit: unit)
         fail(mixer_unit_set_state(unitId, &state), "Set Mixing Unit state")
     }
 
@@ -501,7 +607,12 @@ final class MixerController: ObservableObject {
         var state = MixerFFI.emptyState()
         _ = mixer_unit_get_state(unitId, &state)
         let unit = session.units.first { $0.id == unitId } ?? selectedUnit
-        let enabled = unit.overlays.filter(\.enabled).prefix(8)
+        fillAux(&state, unit: unit)
+        return state
+    }
+
+    private func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry) {
+        let enabled = unit.overlays.filter { $0.enabled && $0.sceneGpuId != 0 }.prefix(8)
         state.overlay_count = UInt32(enabled.count)
         for (index, slot) in enabled.enumerated() {
             var desc = MixerFFI.emptyOverlay()
@@ -512,7 +623,11 @@ final class MixerController: ObservableObject {
             desc.audio_follow = 1
             MixerFFI.setOverlay(&state, index: index, desc)
         }
-        return state
+        let tiles = unit.multiviewTiles
+        state.mv_slot_count = UInt32(min(16, tiles.count))
+        for (index, tile) in tiles.prefix(16).enumerated() {
+            MixerFFI.setMv(&state, index: index, tile.kind.encoded(tile.sourceId))
+        }
     }
 
     private func tbarPreset() -> TransitionPreset {
@@ -538,11 +653,13 @@ final class MixerController: ObservableObject {
         var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
         _ = mixer_copy_stats(&stats)
         if stats.frame_budget_ms > 0 {
-            resourceText = String(format: "GPU  %.1f / %.1f ms", stats.render_ms, stats.frame_budget_ms)
-            warnText = stats.render_ms > stats.frame_budget_ms ? "compose over budget" : ""
+            let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
+            resourceText = hud.text
+            warnText = hud.warn
         }
-        if let id = pumps.activeFileId, let info = pumps.info(id) {
+        if let id = selectedVideoId ?? pumps.activeFileId, let info = pumps.info(id) {
             videoPlaying = info.playing
+            videoTitle = session.inputs.first { $0.id == id }?.name ?? videoTitle
             if info.duration > 0 {
                 videoFraction = info.position / info.duration
             }

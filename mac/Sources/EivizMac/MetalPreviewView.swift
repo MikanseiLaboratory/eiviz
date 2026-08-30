@@ -18,12 +18,14 @@ final class MetalSurfaceView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = false
+        clipsToBounds = true
         autoresizingMask = [.width, .height]
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         wantsLayer = false
+        clipsToBounds = true
         autoresizingMask = [.width, .height]
     }
 
@@ -54,6 +56,7 @@ final class MetalSurfaceView: NSView {
     func attachIfNeeded() {
         guard window != nil else { return }
         let (width, height) = pixelSize()
+        guard width >= 16, height >= 16 else { return }
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         let key = role.key
         if !attached || attachedKey != key {
@@ -73,6 +76,9 @@ final class MetalSurfaceView: NSView {
                 code = mixer_attach_monitor_native(monitorId, sourceId, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
             }
             attached = code == EIVIZ_OK
+            if attached, case .monitor(let monitorId, _) = role {
+                _ = mixer_set_monitor_present_interval(monitorId, 1)
+            }
             attachedWidth = width
             attachedHeight = height
             attachedKey = key
@@ -122,14 +128,26 @@ enum SurfaceRole: Equatable {
 struct MetalPreviewRepresentable: NSViewRepresentable {
     let role: SurfaceRole
 
-    func makeNSView(context: Context) -> MetalSurfaceView {
-        let view = MetalSurfaceView(frame: .zero)
-        view.role = role
-        return view
+    func makeNSView(context: Context) -> NSView {
+        let host = NSView(frame: .zero)
+        host.wantsLayer = true
+        host.clipsToBounds = true
+        host.layer?.masksToBounds = true
+        let surface = MetalSurfaceView(frame: .zero)
+        surface.autoresizingMask = [.width, .height]
+        surface.role = role
+        host.addSubview(surface)
+        return host
     }
 
-    func updateNSView(_ nsView: MetalSurfaceView, context: Context) {
-        nsView.role = role
-        nsView.attachIfNeeded()
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.wantsLayer = true
+        nsView.clipsToBounds = true
+        nsView.layer?.masksToBounds = true
+        guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
+        surface.frame = nsView.bounds
+        surface.clipsToBounds = true
+        surface.role = role
+        surface.attachIfNeeded()
     }
 }

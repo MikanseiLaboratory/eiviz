@@ -53,6 +53,7 @@ struct WireCanvasView: View {
                     }
                 }
             }
+            .clipped()
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -83,6 +84,7 @@ struct WireCanvasView: View {
             )
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .clipped()
         .background(Color.black)
         .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
     }

@@ -31,3 +31,43 @@ struct MixerButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
+
+extension View {
+    func mixerField() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .padding(6)
+            .background(Color(white: 0.16))
+            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            .foregroundStyle(EivizTheme.text)
+    }
+}
+
+func parseUInt32(_ text: String) -> UInt32? {
+    UInt32(text.filter(\.isNumber))
+}
+
+func mixerUintField(_ value: Binding<UInt32>, minimum: UInt32 = 1) -> some View {
+    TextField("", text: Binding(
+        get: { String(value.wrappedValue) },
+        set: { text in
+            if let n = parseUInt32(text), n >= minimum {
+                value.wrappedValue = n
+            }
+        }
+    ))
+    .mixerField()
+}
+
+func mixerInt32Field(_ value: Binding<Int32>) -> some View {
+    TextField("", text: Binding(
+        get: { String(value.wrappedValue) },
+        set: { text in
+            let filtered = text.filter { $0.isNumber || $0 == "-" }
+            if let n = Int32(filtered) {
+                value.wrappedValue = n
+            }
+        }
+    ))
+    .mixerField()
+}

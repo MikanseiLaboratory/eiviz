@@ -8,14 +8,28 @@ final class FramePump {
 
     func startFile(id: UInt64, path: String) {
         stop(id)
-        guard let url = URL(string: path) ?? Optional(URL(fileURLWithPath: path)) else { return }
+        let url = URL(fileURLWithPath: path)
         let asset = AVURLAsset(url: url)
         readers[id] = Pump(id: id, asset: asset)
     }
 
     func startCapture(id: UInt64, deviceId: String) {
         stop(id)
-        readers[id] = Pump(id: id, deviceId: deviceId)
+        let begin = { [self] in
+            DispatchQueue.main.async {
+                self.readers[id] = Pump(id: id, deviceId: deviceId)
+            }
+        }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            begin()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if granted { begin() }
+            }
+        default:
+            break
+        }
     }
 
     func stop(_ id: UInt64) {
@@ -47,7 +61,6 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var playing = true
     var position: Double = 0
     var duration: Double = 1
-    private var display: AVSampleBufferDisplayLayer?
     private var output: AVPlayerItemVideoOutput?
     private var player: AVPlayer?
     private var capture: AVCaptureSession?
@@ -66,8 +79,6 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         item.add(videoOutput)
         output = videoOutput
         player = AVPlayer(playerItem: item)
-        duration = CMTimeGetSeconds(asset.duration)
-        if duration <= 0 { duration = 1 }
         player?.play()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.pull()
@@ -79,7 +90,9 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         self.isFile = false
         super.init()
         let session = AVCaptureSession()
-        session.sessionPreset = .hd1920x1080
+        if session.canSetSessionPreset(.high) {
+            session.sessionPreset = .high
+        }
         let device = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external],
             mediaType: .video,
@@ -92,7 +105,9 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "eiviz.uvc.\(id)"))
         if session.canAddOutput(output) { session.addOutput(output) }
         capture = session
-        session.startRunning()
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.startRunning()
+        }
     }
 
     func stop() {
@@ -114,6 +129,12 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         guard playing, let output, let player else { return }
         let time = player.currentTime()
         position = CMTimeGetSeconds(time)
+        if let item = player.currentItem {
+            let itemDuration = CMTimeGetSeconds(item.duration)
+            if itemDuration > 0 {
+                duration = itemDuration
+            }
+        }
         guard output.hasNewPixelBuffer(forItemTime: time),
               let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
         else { return }
