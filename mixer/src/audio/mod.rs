@@ -146,8 +146,14 @@ impl AudioEngine {
             outputs.clear();
             joins
         };
+        // Detach joins. HAL Start/Stop can block forever on some machines;
+        // freezing mixer_destroy (and the AppKit main thread) is worse.
         for join in joins {
-            let _ = join.join();
+            let _ = std::thread::Builder::new()
+                .name("eiviz-audio-join".into())
+                .spawn(move || {
+                    let _ = join.join();
+                });
         }
     }
 
@@ -298,7 +304,11 @@ impl AudioEngine {
             *outputs = keep;
         }
         for join in stale {
-            let _ = join.join();
+            let _ = std::thread::Builder::new()
+                .name("eiviz-audio-join".into())
+                .spawn(move || {
+                    let _ = join.join();
+                });
         }
     }
 }

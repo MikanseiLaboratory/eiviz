@@ -328,6 +328,17 @@ fn with_mixer<T>(f: impl FnOnce(&Mixer) -> T) -> Result<T, i32> {
     }
 }
 
+/// Send a GPU command that replies, without holding the mixer slot while waiting.
+/// Holding the slot across `recv` deadlocks if the render thread needs the host.
+fn send_gpu_and_wait(send: impl FnOnce(&Mixer, mpsc::Sender<i32>) -> i32) -> i32 {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    match with_mixer(|mixer| send(mixer, reply_tx)) {
+        Ok(OK) => reply_rx.recv().unwrap_or(ERR_DEVICE),
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
 fn set_error(shared: &Mutex<Shared>, message: impl Into<String>) {
     shared.lock().expect("shared").last_error = message.into();
 }
@@ -355,13 +366,15 @@ fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn prepare_native_surface(
-    mixer: &Mixer,
+fn prepare_surface_off_slot(
     surface: NativeSurface,
     width: u32,
     height: u32,
-) -> Result<present::PreparedSurface, String> {
-    let gpu = mixer.surface_gpu.clone();
+) -> Result<present::PreparedSurface, i32> {
+    let gpu = match with_mixer(|mixer| mixer.surface_gpu.clone()) {
+        Ok(gpu) => gpu,
+        Err(code) => return Err(code),
+    };
     crate::main_thread::run_on_main(move || {
         present::prepare_surface(
             &gpu.instance,
@@ -371,6 +384,10 @@ fn prepare_native_surface(
             width,
             height,
         )
+    })
+    .map_err(|error| {
+        let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+        ERR_DEVICE
     })
 }
 
@@ -656,7 +673,14 @@ pub extern "C" fn mixer_unit_attach_native(
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
         return ERR_INVALID_ARGUMENT;
     };
-    match with_mixer(|mixer| {
+    #[cfg(target_os = "macos")]
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
+        Ok(prepared) => Some(prepared),
+        Err(code) => return code,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let prepared = None;
+    send_gpu_and_wait(|mixer, reply| {
         if !mixer
             .shared
             .lock()
@@ -666,17 +690,6 @@ pub extern "C" fn mixer_unit_attach_native(
         {
             return ERR_INVALID_ARGUMENT;
         }
-        #[cfg(target_os = "macos")]
-        let prepared = match prepare_native_surface(mixer, surface, width, height) {
-            Ok(prepared) => Some(prepared),
-            Err(error) => {
-                set_error(&mixer.shared, error);
-                return ERR_DEVICE;
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let prepared = None;
-        let (reply_tx, reply_rx) = mpsc::channel();
         if mixer
             .cmds
             .send(GpuCmd::Attach {
@@ -686,17 +699,14 @@ pub extern "C" fn mixer_unit_attach_native(
                 width,
                 height,
                 prepared,
-                reply: reply_tx,
+                reply,
             })
             .is_err()
         {
             return ERR_DEVICE;
         }
-        reply_rx.recv().unwrap_or(ERR_DEVICE)
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -914,18 +924,14 @@ pub extern "C" fn mixer_attach_monitor_native(
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
         return ERR_INVALID_ARGUMENT;
     };
-    match with_mixer(|mixer| {
-        #[cfg(target_os = "macos")]
-        let prepared = match prepare_native_surface(mixer, surface, width, height) {
-            Ok(prepared) => Some(prepared),
-            Err(error) => {
-                set_error(&mixer.shared, error);
-                return ERR_DEVICE;
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let prepared = None;
-        let (reply_tx, reply_rx) = mpsc::channel();
+    #[cfg(target_os = "macos")]
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
+        Ok(prepared) => Some(prepared),
+        Err(code) => return code,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let prepared = None;
+    send_gpu_and_wait(|mixer, reply| {
         if mixer
             .cmds
             .send(GpuCmd::AttachMonitor {
@@ -935,17 +941,14 @@ pub extern "C" fn mixer_attach_monitor_native(
                 width,
                 height,
                 prepared,
-                reply: reply_tx,
+                reply,
             })
             .is_err()
         {
             return ERR_DEVICE;
         }
-        reply_rx.recv().unwrap_or(ERR_DEVICE)
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -2910,7 +2913,6 @@ fn apply_send_cmd(
             busy,
         } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _guard = crate::device::lock_gpu_queue();
                 let _ = panic::catch_unwind(AssertUnwindSafe(|| {
                     sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
                 }));

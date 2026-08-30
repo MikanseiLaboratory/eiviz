@@ -248,16 +248,10 @@ impl Presenters {
     }
 
     pub fn reconfigure_pending(&mut self, device: &GpuDevice) {
-        #[cfg(target_os = "macos")]
-        {
-            let device = crate::main_thread::SendPtr::from_const(device as *const GpuDevice);
-            let presenters = crate::main_thread::SendPtr::from_mut(self as *mut Presenters);
-            crate::main_thread::run_on_main(move || {
-                // SAFETY: the render thread waits in run_on_main.
-                unsafe { reconfigure_pending_inner(device.as_ref(), presenters.as_mut()) }
-            });
-        }
-        #[cfg(not(target_os = "macos"))]
+        // Apply on the render thread. Surface *creation* already ran on the
+        // AppKit main thread. dispatch_sync back to main from here deadlocks
+        // when the host (or cargo test) is on main waiting for this thread
+        // — attach reply, mixer_destroy join, or a sleeping integration test.
         reconfigure_pending_inner(device, self);
     }
 }
