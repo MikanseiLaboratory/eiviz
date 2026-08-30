@@ -47,6 +47,7 @@ func parseUInt32(_ text: String) -> UInt32? {
     UInt32(text.filter(\.isNumber))
 }
 
+@MainActor
 func mixerUintField(_ value: Binding<UInt32>, minimum: UInt32 = 1) -> some View {
     TextField("", text: Binding(
         get: { String(value.wrappedValue) },
@@ -59,6 +60,7 @@ func mixerUintField(_ value: Binding<UInt32>, minimum: UInt32 = 1) -> some View 
     .mixerField()
 }
 
+@MainActor
 func mixerInt32Field(_ value: Binding<Int32>) -> some View {
     TextField("", text: Binding(
         get: { String(value.wrappedValue) },
