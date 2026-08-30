@@ -4,14 +4,16 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, PixelFormat, Receiver, ReceiverColorFormat,
-    ReceiverOptions, Sender, SenderOptions, Source, VideoFrame, NDI,
+    AudioFrame, Finder, FinderOptions, LineStrideOrSize, PixelFormat, Receiver, ReceiverBandwidth,
+    ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source, SourceAddress, VideoFrame,
+    NDI,
 };
 
 use crate::abi::FMT_BGRA;
 use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore};
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
+static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
 
 fn runtime() -> Result<&'static NDI, String> {
     match RUNTIME.get_or_init(|| NDI::new().map_err(|error| error.to_string())) {
@@ -20,8 +22,26 @@ fn runtime() -> Result<&'static NDI, String> {
     }
 }
 
+fn finder() -> Result<&'static Finder, String> {
+    match FINDER.get_or_init(|| {
+        let ndi = runtime()?;
+        Finder::new(ndi, &FinderOptions::builder().show_local_sources(true).build())
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(finder) => Ok(finder),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+pub fn warm_finder() {
+    if let Ok(finder) = finder() {
+        let _ = finder.wait_for_sources(Duration::from_secs(2));
+    }
+}
+
 pub struct NdiReceiver {
     stop: Arc<AtomicBool>,
+    want_full: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -34,15 +54,12 @@ impl NdiReceiver {
     ) -> Result<Self, String> {
         let depth = frame_buffer_frames.clamp(1, 8);
         let ndi = runtime()?;
-        let source = resolve_source(ndi, &address)?;
-        let options = ReceiverOptions::builder(source)
-            .color(ReceiverColorFormat::BGRX_BGRA)
-            .allow_video_fields(false)
-            .name("eiviz")
-            .build();
-        let receiver = Receiver::new(ndi, &options).map_err(|error| error.to_string())?;
+        let source = resolve_source(&address)?;
+        let want_full = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
+        let want_full_thread = Arc::clone(&want_full);
+        let mut receiver = open_receiver(ndi, &source, source_id, true)?;
         let join = thread::Builder::new()
             .name(format!("eiviz-ndi-{source_id}"))
             .spawn(move || {
@@ -56,7 +73,15 @@ impl NdiReceiver {
                         depth,
                     );
                 }
+                let mut full = true;
                 while !stop_thread.load(Ordering::Relaxed) {
+                    let next_full = want_full_thread.load(Ordering::Relaxed);
+                    if next_full != full
+                        && let Ok(next) = open_receiver(ndi, &source, source_id, next_full)
+                    {
+                        receiver = next;
+                        full = next_full;
+                    }
                     match receiver.video().try_capture(Duration::from_millis(4)) {
                         Ok(Some(frame)) => ingest_video(&uploads, source_id, depth, &frame),
                         Ok(None) => {}
@@ -75,8 +100,13 @@ impl NdiReceiver {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             stop,
+            want_full,
             join: Some(join),
         })
+    }
+
+    pub fn apply_save(&self, full: bool) {
+        self.want_full.store(full, Ordering::Relaxed);
     }
 }
 
@@ -172,49 +202,97 @@ impl NdiSender {
     }
 }
 
+fn open_receiver(
+    ndi: &NDI,
+    source: &Source,
+    source_id: u64,
+    full: bool,
+) -> Result<Receiver, String> {
+    let options = ReceiverOptions::builder(source.clone())
+        .color(ReceiverColorFormat::BGRX_BGRA)
+        .bandwidth(if full {
+            ReceiverBandwidth::Highest
+        } else {
+            ReceiverBandwidth::Lowest
+        })
+        .allow_video_fields(false)
+        .name(format!("eiviz-ndi-{source_id}"))
+        .build();
+    Receiver::new(ndi, &options).map_err(|error| error.to_string())
+}
+
 pub fn discover_sources() -> Result<Vec<String>, String> {
-    let ndi = runtime()?;
-    let finder = Finder::new(ndi, &FinderOptions::builder().show_local_sources(true).build())
-        .map_err(|error| error.to_string())?;
-    let _ = finder.wait_for_sources(Duration::from_millis(400));
-    let sources = finder
-        .current_sources()
-        .or_else(|_| finder.find_sources(Duration::from_millis(200)))
-        .map_err(|error| error.to_string())?;
+    let finder = finder()?;
+    let mut sources = finder.current_sources().unwrap_or_default();
+    if sources.is_empty() {
+        let _ = finder.wait_for_sources(Duration::from_millis(1500));
+        sources = finder
+            .current_sources()
+            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
+            .map_err(|error| error.to_string())?;
+    }
     Ok(sources.into_iter().map(|source| source.to_string()).collect())
 }
 
-fn resolve_source(ndi: &NDI, query: &str) -> Result<Source, String> {
+fn resolve_source(query: &str) -> Result<Source, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    let finder = Finder::new(ndi, &FinderOptions::builder().show_local_sources(true).build())
-        .map_err(|error| error.to_string())?;
-    let _ = finder.wait_for_sources(Duration::from_secs(2));
-    let sources = finder
-        .current_sources()
-        .or_else(|_| finder.find_sources(Duration::from_millis(500)))
-        .map_err(|error| error.to_string())?;
-    if let Some(source) = sources.iter().find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
+    if let Ok(finder) = finder() {
+        let _ = finder.wait_for_sources(Duration::from_millis(200));
+        if let Ok(sources) = finder
+            .current_sources()
+            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
+        {
+            if let Some(source) = sources
+                .iter()
+                .find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
+            {
+                return Ok(source.clone());
+            }
+            if let Some(source) = sources
+                .iter()
+                .find(|source| source.name.eq_ignore_ascii_case(trimmed))
+            {
+                return Ok(source.clone());
+            }
+            let matches: Vec<_> = sources
+                .iter()
+                .filter(|source| {
+                    let needle = trimmed.to_ascii_lowercase();
+                    source_key(source).to_ascii_lowercase().contains(&needle)
+                        || source.name.to_ascii_lowercase().contains(&needle)
+                })
+                .cloned()
+                .collect();
+            if matches.len() == 1 {
+                return Ok(matches.into_iter().next().expect("len 1"));
+            }
+        }
+    }
+    Ok(source_from_query(trimmed))
+}
+
+pub(crate) fn source_from_query(query: &str) -> Source {
+    let trimmed = query.trim();
+    if let Some((name, addr)) = trimmed.rsplit_once('@')
+        && !name.is_empty()
+        && !addr.is_empty()
     {
-        return Ok(source.clone());
+        let address = if addr.contains("://") {
+            SourceAddress::Url(addr.to_string())
+        } else {
+            SourceAddress::Ip(addr.to_string())
+        };
+        return Source {
+            name: name.to_string(),
+            address,
+        };
     }
-    if let Some(source) = sources.iter().find(|source| source.name.eq_ignore_ascii_case(trimmed)) {
-        return Ok(source.clone());
-    }
-    let matches: Vec<_> = sources
-        .iter()
-        .filter(|source| {
-            source_key(source).to_ascii_lowercase().contains(&trimmed.to_ascii_lowercase())
-                || source.name.to_ascii_lowercase().contains(&trimmed.to_ascii_lowercase())
-        })
-        .cloned()
-        .collect();
-    match matches.len() {
-        1 => Ok(matches.into_iter().next().expect("len 1")),
-        0 => Err(format!("NDI source not found: {trimmed}")),
-        _ => Err(format!("NDI source name is ambiguous: {trimmed}")),
+    Source {
+        name: trimmed.to_string(),
+        address: SourceAddress::None,
     }
 }
 
@@ -308,5 +386,17 @@ mod tests {
         src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
         let packed = pack_uyvy(width, height, stride, &src);
         assert_eq!(packed, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn source_from_query_keeps_name_and_url() {
+        let named = super::source_from_query("CAM 1");
+        assert_eq!(named.name, "CAM 1");
+        let with_ip = super::source_from_query("DESKTOP (CAM)@192.168.0.10:5960");
+        assert_eq!(with_ip.name, "DESKTOP (CAM)");
+        match with_ip.address {
+            grafton_ndi::SourceAddress::Ip(ip) => assert!(ip.starts_with("192.168.0.10")),
+            other => panic!("{other:?}"),
+        }
     }
 }

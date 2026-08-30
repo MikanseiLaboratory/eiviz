@@ -5,9 +5,9 @@ use std::time::Duration;
 use eiviz_mixer::{
     mixer_audio_bus_count, mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
     mixer_ndi_discover, mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_output_remove,
-    mixer_ping, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
+    mixer_ping, mixer_set_live_save, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
     mixer_unit_release_frame, mixer_unit_set_state, mixer_video_start, OverlayDesc, Rect, UnitState,
-    ERR_INVALID_ARGUMENT, ERR_IO, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE,
+    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLUE,
     SRC_COLOR, SRC_KIND_MU_PROGRAM,
 };
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
@@ -16,6 +16,8 @@ use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
 fn ping_and_invalid_clock() {
     assert_eq!(mixer_ping(), 0x4549_5649);
     assert_eq!(mixer_create(0, 60_000, 0), ERR_INVALID_ARGUMENT);
+    mixer_destroy();
+    assert_eq!(mixer_set_live_save(1, 2, 0), ERR_NOT_CREATED);
 }
 
 #[test]

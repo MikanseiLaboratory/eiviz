@@ -14,6 +14,14 @@ public enum InputKind
     Uvc
 }
 
+public enum BandwidthSave
+{
+    AlwaysLow = 0,
+    NotOnProgram = 1,
+    NotOnPreviewOrProgram = 2,
+    AlwaysFull = 3
+}
+
 public enum OutputTransport
 {
     Omt = 0,
@@ -60,6 +68,8 @@ public sealed class InputEntry
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
     public uint FrameBufferFrames { get; set; } = 1;
+    public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
+    public bool KeepFullOnMultiview { get; set; }
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
     public override string ToString() => Name;
 }

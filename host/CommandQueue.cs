@@ -16,8 +16,9 @@ internal sealed record PreviewSceneCommand(ulong UnitId, ulong SceneGpuId) : Mix
 internal sealed record PushUnitStateCommand(ulong UnitId, UnitState State) : MixerCommand;
 internal sealed record DefineSceneCommand(SceneEntry Scene, uint Width, uint Height) : MixerCommand;
 internal sealed record DestroySceneCommand(ulong GpuId) : MixerCommand;
-internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool UseGpu, uint FrameBufferFrames) : MixerCommand;
-internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames) : MixerCommand;
+internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool UseGpu, uint FrameBufferFrames, BandwidthSave SaveMode, bool KeepFullOnMultiview) : MixerCommand;
+internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames, BandwidthSave SaveMode, bool KeepFullOnMultiview) : MixerCommand;
+internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
 internal sealed record StartVideoCommand(ulong SourceId, string Path) : MixerCommand;
 internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink) : MixerCommand;
@@ -329,6 +330,12 @@ internal sealed class CommandQueue : IAsyncDisposable
                                 connect.UseGpu ? 1u : 0u,
                                 Math.Clamp(connect.FrameBufferFrames, 1u, 8u)),
                             "OMT connect");
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.SetLiveSave(
+                                connect.SourceId,
+                                (uint)connect.SaveMode,
+                                connect.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
+                            "OMT bandwidth save");
                         break;
                     case ConnectNdiCommand connect:
                         MixerNative.ThrowIfFailed(
@@ -337,6 +344,20 @@ internal sealed class CommandQueue : IAsyncDisposable
                                 connect.Address,
                                 Math.Clamp(connect.FrameBufferFrames, 1u, 8u)),
                             "NDI connect");
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.SetLiveSave(
+                                connect.SourceId,
+                                (uint)connect.SaveMode,
+                                connect.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
+                            "NDI bandwidth save");
+                        break;
+                    case LiveSaveCommand save:
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.SetLiveSave(
+                                save.SourceId,
+                                (uint)save.SaveMode,
+                                save.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
+                            "Bandwidth save");
                         break;
                     case LoadStillCommand still:
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");

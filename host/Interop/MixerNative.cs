@@ -34,6 +34,11 @@ internal static partial class MixerNative
     internal const uint SrcKindInput = 4;
     internal const uint GenSolid = 0;
     internal const uint GenBars = 1;
+    internal const uint SaveAlwaysLow = 0;
+    internal const uint SaveNotOnProgram = 1;
+    internal const uint SaveNotOnPreviewOrProgram = 2;
+    internal const uint SaveAlwaysFull = 3;
+    internal const uint SaveFlagMultiview = 1;
     internal const ulong MuSourceFlag = 0x8000_0000_0000_0000UL;
     internal const ulong MuBusPreview = 0x1000_0000_0000_0000UL;
     internal const ulong MuIdMask = 0x0FFF_FFFF_FFFF_FFFFUL;
@@ -173,6 +178,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_ndi_connect", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ConnectNdi(ulong id, string address, uint frameBufferFrames);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_live_save")]
+    internal static partial int SetLiveSave(ulong id, uint mode, uint flags);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_define_scene")]
     internal static unsafe partial int DefineScene(ulong sceneId, uint width, uint height, uint count, OverlayDesc* layers);

@@ -6,9 +6,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use openmediatransport::{
-    Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, ReceiverConfig,
-    ReceiverSession, Sender, VideoTextureMeta,
+    Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, Quality,
+    ReceiverConfig, ReceiverSession, Sender, Tally, VideoTextureMeta,
 };
+use openmediatransport::protocol::metadata::{suggested_quality_xml, PREVIEW_OFF, PREVIEW_ON};
 
 use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
@@ -25,6 +26,9 @@ pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
 
 pub struct OmtReceiver {
     stop: Arc<AtomicBool>,
+    want_full: Arc<AtomicBool>,
+    on_program: Arc<AtomicBool>,
+    on_preview: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -46,7 +50,13 @@ impl OmtReceiver {
         };
         let session = connect_receiver(&address, config)?;
         let stop = Arc::new(AtomicBool::new(false));
+        let want_full = Arc::new(AtomicBool::new(true));
+        let on_program = Arc::new(AtomicBool::new(false));
+        let on_preview = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
+        let want_full_thread = Arc::clone(&want_full);
+        let on_program_thread = Arc::clone(&on_program);
+        let on_preview_thread = Arc::clone(&on_preview);
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
@@ -59,7 +69,15 @@ impl OmtReceiver {
                     };
                     store.ensure_playout(source_id, 16, 16, format, depth);
                 }
+                let mut sent: Option<(bool, bool, bool)> = None;
                 while !stop_thread.load(Ordering::Relaxed) {
+                    apply_omt_save(
+                        &session,
+                        want_full_thread.load(Ordering::Relaxed),
+                        on_program_thread.load(Ordering::Relaxed),
+                        on_preview_thread.load(Ordering::Relaxed),
+                        &mut sent,
+                    );
                     if use_gpu {
                         if let Some(frame) = session.recv_video_gpu_timeout(Duration::from_millis(4))
                         {
@@ -113,8 +131,17 @@ impl OmtReceiver {
             .map_err(|error| error.to_string())?;
         Ok(Self {
             stop,
+            want_full,
+            on_program,
+            on_preview,
             join: Some(join),
         })
+    }
+
+    pub fn apply_save(&self, full: bool, on_program: bool, on_preview: bool) {
+        self.want_full.store(full, Ordering::Relaxed);
+        self.on_program.store(on_program, Ordering::Relaxed);
+        self.on_preview.store(on_preview, Ordering::Relaxed);
     }
 }
 
@@ -347,6 +374,30 @@ impl GpuSendSlot {
             busy: Arc::new(AtomicBool::new(false)),
         }
     }
+}
+
+fn apply_omt_save(
+    session: &ReceiverSession,
+    full: bool,
+    on_program: bool,
+    on_preview: bool,
+    sent: &mut Option<(bool, bool, bool)>,
+) {
+    let next = (full, on_program, on_preview);
+    if *sent == Some(next) {
+        return;
+    }
+    *sent = Some(next);
+    let _ = session.send_metadata(if full { PREVIEW_OFF } else { PREVIEW_ON });
+    let _ = session.send_metadata(suggested_quality_xml(if full {
+        Quality::High
+    } else {
+        Quality::Low
+    }));
+    let _ = session.set_tally(Tally::new(
+        i32::from(on_preview),
+        i32::from(on_program),
+    ));
 }
 
 pub fn discover_addresses() -> Result<Vec<String>, String> {

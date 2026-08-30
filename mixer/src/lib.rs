@@ -13,14 +13,15 @@ mod omt;
 mod pool;
 mod present;
 mod readback;
+mod save;
 mod upload;
 
 pub use abi::{
     AudioPeak, MixerStats, OverlayDesc, Rect, SourceUsage, UnitState, ERR_ALREADY_CREATED, ERR_DEVICE,
     ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, OK, OUTPUT_MULTIVIEW,
-    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
+    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUT_DECKLINK, OUT_NDI, OUT_OMT, SAVE_FLAG_MULTIVIEW,
+    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 pub use media::MixerVideoInfo;
@@ -43,6 +44,7 @@ use ndi::{NdiReceiver, NdiSender};
 use omt::{omt_gpu_from_device, GpuSendStore, OmtGpu, OmtReceiver, ProgramSender};
 use present::Presenters;
 use readback::ReadbackStore;
+use save::{collect_source_roles, want_full, LiveSave};
 use upload::{AudioPacket, CpuFormat, UploadStore, AUDIO_RATE};
 
 struct AutoTransition {
@@ -105,6 +107,7 @@ struct Shared {
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
+    live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     last_error: String,
     last_render_ms: f32,
@@ -117,6 +120,15 @@ struct Shared {
 enum LiveReceiver {
     Omt(OmtReceiver),
     Ndi(NdiReceiver),
+}
+
+impl LiveReceiver {
+    fn apply_save(&self, full: bool, on_program: bool, on_preview: bool) {
+        match self {
+            Self::Omt(receiver) => receiver.apply_save(full, on_program, on_preview),
+            Self::Ndi(receiver) => receiver.apply_save(full),
+        }
+    }
 }
 
 enum OutputHandle {
@@ -331,6 +343,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
+        live_save: HashMap::new(),
         last_error: String::new(),
         last_render_ms: 0.0,
         frame_buffer_frames: 3,
@@ -374,6 +387,9 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         send: Some(send),
         stop,
     });
+    let _ = thread::Builder::new()
+        .name("eiviz-ndi-find".into())
+        .spawn(ndi::warm_finder);
     OK
 }
 
@@ -1071,6 +1087,24 @@ pub unsafe extern "C" fn mixer_ndi_connect(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_live_save(id: u64, mode: u32, flags: u32) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").live_save.insert(
+            id,
+            LiveSave {
+                mode,
+                flags: flags & SAVE_FLAG_MULTIVIEW,
+            },
+        );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char) -> i32 {
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1192,16 +1226,19 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    match ndi::discover_sources() {
-        Ok(addresses) => {
-            let text = addresses.join("\n");
-            let bytes = text.as_bytes();
-            let n = bytes.len().min(cap);
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
-            n as i32
+        match ndi::discover_sources() {
+            Ok(addresses) => {
+                let text = addresses.join("\n");
+                let bytes = text.as_bytes();
+                let n = bytes.len().min(cap);
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
+                n as i32
+            }
+            Err(error) => {
+                let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                0
+            }
         }
-        Err(_) => 0,
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -1263,6 +1300,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
                 {
                     shared.receivers.remove(&id);
                     shared.generators.remove(&id);
+                    shared.live_save.remove(&id);
                     shared.uploads.clone()
                 },
             )
@@ -1922,12 +1960,31 @@ fn render_loop(
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
             frame_i = frame_i.wrapping_add(1);
+            let monitor_sources = presenters.attached_monitor_sources_due(frame_i);
             let (used_scenes, used_uploads) = collect_live_ids(
                 &scene_specs,
                 &snapshot,
-                presenters.attached_monitor_sources_due(frame_i),
+                monitor_sources.clone(),
                 &outputs_snap,
             );
+            let output_refs: Vec<(u32, u64)> = outputs_snap
+                .iter()
+                .map(|item| (item.source_kind, item.source_id))
+                .collect();
+            let roles = collect_source_roles(
+                &scene_specs,
+                &snapshot,
+                &monitor_sources,
+                &output_refs,
+            );
+            {
+                let guard = shared.lock().expect("shared");
+                for (id, receiver) in &guard.receivers {
+                    let save = guard.live_save.get(id).copied().unwrap_or_default();
+                    let role = roles.get(id).copied().unwrap_or_default();
+                    receiver.apply_save(want_full(save, role), role.on_program, role.on_preview);
+                }
+            }
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
