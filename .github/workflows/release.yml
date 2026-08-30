@@ -209,9 +209,77 @@ jobs:
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
 
+  macos-x64:
+    name: Release macOS x64
+    needs: meta
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          targets: x86_64-apple-darwin
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mixer
+          key: macos-x64
+
+      - name: Build Mac host (x86_64)
+        env:
+          EIVIZ_MAC_ARCH: x86_64-apple-darwin
+        run: |
+          chmod +x mac/build.sh
+          mac/build.sh
+          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
+
+      - name: Package zip
+        run: |
+          TAG="${{ needs.meta.outputs.tag }}"
+          STAGING="eiviz-${TAG}-macos-x64"
+          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          mkdir -p "$STAGING"
+          cp "$BIN/eiviz-mac" "$STAGING/"
+          cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          install_name_tool -add_rpath "@executable_path" "$STAGING/eiviz-mac" || true
+          codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
+          Intel (x86_64 / amd64) Metal preview host.
+
+          Unzip, then in Terminal:
+            cd eiviz-*-macos-x64
+            xattr -cr .
+            ./eiviz-mac
+
+          Optional still image on Scene 2:
+            ./eiviz-mac /path/to/image.png
+
+          If macOS blocks the binary: System Settings → Privacy & Security → Open Anyway.
+          CUT, AUTO, T-bar, and OMT Program send (name eiviz-mac) are available.
+          EOF
+          zip -r "${STAGING}.zip" "$STAGING"
+          shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: |
+            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
+            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
+
   publish:
     name: Publish GitHub Release
-    needs: [meta, windows-x64, macos-arm64]
+    needs: [meta, windows-x64, macos-arm64, macos-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -234,3 +302,5 @@ jobs:
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256

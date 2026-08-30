@@ -10,7 +10,8 @@ eiviz / 映像(eizou) + visual
 [Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [all releases](https://github.com/MikanseiLaboratory/eiviz/releases)
 
 Windows x64 zip: unzip and run `Eiviz.Host.exe`.  
-macOS Apple Silicon zip: unzip and run `./eiviz-mac`.
+macOS Apple Silicon zip (`macos-arm64`): unzip and run `./eiviz-mac`.  
+macOS Intel zip (`macos-x64`): same, for x86_64 / amd64.
 
 ## What it is
 
@@ -34,10 +35,12 @@ cargo test --manifest-path mixer\Cargo.toml
 
 `dotnet build` compiles the mixer DLL first.
 
-macOS (Apple Silicon), Rust 1.97, and Swift 6:
+macOS, Rust 1.97, and Swift 6:
 
 ```bash
 ./mac/build.sh
+# Intel:
+# EIVIZ_MAC_ARCH=x86_64-apple-darwin ./mac/build.sh
 ```
 
 ## License
