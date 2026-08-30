@@ -15,21 +15,7 @@ final class FramePump {
 
     func startCapture(id: UInt64, deviceId: String) {
         stop(id)
-        let begin = { [self] in
-            DispatchQueue.main.async {
-                self.readers[id] = Pump(id: id, deviceId: deviceId)
-            }
-        }
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            begin()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                if granted { begin() }
-            }
-        default:
-            break
-        }
+        readers[id] = Pump(id: id, deviceId: deviceId)
     }
 
     func stop(_ id: UInt64) {

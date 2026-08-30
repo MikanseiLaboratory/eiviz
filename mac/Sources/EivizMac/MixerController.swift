@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import EivizMixer
 import Foundation
@@ -562,10 +563,27 @@ final class MixerController: ObservableObject {
             }
         case .uvc:
             if let deviceId = input.pathOrAddress {
-                pumps.startCapture(id: input.id, deviceId: deviceId)
+                startCapture(id: input.id, deviceId: deviceId)
             }
         }
         _ = mixer_audio_set_input(input.id, input.busMask, input.gain, input.mute ? 1 : 0)
+    }
+
+    private func startCapture(id: UInt64, deviceId: String) {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            pumps.startCapture(id: id, deviceId: deviceId)
+        case .notDetermined:
+            Task { @MainActor in
+                if await AVCaptureDevice.requestAccess(for: .video) {
+                    pumps.startCapture(id: id, deviceId: deviceId)
+                } else {
+                    errorText = "Camera access was denied."
+                }
+            }
+        default:
+            errorText = "Camera access was denied."
+        }
     }
 
     func pushScene(_ scene: SceneEntry) {
