@@ -250,15 +250,22 @@ struct ContentView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(Color(white: 0.2))
-            MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
-                .frame(width: 176, height: 90)
-                .background(Color.black)
+                .contentShape(Rectangle())
+                .onTapGesture { mixer.previewScene(scene) }
+            MetalPreviewRepresentable(
+                role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId),
+                onClick: { mixer.previewScene(scene) },
+                onDoubleClick: {
+                    mixer.editingScene = scene
+                    mixer.showSceneEditor = true
+                }
+            )
+            .frame(width: 176, height: 90)
+            .background(Color.black)
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
-        .contentShape(Rectangle())
         .overlay(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
-        .onTapGesture { mixer.previewScene(scene) }
         .contextMenu {
             Button("Edit") {
                 mixer.editingScene = scene

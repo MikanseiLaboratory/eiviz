@@ -55,8 +55,8 @@ final class MetalSurfaceView: NSView {
         attachIfNeeded()
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
+    override func mouseUp(with event: NSEvent) {
+        (superview as? PreviewHostView)?.mouseUp(with: event)
     }
 
     deinit {
@@ -143,20 +143,42 @@ enum SurfaceRole: Equatable {
 }
 
 final class PreviewHostView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
+    var onClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
+
+    override func mouseUp(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+        } else if event.clickCount == 1 {
+            onClick?()
+        }
     }
 }
 
 struct MetalPreviewRepresentable: NSViewRepresentable {
     let role: SurfaceRole
+    var onClick: (() -> Void)? = nil
+    var onDoubleClick: (() -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        var onClick: (() -> Void)?
+        var onDoubleClick: (() -> Void)?
+    }
 
     func makeNSView(context: Context) -> PreviewHostView {
         // Host must not be layer-backed: SwiftUI paints layer-backed representable
-        // views and covers the child CAMetalLayer (scene tiles stay black).
-        // hitTest is nil so scene-tile taps reach SwiftUI previewScene.
+        // views and covers the child CAMetalLayer. Clicks stay in AppKit
+        // (same as WPF SurfaceClicked) so Metal can keep presenting.
+        context.coordinator.onClick = onClick
+        context.coordinator.onDoubleClick = onDoubleClick
         let host = PreviewHostView(frame: .zero)
         host.wantsLayer = false
+        host.onClick = { context.coordinator.onClick?() }
+        host.onDoubleClick = { context.coordinator.onDoubleClick?() }
         let surface = MetalSurfaceView(frame: .zero)
         surface.autoresizingMask = [.width, .height]
         surface.role = role
@@ -165,7 +187,11 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: PreviewHostView, context: Context) {
+        context.coordinator.onClick = onClick
+        context.coordinator.onDoubleClick = onDoubleClick
         nsView.wantsLayer = false
+        nsView.onClick = { context.coordinator.onClick?() }
+        nsView.onDoubleClick = { context.coordinator.onDoubleClick?() }
         guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
         surface.frame = nsView.bounds
         surface.role = role
