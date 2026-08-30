@@ -1000,7 +1000,7 @@ impl Composer {
                 SRC_BARS => self.fill_target(device, &mut encoder, &view, [0.0; 4], true, false),
                 _ => self.fill_target(device, &mut encoder, &view, color_for(id), false, false),
             }
-            device.queue.submit(Some(encoder.finish()));
+            device.submit(Some(encoder.finish()));
             self.sources.insert(
                 id,
                 SourceGpu {

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use crate::abi::NativeSurface;
-use crate::device::GpuDevice;
+use crate::device::{self, GpuDevice};
 
 /// wgpu surface created (and configured) before the render thread sees it.
 /// On macOS this must happen on the AppKit main thread.
@@ -30,6 +31,8 @@ pub struct Presenter {
     params: wgpu::Buffer,
     bind_key: u64,
     bind: Option<wgpu::BindGroup>,
+    pending: Option<(u32, u32)>,
+    ready: bool,
 }
 
 #[derive(Default)]
@@ -243,6 +246,29 @@ impl Presenters {
             .keys()
             .any(|(id, k, _)| *id == unit_id && *k == kind)
     }
+
+    pub fn reconfigure_pending(&mut self, device: &GpuDevice) {
+        #[cfg(target_os = "macos")]
+        {
+            let device = crate::main_thread::SendPtr::from_const(device as *const GpuDevice);
+            let presenters = crate::main_thread::SendPtr::from_mut(self as *mut Presenters);
+            crate::main_thread::run_on_main(move || {
+                // SAFETY: the render thread waits in run_on_main.
+                unsafe { reconfigure_pending_inner(device.as_ref(), presenters.as_mut()) }
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        reconfigure_pending_inner(device, self);
+    }
+}
+
+fn reconfigure_pending_inner(device: &GpuDevice, presenters: &mut Presenters) {
+    for presenter in presenters.by_key.values_mut() {
+        apply_pending_size(device, presenter);
+    }
+    for presenter in presenters.monitors.values_mut() {
+        apply_pending_size(device, presenter);
+    }
 }
 
 fn raw_handles(surface: NativeSurface) -> Result<(RawDisplayHandle, RawWindowHandle), String> {
@@ -318,7 +344,7 @@ pub(crate) fn prepare_surface(
     config.format = pick_surface_format(&caps.formats);
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
-    surface.configure(device, &config);
+    configure_surface(device, &surface, &config)?;
     Ok(PreparedSurface { surface, config })
 }
 
@@ -343,11 +369,13 @@ fn presenter_from_prepared(
         params,
         bind_key: 0,
         bind: None,
+        pending: None,
+        ready: true,
     })
 }
 
 fn resize_presenter_for(
-    device: &GpuDevice,
+    _device: &GpuDevice,
     presenter: Option<&mut Presenter>,
     width: u32,
     height: u32,
@@ -355,41 +383,61 @@ fn resize_presenter_for(
     let Some(presenter) = presenter else {
         return;
     };
-    #[cfg(target_os = "macos")]
-    {
-        let device = crate::main_thread::SendPtr::from_const(device as *const GpuDevice);
-        let presenter = crate::main_thread::SendPtr::from_mut(presenter as *mut Presenter);
-        crate::main_thread::run_on_main(move || {
-            // SAFETY: the render thread waits in run_on_main, or this is already
-            // the AppKit main thread.
-            unsafe { resize_presenter(device.as_ref(), Some(presenter.as_mut()), width, height) }
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    resize_presenter(device, Some(presenter), width, height);
+    presenter.pending = Some((width.max(2), height.max(2)));
 }
 
-fn resize_presenter(
-    device: &GpuDevice,
-    presenter: Option<&mut Presenter>,
-    width: u32,
-    height: u32,
-) {
-    let Some(presenter) = presenter else {
+fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
+    let Some((width, height)) = presenter.pending else {
         return;
     };
-    let width = width.max(2);
-    let height = height.max(2);
-    if presenter.config.width == width && presenter.config.height == height {
+    if presenter.ready && presenter.config.width == width && presenter.config.height == height {
+        presenter.pending = None;
         return;
     }
-    presenter.config.width = width;
-    presenter.config.height = height;
-    presenter.bind = None;
-    presenter.bind_key = 0;
-    presenter
-        .surface
-        .configure(&device.device, &presenter.config);
+    let mut config = presenter.config.clone();
+    config.width = width;
+    config.height = height;
+    if configure_surface(&device.device, &presenter.surface, &config).is_ok() {
+        presenter.config = config;
+        presenter.bind = None;
+        presenter.bind_key = 0;
+        presenter.pending = None;
+        presenter.ready = true;
+    }
+}
+
+fn wait_gpu_idle(device: &wgpu::Device) {
+    for _ in 0..8 {
+        match device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_millis(50)),
+        }) {
+            Ok(wgpu::PollStatus::QueueEmpty) => return,
+            Ok(_) => continue,
+            Err(_) => return,
+        }
+    }
+}
+
+fn configure_surface(
+    device: &wgpu::Device,
+    surface: &wgpu::Surface,
+    config: &wgpu::SurfaceConfiguration,
+) -> Result<(), String> {
+    for _ in 0..8 {
+        {
+            let _guard = device::lock_gpu_queue();
+            wait_gpu_idle(device);
+            let (_, failed) = device::with_surface_configure(|| {
+                surface.configure(device, config);
+            });
+            if !failed {
+                return Ok(());
+            }
+        }
+        std::thread::yield_now();
+    }
+    Err("surface configure failed".into())
 }
 
 fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
@@ -436,9 +484,19 @@ fn draw_presenter(
     packed: bool,
     encoder: &mut wgpu::CommandEncoder,
 ) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+    if !presenter.ready {
+        return None;
+    }
     let texture = match presenter.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+        wgpu::CurrentSurfaceTexture::Outdated
+        | wgpu::CurrentSurfaceTexture::Lost
+        | wgpu::CurrentSurfaceTexture::Validation => {
+            presenter.ready = false;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+            return None;
+        }
         _ => return None,
     };
     let dest = texture.texture.create_view(&Default::default());
@@ -510,7 +568,7 @@ fn submit_presents(
     if acquired.is_empty() {
         return Ok(());
     }
-    device.queue.submit(Some(encoder.finish()));
+    device.submit(Some(encoder.finish()));
     for (texture, dest) in acquired {
         drop(dest);
         device.queue.present(texture);

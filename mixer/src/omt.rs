@@ -513,6 +513,7 @@ fn copy_gpu_frame(
             depth_or_array_layers: 1,
         },
     );
+    let _guard = crate::device::lock_gpu_queue();
     ctx.queue.submit(Some(encoder.finish()));
     GpuVideoFrame {
         pts,

@@ -2199,6 +2199,7 @@ fn render_loop(
                 GpuCmd::Shutdown => return,
             }
         }
+        presenters.reconfigure_pending(&device);
         let buffer_frames = shared
             .lock()
             .expect("shared")
@@ -2437,7 +2438,7 @@ fn render_loop(
                         ));
                     }
                 }
-                device.queue.submit(Some(encoder.finish()));
+                device.submit(Some(encoder.finish()));
                 emit_packed(
                     &mut readbacks,
                     &device,
@@ -2550,7 +2551,7 @@ fn render_loop(
                     &composer,
                     snapshot.iter().map(|(id, ..)| *id),
                 );
-                device.queue.submit(Some(encoder.finish()));
+                device.submit(Some(encoder.finish()));
                 emit_packed(
                     &mut readbacks,
                     &device,
@@ -2911,6 +2912,7 @@ fn apply_send_cmd(
             busy,
         } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
+                let _guard = crate::device::lock_gpu_queue();
                 let _ = panic::catch_unwind(AssertUnwindSafe(|| {
                     sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
                 }));

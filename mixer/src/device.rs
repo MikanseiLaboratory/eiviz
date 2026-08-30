@@ -1,6 +1,28 @@
-use std::sync::Arc;
+use std::cell::Cell;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use thiserror::Error;
+
+thread_local! {
+    static SURFACE_CONFIGURE: Cell<bool> = const { Cell::new(false) };
+    static SURFACE_CONFIGURE_FAILED: Cell<bool> = const { Cell::new(false) };
+}
+
+static GPU_QUEUE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serializes `Queue::submit` against `Surface::configure`.
+/// wgpu treats a submit during configure's wait-idle as a validation error.
+pub fn lock_gpu_queue() -> MutexGuard<'static, ()> {
+    GPU_QUEUE_LOCK.lock().expect("gpu queue lock")
+}
+
+pub fn with_surface_configure<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    SURFACE_CONFIGURE.set(true);
+    SURFACE_CONFIGURE_FAILED.set(false);
+    let result = f();
+    SURFACE_CONFIGURE.set(false);
+    (result, SURFACE_CONFIGURE_FAILED.get())
+}
 
 #[derive(Debug, Error)]
 pub enum DeviceError {
@@ -38,6 +60,10 @@ impl GpuDevice {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
         device.on_uncaptured_error(Arc::new(|error| {
+            if SURFACE_CONFIGURE.get() {
+                SURFACE_CONFIGURE_FAILED.set(true);
+                return;
+            }
             eprintln!("eiviz wgpu: {error}");
         }));
 
@@ -47,6 +73,14 @@ impl GpuDevice {
             device,
             queue,
         })
+    }
+
+    pub fn submit(
+        &self,
+        command_buffers: impl IntoIterator<Item = wgpu::CommandBuffer>,
+    ) -> wgpu::SubmissionIndex {
+        let _guard = lock_gpu_queue();
+        self.queue.submit(command_buffers)
     }
 
     fn backends() -> Result<wgpu::Backends, DeviceError> {
