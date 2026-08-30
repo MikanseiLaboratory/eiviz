@@ -16,9 +16,48 @@ static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
 static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
 
 fn runtime() -> Result<&'static NDI, String> {
-    match RUNTIME.get_or_init(|| NDI::new().map_err(|error| error.to_string())) {
+    match RUNTIME.get_or_init(|| {
+        preload_ndi_dylib();
+        NDI::new().map_err(|error| format!("NDI runtime: {error}"))
+    }) {
         Ok(ndi) => Ok(ndi),
         Err(error) => Err(error.clone()),
+    }
+}
+
+fn preload_ndi_dylib() {
+    #[cfg(target_os = "macos")]
+    {
+        let mut dirs = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                dirs.push(dir.to_path_buf());
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            dirs.push(cwd);
+        }
+        for dir in dirs {
+            for name in ["libndi.dylib", "libndi.6.dylib"] {
+                let path = dir.join(name);
+                if !path.is_file() {
+                    continue;
+                }
+                if let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) {
+                    unsafe {
+                        let _ = macos::dlopen(c_path.as_ptr(), 1);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    unsafe extern "C" {
+        pub fn dlopen(path: *const std::ffi::c_char, mode: i32) -> *mut std::ffi::c_void;
     }
 }
 
@@ -123,10 +162,10 @@ impl NdiSender {
     }
 
     pub fn pump(&mut self) -> Result<bool, String> {
-        match self.sender.connection_count(Duration::ZERO) {
-            Ok(count) => Ok(count > 0),
-            Err(_) => Ok(false),
-        }
+        // Always encode. connection_count can stay 0 on macOS until a receiver
+        // has already seen a source, so gating on it hides the sender entirely.
+        let _ = self.sender.connection_count(Duration::ZERO);
+        Ok(true)
     }
 
     pub fn send_video_uyvy(

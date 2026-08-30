@@ -188,20 +188,31 @@ jobs:
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh
+          if [ -f "$BIN/libndi.6.dylib" ]; then
+            cp "$BIN/libndi.6.dylib" "$STAGING/"
+          fi
+          chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi
+          if [ -f "$STAGING/libndi.6.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
+          fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Apple Silicon (arm64) Metal preview host.
 
           Unzip, then in Terminal:
             cd eiviz-*-macos-arm64
             xattr -cr .
-            ./eiviz-mac
+            open eiviz-mac.app
+
+          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
+          The loose ./eiviz-mac binary still works for local preview.
 
           Optional still image on Scene 2:
             ./eiviz-mac /path/to/image.png
@@ -266,20 +277,31 @@ jobs:
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh
+          if [ -f "$BIN/libndi.6.dylib" ]; then
+            cp "$BIN/libndi.6.dylib" "$STAGING/"
+          fi
+          chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi
+          if [ -f "$STAGING/libndi.6.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
+          fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Intel (x86_64 / amd64) Metal preview host.
 
           Unzip, then in Terminal:
             cd eiviz-*-macos-x64
             xattr -cr .
-            ./eiviz-mac
+            open eiviz-mac.app
+
+          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
+          The loose ./eiviz-mac binary still works for local preview.
 
           Optional still image on Scene 2:
             ./eiviz-mac /path/to/image.png

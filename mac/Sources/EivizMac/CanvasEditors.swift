@@ -59,12 +59,10 @@ struct SceneEditorView: View {
                 if let scene = current {
                     MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
                         .frame(height: 180)
-                        .clipped()
                         .background(Color.black)
                 }
                 Text("Name").padding(.top, 8)
-                TextField("Name", text: $name)
-                    .mixerField()
+                mixerTextField($name, placeholder: "Name")
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
                 }
@@ -205,20 +203,16 @@ struct SceneEditorView: View {
         get: KeyPath<SceneLayer, Float>,
         set: @escaping (inout SceneLayer, Float) -> Void
     ) -> some View {
-        TextField("", text: Binding(
+        mixerFloatField(Binding(
             get: {
-                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return "" }
-                return String(format: "%.4g", mixer.session.scenes[i].layers[index][keyPath: get])
+                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return 0 }
+                return mixer.session.scenes[i].layers[index][keyPath: get]
             },
-            set: { text in
-                guard let value = Float(text), let i = sceneIndex,
-                      mixer.session.scenes[i].layers.indices.contains(index)
-                else { return }
+            set: { value in
+                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
                 set(&mixer.session.scenes[i].layers[index], value)
             }
-        ))
-        .mixerField()
-        .onSubmit { push() }
+        ), onSubmit: { push() })
         .frame(width: 72)
     }
 }
@@ -272,7 +266,6 @@ struct OverlayView: View {
                     sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
                 ))
                 .frame(height: 180)
-                .clipped()
                 .background(Color.black)
                 if let slot = current {
                     Toggle("ON", isOn: Binding(
@@ -389,18 +382,10 @@ struct OverlayView: View {
     }
 
     private func num(_ key: WritableKeyPath<OverlaySlot, Float>) -> some View {
-        TextField("", text: Binding(
-            get: {
-                guard let slot = current else { return "" }
-                return String(format: "%.4g", slot[keyPath: key])
-            },
-            set: { text in
-                guard let value = Float(text) else { return }
-                mutate { $0[keyPath: key] = value }
-            }
-        ))
-        .mixerField()
-        .onSubmit { mixer.pushOverlays() }
+        mixerFloatField(Binding(
+            get: { current?[keyPath: key] ?? 0 },
+            set: { value in mutate { $0[keyPath: key] = value } }
+        ), onSubmit: { mixer.pushOverlays() })
         .frame(width: 72)
     }
 }

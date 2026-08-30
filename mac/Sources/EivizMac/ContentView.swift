@@ -136,23 +136,18 @@ struct ContentView: View {
                         Text("Dip").tag(EIVIZ_TRANSITION_DIP)
                     }
                     Text("Duration (frames)").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
-                    TextField(
-                        "frames",
-                        text: Binding(
-                            get: {
-                                String(mixer.selectedUnit.transitions[safe: index]?.durationFrames ?? preset.durationFrames)
-                            },
-                            set: { text in
-                                guard let frames = parseUInt32(text), frames > 0 else { return }
-                                var unit = mixer.selectedUnit
-                                if index < unit.transitions.count {
-                                    unit.transitions[index].durationFrames = frames
-                                    mixer.saveUnit(unit)
-                                }
+                    mixerUintField(Binding(
+                        get: {
+                            mixer.selectedUnit.transitions[safe: index]?.durationFrames ?? preset.durationFrames
+                        },
+                        set: { frames in
+                            var unit = mixer.selectedUnit
+                            if index < unit.transitions.count {
+                                unit.transitions[index].durationFrames = frames
+                                mixer.saveUnit(unit)
                             }
-                        )
-                    )
-                    .mixerField()
+                        }
+                    ))
                     Toggle("Swap", isOn: Binding(
                         get: { mixer.selectedUnit.transitions[safe: index]?.swap ?? true },
                         set: { value in
@@ -256,12 +251,11 @@ struct ContentView: View {
                 .padding(.vertical, 3)
                 .background(Color(white: 0.2))
             MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
-                .frame(height: 90)
-                .clipped()
+                .frame(width: 176, height: 90)
                 .background(Color.black)
         }
         .frame(width: 176)
-        .clipped()
+        .id("scene-\(scene.id)-\(scene.monitorId)")
         .overlay(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
         .onTapGesture { mixer.previewScene(scene) }
         .contextMenu {
@@ -356,7 +350,6 @@ struct ContentView: View {
                 .background(color)
             MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
-                .clipped()
                 .background(Color.black)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)

@@ -105,8 +105,7 @@ struct SettingsView: View {
     private func outputRow(_ output: Binding<OutputEntry>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                TextField("Name", text: output.name)
-                    .mixerField()
+                mixerTextField(output.name, placeholder: "Name")
                 Picker("", selection: Binding(
                     get: { output.wrappedValue.transport },
                     set: { value in
@@ -284,8 +283,7 @@ struct SettingsView: View {
     private func busRow(_ bus: Binding<AudioBusEntry>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                TextField("Name", text: bus.name)
-                    .mixerField()
+                mixerTextField(bus.name, placeholder: "Name")
                     .disabled(bus.wrappedValue.role != .aux)
                 if bus.wrappedValue.role == .aux {
                     Button("−") {
@@ -373,8 +371,7 @@ struct AddInputView: View {
             .frame(width: 200)
             VStack(alignment: .leading, spacing: 12) {
                 Text("Name")
-                TextField("Name", text: $name)
-                    .mixerField()
+                mixerTextField($name, placeholder: defaultName())
                 form
                 Spacer()
                 HStack {
@@ -411,15 +408,13 @@ struct AddInputView: View {
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
         case "OMT":
-            TextField("OMT source address", text: $omtAddress)
-                .mixerField()
+            mixerTextField($omtAddress, placeholder: "OMT source address")
             Button("Refresh discovery") { refreshOmt() }
             List(omtList, id: \.self, selection: $omtAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("GPU decode", isOn: $useGpu)
         case "NDI®":
-            TextField("NDI® source", text: $ndiAddress)
-                .mixerField()
+            mixerTextField($ndiAddress, placeholder: "NDI® source")
             Button("Refresh discovery") { refreshNdi() }
             List(ndiList, id: \.self, selection: $ndiAddress) { Text($0) }
                 .frame(height: 120)
@@ -443,8 +438,7 @@ struct AddInputView: View {
 
     private func pathRow(_ text: Binding<String>, browse: @escaping () -> Void) -> some View {
         HStack {
-            TextField("Path", text: text)
-                .mixerField()
+            mixerTextField(text, placeholder: "Path")
             Button("Browse", action: browse)
         }
     }
@@ -573,8 +567,7 @@ struct MixingUnitView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             labeled("Name") {
-                TextField("Name", text: $unit.name)
-                    .mixerField()
+                mixerTextField($unit.name, placeholder: "Name")
             }
             labeled("Width") { mixerUintField($unit.width) }
             labeled("Height") { mixerUintField($unit.height) }
@@ -659,7 +652,6 @@ struct MultiviewView: View {
             if let layout {
                 MetalPreviewRepresentable(role: .monitor(monitorId: layout.monitorId, sourceId: layout.gpuId))
                     .frame(minHeight: 280)
-                    .clipped()
                     .background(Color.black)
             } else {
                 Text("Add a Multiview in Settings.")

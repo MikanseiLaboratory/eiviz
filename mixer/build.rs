@@ -55,6 +55,12 @@ fn copy_macos_ndi_dylib() {
     };
     copy_file(&dylib, &profile_dir.join("libndi.dylib"));
     copy_file(&dylib, &profile_dir.join("deps").join("libndi.dylib"));
+    if let Some(name) = dylib.file_name() {
+        if name != "libndi.dylib" {
+            copy_file(&dylib, &profile_dir.join(name));
+            copy_file(&dylib, &profile_dir.join("deps").join(name));
+        }
+    }
 }
 
 fn ndi_runtime_dylib() -> Option<PathBuf> {

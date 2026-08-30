@@ -44,8 +44,12 @@ cp -f "$DYLIB" "$BIN/"
 if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" ]; then
   cp -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" "$BIN/"
 fi
-chmod +x "$ROOT/mac/relocate-dylib.sh"
+if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" ]; then
+  cp -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" "$BIN/"
+fi
+chmod +x "$ROOT/mac/relocate-dylib.sh" "$ROOT/mac/package-app.sh"
 "$ROOT/mac/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
+"$ROOT/mac/package-app.sh" "$BIN"
 echo "eiviz-mac -> $BIN/eiviz-mac"
 file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
 otool -L "$BIN/eiviz-mac"

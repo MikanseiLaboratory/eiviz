@@ -30,11 +30,16 @@ EOF
 rewrite_id "$DYLIB" "@rpath/libeiviz_mixer.dylib"
 rewrite_dep "$BIN" "libeiviz_mixer\\.dylib" "@rpath/libeiviz_mixer.dylib"
 install_name_tool -add_rpath "@executable_path" "$BIN" 2>/dev/null || true
+install_name_tool -add_rpath "@loader_path" "$BIN" 2>/dev/null || true
+install_name_tool -add_rpath "@executable_path" "$DYLIB" 2>/dev/null || true
+install_name_tool -add_rpath "@loader_path" "$DYLIB" 2>/dev/null || true
 
 if [ -f "$DIR/libndi.dylib" ]; then
   rewrite_id "$DIR/libndi.dylib" "@rpath/libndi.dylib"
   rewrite_dep "$DYLIB" "libndi" "@rpath/libndi.dylib"
-  install_name_tool -add_rpath "@executable_path" "$DYLIB" 2>/dev/null || true
+fi
+if [ -f "$DIR/libndi.6.dylib" ]; then
+  rewrite_id "$DIR/libndi.6.dylib" "@rpath/libndi.6.dylib"
 fi
 
 refs="$(otool -L "$BIN" | awk '/libeiviz_mixer\.dylib/ { print $1 }')"

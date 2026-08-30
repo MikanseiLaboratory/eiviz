@@ -15,18 +15,29 @@ final class MetalSurfaceView: NSView {
     nonisolated(unsafe) private var detachMonitorId: UInt64 = 0
     nonisolated(unsafe) private var detachIsMonitor = false
 
+    override var isOpaque: Bool { true }
+    override var wantsUpdateLayer: Bool { false }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = false
-        clipsToBounds = true
-        autoresizingMask = [.width, .height]
+        configureLayer()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        wantsLayer = false
+        configureLayer()
+    }
+
+    private func configureLayer() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
         clipsToBounds = true
         autoresizingMask = [.width, .height]
+    }
+
+    override func layout() {
+        super.layout()
+        attachIfNeeded()
     }
 
     override func viewDidMoveToWindow() {
@@ -61,11 +72,10 @@ final class MetalSurfaceView: NSView {
         let key = role.key
         if !attached || attachedKey != key {
             if attached {
-                switch role {
-                case .unit(let unitId, let kind):
-                    _ = mixer_unit_detach_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
-                case .monitor(let monitorId, _):
-                    _ = mixer_detach_monitor(monitorId)
+                if detachIsMonitor {
+                    _ = mixer_detach_monitor(detachMonitorId)
+                } else {
+                    _ = mixer_unit_detach_native(detachUnitId, detachKind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
                 }
             }
             let code: Int32
@@ -74,6 +84,9 @@ final class MetalSurfaceView: NSView {
                 code = mixer_unit_attach_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
             case .monitor(let monitorId, let sourceId):
                 code = mixer_attach_monitor_native(monitorId, sourceId, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
+                if code == EIVIZ_OK {
+                    _ = mixer_monitor_set_source(monitorId, sourceId)
+                }
             }
             attached = code == EIVIZ_OK
             if attached, case .monitor(let monitorId, _) = role {
@@ -129,10 +142,10 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     let role: SurfaceRole
 
     func makeNSView(context: Context) -> NSView {
+        // Host must not be layer-backed: SwiftUI paints layer-backed representable
+        // views and covers the child CAMetalLayer (scene tiles stay black).
         let host = NSView(frame: .zero)
-        host.wantsLayer = true
-        host.clipsToBounds = true
-        host.layer?.masksToBounds = true
+        host.wantsLayer = false
         let surface = MetalSurfaceView(frame: .zero)
         surface.autoresizingMask = [.width, .height]
         surface.role = role
@@ -141,12 +154,9 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.wantsLayer = true
-        nsView.clipsToBounds = true
-        nsView.layer?.masksToBounds = true
+        nsView.wantsLayer = false
         guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
         surface.frame = nsView.bounds
-        surface.clipsToBounds = true
         surface.role = role
         surface.attachIfNeeded()
     }
