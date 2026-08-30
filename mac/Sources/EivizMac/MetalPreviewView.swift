@@ -10,10 +10,10 @@ final class MetalSurfaceView: NSView {
     private var attachedWidth: UInt32 = 0
     private var attachedHeight: UInt32 = 0
     private var attachedKey: String = ""
-    private var detachUnitId: UInt64 = 1
-    private var detachKind: UInt32 = 0
-    private var detachMonitorId: UInt64 = 0
-    private var detachIsMonitor = false
+    nonisolated(unsafe) private var detachUnitId: UInt64 = 1
+    nonisolated(unsafe) private var detachKind: UInt32 = 0
+    nonisolated(unsafe) private var detachMonitorId: UInt64 = 0
+    nonisolated(unsafe) private var detachIsMonitor = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
