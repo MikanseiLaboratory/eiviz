@@ -252,7 +252,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             Text("Audio").fontWeight(.bold)
             ForEach(mixer.session.buses) { bus in
-                meter(title: bus.name, id: bus.role == 0 ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
+                meter(title: bus.name, id: bus.role == .master ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
             }
             ForEach(mixer.selectedUnit.overlays) { slot in
                 Toggle(isOn: Binding(

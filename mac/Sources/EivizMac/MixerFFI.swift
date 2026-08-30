@@ -32,6 +32,9 @@ enum MixerFFI {
         string.withCString(body)
     }
 
+    static func emptyState() -> EivizUnitState { zeroed() }
+    static func emptyOverlay() -> EivizOverlayDesc { zeroed() }
+
     static func setOverlay(_ state: inout EivizUnitState, index: Int, _ desc: EivizOverlayDesc) {
         guard (0..<8).contains(index) else { return }
         withUnsafeMutableBytes(of: &state.overlays) { raw in
