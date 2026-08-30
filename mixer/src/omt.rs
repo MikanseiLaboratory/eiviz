@@ -9,12 +9,11 @@ use openmediatransport::{
     Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, Quality,
     ReceiverConfig, ReceiverSession, Sender, Tally, VideoTextureMeta,
 };
-use openmediatransport::protocol::metadata::{suggested_quality_xml, PREVIEW_OFF, PREVIEW_ON};
 
 use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
 use crate::save::debounce_want_full;
-use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore};
+use crate::upload::{AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_throttled};
 
 pub type OmtGpu = GpuVideoContext;
 
@@ -92,7 +91,8 @@ impl OmtReceiver {
                         &mut sent,
                     );
                     if use_gpu {
-                        if let Some(frame) = session.recv_video_gpu_timeout(Duration::from_millis(4))
+                        if let Some(frame) =
+                            session.recv_video_gpu_timeout(Duration::from_millis(4))
                         {
                             let width = frame.width.max(2);
                             let height = frame.height.max(2);
@@ -121,7 +121,8 @@ impl OmtReceiver {
                             );
                             store.push_playout_gpu(source_id, gpu_frame).ok();
                         }
-                    } else if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4)) {
+                    } else if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4))
+                    {
                         let mut store = uploads.lock().expect("uploads lock");
                         store.ensure_playout(
                             source_id,
@@ -204,7 +205,9 @@ impl ProgramSender {
 
     pub fn pump(&mut self) -> Result<(), String> {
         self.sender.poll_accept().map_err(|e| e.to_string())?;
-        self.sender.poll_peer_metadata().map_err(|e| e.to_string())?;
+        self.sender
+            .poll_peer_metadata()
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -413,8 +416,8 @@ fn quality_to_abi(quality: Quality) -> u32 {
     }
 }
 
-/// libomtnet matches Preview and Quality as exact tokens. A combined
-/// `<OMTSettings Preview="…" Quality="…" />` is ignored and Preview never turns on.
+/// Ask the crate to switch preview / quality / tally. Preview and quality are
+/// sent as separate protocol tokens inside `set_preview` / `set_suggested_quality`.
 fn apply_omt_save(
     session: &ReceiverSession,
     full: bool,
@@ -428,12 +431,9 @@ fn apply_omt_save(
         return;
     }
     *sent = Some(next);
-    let _ = session.send_metadata(if full { PREVIEW_OFF } else { PREVIEW_ON });
-    let _ = session.send_metadata(suggested_quality_xml(quality));
-    let _ = session.set_tally(Tally::new(
-        i32::from(on_preview),
-        i32::from(on_program),
-    ));
+    let _ = session.set_preview(!full);
+    let _ = session.set_suggested_quality(quality);
+    let _ = session.set_tally(Tally::new(i32::from(on_preview), i32::from(on_program)));
 }
 
 pub fn discover_addresses() -> Result<Vec<String>, String> {
@@ -499,9 +499,11 @@ fn copy_gpu_frame(
             | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("eiviz omt jitter copy"),
-    });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("eiviz omt jitter copy"),
+        });
     encoder.copy_texture_to_texture(
         src.as_image_copy(),
         texture.as_image_copy(),
@@ -534,25 +536,5 @@ fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
         channels: frame.channels,
         samples_per_channel: samples,
         pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use openmediatransport::protocol::metadata::{suggested_quality_xml, PREVIEW_OFF, PREVIEW_ON};
-    use openmediatransport::Quality;
-
-    #[test]
-    fn preview_and_quality_are_exact_tokens() {
-        assert_eq!(PREVIEW_ON, r#"<OMTSettings Preview="true" />"#);
-        assert_eq!(PREVIEW_OFF, r#"<OMTSettings Preview="false" />"#);
-        assert_eq!(
-            suggested_quality_xml(Quality::Default),
-            r#"<OMTSettings Quality="Default" />"#
-        );
-        assert_eq!(
-            suggested_quality_xml(Quality::Medium),
-            r#"<OMTSettings Quality="Medium" />"#
-        );
     }
 }
