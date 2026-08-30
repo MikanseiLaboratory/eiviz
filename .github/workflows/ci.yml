@@ -58,10 +58,10 @@ jobs:
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
 
-  macos-check:
-    name: Check mixer (macOS)
+  macos:
+    name: Test mixer and Mac host
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -76,6 +76,12 @@ jobs:
         with:
           workspaces: mixer
 
-      - name: Check mixer
+      - name: Test mixer
         working-directory: mixer
-        run: cargo check --locked --release
+        # mixer_create is process-global, so GPU/integration tests cannot share the process.
+        run: cargo test --locked --release -- --test-threads=1
+
+      - name: Build Mac host
+        run: |
+          chmod +x mac/build.sh
+          mac/build.sh

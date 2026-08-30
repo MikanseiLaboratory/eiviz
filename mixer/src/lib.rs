@@ -13,6 +13,8 @@ mod dxgi;
 mod media;
 #[cfg(windows)]
 mod ndi;
+#[cfg(target_os = "macos")]
+mod main_thread;
 mod omt;
 mod pool;
 mod present;
@@ -254,6 +256,7 @@ enum GpuCmd {
         surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<present::PreparedSurface>,
         reply: mpsc::Sender<i32>,
     },
     Resize {
@@ -277,6 +280,7 @@ enum GpuCmd {
         surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<present::PreparedSurface>,
         reply: mpsc::Sender<i32>,
     },
     ResizeMonitor {
@@ -305,6 +309,8 @@ struct Mixer {
     render: Option<JoinHandle<()>>,
     send: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    surface_gpu: present::SurfaceGpu,
 }
 
 static MIXER: OnceLock<Mutex<Option<Mixer>>> = OnceLock::new();
@@ -325,6 +331,26 @@ fn set_error(shared: &Mutex<Shared>, message: impl Into<String>) {
     shared.lock().expect("shared").last_error = message.into();
 }
 
+#[cfg(target_os = "macos")]
+fn prepare_native_surface(
+    mixer: &Mixer,
+    surface: NativeSurface,
+    width: u32,
+    height: u32,
+) -> Result<present::PreparedSurface, String> {
+    let gpu = mixer.surface_gpu.clone();
+    crate::main_thread::run_on_main(move || {
+        present::prepare_surface(
+            &gpu.instance,
+            &gpu.adapter,
+            &gpu.device,
+            surface,
+            width,
+            height,
+        )
+    })
+}
+
 /// Creates the OS-fixed wgpu device (DX12 on Windows, Metal on macOS).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
@@ -338,6 +364,12 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     let device = match GpuDevice::new() {
         Ok(device) => device,
         Err(_) => return ERR_DEVICE,
+    };
+    #[cfg(target_os = "macos")]
+    let surface_gpu = present::SurfaceGpu {
+        instance: device.instance.clone(),
+        adapter: device.adapter.clone(),
+        device: device.device.clone(),
     };
     #[cfg(windows)]
     let gpu_video = match GpuVideoContext::new(&device) {
@@ -407,6 +439,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         render: Some(render),
         send: Some(send),
         stop,
+        #[cfg(target_os = "macos")]
+        surface_gpu,
     });
     #[cfg(windows)]
     let _ = thread::Builder::new()
@@ -610,6 +644,16 @@ pub extern "C" fn mixer_unit_attach_native(
         {
             return ERR_INVALID_ARGUMENT;
         }
+        #[cfg(target_os = "macos")]
+        let prepared = match prepare_native_surface(mixer, surface, width, height) {
+            Ok(prepared) => Some(prepared),
+            Err(error) => {
+                set_error(&mixer.shared, error);
+                return ERR_DEVICE;
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let prepared = None;
         let (reply_tx, reply_rx) = mpsc::channel();
         if mixer
             .cmds
@@ -619,6 +663,7 @@ pub extern "C" fn mixer_unit_attach_native(
                 surface,
                 width,
                 height,
+                prepared,
                 reply: reply_tx,
             })
             .is_err()
@@ -848,6 +893,16 @@ pub extern "C" fn mixer_attach_monitor_native(
         return ERR_INVALID_ARGUMENT;
     };
     match with_mixer(|mixer| {
+        #[cfg(target_os = "macos")]
+        let prepared = match prepare_native_surface(mixer, surface, width, height) {
+            Ok(prepared) => Some(prepared),
+            Err(error) => {
+                set_error(&mixer.shared, error);
+                return ERR_DEVICE;
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let prepared = None;
         let (reply_tx, reply_rx) = mpsc::channel();
         if mixer
             .cmds
@@ -857,6 +912,7 @@ pub extern "C" fn mixer_attach_monitor_native(
                 surface,
                 width,
                 height,
+                prepared,
                 reply: reply_tx,
             })
             .is_err()
@@ -1990,16 +2046,24 @@ fn render_loop(
                     surface,
                     width,
                     height,
+                    prepared,
                     reply,
                 } => {
-                    let code =
-                        match presenters.attach(&device, unit_id, kind, surface, width, height) {
-                            Ok(()) => OK,
-                            Err(error) => {
-                                shared.lock().expect("shared").last_error = error;
-                                ERR_DEVICE
-                            }
-                        };
+                    let code = match presenters.attach(
+                        &device,
+                        unit_id,
+                        kind,
+                        surface,
+                        width,
+                        height,
+                        prepared,
+                    ) {
+                        Ok(()) => OK,
+                        Err(error) => {
+                            shared.lock().expect("shared").last_error = error;
+                            ERR_DEVICE
+                        }
+                    };
                     let _ = reply.send(code);
                 }
                 GpuCmd::Resize {
@@ -2021,11 +2085,18 @@ fn render_loop(
                     surface,
                     width,
                     height,
+                    prepared,
                     reply,
                 } => {
-                    let code = match presenters
-                        .attach_monitor(&device, monitor_id, source_id, surface, width, height)
-                    {
+                    let code = match presenters.attach_monitor(
+                        &device,
+                        monitor_id,
+                        source_id,
+                        surface,
+                        width,
+                        height,
+                        prepared,
+                    ) {
                         Ok(()) => OK,
                         Err(error) => {
                             shared.lock().expect("shared").last_error = error;
@@ -2818,6 +2889,11 @@ mod tests {
         assert_eq!(
             mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
             ERR_INVALID_ARGUMENT
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
+            ERR_NOT_CREATED
         );
         #[cfg(not(any(windows, target_os = "macos")))]
         {

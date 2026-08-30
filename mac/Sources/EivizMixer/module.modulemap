@@ -1,0 +1,4 @@
+module EivizMixer {
+    header "eiviz_mixer.h"
+    export *
+}

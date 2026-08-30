@@ -5,6 +5,21 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use crate::abi::NativeSurface;
 use crate::device::GpuDevice;
 
+/// wgpu surface created (and configured) before the render thread sees it.
+/// On macOS this must happen on the AppKit main thread.
+pub(crate) struct PreparedSurface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub(crate) struct SurfaceGpu {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+}
+
 pub struct Presenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -34,8 +49,12 @@ impl Presenters {
         surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<PreparedSurface>,
     ) -> Result<(), String> {
-        let presenter = create_presenter(device, surface, width, height)?;
+        let presenter = match prepared {
+            Some(prepared) => presenter_from_prepared(device, prepared)?,
+            None => create_presenter(device, surface, width, height)?,
+        };
         self.by_key.insert((unit_id, kind, surface), presenter);
         Ok(())
     }
@@ -49,7 +68,7 @@ impl Presenters {
         width: u32,
         height: u32,
     ) {
-        resize_presenter(
+        resize_presenter_for(
             device,
             self.by_key.get_mut(&(unit_id, kind, surface)),
             width,
@@ -73,8 +92,12 @@ impl Presenters {
         surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<PreparedSurface>,
     ) -> Result<(), String> {
-        let presenter = create_presenter(device, surface, width, height)?;
+        let presenter = match prepared {
+            Some(prepared) => presenter_from_prepared(device, prepared)?,
+            None => create_presenter(device, surface, width, height)?,
+        };
         self.monitors.insert(monitor_id, presenter);
         self.monitor_sources.insert(monitor_id, source_id);
         self.monitor_intervals.entry(monitor_id).or_insert(1);
@@ -82,7 +105,7 @@ impl Presenters {
     }
 
     pub fn resize_monitor(&mut self, device: &GpuDevice, monitor_id: u64, width: u32, height: u32) {
-        resize_presenter(device, self.monitors.get_mut(&monitor_id), width, height);
+        resize_presenter_for(device, self.monitors.get_mut(&monitor_id), width, height);
     }
 
     pub fn detach_monitor(&mut self, monitor_id: u64) {
@@ -259,11 +282,29 @@ fn create_presenter(
     width: u32,
     height: u32,
 ) -> Result<Presenter, String> {
-    let (raw_display_handle, raw_window_handle) = raw_handles(surface)?;
+    let prepared = prepare_surface(
+        &device.instance,
+        &device.adapter,
+        &device.device,
+        surface,
+        width,
+        height,
+    )?;
+    presenter_from_prepared(device, prepared)
+}
+
+pub(crate) fn prepare_surface(
+    instance: &wgpu::Instance,
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    native: NativeSurface,
+    width: u32,
+    height: u32,
+) -> Result<PreparedSurface, String> {
+    let (raw_display_handle, raw_window_handle) = raw_handles(native)?;
     // SAFETY: the host owns the HWND / NSView and detaches the surface before destroying it.
     let surface = unsafe {
-        device
-            .instance
+        instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
@@ -271,14 +312,21 @@ fn create_presenter(
             .map_err(|error| error.to_string())?
     };
     let mut config = surface
-        .get_default_config(&device.adapter, width.max(2), height.max(2))
+        .get_default_config(adapter, width.max(2), height.max(2))
         .ok_or("surface exposes no compatible configuration")?;
-    let caps = surface.get_capabilities(&device.adapter);
+    let caps = surface.get_capabilities(adapter);
     config.format = pick_surface_format(&caps.formats);
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
-    surface.configure(&device.device, &config);
-    let (layout, present, uyvy, sampler) = present_pipelines(device, config.format)?;
+    surface.configure(device, &config);
+    Ok(PreparedSurface { surface, config })
+}
+
+fn presenter_from_prepared(
+    device: &GpuDevice,
+    prepared: PreparedSurface,
+) -> Result<Presenter, String> {
+    let (layout, present, uyvy, sampler) = present_pipelines(device, prepared.config.format)?;
     let params = device.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("present params"),
         size: 256,
@@ -286,8 +334,8 @@ fn create_presenter(
         mapped_at_creation: false,
     });
     Ok(Presenter {
-        surface,
-        config,
+        surface: prepared.surface,
+        config: prepared.config,
         present,
         uyvy,
         layout,
@@ -296,6 +344,29 @@ fn create_presenter(
         bind_key: 0,
         bind: None,
     })
+}
+
+fn resize_presenter_for(
+    device: &GpuDevice,
+    presenter: Option<&mut Presenter>,
+    width: u32,
+    height: u32,
+) {
+    let Some(presenter) = presenter else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let device = device as *const GpuDevice;
+        let presenter = presenter as *mut Presenter;
+        crate::main_thread::run_on_main(move || {
+            // SAFETY: the render thread waits in run_on_main, or this is already
+            // the AppKit main thread.
+            unsafe { resize_presenter(&*device, Some(&mut *presenter), width, height) }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    resize_presenter(device, Some(presenter), width, height);
 }
 
 fn resize_presenter(
