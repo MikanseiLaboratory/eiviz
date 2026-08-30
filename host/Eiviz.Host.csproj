@@ -18,9 +18,17 @@
   <Target Name="BuildMixer" BeforeTargets="Build">
     <Exec Command="cargo build --release" WorkingDirectory="$(MixerProject)" />
     <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="$(MixerProject)\target\release\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="Exists('$(MixerProject)\target\release\Processing.NDI.Lib.x64.dll')" />
+    <Copy SourceFiles="$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="!Exists('$(OutDir)Processing.NDI.Lib.x64.dll') and '$(NDI_SDK_DIR)' != '' and Exists('$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll')" />
+    <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="!Exists('$(OutDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />
+    <Error Text="NDI runtime DLL not found. Install the NDI SDK 6 and set NDI_SDK_DIR if it is not in the default location." Condition="!Exists('$(OutDir)Processing.NDI.Lib.x64.dll')" />
   </Target>
 
   <Target Name="PublishMixer" AfterTargets="Publish">
     <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(PublishDir)" />
+    <Copy SourceFiles="$(MixerProject)\target\release\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="Exists('$(MixerProject)\target\release\Processing.NDI.Lib.x64.dll')" />
+    <Copy SourceFiles="$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and '$(NDI_SDK_DIR)' != '' and Exists('$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll')" />
+    <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />
+    <Error Text="NDI runtime DLL not found. Install the NDI SDK 6 and set NDI_SDK_DIR if it is not in the default location." Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll')" />
   </Target>
 </Project>

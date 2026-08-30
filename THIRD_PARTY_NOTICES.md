@@ -13,6 +13,7 @@ as copyright and permission notices are preserved.
 | Crate | License | Source |
 | --- | --- | --- |
 | bytemuck | MIT OR Apache-2.0 | https://crates.io/crates/bytemuck |
+| grafton-ndi | Apache-2.0 | https://crates.io/crates/grafton-ndi |
 | image | MIT OR Apache-2.0 | https://crates.io/crates/image |
 | openmediatransport | MIT | https://github.com/MikanseiLaboratory/openmediatransport-rs |
 | pollster | Apache-2.0 OR MIT | https://crates.io/crates/pollster |
@@ -44,6 +45,16 @@ ASIO is a trademark of Steinberg Media Technologies GmbH. Using the ASIO
 name or shipping an ASIO-enabled **commercial** product may require a
 separate arrangement with Steinberg. That is independent of this
 repository's PolyForm Shield terms.
+
+## NDI®
+
+eiviz talks to NDI through [grafton-ndi](https://crates.io/crates/grafton-ndi)
+(Apache-2.0) and the NDI SDK. The NDI SDK stays under Vizrt NDI AB terms;
+this repository does not relicense it.
+
+A binary release includes `Processing.NDI.Lib.x64.dll` next to the
+executable, as the NDI SDK distribution rules require. NDI® is a registered
+trademark of Vizrt NDI AB. See https://ndi.video/.
 
 ## Binary releases
 

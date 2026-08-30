@@ -34,6 +34,11 @@ internal static partial class MixerNative
     internal const uint SrcKindInput = 4;
     internal const uint GenSolid = 0;
     internal const uint GenBars = 1;
+    internal const uint SaveAlwaysLow = 0;
+    internal const uint SaveNotOnProgram = 1;
+    internal const uint SaveNotOnPreviewOrProgram = 2;
+    internal const uint SaveAlwaysFull = 3;
+    internal const uint SaveFlagMultiview = 1;
     internal const ulong MuSourceFlag = 0x8000_0000_0000_0000UL;
     internal const ulong MuBusPreview = 0x1000_0000_0000_0000UL;
     internal const ulong MuIdMask = 0x0FFF_FFFF_FFFF_FFFFUL;
@@ -169,7 +174,16 @@ internal static partial class MixerNative
     internal static unsafe partial int CopyVideoInfo(ulong id, MixerVideoInfo* info);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_connect", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int ConnectOmt(ulong id, string address, uint useGpu, uint frameBufferFrames);
+    internal static partial int ConnectOmt(ulong id, string address, uint useGpu, uint frameBufferFrames, uint quality);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_omt_set_quality")]
+    internal static partial int SetOmtQuality(ulong id, uint quality);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_ndi_connect", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ConnectNdi(ulong id, string address, uint frameBufferFrames, uint lowBandwidth);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_live_save")]
+    internal static partial int SetLiveSave(ulong id, uint mode, uint flags);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_define_scene")]
     internal static unsafe partial int DefineScene(ulong sceneId, uint width, uint height, uint count, OverlayDesc* layers);
@@ -191,6 +205,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_discover")]
     internal static unsafe partial int Discover(byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_ndi_discover")]
+    internal static unsafe partial int DiscoverNdi(byte* buffer, nuint capacity);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_audio_peaks")]
     internal static unsafe partial int CopyAudioPeaks(AudioPeak* peaks, uint capacity);
@@ -231,6 +248,21 @@ internal static partial class MixerNative
             fixed (byte* ptr = buffer)
             {
                 var n = Discover(ptr, (nuint)buffer.Length);
+                if (n <= 0)
+                    return string.Empty;
+                return Encoding.UTF8.GetString(buffer, 0, n);
+            }
+        }
+    }
+
+    internal static string DiscoverNdiText()
+    {
+        var buffer = new byte[8192];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = DiscoverNdi(ptr, (nuint)buffer.Length);
                 if (n <= 0)
                     return string.Empty;
                 return Encoding.UTF8.GetString(buffer, 0, n);

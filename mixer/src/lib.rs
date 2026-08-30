@@ -8,18 +8,20 @@ mod convert;
 mod device;
 mod dxgi;
 mod media;
+mod ndi;
 mod omt;
 mod pool;
 mod present;
 mod readback;
+mod save;
 mod upload;
 
 pub use abi::{
     AudioPeak, MixerStats, OverlayDesc, Rect, SourceUsage, UnitState, ERR_ALREADY_CREATED, ERR_DEVICE,
     ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, OK, OUTPUT_MULTIVIEW,
-    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUT_DECKLINK, OUT_NDI, OUT_OMT, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
+    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUT_DECKLINK, OUT_NDI, OUT_OMT, SAVE_FLAG_MULTIVIEW,
+    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 pub use media::MixerVideoInfo;
@@ -38,9 +40,11 @@ use delay::FrameDelay;
 use device::GpuDevice;
 use dxgi::GpuVideoContext;
 use media::VideoPump;
+use ndi::{NdiReceiver, NdiSender};
 use omt::{omt_gpu_from_device, GpuSendStore, OmtGpu, OmtReceiver, ProgramSender};
 use present::Presenters;
 use readback::ReadbackStore;
+use save::{collect_source_roles, want_full, LiveSave};
 use upload::{AudioPacket, CpuFormat, UploadStore, AUDIO_RATE};
 
 struct AutoTransition {
@@ -99,10 +103,11 @@ struct Shared {
     uploads: Arc<Mutex<UploadStore>>,
     gpu_video: GpuVideoContext,
     omt_gpu: OmtGpu,
-    receivers: HashMap<u64, OmtReceiver>,
+    receivers: HashMap<u64, LiveReceiver>,
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
+    live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     last_error: String,
     last_render_ms: f32,
@@ -112,10 +117,87 @@ struct Shared {
     audio: audio::AudioEngine,
 }
 
+enum LiveReceiver {
+    Omt(OmtReceiver),
+    Ndi(NdiReceiver),
+}
+
+impl LiveReceiver {
+    fn apply_save(&self, full: bool, on_program: bool, on_preview: bool) {
+        match self {
+            Self::Omt(receiver) => receiver.apply_save(full, on_program, on_preview),
+            // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
+            Self::Ndi(_) => {}
+        }
+    }
+}
+
+enum OutputHandle {
+    Omt(ProgramSender),
+    Ndi(NdiSender),
+}
+
+impl OutputHandle {
+    fn pump(&mut self) -> Result<bool, String> {
+        match self {
+            Self::Omt(sender) => {
+                sender.pump()?;
+                Ok(sender.video_subscribed())
+            }
+            Self::Ndi(sender) => sender.pump(),
+        }
+    }
+
+    fn send_video_uyvy(
+        &mut self,
+        width: u32,
+        height: u32,
+        stride: u32,
+        pts: i64,
+        data: Arc<[u8]>,
+        fps_n: u32,
+        fps_d: u32,
+    ) -> Result<(), String> {
+        match self {
+            Self::Omt(sender) => {
+                sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
+            }
+            Self::Ndi(sender) => {
+                sender.send_video_uyvy(width, height, stride, pts, &data, fps_n, fps_d)
+            }
+        }
+    }
+
+    fn send_video_texture(
+        &mut self,
+        omt_gpu: &OmtGpu,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pts: i64,
+        fps_n: u32,
+        fps_d: u32,
+    ) -> Result<(), String> {
+        match self {
+            Self::Omt(sender) => {
+                sender.send_video_texture(omt_gpu, texture, width, height, pts, fps_n, fps_d)
+            }
+            Self::Ndi(_) => Ok(()),
+        }
+    }
+
+    fn send_audio(&mut self, packet: &AudioPacket) -> Result<(), String> {
+        match self {
+            Self::Omt(sender) => sender.send_audio(packet),
+            Self::Ndi(sender) => sender.send_audio(packet),
+        }
+    }
+}
+
 enum SendCmd {
     Add {
         output_id: u64,
-        sender: ProgramSender,
+        sender: OutputHandle,
         video_sub: Arc<AtomicBool>,
     },
     Remove {
@@ -262,6 +344,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
+        live_save: HashMap::new(),
         last_error: String::new(),
         last_render_ms: 0.0,
         frame_buffer_frames: 3,
@@ -305,6 +388,9 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         send: Some(send),
         stop,
     });
+    let _ = thread::Builder::new()
+        .name("eiviz-ndi-find".into())
+        .spawn(ndi::warm_finder);
     OK
 }
 
@@ -915,6 +1001,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
     address: *const c_char,
     use_gpu: u32,
     frame_buffer_frames: u32,
+    quality: u32,
 ) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -939,9 +1026,14 @@ pub unsafe extern "C" fn mixer_omt_connect(
             drop(previous);
             (uploads, gpu)
         };
-        match OmtReceiver::start(id, address, uploads, gpu, depth) {
+        match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
             Ok(receiver) => {
-                mixer.shared.lock().expect("shared").receivers.insert(id, receiver);
+                mixer
+                    .shared
+                    .lock()
+                    .expect("shared")
+                    .receivers
+                    .insert(id, LiveReceiver::Omt(receiver));
                 OK
             }
             Err(error) => {
@@ -949,6 +1041,83 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 ERR_IO
             }
         }
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ndi_connect(
+    id: u64,
+    address: *const c_char,
+    frame_buffer_frames: u32,
+    low_bandwidth: u32,
+) -> i32 {
+    if address.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let address = unsafe { CStr::from_ptr(address) }
+        .to_str()
+        .unwrap_or_default()
+        .to_string();
+    let depth = frame_buffer_frames.clamp(1, 8);
+    with_mixer(|mixer| {
+        let uploads = {
+            let mut shared = mixer.shared.lock().expect("shared");
+            let previous = shared.videos.remove(&id);
+            drop(shared.receivers.remove(&id));
+            let uploads = shared.uploads.clone();
+            drop(shared);
+            drop(previous);
+            uploads
+        };
+        match NdiReceiver::start(id, address, uploads, depth, low_bandwidth) {
+            Ok(receiver) => {
+                mixer
+                    .shared
+                    .lock()
+                    .expect("shared")
+                    .receivers
+                    .insert(id, LiveReceiver::Ndi(receiver));
+                OK
+            }
+            Err(error) => {
+                set_error(&mixer.shared, error);
+                ERR_IO
+            }
+        }
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_live_save(id: u64, mode: u32, flags: u32) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").live_save.insert(
+            id,
+            LiveSave {
+                mode,
+                flags: flags & SAVE_FLAG_MULTIVIEW,
+            },
+        );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_omt_set_quality(id: u64, quality: u32) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        if let Some(LiveReceiver::Omt(receiver)) = shared.receivers.get(&id) {
+            receiver.set_quality(quality);
+        }
+        OK
     })
     .unwrap_or_else(|code| code)
 }
@@ -978,35 +1147,47 @@ pub unsafe extern "C" fn mixer_output_add(
         .to_str()
         .unwrap_or_default()
         .to_string();
-    match transport {
-        OUT_NDI => {
-            let _ = with_mixer(|mixer| {
-                set_error(&mixer.shared, "NDI output is not linked in this build");
-            });
-            return ERR_IO;
-        }
-        OUT_DECKLINK => {
-            let _ = with_mixer(|mixer| {
-                set_error(&mixer.shared, "DeckLink output is not linked in this build");
-            });
-            return ERR_IO;
-        }
-        OUT_OMT => {}
-        _ => return ERR_INVALID_ARGUMENT,
+    if transport == OUT_DECKLINK {
+        let _ = with_mixer(|mixer| {
+            set_error(&mixer.shared, "DeckLink output is not linked in this build");
+        });
+        return ERR_IO;
     }
-    let started = panic::catch_unwind(AssertUnwindSafe(|| ProgramSender::start(&name)));
-    let sender = match started {
-        Ok(Ok(sender)) => sender,
-        Ok(Err(error)) => {
-            let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
-            return ERR_IO;
+    let use_gpu = transport == OUT_OMT && use_gpu != 0;
+    let handle = match transport {
+        OUT_NDI => {
+            let started = panic::catch_unwind(AssertUnwindSafe(|| NdiSender::start(&name)));
+            match started {
+                Ok(Ok(sender)) => OutputHandle::Ndi(sender),
+                Ok(Err(error)) => {
+                    let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                    return ERR_IO;
+                }
+                Err(_) => {
+                    let _ = with_mixer(|mixer| {
+                        set_error(&mixer.shared, "NDI sender panicked during create")
+                    });
+                    return ERR_IO;
+                }
+            }
         }
-        Err(_) => {
-            let _ = with_mixer(|mixer| {
-                set_error(&mixer.shared, "OMT sender panicked during create")
-            });
-            return ERR_IO;
+        OUT_OMT => {
+            let started = panic::catch_unwind(AssertUnwindSafe(|| ProgramSender::start(&name)));
+            match started {
+                Ok(Ok(sender)) => OutputHandle::Omt(sender),
+                Ok(Err(error)) => {
+                    let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                    return ERR_IO;
+                }
+                Err(_) => {
+                    let _ = with_mixer(|mixer| {
+                        set_error(&mixer.shared, "OMT sender panicked during create")
+                    });
+                    return ERR_IO;
+                }
+            }
         }
+        _ => return ERR_INVALID_ARGUMENT,
     };
     with_mixer(|mixer| {
         let video_sub = Arc::new(AtomicBool::new(false));
@@ -1018,12 +1199,12 @@ pub unsafe extern "C" fn mixer_output_add(
                 source_id,
                 unit_id,
                 video_sub: Arc::clone(&video_sub),
-                use_gpu: use_gpu != 0,
+                use_gpu,
             },
         );
         let _ = mixer.send_tx.send(SendCmd::Add {
             output_id,
-            sender,
+            sender: handle,
             video_sub,
         });
         OK
@@ -1056,6 +1237,26 @@ pub unsafe extern "C" fn mixer_omt_discover(out: *mut u8, cap: usize) -> i32 {
         }
         Err(_) => 0,
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+        match ndi::discover_sources() {
+            Ok(addresses) => {
+                let text = addresses.join("\n");
+                let bytes = text.as_bytes();
+                let n = bytes.len().min(cap);
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
+                n as i32
+            }
+            Err(error) => {
+                let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                0
+            }
+        }
 }
 
 #[unsafe(no_mangle)]
@@ -1117,6 +1318,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
                 {
                     shared.receivers.remove(&id);
                     shared.generators.remove(&id);
+                    shared.live_save.remove(&id);
                     shared.uploads.clone()
                 },
             )
@@ -1776,12 +1978,32 @@ fn render_loop(
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
             frame_i = frame_i.wrapping_add(1);
+            let monitor_sources_due = presenters.attached_monitor_sources_due(frame_i);
+            let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) = collect_live_ids(
                 &scene_specs,
                 &snapshot,
-                presenters.attached_monitor_sources_due(frame_i),
+                monitor_sources_due,
                 &outputs_snap,
             );
+            let output_refs: Vec<(u32, u64)> = outputs_snap
+                .iter()
+                .map(|item| (item.source_kind, item.source_id))
+                .collect();
+            let roles = collect_source_roles(
+                &scene_specs,
+                &snapshot,
+                &monitor_sources,
+                &output_refs,
+            );
+            {
+                let guard = shared.lock().expect("shared");
+                for (id, receiver) in &guard.receivers {
+                    let save = guard.live_save.get(id).copied().unwrap_or_default();
+                    let role = roles.get(id).copied().unwrap_or_default();
+                    receiver.apply_save(want_full(save, role), role.on_program, role.on_preview);
+                }
+            }
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
@@ -2269,7 +2491,7 @@ fn collect_live_ids(
 }
 
 fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu) {
-    let mut senders: HashMap<u64, (ProgramSender, Arc<AtomicBool>)> = HashMap::new();
+    let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         loop {
             match rx.try_recv() {
@@ -2283,8 +2505,8 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
         for (&id, (sender, video_sub)) in senders.iter_mut() {
             let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump()));
             match pumped {
-                Ok(_) => video_sub.store(sender.video_subscribed(), Ordering::Relaxed),
-                Err(_) => dead.push(id),
+                Ok(Ok(subscribed)) => video_sub.store(subscribed, Ordering::Relaxed),
+                Ok(Err(_)) | Err(_) => dead.push(id),
             }
         }
         for id in dead {
@@ -2300,7 +2522,7 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
 }
 
 fn apply_send_cmd(
-    senders: &mut HashMap<u64, (ProgramSender, Arc<AtomicBool>)>,
+    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
     cmd: SendCmd,
     omt_gpu: &OmtGpu,
 ) {

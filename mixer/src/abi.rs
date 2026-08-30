@@ -42,6 +42,12 @@ pub const SRC_KIND_INPUT: u32 = 4;
 pub const GEN_SOLID: u32 = 0;
 pub const GEN_BARS: u32 = 1;
 
+pub const SAVE_ALWAYS_LOW: u32 = 0;
+pub const SAVE_NOT_ON_PROGRAM: u32 = 1;
+pub const SAVE_NOT_ON_PREVIEW_OR_PROGRAM: u32 = 2;
+pub const SAVE_ALWAYS_FULL: u32 = 3;
+pub const SAVE_FLAG_MULTIVIEW: u32 = 1;
+
 pub const MV_SLOT_MAX: usize = 16;
 pub const MU_BUS_PREVIEW: u64 = 0x1000_0000_0000_0000;
 pub const MU_BUS_MULTIVIEW: u64 = 0x2000_0000_0000_0000;

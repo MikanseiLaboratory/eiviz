@@ -27,6 +27,8 @@ env:
   CARGO_INCREMENTAL: "0"
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
+  LLVM_VERSION: "20.1.8"
 
 jobs:
   windows-x64:
@@ -38,6 +40,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup NDI SDK and LLVM
+        uses: ./.github/actions/setup-ndi-windows
 
       - name: Resolve tag
         id: meta
@@ -103,6 +108,9 @@ jobs:
           }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_mixer.dll")) {
             throw "Published output is missing eiviz_mixer.dll"
+          }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Processing.NDI.Lib.x64.dll")) {
+            throw "Published output is missing Processing.NDI.Lib.x64.dll"
           }
 
       - name: Package zip

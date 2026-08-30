@@ -624,7 +624,14 @@ public partial class MainWindow : Window
         var previousKind = input.Kind;
         var wasGenerator = previousKind is InputKind.Color or InputKind.Bars or InputKind.Black;
         var nowGenerator = dialog.Kind is InputKind.Color or InputKind.Bars;
-        if (replacing && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
+        var keepLive = replacing
+            && input.Kind == dialog.Kind
+            && dialog.Kind is InputKind.Omt or InputKind.Ndi
+            && input.PathOrAddress == dialog.ResultPath
+            && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
+            && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
+            && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth);
+        if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             Commands.TryEnqueue(new DropSourceCommand(input.Id));
             MixerNative.FlushAudio(input.Id);
@@ -637,7 +644,28 @@ public partial class MainWindow : Window
         input.ColorB = dialog.ColorB;
         input.Scroll = dialog.Scroll;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind == InputKind.Omt ? dialog.ResultFrameBufferFrames : 1;
+        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
+            ? dialog.ResultFrameBufferFrames
+            : 1;
+        input.BandwidthSave = dialog.Kind == InputKind.Omt
+            ? dialog.ResultSaveMode
+            : BandwidthSave.NotOnPreviewOrProgram;
+        input.KeepFullOnMultiview = dialog.Kind == InputKind.Omt
+            && dialog.ResultKeepFullOnMultiview;
+        input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
+        input.NdiBandwidth = dialog.Kind == InputKind.Ndi ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
+        if (keepLive)
+        {
+            if (dialog.Kind == InputKind.Omt)
+            {
+                Commands.TryEnqueue(new LiveSaveCommand(
+                    input.Id,
+                    input.BandwidthSave,
+                    input.KeepFullOnMultiview,
+                    input.OmtQuality));
+            }
+            return;
+        }
         switch (dialog.Kind)
         {
             case InputKind.Color:
@@ -661,7 +689,17 @@ public partial class MainWindow : Window
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultUseGpu,
-                    dialog.ResultFrameBufferFrames));
+                    dialog.ResultFrameBufferFrames,
+                    input.BandwidthSave,
+                    input.KeepFullOnMultiview,
+                    input.OmtQuality));
+                break;
+            case InputKind.Ndi:
+                Commands.TryEnqueue(new ConnectNdiCommand(
+                    input.Id,
+                    dialog.ResultPath!,
+                    dialog.ResultFrameBufferFrames,
+                    input.NdiBandwidth));
                 break;
             case InputKind.Uvc:
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!));
@@ -988,7 +1026,7 @@ public partial class MainWindow : Window
                 continue;
             if (prior is not null)
                 Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
-            if (output.Transport == OutputTransport.Omt)
+            if (output.Transport is OutputTransport.Omt or OutputTransport.Ndi)
             {
                 Commands.TryEnqueue(new AddOutputCommand(output));
                 continue;

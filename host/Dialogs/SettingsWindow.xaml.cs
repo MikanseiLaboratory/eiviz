@@ -366,7 +366,11 @@ public partial class SettingsWindow : Window
             transport.SelectionChanged += (_, _) =>
             {
                 if (transport.SelectedItem is ComboBoxItem item && item.Tag is OutputTransport value)
+                {
                     output.Transport = value;
+                    if (value != OutputTransport.Omt)
+                        output.UseGpu = false;
+                }
                 RebuildOutputs();
             };
 

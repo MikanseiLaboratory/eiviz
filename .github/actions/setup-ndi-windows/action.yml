@@ -1,0 +1,104 @@
+name: Setup NDI SDK on Windows
+description: Install NDI SDK 6 and LLVM so grafton-ndi can build on Windows x64
+inputs:
+  save-cache:
+    description: Whether to save the cache after installation
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Generate cache key
+      id: cache-key
+      shell: pwsh
+      run: |
+        # downloads.ndi.tv can rotate the installer for the same URL.
+        $primary = '4D5DD36A1C7C7634F408BF459B068787CCE6F5310A3EFE832D76B1DDEB54E499'
+        $previous = '97E8993C6B94213A950E6ACBE9AA4D35831D137324D762F7C74851D3FEEF80D9'
+        $ndiHash = $primary.Substring(0, 8)
+        $llvm = if ($env:LLVM_VERSION) { $env:LLVM_VERSION } else { '20.1.8' }
+        echo "key=eiviz-ndi-v1-$ndiHash-$llvm-${{ runner.os }}" >> $env:GITHUB_OUTPUT
+        echo "accepted_hashes=$primary,$previous" >> $env:GITHUB_OUTPUT
+        echo "llvm_version=$llvm" >> $env:GITHUB_OUTPUT
+
+    - name: Restore cache
+      id: cache-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ${{ runner.temp }}\ndi-sdk\**\*
+          C:\Program Files\LLVM
+        key: ${{ steps.cache-key.outputs.key }}
+
+    - name: Install LLVM
+      if: steps.cache-restore.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        if (Test-Path "C:\Program Files\LLVM\bin\clang.exe") {
+          Write-Host "LLVM already installed"
+        } else {
+          choco install llvm --version=${{ steps.cache-key.outputs.llvm_version }} -y
+        }
+
+    - name: Download and install NDI SDK
+      if: steps.cache-restore.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $NDI_SDK_DIR = "${{ runner.temp }}\ndi-sdk"
+        $NDI_SDK_INSTALLER = "${{ runner.temp }}\NDI_SDK_Installer.exe"
+        $url = if ($env:NDI_SDK_URL) { $env:NDI_SDK_URL } else { 'https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe' }
+
+        Write-Host "Downloading NDI SDK..."
+        curl.exe -L --retry 4 --retry-delay 8 -o "$NDI_SDK_INSTALLER" "$url"
+
+        Write-Host "Verifying NDI SDK integrity..."
+        $accepted = '${{ steps.cache-key.outputs.accepted_hashes }}' -split ',' | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ }
+        $actual = (Get-FileHash "$NDI_SDK_INSTALLER" -Algorithm SHA256).Hash
+        if ($accepted -notcontains $actual) {
+          Write-Error "NDI SDK hash mismatch! Got: $actual. Accepted: $($accepted -join ', ')"
+          exit 1
+        }
+        Write-Host "NDI SDK hash verified: $actual"
+
+        Write-Host "Installing NDI SDK to: $NDI_SDK_DIR"
+        $proc = Start-Process -FilePath "$NDI_SDK_INSTALLER" `
+          -ArgumentList "/VERYSILENT", "/SP-", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL", "/DIR=$NDI_SDK_DIR", "/LOG=$env:TEMP\ndi_install.log" `
+          -PassThru
+        if (!$proc.WaitForExit(300000)) {
+          $proc | Stop-Process -Force
+          if (-not (Test-Path "$NDI_SDK_DIR\include\Processing.NDI.Lib.h")) {
+            Write-Error "NDI SDK installation timed out"
+            exit 1
+          }
+        } elseif ($proc.ExitCode -ne 0) {
+          Write-Error "NDI installer failed with code $($proc.ExitCode)"
+          exit 1
+        }
+
+        Remove-Item "$NDI_SDK_INSTALLER" -ErrorAction SilentlyContinue
+        if (-not (Test-Path "$NDI_SDK_DIR\include\Processing.NDI.Lib.h")) {
+          Write-Error "NDI SDK installation failed - header file not found"
+          exit 1
+        }
+
+    - name: Setup environment
+      shell: pwsh
+      run: |
+        $sdk = "${{ runner.temp }}\ndi-sdk"
+        if (-not (Test-Path "$sdk\include\Processing.NDI.Lib.h")) {
+          Write-Error "NDI SDK header missing at $sdk"
+          exit 1
+        }
+        "NDI_SDK_DIR=$sdk" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        "$sdk\Bin\x64" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+        "C:\Program Files\LLVM\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+        "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Save cache
+      if: inputs.save-cache == 'true' && steps.cache-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ runner.temp }}\ndi-sdk\**\*
+          C:\Program Files\LLVM
+        key: ${{ steps.cache-key.outputs.key }}

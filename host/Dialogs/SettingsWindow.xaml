@@ -70,7 +70,7 @@
                     <TextBlock Text="Outputs" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                           Text="OMT is sent from the mixer. NDI and DeckLink are listed here but fail immediately until those SDKs are linked. For OMT, Encode path chooses GPU encode (frame stays on the GPU) or CPU encode (UYVY pack and readback)."/>
+                           Text="OMT and NDI® are sent from the mixer. DeckLink is listed here but fails immediately until that SDK is linked. For OMT, Encode path chooses GPU encode (frame stays on the GPU) or CPU encode (UYVY pack and readback). NDI always uses CPU encode."/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="OutputRows"/>
                 </ScrollViewer>
@@ -118,7 +118,7 @@
             <StackPanel x:Name="AboutPanel" Margin="20" Visibility="Collapsed">
                 <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                           Text="WPF host + Rust wgpu DX12 mixer. OMT/VMX use openmediatransport-rs and vmx-rs."/>
+                           Text="Windows host and DirectX 12 mixer."/>
             </StackPanel>
         </DockPanel>
     </Grid>

@@ -1,7 +1,7 @@
 <Window x:Class="Eiviz.Host.Dialogs.AddInputWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Input Select" Height="560" Width="820"
+        Title="Input Select" Height="640" Width="820"
         WindowStartupLocation="CenterOwner"
         Background="#2B2B2B" Foreground="#EEEEEE">
     <Grid>
@@ -68,12 +68,19 @@
                     <TextBlock Text="OMT source address" Margin="0,0,0,8"/>
                     <TextBox x:Name="OmtAddress"/>
                     <Button Content="Refresh discovery" Margin="0,12,0,8" HorizontalAlignment="Left" Click="RefreshOmt_Click"/>
-                    <ListBox x:Name="OmtList" Height="180" Background="#333" Foreground="#EEE"
+                    <ListBox x:Name="OmtList" Height="132" Background="#333" Foreground="#EEE"
                              SelectionChanged="OmtList_SelectionChanged"/>
                     <TextBlock Text="Decode path" Margin="0,12,0,4"/>
                     <ComboBox x:Name="OmtPathBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
                         <ComboBoxItem Content="GPU decode" Tag="gpu" IsSelected="True"/>
                         <ComboBoxItem Content="CPU decode" Tag="cpu"/>
+                    </ComboBox>
+                    <TextBlock Text="Quality" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="OmtQualityBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Default" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Low" Tag="1"/>
+                        <ComboBoxItem Content="Medium" Tag="50"/>
+                        <ComboBoxItem Content="High" Tag="100"/>
                     </ComboBox>
                     <TextBlock Text="Frame buffer (frames)"/>
                     <ComboBox x:Name="OmtBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,8">
@@ -84,12 +91,40 @@
                         <ComboBoxItem Content="6" Tag="6"/>
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
+                    <TextBlock Text="Save bandwidth when" Margin="0,4,0,4"/>
+                    <ComboBox x:Name="OmtSaveBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Always (low quality)" Tag="0"/>
+                        <ComboBoxItem Content="Not on Program (any MU)" Tag="1"/>
+                        <ComboBoxItem Content="Not on Preview/Program (any MU)" Tag="2" IsSelected="True"/>
+                        <ComboBoxItem Content="None (always full)" Tag="3"/>
+                    </ComboBox>
+                    <CheckBox x:Name="OmtMvBox" Content="Keep full quality on Multiview" Foreground="#EEE" Margin="0,0,0,8"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source."/>
+                               Text="GPU decode keeps VMX frames on the GPU. CPU decode copies into system memory. Frame buffer (1–8) absorbs jitter on this source. Quality is requested from the sender. Unused sources stay connected and also request Preview (1/8 decode)."/>
                 </StackPanel>
                 <StackPanel x:Name="NdiPanel" Visibility="Collapsed">
-                    <TextBlock TextWrapping="Wrap"
-                               Text="NDI receive is not linked in this build. Use OMT for AV-over-IP until the NDI SDK is added. This dialog will not create a fake source."/>
+                    <TextBlock Text="NDI® source" Margin="0,0,0,8"/>
+                    <TextBox x:Name="NdiAddress"/>
+                    <Button Content="Refresh discovery" Margin="0,12,0,8" HorizontalAlignment="Left" Click="RefreshNdi_Click"/>
+                    <ListBox x:Name="NdiList" Height="132" Background="#333" Foreground="#EEE"
+                             SelectionChanged="NdiList_SelectionChanged"/>
+                    <TextBlock Text="Frame buffer (frames)" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="NdiBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,4,0,8">
+                        <ComboBoxItem Content="1" Tag="1" IsSelected="True"/>
+                        <ComboBoxItem Content="2" Tag="2"/>
+                        <ComboBoxItem Content="3" Tag="3"/>
+                        <ComboBoxItem Content="4" Tag="4"/>
+                        <ComboBoxItem Content="6" Tag="6"/>
+                        <ComboBoxItem Content="8" Tag="8"/>
+                    </ComboBox>
+                    <TextBlock Text="Bandwidth" Margin="0,4,0,4"/>
+                    <ComboBox x:Name="NdiBandwidthBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Highest" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Lowest" Tag="1"/>
+                    </ComboBox>
+                    <TextBlock x:Name="NdiStatus" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="#C88"/>
+                    <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source. Bandwidth is set when connecting. Lowest is the public SDK preview stream."/>
                 </StackPanel>
                 <StackPanel x:Name="UvcPanel" Visibility="Collapsed">
                     <TextBlock Text="Select a UVC / Media Foundation capture device." Margin="0,0,0,8"/>
