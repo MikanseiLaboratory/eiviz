@@ -110,6 +110,25 @@ typedef struct EivizSourceUsage {
     uint64_t vram_bytes;
 } EivizSourceUsage;
 
+typedef struct EivizAudioDeviceInfo {
+    uint32_t kind;
+    uint32_t channels;
+    uint8_t id[256];
+    uint8_t name[256];
+} EivizAudioDeviceInfo;
+
+typedef struct EivizAudioBusInfo {
+    uint64_t id;
+    uint32_t role;
+    uint32_t device_kind;
+    int32_t map_left;
+    int32_t map_right;
+    uint32_t exclusive;
+    uint32_t bit;
+    uint8_t name[64];
+    uint8_t device_id[256];
+} EivizAudioBusInfo;
+
 uint32_t mixer_ping(void);
 int32_t mixer_create(uint64_t adapter_luid, uint32_t fps_num, uint32_t fps_den);
 void mixer_destroy(void);
@@ -153,11 +172,20 @@ int32_t mixer_copy_stats(EivizMixerStats *out);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);
+int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);
+int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
+int32_t mixer_session_canonicalize(const uint8_t *json, size_t len, uint8_t *out, size_t cap);
 int32_t mixer_audio_bus_upsert(uint64_t id, const char *name, uint32_t role, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right, uint32_t exclusive);
+int32_t mixer_audio_bus_remove(uint64_t id);
+int32_t mixer_audio_bus_count(void);
+int32_t mixer_audio_bus_get(uint32_t index, EivizAudioBusInfo *out);
 int32_t mixer_audio_set_input(uint64_t id, uint32_t bus_mask, float gain, uint32_t mute);
 int32_t mixer_audio_set_bus_gain(uint64_t id, float gain, uint32_t mute);
 int32_t mixer_audio_set_unit_link(uint64_t unit_id, uint64_t bus_id, uint32_t mode);
+int32_t mixer_audio_set_headphone_cue(uint64_t unit_id);
 int32_t mixer_audio_set_headphone_copy_master(uint32_t enabled);
+int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint32_t cap);
+int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
 
 #ifdef __cplusplus
 }

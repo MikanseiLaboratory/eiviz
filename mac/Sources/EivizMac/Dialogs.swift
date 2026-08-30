@@ -31,7 +31,10 @@ struct SettingsView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button("OK") { dismiss() }
+                    Button("OK") {
+                        mixer.pushAudio()
+                        dismiss()
+                    }
                     Button("Cancel") { dismiss() }
                 }
             }
@@ -135,19 +138,97 @@ struct SettingsView: View {
     }
 
     private var audio: some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Internal mix is 48 kHz stereo. Master and Headphone cannot be removed.")
                 .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Headphone copies Master", isOn: $mixer.session.headphoneCopyMaster)
+            HStack {
+                Spacer()
+                Button("+") { addAuxBus() }
+            }
             ForEach($mixer.session.buses) { $bus in
-                HStack {
-                    TextField("Name", text: $bus.name)
-                    Slider(value: $bus.gain, in: 0 ... 2)
-                    Toggle("Mute", isOn: $bus.mute)
-                }
-                .onChange(of: bus.gain) { _, value in
-                    _ = mixer_audio_set_bus_gain(bus.id, value, bus.mute ? 1 : 0)
+                busRow($bus)
+            }
+        }
+    }
+
+    private func addAuxBus() {
+        let aux = mixer.session.buses.filter { $0.role == .aux }.count
+        guard aux < 8 else { return }
+        var bit: UInt32 = 2
+        while mixer.session.buses.contains(where: { $0.bit == bit }) && bit < 31 {
+            bit += 1
+        }
+        mixer.session.buses.append(AudioBusEntry(
+            id: mixer.session.nextBusId,
+            name: nextAuxName(),
+            role: .aux,
+            deviceKind: .none,
+            bit: bit
+        ))
+        mixer.session.nextBusId += 1
+    }
+
+    private func nextAuxName() -> String {
+        for letter in "ABCDEFGH" {
+            let name = "Bus \(letter)"
+            if mixer.session.buses.allSatisfy({ $0.name != name }) {
+                return name
+            }
+        }
+        return "Bus \(mixer.session.nextBusId)"
+    }
+
+    private func busRow(_ bus: Binding<AudioBusEntry>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                TextField("Name", text: bus.name)
+                    .disabled(bus.wrappedValue.role != .aux)
+                if bus.wrappedValue.role == .aux {
+                    Button("−") {
+                        mixer.session.buses.removeAll { $0.id == bus.wrappedValue.id }
+                    }
                 }
             }
+            HStack {
+                Picker("", selection: bus.deviceKind) {
+                    Text("Enabled").tag(AudioDeviceKind.none)
+                    Text("Core Audio").tag(AudioDeviceKind.coreAudio)
+                    Text("WASAPI").tag(AudioDeviceKind.wasapi)
+                }
+                .frame(width: 140)
+                if bus.wrappedValue.deviceKind != .none {
+                    Picker("", selection: bus.deviceId) {
+                        Text("Default").tag("")
+                        ForEach(devices(for: bus.wrappedValue.deviceKind)) { device in
+                            Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                        }
+                    }
+                }
+            }
+            if bus.wrappedValue.deviceKind != .none {
+                HStack {
+                    Text("L ch")
+                    TextField("0", value: bus.mapLeft, format: .number).frame(width: 48)
+                    Text("R ch")
+                    TextField("1", value: bus.mapRight, format: .number).frame(width: 48)
+                }
+            }
+            HStack {
+                Slider(value: bus.gain, in: 0 ... 2)
+                Toggle("Mute", isOn: bus.mute)
+            }
+        }
+        .padding(8)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+    }
+
+    private func devices(for kind: AudioDeviceKind) -> [AudioDevice] {
+        MixerFFI.audioDevices().filter {
+            $0.kind == kind.rawUInt
+                || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
+                || (kind == .wasapi && $0.kind == AudioDeviceKind.coreAudio.rawUInt)
         }
     }
 
@@ -317,11 +398,16 @@ struct AddInputView: View {
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
             input.frameBufferFrames = buffer
-            input.omtQuality = quality
+            input.omtQuality = switch quality {
+            case 1: .low
+            case 50: .medium
+            case 100: .high
+            default: .default
+            }
         case "NDI®":
             input.kind = .ndi
             input.pathOrAddress = ndiAddress
-            input.ndiBandwidth = ndiLow ? 1 : 0
+            input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
         default:
             input.kind = .uvc
@@ -341,6 +427,17 @@ struct MixingUnitView: View {
             labeled("Name") { TextField("Name", text: $unit.name) }
             labeled("Width") { TextField("Width", value: $unit.width, format: .number) }
             labeled("Height") { TextField("Height", value: $unit.height, format: .number) }
+            labeled("Audio") {
+                Picker("", selection: $unit.audioBusId) {
+                    ForEach(mixer.session.buses) { bus in
+                        Text(bus.name).tag(bus.id)
+                    }
+                }
+            }
+            Picker("Link", selection: $unit.audioLink) {
+                Text("Follow").tag(AudioLinkMode.follow)
+                Text("Independent").tag(AudioLinkMode.independent)
+            }
             Text("Audio bus is which mix this Mixing Unit feeds. Follow: the bus mix follows Preview/Program and the T-bar.")
                 .foregroundStyle(EivizTheme.dim)
             HStack {
@@ -363,161 +460,6 @@ struct MixingUnitView: View {
             Text(title).frame(width: 80, alignment: .leading)
             content()
         }
-    }
-}
-
-struct SceneEditorView: View {
-    @EnvironmentObject private var mixer: MixerController
-    @Environment(\.dismiss) private var dismiss
-    @State var scene: SceneEntry
-    @State private var selectedLayer: UUID?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading) {
-                Text("Layers").fontWeight(.bold)
-                List(scene.layers, selection: $selectedLayer) { layer in
-                    Text(mixer.session.inputs.first { $0.id == layer.inputId }?.name ?? "\(layer.inputId)")
-                        .tag(Optional(layer.id))
-                }
-                Picker("Input", selection: Binding(
-                    get: { mixer.selectedInputId ?? EIVIZ_SRC_BARS },
-                    set: { mixer.selectedInputId = $0 }
-                )) {
-                    ForEach(mixer.session.inputs) { input in
-                        Text(input.name).tag(input.id)
-                    }
-                }
-                Button("Add layer") {
-                    scene.layers.append(SceneLayer(inputId: mixer.selectedInputId ?? EIVIZ_SRC_BARS, z: Int32(scene.layers.count)))
-                }
-                Button("Delete") {
-                    scene.layers.removeAll { $0.id == selectedLayer }
-                }
-            }
-            .frame(width: 240)
-            VStack {
-                Text("Wireframe (16:9)").fontWeight(.bold)
-                ZStack {
-                    Rectangle().fill(Color.black)
-                    ForEach(scene.layers) { layer in
-                        Rectangle()
-                            .stroke(EivizTheme.preview, lineWidth: 1)
-                            .frame(width: 400 * CGFloat(layer.width), height: 225 * CGFloat(layer.height))
-                            .offset(
-                                x: 400 * CGFloat(layer.x + layer.width / 2 - 0.5),
-                                y: 225 * CGFloat(layer.y + layer.height / 2 - 0.5)
-                            )
-                    }
-                }
-                .frame(width: 400, height: 225)
-                .border(EivizTheme.stroke)
-            }
-            VStack(alignment: .leading) {
-                Text("Live preview").fontWeight(.bold)
-                MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
-                    .frame(height: 180)
-                    .background(Color.black)
-                TextField("Name", text: $scene.name)
-                if let index = scene.layers.firstIndex(where: { $0.id == selectedLayer }) {
-                    layerFields(index)
-                }
-                HStack {
-                    Spacer()
-                    Button("OK") {
-                        mixer.saveScene(scene)
-                        dismiss()
-                    }
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .frame(width: 280)
-        }
-        .padding(12)
-        .frame(minWidth: 980, minHeight: 520)
-        .background(EivizTheme.dialog)
-        .foregroundStyle(EivizTheme.text)
-    }
-
-    private func layerFields(_ index: Int) -> some View {
-        Grid {
-            GridRow {
-                Text("X")
-                TextField("X", value: $scene.layers[index].x, format: .number)
-                Text("Y")
-                TextField("Y", value: $scene.layers[index].y, format: .number)
-            }
-            GridRow {
-                Text("W")
-                TextField("W", value: $scene.layers[index].width, format: .number)
-                Text("H")
-                TextField("H", value: $scene.layers[index].height, format: .number)
-            }
-            GridRow {
-                Text("Op")
-                TextField("Op", value: $scene.layers[index].opacity, format: .number)
-                Toggle("Audio Follow", isOn: $scene.layers[index].audioFollow)
-            }
-        }
-    }
-}
-
-struct OverlayView: View {
-    @EnvironmentObject private var mixer: MixerController
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading) {
-            HStack {
-                Text("Overlays").fontWeight(.bold)
-                Spacer()
-                Button("+") {
-                    var unit = mixer.selectedUnit
-                    var slot = OverlaySlot(sceneGpuId: mixer.session.scenes.first?.gpuId ?? 0)
-                    slot.z = Int32(unit.overlays.count)
-                    unit.overlays.append(slot)
-                    mixer.saveUnit(unit)
-                }
-            }
-            ForEach(mixer.selectedUnit.overlays) { slot in
-                HStack {
-                    Toggle("ON", isOn: Binding(
-                        get: { mixer.overlayOn[slot.id] ?? slot.enabled },
-                        set: { _ in mixer.toggleOverlay(slot) }
-                    ))
-                    Picker("Scene", selection: Binding(
-                        get: { slot.sceneGpuId },
-                        set: { value in
-                            var unit = mixer.selectedUnit
-                            if let index = unit.overlays.firstIndex(where: { $0.id == slot.id }) {
-                                unit.overlays[index].sceneGpuId = value
-                                mixer.saveUnit(unit)
-                            }
-                        }
-                    )) {
-                        ForEach(mixer.session.scenes) { scene in
-                            Text(scene.name).tag(scene.gpuId)
-                        }
-                    }
-                    Button("Delete") {
-                        var unit = mixer.selectedUnit
-                        unit.overlays.removeAll { $0.id == slot.id }
-                        mixer.saveUnit(unit)
-                    }
-                }
-            }
-            MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: EIVIZ_OUTPUT_PROGRAM))
-                .frame(minHeight: 240)
-                .background(Color.black)
-            HStack {
-                Spacer()
-                Button("Close") { dismiss() }
-            }
-        }
-        .padding(12)
-        .frame(minWidth: 900, minHeight: 560)
-        .background(EivizTheme.dialog)
-        .foregroundStyle(EivizTheme.text)
     }
 }
 

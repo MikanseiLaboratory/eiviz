@@ -35,6 +35,30 @@ enum MixerFFI {
     static func emptyState() -> EivizUnitState { zeroed() }
     static func emptyOverlay() -> EivizOverlayDesc { zeroed() }
 
+    static func audioDevices() -> [AudioDevice] {
+        var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_audio_enum_devices(0, ptr.baseAddress, UInt32(ptr.count))
+        }
+        guard n > 0 else { return [] }
+        return buffer.prefix(Int(n)).map { info in
+            AudioDevice(
+                kind: info.kind,
+                channels: info.channels,
+                id: cString(info.id),
+                name: cString(info.name)
+            )
+        }
+    }
+
+    private static func cString<T>(_ tuple: T) -> String {
+        withUnsafeBytes(of: tuple) { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            let n = bytes.firstIndex(of: 0) ?? bytes.count
+            return String(bytes: bytes.prefix(n), encoding: .utf8) ?? ""
+        }
+    }
+
     static func zeroed<T>() -> T {
         let pointer = UnsafeMutableRawPointer.allocate(
             byteCount: MemoryLayout<T>.stride,

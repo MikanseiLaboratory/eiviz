@@ -18,6 +18,7 @@ pub const ROLE_AUX: u32 = 2;
 pub const DEVICE_NONE: u32 = 0;
 pub const DEVICE_WASAPI: u32 = 1;
 pub const DEVICE_ASIO: u32 = 2;
+pub const DEVICE_COREAUDIO: u32 = 3;
 pub const LINK_FOLLOW: u32 = 0;
 #[allow(dead_code)]
 pub const LINK_INDEPENDENT: u32 = 1;
@@ -136,6 +137,8 @@ impl AudioGraph {
         };
         let master_kind = if cfg!(windows) {
             DEVICE_WASAPI
+        } else if cfg!(target_os = "macos") {
+            DEVICE_COREAUDIO
         } else {
             DEVICE_NONE
         };

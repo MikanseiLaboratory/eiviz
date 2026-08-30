@@ -17,11 +17,11 @@ macOS Intel zip (`macos-x64`): same, for x86_64 / amd64.
 
 Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
 
-The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C# WPF. The Mac host is SwiftUI with AppKit NSView present, matching the WPF layout.
+The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C# WPF. The Mac host is SwiftUI with AppKit NSView present, matching the WPF layout. Session files are canonical JSON owned by the mixer core, so a file saved on one OS loads as the same session on the other.
 
 Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
 Output: OMT (GPU or CPU encode), NDI® (CPU / UYVY).  
-Scenes, overlays, multiview. Audio buses over WASAPI / ASIO on Windows; Mac plays the Master mix through Core Audio.
+Scenes, overlays, multiview. Audio buses: WASAPI / ASIO on Windows, Core Audio on macOS.
 
 ## Build
 

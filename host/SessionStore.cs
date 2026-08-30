@@ -1,4 +1,3 @@
-using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -17,14 +16,14 @@ internal static class SessionStore
 
     public static void Save(Session session, string path)
     {
-        var dto = Document.From(session);
-        File.WriteAllText(path, JsonSerializer.Serialize(dto, Json));
         session.Settings.LastSessionPath = path;
+        var dto = Document.From(session);
+        MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
     public static Session Load(string path)
     {
-        var dto = JsonSerializer.Deserialize<Document>(File.ReadAllText(path), Json)
+        var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
             ?? throw new InvalidOperationException("Session file is empty.");
         var session = dto.ToSession();
         session.Settings.LastSessionPath = path;

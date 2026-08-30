@@ -34,7 +34,6 @@ final class MixerController: ObservableObject {
     @Published var editingScene: SceneEntry?
 
     let pumps = FramePump()
-    private let audioOut = MasterAudioOut()
     private var booted = false
     private var tbarLatching = false
     private var meterTimer: Timer?
@@ -54,7 +53,6 @@ final class MixerController: ObservableObject {
         fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         applySession()
-        audioOut.start()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -65,18 +63,18 @@ final class MixerController: ObservableObject {
     func shutdown() {
         meterTimer?.invalidate()
         meterTimer = nil
-        audioOut.stop()
         guard booted else { return }
         mixer_destroy()
         booted = false
     }
 
     func applySession() {
+        session.assignMonitors()
         for unit in session.units {
             fail(mixer_create_unit(unit.id, unit.width, unit.height), "Create Mixing Unit")
             fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-            fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, 0), "Audio link")
         }
+        pushAudio()
         for scene in session.scenes {
             pushScene(scene)
         }
@@ -92,11 +90,48 @@ final class MixerController: ObservableObject {
             addOutput(output)
         }
         selectedSceneId = session.scenes.first?.id
-        MixerFFI.withCString("Master") { name in
-            MixerFFI.withCString("") { device in
-                _ = mixer_audio_bus_upsert(1, name, 0, 0, device, 0, 1, 0)
+        selectedUnitId = session.selectedUnitId == 0 ? (session.units.first?.id ?? 1) : session.selectedUnitId
+    }
+
+    func pushAudio() {
+        var live: [UInt64] = []
+        let n = mixer_audio_bus_count()
+        if n > 0 {
+            for i in 0..<UInt32(n) {
+                var info = MixerFFI.zeroed() as EivizAudioBusInfo
+                if mixer_audio_bus_get(i, &info) != 0 { continue }
+                live.append(info.id)
             }
         }
+        let keep = Set(session.buses.map(\.id))
+        for id in live where !keep.contains(id) {
+            _ = mixer_audio_bus_remove(id)
+        }
+        for bus in session.buses {
+            MixerFFI.withCString(bus.name) { name in
+                MixerFFI.withCString(bus.deviceId) { device in
+                    _ = mixer_audio_bus_upsert(
+                        bus.id,
+                        name,
+                        bus.role.rawUInt,
+                        bus.deviceKind.rawUInt,
+                        device,
+                        bus.mapLeft,
+                        bus.mapRight,
+                        bus.exclusive ? 1 : 0
+                    )
+                }
+            }
+            _ = mixer_audio_set_bus_gain(bus.id, max(0, bus.gain), bus.mute ? 1 : 0)
+        }
+        for input in session.inputs {
+            _ = mixer_audio_set_input(input.id, input.busMask == 0 ? 1 : input.busMask, max(0, input.gain), input.mute ? 1 : 0)
+        }
+        for unit in session.units {
+            _ = mixer_audio_set_unit_link(unit.id, unit.audioBusId == 0 ? 1 : unit.audioBusId, unit.audioLink.rawUInt)
+        }
+        _ = mixer_audio_set_headphone_cue(selectedUnitId)
+        _ = mixer_audio_set_headphone_copy_master(session.headphoneCopyMaster ? 1 : 0)
     }
 
     func cut() {
@@ -249,7 +284,7 @@ final class MixerController: ObservableObject {
             session.units[index] = unit
         }
         fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-        fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, 0), "Audio link")
+        fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
         selectedUnitId = unit.id
         updateStatus()
     }
@@ -268,9 +303,9 @@ final class MixerController: ObservableObject {
             fail(
                 mixer_output_add(
                     output.id,
-                    output.transport.rawValue,
+                    output.transport.rawValueU32,
                     name,
-                    output.sourceKind.rawValue,
+                    output.sourceKind.rawValueU32,
                     output.sourceId,
                     output.unitId,
                     output.useGpu ? 1 : 0
@@ -285,9 +320,18 @@ final class MixerController: ObservableObject {
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = "eiviz.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        session.selectedUnitId = selectedUnitId
+        session.settings.lastSessionPath = url.path
         do {
-            let data = try JSONEncoder().encode(session)
-            try data.write(to: url)
+            let json = try SessionFile.encode(session)
+            MixerFFI.withCString(url.path) { path in
+                json.withUnsafeBytes { ptr in
+                    fail(
+                        mixer_session_save(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
+                        "Save session"
+                    )
+                }
+            }
         } catch {
             errorText = error.localizedDescription
         }
@@ -298,13 +342,24 @@ final class MixerController: ObservableObject {
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        let n = MixerFFI.withCString(url.path) { path in
+            buffer.withUnsafeMutableBufferPointer { ptr in
+                mixer_session_load(path, ptr.baseAddress, ptr.count)
+            }
+        }
+        guard n >= 0 else {
+            fail(n, "Load session")
+            return
+        }
         do {
-            let loaded = try JSONDecoder().decode(MixerSessionData.self, from: Data(contentsOf: url))
+            let loaded = try SessionFile.decode(Data(buffer.prefix(Int(n))))
             mixer_destroy()
             session = loaded
-            selectedUnitId = loaded.selectedUnitId
+            selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
             mix = 0
             fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
+            fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
             applySession()
         } catch {
             errorText = error.localizedDescription
@@ -376,14 +431,14 @@ final class MixerController: ObservableObject {
                             cstr,
                             input.useGpu ? 1 : 0,
                             max(1, min(8, input.frameBufferFrames)),
-                            input.omtQuality
+                            input.omtQuality.rawUInt
                         ),
                         "OMT connect"
                     )
                 }
                 _ = mixer_set_live_save(
                     input.id,
-                    input.bandwidthSave.rawValue,
+                    input.bandwidthSave.rawUInt,
                     input.keepFullOnMultiview ? EIVIZ_SAVE_FLAG_MULTIVIEW : 0
                 )
             }
@@ -395,7 +450,7 @@ final class MixerController: ObservableObject {
                             input.id,
                             cstr,
                             max(1, min(8, input.frameBufferFrames)),
-                            input.ndiBandwidth
+                            input.ndiBandwidth.rawUInt
                         ),
                         "NDI connect"
                     )
@@ -409,7 +464,7 @@ final class MixerController: ObservableObject {
         _ = mixer_audio_set_input(input.id, input.busMask, input.gain, input.mute ? 1 : 0)
     }
 
-    private func pushScene(_ scene: SceneEntry) {
+    func pushScene(_ scene: SceneEntry) {
         var layers = scene.layers.map { layer -> EivizOverlayDesc in
             var desc = MixerFFI.emptyOverlay()
             desc.source_id = layer.inputId
@@ -428,7 +483,7 @@ final class MixerController: ObservableObject {
         }
     }
 
-    private func pushOverlays() {
+    func pushOverlays() {
         var state = currentState(selectedUnit.id)
         fail(mixer_unit_set_state(selectedUnit.id, &state), "Overlays")
     }

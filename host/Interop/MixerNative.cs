@@ -227,6 +227,15 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_last_error")]
     internal static unsafe partial int LastError(byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_load", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionLoad(string path, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_save", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionSave(string path, byte* json, nuint length);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_canonicalize")]
+    internal static unsafe partial int SessionCanonicalize(byte* json, nuint length, byte* buffer, nuint capacity);
+
     internal static string LastErrorText()
     {
         var buffer = new byte[512];
@@ -236,6 +245,32 @@ internal static partial class MixerNative
             {
                 var n = LastError(ptr, (nuint)buffer.Length);
                 return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
+            }
+        }
+    }
+
+    internal static string SessionLoadText(string path)
+    {
+        var buffer = new byte[1 << 20];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = SessionLoad(path, ptr, (nuint)buffer.Length);
+                ThrowIfFailed(n < 0 ? n : 0, "Load session");
+                return Encoding.UTF8.GetString(buffer, 0, n);
+            }
+        }
+    }
+
+    internal static void SessionSaveText(string path, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionSave(path, ptr, (nuint)bytes.Length), "Save session");
             }
         }
     }

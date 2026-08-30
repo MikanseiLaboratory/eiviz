@@ -1,5 +1,7 @@
 #[cfg(windows)]
 mod asio;
+#[cfg(target_os = "macos")]
+mod coreaudio;
 #[cfg(windows)]
 mod device;
 mod graph;
@@ -17,7 +19,8 @@ use crate::upload::{AUDIO_RATE, UploadStore};
 
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS,
+    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
+    MASTER_BUS,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 
@@ -295,20 +298,36 @@ impl Drop for AudioEngine {
 
 fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
     #[cfg(windows)]
-    match key.kind {
-        DEVICE_WASAPI => {
-            if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
-                eprintln!("eiviz wasapi: {error}");
+    {
+        let kind = if key.kind == DEVICE_COREAUDIO {
+            DEVICE_WASAPI
+        } else {
+            key.kind
+        };
+        match kind {
+            DEVICE_WASAPI => {
+                if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
+                    eprintln!("eiviz wasapi: {error}");
+                }
             }
-        }
-        DEVICE_ASIO => {
-            if let Err(error) = asio::run(&key.id, &maps, &stop) {
-                eprintln!("eiviz asio: {error}");
+            DEVICE_ASIO => {
+                if let Err(error) = asio::run(&key.id, &maps, &stop) {
+                    eprintln!("eiviz asio: {error}");
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        if key.kind == DEVICE_ASIO || key.kind == DEVICE_NONE {
+            return;
+        }
+        if let Err(error) = coreaudio::run(&key.id, &maps, &stop) {
+            eprintln!("eiviz coreaudio: {error}");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (key, maps, stop);
     }
@@ -375,7 +394,15 @@ pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
     {
         device::enumerate(kind, dest)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        if kind == 0 || kind == DEVICE_COREAUDIO || kind == DEVICE_WASAPI {
+            coreaudio::enumerate(dest)
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (kind, dest);
         0
@@ -387,7 +414,12 @@ pub fn device_channels(kind: u32, device_id: &str) -> i32 {
     {
         device::channel_count(kind, device_id)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = kind;
+        coreaudio::channel_count(device_id)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (kind, device_id);
         0

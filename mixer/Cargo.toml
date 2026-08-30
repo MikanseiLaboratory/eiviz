@@ -15,6 +15,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "09cdcaf49586491cf709dc472cf84143fc152848", features = ["wgpu"] }
 pollster = "0.4"
 raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }

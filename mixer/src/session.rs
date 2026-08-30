@@ -1,0 +1,642 @@
+//! Canonical session JSON shared by every host.
+//! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 1).
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Document {
+    #[serde(default = "version_one")]
+    pub version: i32,
+    #[serde(default)]
+    pub settings: SessionSettings,
+    #[serde(default)]
+    pub inputs: Vec<InputDto>,
+    #[serde(default)]
+    pub scenes: Vec<SceneDto>,
+    #[serde(default)]
+    pub units: Vec<UnitDto>,
+    #[serde(default)]
+    pub outputs: Vec<OutputDto>,
+    #[serde(default)]
+    pub multiviews: Vec<MultiviewDto>,
+    #[serde(default)]
+    pub buses: Vec<BusDto>,
+    #[serde(default)]
+    pub next_input_id: u64,
+    #[serde(default)]
+    pub next_scene_id: u64,
+    #[serde(default)]
+    pub next_unit_id: u64,
+    #[serde(default)]
+    pub next_output_id: u64,
+    #[serde(default)]
+    pub next_multiview_id: u64,
+    #[serde(default)]
+    pub next_bus_id: u64,
+    #[serde(default)]
+    pub selected_unit_id: u64,
+    #[serde(default)]
+    pub headphone_copy_master: bool,
+}
+
+fn version_one() -> i32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSettings {
+    #[serde(default = "fps_num")]
+    pub master_fps_num: u32,
+    #[serde(default = "fps_den")]
+    pub master_fps_den: u32,
+    #[serde(default = "width_1080")]
+    pub default_width: u32,
+    #[serde(default = "height_1080")]
+    pub default_height: u32,
+    #[serde(default = "theme_charcoal")]
+    pub theme: String,
+    #[serde(default = "one")]
+    pub default_multiview_unit_id: u64,
+    #[serde(default = "three")]
+    pub frame_buffer_frames: u32,
+    #[serde(default = "three")]
+    pub default_present_interval: u32,
+    #[serde(default)]
+    pub internal_color_format: InternalColorFormat,
+    pub last_session_path: Option<String>,
+}
+
+impl Default for SessionSettings {
+    fn default() -> Self {
+        Self {
+            master_fps_num: fps_num(),
+            master_fps_den: fps_den(),
+            default_width: width_1080(),
+            default_height: height_1080(),
+            theme: theme_charcoal(),
+            default_multiview_unit_id: 1,
+            frame_buffer_frames: 3,
+            default_present_interval: 3,
+            internal_color_format: InternalColorFormat::Uyvy,
+            last_session_path: None,
+        }
+    }
+}
+
+fn fps_num() -> u32 {
+    60_000
+}
+fn fps_den() -> u32 {
+    1_001
+}
+fn width_1080() -> u32 {
+    1920
+}
+fn height_1080() -> u32 {
+    1080
+}
+fn theme_charcoal() -> String {
+    "Charcoal".into()
+}
+fn one() -> u64 {
+    1
+}
+fn three() -> u32 {
+    3
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InternalColorFormat {
+    #[default]
+    Uyvy,
+    Bgra,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InputKind {
+    Color,
+    Bars,
+    Black,
+    Still,
+    Video,
+    Omt,
+    Ndi,
+    Uvc,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BandwidthSave {
+    AlwaysLow,
+    NotOnProgram,
+    #[default]
+    NotOnPreviewOrProgram,
+    AlwaysFull,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OmtQuality {
+    #[default]
+    Default,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NdiBandwidth {
+    #[default]
+    Highest,
+    Lowest,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutputTransport {
+    #[default]
+    Omt,
+    Ndi,
+    DeckLink,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OutputSourceKind {
+    Scene,
+    MuPreview,
+    #[default]
+    MuProgram,
+    Multiview,
+    Input,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MvSlotKind {
+    #[default]
+    None,
+    Input,
+    Scene,
+    MuPreview,
+    MuProgram,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AudioBusRole {
+    #[default]
+    Master,
+    Headphone,
+    Aux,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AudioDeviceKind {
+    #[default]
+    None,
+    Wasapi,
+    Asio,
+    CoreAudio,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AudioLinkMode {
+    #[default]
+    Follow,
+    Independent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    pub kind: InputKind,
+    pub path_or_address: Option<String>,
+    #[serde(default)]
+    pub color_r: f32,
+    #[serde(default)]
+    pub color_g: f32,
+    #[serde(default)]
+    pub color_b: f32,
+    #[serde(default)]
+    pub scroll: bool,
+    #[serde(default = "one_u32")]
+    pub bus_mask: u32,
+    #[serde(default = "one_f32")]
+    pub gain: f32,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub use_gpu: bool,
+    #[serde(default = "one_u32")]
+    pub frame_buffer_frames: u32,
+    #[serde(default)]
+    pub bandwidth_save: BandwidthSave,
+    #[serde(default)]
+    pub keep_full_on_multiview: bool,
+    #[serde(default)]
+    pub omt_quality: OmtQuality,
+    #[serde(default)]
+    pub ndi_bandwidth: NdiBandwidth,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+fn one_f32() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneLayer {
+    pub input_id: u64,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default = "one_f32")]
+    pub width: f32,
+    #[serde(default = "one_f32")]
+    pub height: f32,
+    #[serde(default = "one_f32")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub z: i32,
+    #[serde(default = "true_bool")]
+    pub audio_follow: bool,
+}
+
+fn true_bool() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub layers: Vec<SceneLayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionPreset {
+    #[serde(default = "fade")]
+    pub kind: u32,
+    #[serde(default = "thirty")]
+    pub duration_frames: u32,
+    #[serde(default = "true_bool")]
+    pub swap: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+fn fade() -> u32 {
+    1
+}
+fn thirty() -> u32 {
+    30
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlaySlot {
+    #[serde(default)]
+    pub scene_gpu_id: u64,
+    #[serde(default = "overlay_x")]
+    pub x: f32,
+    #[serde(default = "overlay_y")]
+    pub y: f32,
+    #[serde(default = "overlay_w")]
+    pub width: f32,
+    #[serde(default = "overlay_h")]
+    pub height: f32,
+    #[serde(default = "one_f32")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub z: i32,
+    #[serde(default = "true_bool")]
+    pub enabled: bool,
+}
+
+fn overlay_x() -> f32 {
+    0.62
+}
+fn overlay_y() -> f32 {
+    0.08
+}
+fn overlay_w() -> f32 {
+    0.32
+}
+fn overlay_h() -> f32 {
+    0.32
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MvSlot {
+    #[serde(default)]
+    pub kind: MvSlotKind,
+    #[serde(default)]
+    pub source_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnitDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default = "width_1080")]
+    pub width: u32,
+    #[serde(default = "height_1080")]
+    pub height: u32,
+    #[serde(default = "fps_num")]
+    pub fps_num: u32,
+    #[serde(default = "fps_den")]
+    pub fps_den: u32,
+    #[serde(default)]
+    pub transitions: Vec<TransitionPreset>,
+    #[serde(default)]
+    pub overlays: Vec<OverlaySlot>,
+    #[serde(default)]
+    pub multiview_tiles: Vec<MvSlot>,
+    #[serde(default = "one")]
+    pub audio_bus_id: u64,
+    #[serde(default)]
+    pub audio_link: AudioLinkMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub transport: OutputTransport,
+    #[serde(default)]
+    pub source_kind: OutputSourceKind,
+    #[serde(default)]
+    pub source_id: u64,
+    #[serde(default = "one")]
+    pub unit_id: u64,
+    #[serde(default)]
+    pub use_gpu: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiviewDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub preview_unit_id: u64,
+    #[serde(default)]
+    pub program_unit_id: u64,
+    #[serde(default)]
+    pub present_interval: u32,
+    #[serde(default)]
+    pub tiles: Vec<MvSlot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub role: AudioBusRole,
+    #[serde(default)]
+    pub device_kind: AudioDeviceKind,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub map_left: i32,
+    #[serde(default = "one_i32")]
+    pub map_right: i32,
+    #[serde(default)]
+    pub exclusive: bool,
+    #[serde(default)]
+    pub bit: u32,
+    #[serde(default = "one_f32")]
+    pub gain: f32,
+    #[serde(default)]
+    pub mute: bool,
+}
+
+fn one_i32() -> i32 {
+    1
+}
+
+impl Document {
+    pub fn canonicalize(self) -> Self {
+        let mut doc = self;
+        doc.version = 1;
+        doc.settings.frame_buffer_frames = doc.settings.frame_buffer_frames.clamp(1, 8);
+        if doc.settings.frame_buffer_frames == 0 {
+            doc.settings.frame_buffer_frames = 3;
+        }
+        doc.settings.default_present_interval = doc.settings.default_present_interval.clamp(1, 8);
+        if doc.settings.master_fps_num == 0 {
+            doc.settings.master_fps_num = fps_num();
+        }
+        if doc.settings.master_fps_den == 0 {
+            doc.settings.master_fps_den = fps_den();
+        }
+        if doc.settings.default_width == 0 {
+            doc.settings.default_width = width_1080();
+        }
+        if doc.settings.default_height == 0 {
+            doc.settings.default_height = height_1080();
+        }
+        if doc.settings.theme.is_empty() {
+            doc.settings.theme = theme_charcoal();
+        }
+        for input in &mut doc.inputs {
+            if input.bus_mask == 0 {
+                input.bus_mask = 1;
+            }
+            if input.frame_buffer_frames == 0 {
+                input.frame_buffer_frames = 1;
+            }
+            input.frame_buffer_frames = input.frame_buffer_frames.clamp(1, 8);
+            if input.gain < 0.0 {
+                input.gain = 1.0;
+            }
+        }
+        for unit in &mut doc.units {
+            if unit.width == 0 {
+                unit.width = width_1080();
+            }
+            if unit.height == 0 {
+                unit.height = height_1080();
+            }
+            if unit.fps_num == 0 {
+                unit.fps_num = fps_num();
+            }
+            if unit.fps_den == 0 {
+                unit.fps_den = fps_den();
+            }
+            if unit.audio_bus_id == 0 {
+                unit.audio_bus_id = 1;
+            }
+            if unit.transitions.is_empty() {
+                unit.transitions = vec![
+                    TransitionPreset {
+                        kind: 0,
+                        duration_frames: 1,
+                        swap: true,
+                        label: Some("Cut".into()),
+                    },
+                    TransitionPreset {
+                        kind: 1,
+                        duration_frames: 30,
+                        swap: true,
+                        label: Some("Fade".into()),
+                    },
+                ];
+            } else {
+                for preset in &mut unit.transitions {
+                    preset.label = Some(match preset.kind {
+                        0 => "Cut".into(),
+                        2 => "Dip".into(),
+                        _ => "Fade".into(),
+                    });
+                    if preset.duration_frames == 0 {
+                        preset.duration_frames = 1;
+                    }
+                }
+            }
+            while unit.multiview_tiles.len() < 8 {
+                unit.multiview_tiles.push(MvSlot {
+                    kind: MvSlotKind::None,
+                    source_id: 0,
+                });
+            }
+            unit.multiview_tiles.truncate(8);
+        }
+        for layout in &mut doc.multiviews {
+            if layout.present_interval > 0 {
+                layout.present_interval = layout.present_interval.clamp(1, 8);
+            }
+            while layout.tiles.len() < 8 {
+                layout.tiles.push(MvSlot {
+                    kind: MvSlotKind::None,
+                    source_id: 0,
+                });
+            }
+            layout.tiles.truncate(8);
+            for tile in &mut layout.tiles {
+                if matches!(tile.kind, MvSlotKind::MuPreview | MvSlotKind::MuProgram) {
+                    tile.kind = MvSlotKind::None;
+                    tile.source_id = 0;
+                }
+            }
+        }
+        for bus in &mut doc.buses {
+            if bus.gain < 0.0 {
+                bus.gain = 1.0;
+            }
+        }
+        if doc.next_input_id == 0 {
+            doc.next_input_id = doc.inputs.iter().map(|item| item.id).max().unwrap_or(9) + 1;
+        }
+        if doc.next_scene_id == 0 {
+            doc.next_scene_id = doc.scenes.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        }
+        if doc.next_unit_id == 0 {
+            doc.next_unit_id = doc.units.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        }
+        if doc.next_output_id == 0 {
+            doc.next_output_id = doc.outputs.iter().map(|item| item.id).max().unwrap_or(99) + 1;
+        }
+        if doc.next_multiview_id == 0 {
+            doc.next_multiview_id = doc.multiviews.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+        }
+        if doc.next_bus_id == 0 {
+            doc.next_bus_id = doc.buses.iter().map(|item| item.id).max().unwrap_or(2) + 1;
+        }
+        if doc.selected_unit_id == 0 {
+            doc.selected_unit_id = doc.units.first().map(|unit| unit.id).unwrap_or(1);
+        }
+        doc
+    }
+}
+
+pub fn parse(bytes: &[u8]) -> Result<Document, String> {
+    let text = std::str::from_utf8(bytes).map_err(|error| error.to_string())?;
+    let doc: Document = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    Ok(doc.canonicalize())
+}
+
+pub fn to_vec(doc: &Document) -> Result<Vec<u8>, String> {
+    let text = serde_json::to_string_pretty(doc).map_err(|error| error.to_string())?;
+    Ok(text.into_bytes())
+}
+
+pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    to_vec(&parse(bytes)?)
+}
+
+pub fn load_file(path: &str) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    canonicalize_bytes(&bytes)
+}
+
+pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let canonical = canonicalize_bytes(bytes)?;
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+    }
+    std::fs::write(path, canonical).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_shaped_json_is_stable() {
+        let src = r#"{
+  "version": 1,
+  "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+  "inputs": [{ "id": 2, "name": "SMPTE Bars", "kind": "Bars" }],
+  "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+  "units": [{ "id": 1, "name": "Mixing Unit 1", "audioBusId": 1, "audioLink": "Follow" }],
+  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true }],
+  "buses": [
+    { "id": 1, "name": "Master", "role": "Master", "deviceKind": "Wasapi", "mapRight": 1 },
+    { "id": 2, "name": "Headphone", "role": "Headphone", "deviceKind": "None", "mapRight": 1, "bit": 1 }
+  ],
+  "nextInputId": 10,
+  "nextSceneId": 2,
+  "nextUnitId": 2,
+  "nextOutputId": 101,
+  "selectedUnitId": 1
+}"#;
+        let a = canonicalize_bytes(src.as_bytes()).expect("parse");
+        let b = canonicalize_bytes(&a).expect("again");
+        assert_eq!(a, b);
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.inputs[0].kind, InputKind::Bars);
+        assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
+        assert_eq!(doc.units[0].transitions.len(), 2);
+        assert_eq!(doc.units[0].multiview_tiles.len(), 8);
+    }
+
+    #[test]
+    fn core_audio_enum_roundtrips() {
+        let src = r#"{ "version": 1, "buses": [{ "id": 1, "name": "Master", "role": "Master", "deviceKind": "CoreAudio" }] }"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::CoreAudio);
+        let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
+        assert!(text.contains("\"CoreAudio\""));
+    }
+}

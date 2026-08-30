@@ -20,6 +20,7 @@ mod pool;
 mod present;
 mod readback;
 mod save;
+mod session;
 mod upload;
 
 pub use abi::{
@@ -329,6 +330,28 @@ fn with_mixer<T>(f: impl FnOnce(&Mixer) -> T) -> Result<T, i32> {
 
 fn set_error(shared: &Mutex<Shared>, message: impl Into<String>) {
     shared.lock().expect("shared").last_error = message.into();
+}
+
+fn session_error_slot() -> &'static Mutex<String> {
+    static SLOT: OnceLock<Mutex<String>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(String::new()))
+}
+
+fn report_session_error(message: impl Into<String>) {
+    let message = message.into();
+    *session_error_slot().lock().expect("session error") = message.clone();
+    let _ = with_mixer(|mixer| set_error(&mixer.shared, message));
+}
+
+fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
+    if src.len() > cap {
+        report_session_error(format!("session buffer too small (need {} bytes)", src.len()));
+        return -1;
+    }
+    if !src.is_empty() {
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), out, src.len()) };
+    }
+    src.len() as i32
 }
 
 #[cfg(target_os = "macos")]
@@ -1533,6 +1556,59 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
     let n = error.len().min(cap);
     unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
     n as i32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
+    if path.is_null() || out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    match session::load_file(&read_cstr(path)) {
+        Ok(bytes) => copy_bytes(&bytes, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_save(
+    path: *const c_char,
+    json: *const u8,
+    len: usize,
+) -> i32 {
+    if path.is_null() || json.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    match session::save_file(&read_cstr(path), bytes) {
+        Ok(()) => OK,
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_canonicalize(
+    json: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if json.is_null() || out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    match session::canonicalize_bytes(bytes) {
+        Ok(canonical) => copy_bytes(&canonical, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

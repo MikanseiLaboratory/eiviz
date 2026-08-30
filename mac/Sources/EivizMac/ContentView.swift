@@ -27,11 +27,7 @@ struct ContentView: View {
         .sheet(isPresented: $mixer.showMixingUnit) {
             MixingUnitView(unit: mixer.editingUnit ?? mixer.selectedUnit)
         }
-        .sheet(isPresented: $mixer.showSceneEditor) {
-            if let scene = mixer.editingScene {
-                SceneEditorView(scene: scene)
-            }
-        }
+        .sheet(isPresented: $mixer.showSceneEditor) { SceneEditorView() }
         .sheet(isPresented: $mixer.showOverlay) { OverlayView() }
         .sheet(isPresented: $mixer.showMultiview) { MultiviewView() }
         .sheet(isPresented: $mixer.showResources) { ResourcesView() }
