@@ -357,12 +357,12 @@ fn resize_presenter_for(
     };
     #[cfg(target_os = "macos")]
     {
-        let device = device as *const GpuDevice;
-        let presenter = presenter as *mut Presenter;
+        let device = crate::main_thread::SendPtr::from_const(device as *const GpuDevice);
+        let presenter = crate::main_thread::SendPtr::from_mut(presenter as *mut Presenter);
         crate::main_thread::run_on_main(move || {
             // SAFETY: the render thread waits in run_on_main, or this is already
             // the AppKit main thread.
-            unsafe { resize_presenter(&*device, Some(&mut *presenter), width, height) }
+            unsafe { resize_presenter(device.as_ref(), Some(presenter.as_mut()), width, height) }
         });
     }
     #[cfg(not(target_os = "macos"))]
