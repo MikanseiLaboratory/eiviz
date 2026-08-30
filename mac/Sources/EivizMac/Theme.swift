@@ -46,6 +46,8 @@ func formatMixerFloat(_ value: Float) -> String {
     return formatter.string(from: NSNumber(value: value)) ?? "0"
 }
 
+private let mixerFieldLineHeight: CGFloat = 22
+
 @MainActor
 func mixerTextField(
     _ text: Binding<String>,
@@ -53,25 +55,29 @@ func mixerTextField(
     onSubmit: (() -> Void)? = nil
 ) -> some View {
     MixerTextField(placeholder: placeholder, text: text, onSubmit: onSubmit)
-        .frame(minHeight: 26)
+        .frame(height: mixerFieldLineHeight)
+        .fixedSize(horizontal: false, vertical: true)
 }
 
 @MainActor
 func mixerUintField(_ value: Binding<UInt32>, minimum: UInt32 = 1) -> some View {
     MixerUintField(value: value, minimum: minimum)
-        .frame(minHeight: 26)
+        .frame(height: mixerFieldLineHeight)
+        .fixedSize(horizontal: false, vertical: true)
 }
 
 @MainActor
 func mixerInt32Field(_ value: Binding<Int32>) -> some View {
     MixerInt32Field(value: value)
-        .frame(minHeight: 26)
+        .frame(height: mixerFieldLineHeight)
+        .fixedSize(horizontal: false, vertical: true)
 }
 
 @MainActor
 func mixerFloatField(_ value: Binding<Float>, onSubmit: (() -> Void)? = nil) -> some View {
     MixerFloatField(value: value, onSubmit: onSubmit)
-        .frame(minHeight: 26)
+        .frame(height: mixerFieldLineHeight)
+        .fixedSize(horizontal: false, vertical: true)
 }
 
 final class MixerFieldView: NSView {
@@ -94,12 +100,18 @@ final class MixerFieldView: NSView {
         field.cell?.isScrollable = true
         field.isAutomaticTextCompletionEnabled = false
         field.translatesAutoresizingMaskIntoConstraints = false
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
         addSubview(field)
         NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             field.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentCompressionResistancePriority(.required, for: .vertical)
     }
 
     required init?(coder: NSCoder) {
@@ -107,7 +119,7 @@ final class MixerFieldView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 26)
+        NSSize(width: NSView.noIntrinsicMetric, height: mixerFieldLineHeight)
     }
 }
 
@@ -135,9 +147,11 @@ struct MixerTextField: NSViewRepresentable {
         view.field.placeholderString = placeholder
         view.field.stringValue = text
         view.field.delegate = context.coordinator
-        view.field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        view.field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MixerFieldView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 80, height: mixerFieldLineHeight)
     }
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
@@ -190,9 +204,11 @@ struct MixerUintField: NSViewRepresentable {
         let view = MixerFieldView(frame: .zero)
         view.field.stringValue = String(value)
         view.field.delegate = context.coordinator
-        view.field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        view.field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MixerFieldView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 80, height: mixerFieldLineHeight)
     }
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
@@ -239,9 +255,11 @@ struct MixerInt32Field: NSViewRepresentable {
         let view = MixerFieldView(frame: .zero)
         view.field.stringValue = String(value)
         view.field.delegate = context.coordinator
-        view.field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        view.field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MixerFieldView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 80, height: mixerFieldLineHeight)
     }
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
@@ -291,9 +309,11 @@ struct MixerFloatField: NSViewRepresentable {
         let view = MixerFieldView(frame: .zero)
         view.field.stringValue = formatMixerFloat(value)
         view.field.delegate = context.coordinator
-        view.field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        view.field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MixerFieldView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 80, height: mixerFieldLineHeight)
     }
 
     func updateNSView(_ view: MixerFieldView, context: Context) {

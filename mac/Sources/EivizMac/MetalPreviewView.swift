@@ -55,6 +55,10 @@ final class MetalSurfaceView: NSView {
         attachIfNeeded()
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
     deinit {
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         if detachIsMonitor {
@@ -138,13 +142,20 @@ enum SurfaceRole: Equatable {
     }
 }
 
+final class PreviewHostView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 struct MetalPreviewRepresentable: NSViewRepresentable {
     let role: SurfaceRole
 
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> PreviewHostView {
         // Host must not be layer-backed: SwiftUI paints layer-backed representable
         // views and covers the child CAMetalLayer (scene tiles stay black).
-        let host = NSView(frame: .zero)
+        // hitTest is nil so scene-tile taps reach SwiftUI previewScene.
+        let host = PreviewHostView(frame: .zero)
         host.wantsLayer = false
         let surface = MetalSurfaceView(frame: .zero)
         surface.autoresizingMask = [.width, .height]
@@ -153,7 +164,7 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         return host
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: PreviewHostView, context: Context) {
         nsView.wantsLayer = false
         guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
         surface.frame = nsView.bounds

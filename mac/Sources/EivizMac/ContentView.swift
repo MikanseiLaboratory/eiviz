@@ -256,6 +256,7 @@ struct ContentView: View {
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
+        .contentShape(Rectangle())
         .overlay(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
         .onTapGesture { mixer.previewScene(scene) }
         .contextMenu {
