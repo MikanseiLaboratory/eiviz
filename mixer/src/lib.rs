@@ -11,7 +11,7 @@ mod device;
 mod dxgi;
 #[cfg(windows)]
 mod media;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 #[cfg(target_os = "macos")]
 mod main_thread;
@@ -49,7 +49,7 @@ use device::GpuDevice;
 use dxgi::GpuVideoContext;
 #[cfg(windows)]
 use media::VideoPump;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use ndi::{NdiReceiver, NdiSender};
 use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device};
 use present::Presenters;
@@ -131,7 +131,7 @@ struct Shared {
 
 enum LiveReceiver {
     Omt(OmtReceiver),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiReceiver),
 }
 
@@ -140,7 +140,7 @@ impl LiveReceiver {
         match self {
             Self::Omt(receiver) => receiver.apply_save(full, on_program, on_preview),
             // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {}
         }
     }
@@ -148,7 +148,7 @@ impl LiveReceiver {
 
 enum OutputHandle {
     Omt(ProgramSender),
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiSender),
 }
 
@@ -159,7 +159,7 @@ impl OutputHandle {
                 sender.pump()?;
                 Ok(sender.video_subscribed())
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.pump(),
         }
     }
@@ -178,7 +178,7 @@ impl OutputHandle {
             Self::Omt(sender) => {
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => {
                 sender.send_video_uyvy(width, height, stride, pts, &data, fps_n, fps_d)
             }
@@ -199,7 +199,7 @@ impl OutputHandle {
             Self::Omt(sender) => {
                 sender.send_video_texture(omt_gpu, texture, width, height, pts, fps_n, fps_d)
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
         }
     }
@@ -207,7 +207,7 @@ impl OutputHandle {
     fn send_audio(&mut self, packet: &AudioPacket) -> Result<(), String> {
         match self {
             Self::Omt(sender) => sender.send_audio(packet),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.send_audio(packet),
         }
     }
@@ -442,7 +442,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         #[cfg(target_os = "macos")]
         surface_gpu,
     });
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let _ = thread::Builder::new()
         .name("eiviz-ndi-find".into())
         .spawn(ndi::warm_finder);
@@ -1255,7 +1255,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
         .unwrap_or_default()
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, address, depth, low_bandwidth);
         return with_mixer(|mixer| {
@@ -1264,14 +1264,16 @@ pub unsafe extern "C" fn mixer_ndi_connect(
         })
         .unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
+            #[cfg(windows)]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
             drop(shared);
+            #[cfg(windows)]
             drop(previous);
             uploads
         };
@@ -1361,12 +1363,12 @@ pub unsafe extern "C" fn mixer_output_add(
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
     let handle = match transport {
         OUT_NDI => {
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "macos")))]
             {
                 let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
                 return ERR_IO;
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 let started = panic::catch_unwind(AssertUnwindSafe(|| NdiSender::start(&name)));
                 match started {
@@ -1462,13 +1464,13 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (out, cap);
         let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
         return 0;
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     match ndi::discover_sources() {
         Ok(addresses) => {
             let text = addresses.join("\n");

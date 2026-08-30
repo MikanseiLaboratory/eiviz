@@ -17,11 +17,11 @@ macOS Intel zip (`macos-x64`): same, for x86_64 / amd64.
 
 Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
 
-The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C# WPF. The Mac host is SwiftUI with AppKit NSView present. Proof of concept.
+The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C# WPF. The Mac host is SwiftUI with AppKit NSView present, matching the WPF layout.
 
 Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
 Output: OMT (GPU or CPU encode), NDI® (CPU / UYVY).  
-Scenes, overlays, multiview. Audio buses over WASAPI / ASIO.
+Scenes, overlays, multiview. Audio buses over WASAPI / ASIO on Windows; Mac plays the Master mix through Core Audio.
 
 ## Build
 
@@ -35,7 +35,7 @@ cargo test --manifest-path mixer\Cargo.toml
 
 `dotnet build` compiles the mixer DLL first.
 
-macOS, Rust 1.97, and Swift 6:
+macOS, Rust 1.97, Swift 6, and the [NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/) (set `NDI_SDK_DIR` if it is not in `/Library/NDI SDK for Apple`):
 
 ```bash
 ./mac/build.sh

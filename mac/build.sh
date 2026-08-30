@@ -32,6 +32,9 @@ cd "$ROOT/mac"
 swift build "${SWIFT_ARGS[@]}"
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"
+if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" ]; then
+  cp -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" "$BIN/"
+fi
 chmod +x "$ROOT/mac/relocate-dylib.sh"
 "$ROOT/mac/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
 echo "eiviz-mac -> $BIN/eiviz-mac"

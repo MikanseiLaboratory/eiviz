@@ -20,6 +20,7 @@ env:
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
+  NDI_SDK_URL_MACOS: https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg
   LLVM_VERSION: "20.1.8"
 
 jobs:
@@ -65,6 +66,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
 
       - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@stable

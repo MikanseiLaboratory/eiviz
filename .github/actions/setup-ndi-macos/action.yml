@@ -1,0 +1,46 @@
+name: Setup NDI SDK on macOS
+description: Install NDI SDK 6 so grafton-ndi can build on macOS
+
+runs:
+  using: composite
+  steps:
+    - name: Install NDI SDK
+      shell: bash
+      env:
+        NDI_SDK_URL_MACOS: ${{ env.NDI_SDK_URL_MACOS }}
+      run: |
+        set -euo pipefail
+        NDI_SDK_DIR="${RUNNER_TEMP}/ndi-sdk"
+        mkdir -p "$NDI_SDK_DIR"
+        if [ -f "$NDI_SDK_DIR/include/Processing.NDI.Lib.h" ]; then
+          echo "NDI SDK already present at $NDI_SDK_DIR"
+        else
+          URL="${NDI_SDK_URL_MACOS:-https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg}"
+          PKG="${RUNNER_TEMP}/NDI_SDK_Installer.pkg"
+          echo "Downloading NDI SDK from $URL"
+          curl -L --retry 4 --retry-delay 8 -o "$PKG" "$URL"
+          sudo installer -pkg "$PKG" -target / -allowUntrusted
+          rm -f "$PKG"
+          for location in \
+            "/Library/NDI SDK for Apple" \
+            "/Library/NDI SDK for macOS" \
+            "/Library/NDI 6 SDK" \
+            "/Library/NDI SDK"
+          do
+            if [ -f "$location/include/Processing.NDI.Lib.h" ]; then
+              cp -R "$location"/. "$NDI_SDK_DIR/"
+              break
+            fi
+          done
+        fi
+        if [ ! -f "$NDI_SDK_DIR/include/Processing.NDI.Lib.h" ]; then
+          echo "NDI SDK header not found after install" >&2
+          ls -la /Library | grep -i ndi || true
+          exit 1
+        fi
+        echo "NDI_SDK_DIR=$NDI_SDK_DIR" >> "$GITHUB_ENV"
+        if [ -d "$NDI_SDK_DIR/lib/macOS" ]; then
+          echo "DYLD_LIBRARY_PATH=$NDI_SDK_DIR/lib/macOS${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        elif [ -d "$NDI_SDK_DIR/lib" ]; then
+          echo "DYLD_LIBRARY_PATH=$NDI_SDK_DIR/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        fi

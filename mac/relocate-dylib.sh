@@ -1,23 +1,41 @@
 #!/usr/bin/env bash
-# Point eiviz-mac at a sibling libeiviz_mixer.dylib via @rpath.
+# Point eiviz-mac at sibling dylibs via @rpath.
 # Cargo's default LC_ID_DYLIB is an absolute CI path, which dyld cannot load
 # on another machine.
 set -euo pipefail
 BIN="${1:?binary}"
 DYLIB="${2:?dylib}"
+DIR="$(cd "$(dirname "$DYLIB")" && pwd)"
 
-install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"
+rewrite_id() {
+  local file="$1"
+  local id="$2"
+  install_name_tool -id "$id" "$file"
+}
 
-while IFS= read -r old; do
-  [ -z "$old" ] && continue
-  if [ "$old" != "@rpath/libeiviz_mixer.dylib" ]; then
-    install_name_tool -change "$old" "@rpath/libeiviz_mixer.dylib" "$BIN"
-  fi
-done <<EOF
-$(otool -L "$BIN" | awk '/libeiviz_mixer\.dylib/ { print $1 }')
+rewrite_dep() {
+  local file="$1"
+  local pattern="$2"
+  local dest="$3"
+  while IFS= read -r old; do
+    [ -z "$old" ] && continue
+    if [ "$old" != "$dest" ]; then
+      install_name_tool -change "$old" "$dest" "$file"
+    fi
+  done <<EOF
+$(otool -L "$file" | awk -v pat="$pattern" '$1 ~ pat { print $1 }')
 EOF
+}
 
+rewrite_id "$DYLIB" "@rpath/libeiviz_mixer.dylib"
+rewrite_dep "$BIN" "libeiviz_mixer\\.dylib" "@rpath/libeiviz_mixer.dylib"
 install_name_tool -add_rpath "@executable_path" "$BIN" 2>/dev/null || true
+
+if [ -f "$DIR/libndi.dylib" ]; then
+  rewrite_id "$DIR/libndi.dylib" "@rpath/libndi.dylib"
+  rewrite_dep "$DYLIB" "libndi" "@rpath/libndi.dylib"
+  install_name_tool -add_rpath "@executable_path" "$DYLIB" 2>/dev/null || true
+fi
 
 refs="$(otool -L "$BIN" | awk '/libeiviz_mixer\.dylib/ { print $1 }')"
 if [ -z "$refs" ]; then

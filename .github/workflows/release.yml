@@ -28,6 +28,7 @@ env:
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
+  NDI_SDK_URL_MACOS: https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg
   LLVM_VERSION: "20.1.8"
 
 jobs:
@@ -153,6 +154,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
+
       - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -181,9 +185,15 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          if [ -f "$BIN/libndi.dylib" ]; then
+            cp "$BIN/libndi.dylib" "$STAGING/"
+          fi
           chmod +x mac/relocate-dylib.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          if [ -f "$STAGING/libndi.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
+          fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Apple Silicon (arm64) Metal preview host.
@@ -221,6 +231,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
+
       - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -250,9 +263,15 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          if [ -f "$BIN/libndi.dylib" ]; then
+            cp "$BIN/libndi.dylib" "$STAGING/"
+          fi
           chmod +x mac/relocate-dylib.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          if [ -f "$STAGING/libndi.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
+          fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Intel (x86_64 / amd64) Metal preview host.

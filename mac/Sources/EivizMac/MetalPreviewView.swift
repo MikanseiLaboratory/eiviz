@@ -3,11 +3,17 @@ import EivizMixer
 import SwiftUI
 
 final class MetalSurfaceView: NSView {
-    var unitId: UInt64 = MixerSession.unitId
-    var kind: UInt32 = EIVIZ_OUTPUT_PROGRAM
+    var role: SurfaceRole = .unit(unitId: 1, kind: EIVIZ_OUTPUT_PROGRAM) {
+        didSet { attachIfNeeded() }
+    }
     private var attached = false
     private var attachedWidth: UInt32 = 0
     private var attachedHeight: UInt32 = 0
+    private var attachedKey: String = ""
+    private var detachUnitId: UInt64 = 1
+    private var detachKind: UInt32 = 0
+    private var detachMonitorId: UInt64 = 0
+    private var detachIsMonitor = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -37,49 +43,60 @@ final class MetalSurfaceView: NSView {
     }
 
     deinit {
-        detach()
+        let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
+        if detachIsMonitor {
+            _ = mixer_detach_monitor(detachMonitorId)
+        } else {
+            _ = mixer_unit_detach_native(detachUnitId, detachKind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
+        }
     }
 
     func attachIfNeeded() {
         guard window != nil else { return }
         let (width, height) = pixelSize()
-        let handle = nativeHandle()
-        if !attached {
-            let code = mixer_unit_attach_native(
-                unitId,
-                kind,
-                EIVIZ_NATIVE_APPKIT_NSVIEW,
-                handle,
-                width,
-                height
-            )
+        let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
+        let key = role.key
+        if !attached || attachedKey != key {
+            if attached {
+                switch role {
+                case .unit(let unitId, let kind):
+                    _ = mixer_unit_detach_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
+                case .monitor(let monitorId, _):
+                    _ = mixer_detach_monitor(monitorId)
+                }
+            }
+            let code: Int32
+            switch role {
+            case .unit(let unitId, let kind):
+                code = mixer_unit_attach_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
+            case .monitor(let monitorId, let sourceId):
+                code = mixer_attach_monitor_native(monitorId, sourceId, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
+            }
             attached = code == EIVIZ_OK
             attachedWidth = width
             attachedHeight = height
+            attachedKey = key
+            switch role {
+            case .unit(let unitId, let kind):
+                detachIsMonitor = false
+                detachUnitId = unitId
+                detachKind = kind
+            case .monitor(let monitorId, _):
+                detachIsMonitor = true
+                detachMonitorId = monitorId
+            }
             return
         }
         if width != attachedWidth || height != attachedHeight {
-            _ = mixer_unit_resize_native(
-                unitId,
-                kind,
-                EIVIZ_NATIVE_APPKIT_NSVIEW,
-                handle,
-                width,
-                height
-            )
+            switch role {
+            case .unit(let unitId, let kind):
+                _ = mixer_unit_resize_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
+            case .monitor(let monitorId, _):
+                _ = mixer_resize_monitor(monitorId, width, height)
+            }
             attachedWidth = width
             attachedHeight = height
         }
-    }
-
-    private func detach() {
-        guard attached else { return }
-        _ = mixer_unit_detach_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, nativeHandle())
-        attached = false
-    }
-
-    private func nativeHandle() -> Int {
-        Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
     }
 
     private func pixelSize() -> (UInt32, UInt32) {
@@ -90,17 +107,29 @@ final class MetalSurfaceView: NSView {
     }
 }
 
+enum SurfaceRole: Equatable {
+    case unit(unitId: UInt64, kind: UInt32)
+    case monitor(monitorId: UInt64, sourceId: UInt64)
+
+    var key: String {
+        switch self {
+        case .unit(let unitId, let kind): return "u-\(unitId)-\(kind)"
+        case .monitor(let monitorId, let sourceId): return "m-\(monitorId)-\(sourceId)"
+        }
+    }
+}
+
 struct MetalPreviewRepresentable: NSViewRepresentable {
-    let kind: UInt32
+    let role: SurfaceRole
 
     func makeNSView(context: Context) -> MetalSurfaceView {
         let view = MetalSurfaceView(frame: .zero)
-        view.kind = kind
+        view.role = role
         return view
     }
 
     func updateNSView(_ nsView: MetalSurfaceView, context: Context) {
-        nsView.kind = kind
+        nsView.role = role
         nsView.attachIfNeeded()
     }
 }
