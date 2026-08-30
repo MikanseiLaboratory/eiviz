@@ -629,7 +629,8 @@ public partial class MainWindow : Window
             && dialog.Kind is InputKind.Omt or InputKind.Ndi
             && input.PathOrAddress == dialog.ResultPath
             && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
-            && input.FrameBufferFrames == dialog.ResultFrameBufferFrames;
+            && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
+            && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth);
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             Commands.TryEnqueue(new DropSourceCommand(input.Id));
@@ -652,6 +653,7 @@ public partial class MainWindow : Window
         input.KeepFullOnMultiview = dialog.Kind == InputKind.Omt
             && dialog.ResultKeepFullOnMultiview;
         input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
+        input.NdiBandwidth = dialog.Kind == InputKind.Ndi ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
         if (keepLive)
         {
             if (dialog.Kind == InputKind.Omt)
@@ -696,7 +698,8 @@ public partial class MainWindow : Window
                 Commands.TryEnqueue(new ConnectNdiCommand(
                     input.Id,
                     dialog.ResultPath!,
-                    dialog.ResultFrameBufferFrames));
+                    dialog.ResultFrameBufferFrames,
+                    input.NdiBandwidth));
                 break;
             case InputKind.Uvc:
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!));

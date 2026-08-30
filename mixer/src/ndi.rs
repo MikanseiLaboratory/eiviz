@@ -50,16 +50,17 @@ impl NdiReceiver {
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
         frame_buffer_frames: u32,
+        low_bandwidth: u32,
     ) -> Result<Self, String> {
         let depth = frame_buffer_frames.clamp(1, 8);
         let ndi = runtime()?;
         let source = resolve_source(&address)?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
-        // NDI public SDK sets bandwidth at create time only. Dynamic Highest/Lowest
+        // Bandwidth is chosen at create time. Dynamic Highest/Lowest switching
         // needs Advanced SDK 6.1 `NDIlib_recv_set_bandwidth` (Vendor ID). Implement
         // that path when Advanced SDK is available.
-        let receiver = open_receiver(ndi, &source, source_id)?;
+        let receiver = open_receiver(ndi, &source, source_id, low_bandwidth != 0)?;
         let join = thread::Builder::new()
             .name(format!("eiviz-ndi-{source_id}"))
             .spawn(move || {
@@ -189,10 +190,19 @@ impl NdiSender {
     }
 }
 
-fn open_receiver(ndi: &NDI, source: &Source, source_id: u64) -> Result<Receiver, String> {
+fn open_receiver(
+    ndi: &NDI,
+    source: &Source,
+    source_id: u64,
+    low_bandwidth: bool,
+) -> Result<Receiver, String> {
     let options = ReceiverOptions::builder(source.clone())
         .color(ReceiverColorFormat::BGRX_BGRA)
-        .bandwidth(ReceiverBandwidth::Highest)
+        .bandwidth(if low_bandwidth {
+            ReceiverBandwidth::Lowest
+        } else {
+            ReceiverBandwidth::Highest
+        })
         .allow_video_fields(false)
         .name(format!("eiviz-ndi-{source_id}"))
         .build();

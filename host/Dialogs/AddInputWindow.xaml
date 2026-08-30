@@ -117,9 +117,14 @@
                         <ComboBoxItem Content="6" Tag="6"/>
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
+                    <TextBlock Text="Bandwidth" Margin="0,4,0,4"/>
+                    <ComboBox x:Name="NdiBandwidthBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Highest" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Lowest" Tag="1"/>
+                    </ComboBox>
                     <TextBlock x:Name="NdiStatus" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="#C88"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source."/>
+                               Text="NDI is received on the CPU and uploaded for compose. Frame buffer (1–8) absorbs jitter on this source. Bandwidth is set when connecting. Lowest is the public SDK preview stream."/>
                 </StackPanel>
                 <StackPanel x:Name="UvcPanel" Visibility="Collapsed">
                     <TextBlock Text="Select a UVC / Media Foundation capture device." Margin="0,0,0,8"/>

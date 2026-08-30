@@ -126,7 +126,8 @@ public partial class App : Application
                         Commands.TryEnqueue(new ConnectNdiCommand(
                             input.Id,
                             input.PathOrAddress,
-                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)));
+                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                            input.NdiBandwidth));
                         break;
                     case InputKind.Uvc when !string.IsNullOrWhiteSpace(input.PathOrAddress):
                         Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));

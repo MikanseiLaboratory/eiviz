@@ -180,7 +180,7 @@ internal static partial class MixerNative
     internal static partial int SetOmtQuality(ulong id, uint quality);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_ndi_connect", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int ConnectNdi(ulong id, string address, uint frameBufferFrames);
+    internal static partial int ConnectNdi(ulong id, string address, uint frameBufferFrames, uint lowBandwidth);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_live_save")]
     internal static partial int SetLiveSave(ulong id, uint mode, uint flags);

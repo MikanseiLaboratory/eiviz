@@ -17,7 +17,7 @@ internal sealed record PushUnitStateCommand(ulong UnitId, UnitState State) : Mix
 internal sealed record DefineSceneCommand(SceneEntry Scene, uint Width, uint Height) : MixerCommand;
 internal sealed record DestroySceneCommand(ulong GpuId) : MixerCommand;
 internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool UseGpu, uint FrameBufferFrames, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality Quality) : MixerCommand;
-internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames) : MixerCommand;
+internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames, NdiBandwidth Bandwidth) : MixerCommand;
 internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality? OmtQuality = null) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
 internal sealed record StartVideoCommand(ulong SourceId, string Path) : MixerCommand;
@@ -343,7 +343,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                             MixerNative.ConnectNdi(
                                 connect.SourceId,
                                 connect.Address,
-                                Math.Clamp(connect.FrameBufferFrames, 1u, 8u)),
+                                Math.Clamp(connect.FrameBufferFrames, 1u, 8u),
+                                connect.Bandwidth == NdiBandwidth.Lowest ? 1u : 0u),
                             "NDI connect");
                         break;
                     case LiveSaveCommand save:

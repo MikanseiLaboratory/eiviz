@@ -1050,6 +1050,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     id: u64,
     address: *const c_char,
     frame_buffer_frames: u32,
+    low_bandwidth: u32,
 ) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1069,7 +1070,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
             drop(previous);
             uploads
         };
-        match NdiReceiver::start(id, address, uploads, depth) {
+        match NdiReceiver::start(id, address, uploads, depth, low_bandwidth) {
             Ok(receiver) => {
                 mixer
                     .shared
