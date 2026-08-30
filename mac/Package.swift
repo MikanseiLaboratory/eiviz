@@ -18,8 +18,8 @@ let package = Package(
                 .unsafeFlags([
                     "-L\(mixerLib)",
                     "-leiviz_mixer",
-                    "-rpath", "@executable_path",
-                    "-rpath", mixerLib,
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
+                    "-Xlinker", "-rpath", "-Xlinker", mixerLib,
                 ])
             ]
         ),
