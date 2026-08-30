@@ -164,7 +164,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
 }
 
-struct SceneLayer: Identifiable, Codable, Equatable {
+struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var id = UUID()
     var inputId: UInt64
     var x: Float = 0
@@ -210,7 +210,7 @@ struct TransitionPreset: Identifiable, Codable {
     }
 }
 
-struct OverlaySlot: Identifiable, Codable, Equatable {
+struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var id = UUID()
     var sceneGpuId: UInt64 = 0
     var x: Float = 0.62

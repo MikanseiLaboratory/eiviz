@@ -1,5 +1,5 @@
 name: Setup NDI SDK on macOS
-description: Install NDI SDK 6 so grafton-ndi can build on macOS
+description: Install NDI SDK 6 and point bindgen at libclang so grafton-ndi can build on macOS
 
 runs:
   using: composite
@@ -43,4 +43,13 @@ runs:
           echo "DYLD_LIBRARY_PATH=$NDI_SDK_DIR/lib/macOS${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
         elif [ -d "$NDI_SDK_DIR/lib" ]; then
           echo "DYLD_LIBRARY_PATH=$NDI_SDK_DIR/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        fi
+        if [ -z "${LIBCLANG_PATH:-}" ]; then
+          CLANG="$(xcrun --find clang 2>/dev/null || true)"
+          if [ -n "$CLANG" ]; then
+            LIBDIR="$(cd "$(dirname "$CLANG")/../lib" && pwd)"
+            if [ -f "$LIBDIR/libclang.dylib" ]; then
+              echo "LIBCLANG_PATH=$LIBDIR" >> "$GITHUB_ENV"
+            fi
+          fi
         fi

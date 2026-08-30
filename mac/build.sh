@@ -16,7 +16,16 @@ if [ -n "$ARCH" ]; then
 else
   export EIVIZ_MIXER_LIBDIR="$ROOT/mixer/target/release"
 fi
-export LIBCLANG_PATH="${LIBCLANG_PATH:-}"
+# Empty LIBCLANG_PATH makes bindgen skip its default search and fail.
+if [ -z "${LIBCLANG_PATH:-}" ]; then
+  CLANG="$(xcrun --find clang 2>/dev/null || true)"
+  if [ -n "$CLANG" ]; then
+    LIBDIR="$(cd "$(dirname "$CLANG")/../lib" && pwd)"
+    if [ -f "$LIBDIR/libclang.dylib" ]; then
+      export LIBCLANG_PATH="$LIBDIR"
+    fi
+  fi
+fi
 cd "$ROOT/mixer"
 if [ -n "$ARCH" ]; then
   cargo build --release --locked --target "$ARCH"

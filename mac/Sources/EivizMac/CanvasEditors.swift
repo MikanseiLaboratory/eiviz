@@ -17,7 +17,7 @@ struct SceneEditorView: View {
             VStack(alignment: .leading) {
                 Text("Layers").fontWeight(.bold)
                 List(layers, selection: $selectedLayer) { layer in
-                    Text(label(layer)).tag(Optional(layer.id))
+                    Text(label(layer)).tag(layer.id)
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
@@ -110,8 +110,10 @@ struct SceneEditorView: View {
 
     private func mutate(_ body: (inout SceneEntry) -> Void) {
         guard let i = sceneIndex else { return }
-        body(&mixer.session.scenes[i])
-        mixer.session.scenes[i].layers.sort { $0.z < $1.z }
+        var scene = mixer.session.scenes[i]
+        body(&scene)
+        scene.layers.sort { $0.z < $1.z }
+        mixer.session.scenes[i] = scene
     }
 
     private func addLayer() {
@@ -230,7 +232,7 @@ struct OverlayView: View {
                 }
                 List(unit.overlays, selection: $selected) { slot in
                     Text("\(slot.enabled ? "ON" : "off")  \(sceneName(slot))")
-                        .tag(Optional(slot.id))
+                        .tag(slot.id)
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)

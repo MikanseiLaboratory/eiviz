@@ -51,11 +51,13 @@ enum MixerFFI {
         }
     }
 
-    private static func cString<T>(_ tuple: T) -> String {
-        withUnsafeBytes(of: tuple) { raw in
-            let bytes = raw.bindMemory(to: UInt8.self)
-            let n = bytes.firstIndex(of: 0) ?? bytes.count
-            return String(bytes: bytes.prefix(n), encoding: .utf8) ?? ""
+    private static func cString<T>(_ value: T) -> String {
+        withUnsafePointer(to: value) { ptr in
+            ptr.withMemoryRebound(to: UInt8.self, capacity: MemoryLayout<T>.size) { bytes in
+                let buffer = UnsafeBufferPointer(start: bytes, count: MemoryLayout<T>.size)
+                let n = buffer.firstIndex(of: 0) ?? buffer.count
+                return String(decoding: buffer.prefix(n), as: UTF8.self)
+            }
         }
     }
 
