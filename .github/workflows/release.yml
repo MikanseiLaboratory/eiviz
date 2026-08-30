@@ -181,7 +181,8 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
-          install_name_tool -add_rpath "@executable_path" "$STAGING/eiviz-mac" || true
+          chmod +x mac/relocate-dylib.sh
+          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
@@ -249,7 +250,8 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
-          install_name_tool -add_rpath "@executable_path" "$STAGING/eiviz-mac" || true
+          chmod +x mac/relocate-dylib.sh
+          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'

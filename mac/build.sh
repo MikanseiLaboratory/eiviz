@@ -23,9 +23,17 @@ if [ -n "$ARCH" ]; then
 else
   cargo build --release --locked
 fi
+DYLIB="$EIVIZ_MIXER_LIBDIR/libeiviz_mixer.dylib"
+install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"
+if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" ]; then
+  install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib"
+fi
 cd "$ROOT/mac"
 swift build "${SWIFT_ARGS[@]}"
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
-cp -f "$EIVIZ_MIXER_LIBDIR/libeiviz_mixer.dylib" "$BIN/"
+cp -f "$DYLIB" "$BIN/"
+chmod +x "$ROOT/mac/relocate-dylib.sh"
+"$ROOT/mac/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
 echo "eiviz-mac -> $BIN/eiviz-mac"
 file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
+otool -L "$BIN/eiviz-mac"
