@@ -66,14 +66,15 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         self.playing = playing
         super.init()
         let item = AVPlayerItem(asset: asset)
-        item.actionAtItemEnd = .none
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
         let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         item.add(videoOutput)
         output = videoOutput
-        player = AVPlayer(playerItem: item)
+        let player = AVPlayer(playerItem: item)
+        player.actionAtItemEnd = .none
+        self.player = player
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
