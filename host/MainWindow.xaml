@@ -132,10 +132,13 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="8"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <Button Content="Add" Height="32" Click="AddInput_Click"/>
                             <Button Grid.Column="2" Content="Edit" Height="32" Click="EditInput_Click"/>
-                            <Button Grid.Column="4" Content="Delete" Height="32" Click="RemoveInput_Click"/>
+                            <Button Grid.Column="4" Content="Preview" Height="32" Click="PreviewInput_Click"/>
+                            <Button Grid.Column="6" Content="Delete" Height="32" Click="RemoveInput_Click"/>
                         </Grid>
                         <ListBox x:Name="InputList" Background="#222" Foreground="#EEE" BorderBrush="#444"
                                  SelectionChanged="InputList_SelectionChanged"

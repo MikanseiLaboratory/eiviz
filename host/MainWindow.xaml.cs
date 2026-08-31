@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private OverlayWindow? _overlay;
     private ResourceMonitorWindow? _resourcesWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
+    private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
@@ -617,6 +618,43 @@ public partial class MainWindow : Window
         InputList.Items.Refresh();
         RebuildMeters();
         TickVideo();
+        if (_inputPreviews.TryGetValue(input.Id, out var preview))
+            preview.SetTitle(input.Name);
+    }
+
+    private void PreviewInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, "Select an Input to preview.");
+            return;
+        }
+        OpenInputPreview(input);
+    }
+
+    private void OpenInputPreview(InputEntry input)
+    {
+        if (_inputPreviews.TryGetValue(input.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var monitorId = _session.NextMonitorId++;
+        var window = new InputPreviewWindow(input, monitorId, SelectedUnit.Width, SelectedUnit.Height)
+        {
+            Owner = this
+        };
+        window.Closed += (_, _) => _inputPreviews.Remove(input.Id);
+        _inputPreviews[input.Id] = window;
+        window.Show();
+    }
+
+    private void CloseInputPreview(ulong inputId)
+    {
+        if (!_inputPreviews.TryGetValue(inputId, out var window))
+            return;
+        _inputPreviews.Remove(inputId);
+        window.Close();
     }
 
     private void ApplyInputSource(InputEntry input, AddInputWindow dialog, bool replacing)
@@ -721,6 +759,7 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Built-in generators cannot be deleted.");
             return;
         }
+        CloseInputPreview(input.Id);
         Commands.TryEnqueue(new DropSourceCommand(input.Id));
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)

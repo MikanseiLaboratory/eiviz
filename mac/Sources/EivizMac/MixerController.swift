@@ -43,6 +43,9 @@ final class MixerController: ObservableObject {
     private var meterTimer: Timer?
     private var previewByUnit: [UInt64: UInt64] = [:]
     private var programByUnit: [UInt64: UInt64] = [:]
+    private var inputPreviewWindows: [UInt64: NSWindow] = [:]
+    private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
+    private let inputPreviewCloser = InputPreviewCloser()
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -67,9 +70,76 @@ final class MixerController: ObservableObject {
     func shutdown() {
         meterTimer?.invalidate()
         meterTimer = nil
+        closeAllInputPreviews()
         guard booted else { return }
         mixer_destroy()
         booted = false
+    }
+
+    func openInputPreview(inputId: UInt64, name: String) {
+        if let existing = inputPreviewWindows[inputId] {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        let monitorId = session.nextMonitorId
+        session.nextMonitorId += 1
+        inputPreviewMonitorIds[inputId] = monitorId
+        let unit = selectedUnit
+        let host = NSHostingController(rootView: InputPreviewView(
+            monitorId: monitorId,
+            sourceId: inputId,
+            ratioWidth: unit.width,
+            ratioHeight: unit.height
+        ))
+        let width = CGFloat(960)
+        let height = width * CGFloat(max(1, unit.height)) / CGFloat(max(1, unit.width))
+        let window = InputPreviewHostWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = name
+        window.identifier = NSUserInterfaceItemIdentifier("input-preview-\(inputId)")
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = NSColor(calibratedWhite: 17 / 255, alpha: 1)
+        window.contentAspectRatio = NSSize(width: CGFloat(max(1, unit.width)), height: CGFloat(max(1, unit.height)))
+        var behavior = window.collectionBehavior
+        behavior.insert(.fullScreenPrimary)
+        window.collectionBehavior = behavior
+        window.center()
+        inputPreviewCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.inputPreviewDidClose(closedId)
+            }
+        }
+        window.delegate = inputPreviewCloser
+        inputPreviewWindows[inputId] = window
+        window.makeKeyAndOrderFront(nil)
+        _ = mixer_set_monitor_present_interval(monitorId, 1)
+    }
+
+    func closeInputPreview(_ inputId: UInt64) {
+        let window = inputPreviewWindows.removeValue(forKey: inputId)
+        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
+            _ = mixer_detach_monitor(monitorId)
+        }
+        window?.delegate = nil
+        window?.close()
+    }
+
+    func closeAllInputPreviews() {
+        for id in Array(inputPreviewWindows.keys) {
+            closeInputPreview(id)
+        }
+    }
+
+    private func inputPreviewDidClose(_ inputId: UInt64) {
+        inputPreviewWindows.removeValue(forKey: inputId)
+        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
+            _ = mixer_detach_monitor(monitorId)
+        }
     }
 
     func applySession() {
@@ -249,6 +319,7 @@ final class MixerController: ObservableObject {
               let index = session.inputs.firstIndex(where: { $0.id == id }),
               !session.inputs[index].isBuiltin
         else { return }
+        closeInputPreview(id)
         pumps.stop(id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
@@ -694,5 +765,18 @@ final class MixerController: ObservableObject {
         if let message = MixerFFI.check(code, action) {
             errorText = message
         }
+    }
+}
+
+private final class InputPreviewCloser: NSObject, NSWindowDelegate {
+    var onClose: ((UInt64) -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let raw = window.identifier?.rawValue,
+              raw.hasPrefix("input-preview-"),
+              let inputId = UInt64(raw.dropFirst("input-preview-".count))
+        else { return }
+        onClose?(inputId)
     }
 }

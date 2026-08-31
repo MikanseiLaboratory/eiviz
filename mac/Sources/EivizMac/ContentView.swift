@@ -211,6 +211,12 @@ struct ContentView: View {
                             mixer.editingInput = input
                             mixer.showAddInput = true
                         }
+                        Button("Preview") {
+                            guard let id = mixer.selectedInputId,
+                                  let input = mixer.session.inputs.first(where: { $0.id == id })
+                            else { return }
+                            mixer.openInputPreview(inputId: input.id, name: input.name)
+                        }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
                     .buttonStyle(MixerButtonStyle())
