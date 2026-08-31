@@ -1143,7 +1143,7 @@ pub unsafe extern "C" fn mixer_video_start(
     {
         let _ = (id, path, capture, format);
         return with_mixer(|mixer| {
-            set_error(&mixer.telemetry), "Media Foundation is not available");
+            set_error(&mixer.telemetry, "Media Foundation is not available");
             ERR_IO
         })
         .unwrap_or_else(|code| code);
@@ -1168,7 +1168,7 @@ pub unsafe extern "C" fn mixer_video_start(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.telemetry), error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1299,7 +1299,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.telemetry), error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1326,7 +1326,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     {
         let _ = (id, address, depth, low_bandwidth);
         return with_mixer(|mixer| {
-            set_error(&mixer.telemetry), "NDI is not available");
+            set_error(&mixer.telemetry, "NDI is not available");
             ERR_IO
         })
         .unwrap_or_else(|code| code);
@@ -1355,7 +1355,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.telemetry), error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1423,7 +1423,7 @@ pub unsafe extern "C" fn mixer_output_add(
         .to_string();
     if transport == OUT_DECKLINK {
         let _ = with_mixer(|mixer| {
-            set_error(&mixer.telemetry), "DeckLink output is not linked in this build");
+            set_error(&mixer.telemetry, "DeckLink output is not linked in this build");
         });
         return ERR_IO;
     }
@@ -1432,7 +1432,7 @@ pub unsafe extern "C" fn mixer_output_add(
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
             {
-                let _ = with_mixer(|mixer| set_error(&mixer.telemetry), "NDI is not available"));
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "NDI is not available"));
                 return ERR_IO;
             }
             #[cfg(any(windows, target_os = "macos"))]
@@ -1441,12 +1441,12 @@ pub unsafe extern "C" fn mixer_output_add(
                 match started {
                     Ok(Ok(sender)) => OutputHandle::Ndi(sender),
                     Ok(Err(error)) => {
-                        let _ = with_mixer(|mixer| set_error(&mixer.telemetry), error));
+                        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                         return ERR_IO;
                     }
                     Err(_) => {
                         let _ = with_mixer(|mixer| {
-                            set_error(&mixer.telemetry), "NDI sender panicked during create")
+                            set_error(&mixer.telemetry, "NDI sender panicked during create")
                         });
                         return ERR_IO;
                     }
@@ -1458,12 +1458,12 @@ pub unsafe extern "C" fn mixer_output_add(
             match started {
                 Ok(Ok(sender)) => OutputHandle::Omt(sender),
                 Ok(Err(error)) => {
-                    let _ = with_mixer(|mixer| set_error(&mixer.telemetry), error));
+                    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
                 }
                 Err(_) => {
                     let _ = with_mixer(|mixer| {
-                        set_error(&mixer.telemetry), "OMT sender panicked during create")
+                        set_error(&mixer.telemetry, "OMT sender panicked during create")
                     });
                     return ERR_IO;
                 }
@@ -1534,7 +1534,7 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (out, cap);
-        let _ = with_mixer(|mixer| set_error(&mixer.telemetry), "NDI is not available"));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "NDI is not available"));
         return 0;
     }
     #[cfg(any(windows, target_os = "macos"))]
@@ -1547,7 +1547,7 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
             n as i32
         }
         Err(error) => {
-            let _ = with_mixer(|mixer| set_error(&mixer.telemetry), error));
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
             0
         }
     }
@@ -2381,7 +2381,7 @@ fn render_loop(
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
-            let secs = f64::from(frame_i) * f64::from(fps_den) / f64::from(fps_num.max(1));
+            let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
             let phase = ((secs * 0.12) % 1.0) as f32;
             let phase_y = ((secs * 0.07) % 1.0) as f32;
             composer.begin_frame();
