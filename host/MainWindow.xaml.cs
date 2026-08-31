@@ -72,14 +72,90 @@ public partial class MainWindow : Window
     private void RebuildScenes()
     {
         ScenePanel.Children.Clear();
+        var index = 1;
         foreach (var scene in _session.Scenes)
         {
             var tile = new SceneTile();
             tile.SceneSelected += (_, selected) => SelectScene(selected);
             tile.SceneEditRequested += (_, selected) => OpenSceneEditor(selected);
-            tile.Bind(scene, _selectedScene?.Id == scene.Id);
+            tile.SceneCutRequested += (_, selected) => CutScene(selected);
+            tile.SceneLoopRequested += (_, selected) => ToggleSceneLoop(selected);
+            tile.ScenePlayRequested += (_, selected) => ToggleScenePlay(selected);
+            tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
+            tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
+            tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
+            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id);
             ScenePanel.Children.Add(tile);
         }
+        RefreshSceneTiles();
+    }
+
+    private void RefreshSceneTiles()
+    {
+        foreach (SceneTile tile in ScenePanel.Children)
+        {
+            if (tile.Scene is not { } scene)
+                continue;
+            var video = SceneVideo(scene);
+            var playing = false;
+            if (video is not null && TryVideoInfo(video.Id, out var info))
+                playing = info.Playing != 0;
+            tile.SetTransport(
+                video is not null,
+                video?.VideoLoop == true,
+                playing,
+                SceneInputs(scene).All(item => item.Mute));
+        }
+    }
+
+    private InputEntry? SceneVideo(SceneEntry scene) =>
+        SceneInputs(scene).FirstOrDefault(item => item.Kind == InputKind.Video);
+
+    private IEnumerable<InputEntry> SceneInputs(SceneEntry scene) =>
+        scene.Layers
+            .Select(layer => _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId))
+            .OfType<InputEntry>();
+
+    private void CutScene(SceneEntry scene)
+    {
+        SelectScene(scene);
+        FirePreset(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
+    }
+
+    private void ToggleSceneLoop(SceneEntry scene)
+    {
+        if (SceneVideo(scene) is not { } video)
+            return;
+        video.VideoLoop = !video.VideoLoop;
+        MixerNative.VideoSetLoop(video.Id, video.VideoLoop ? 1u : 0u);
+        RefreshSceneTiles();
+    }
+
+    private void ToggleScenePlay(SceneEntry scene)
+    {
+        if (SceneVideo(scene) is not { } video || !TryVideoInfo(video.Id, out var info))
+            return;
+        MixerNative.VideoSetPlaying(video.Id, info.Playing == 0 ? 1u : 0u);
+        RefreshSceneTiles();
+    }
+
+    private void ToggleSceneAudio(SceneEntry scene)
+    {
+        var inputs = SceneInputs(scene).ToList();
+        if (inputs.Count == 0)
+            return;
+        var mute = !inputs.All(item => item.Mute);
+        foreach (var input in inputs)
+        {
+            input.Mute = mute;
+            MixerNative.AudioSetInput(
+                input.Id,
+                input.BusMask == 0 ? 1u : input.BusMask,
+                MixerNative.MixerGain(input.Gain),
+                mute ? 1u : 0u);
+        }
+        RebuildMeters();
+        RefreshSceneTiles();
     }
 
     private void SelectScene(SceneEntry scene)
@@ -417,6 +493,7 @@ public partial class MainWindow : Window
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
+        RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
@@ -634,20 +711,22 @@ public partial class MainWindow : Window
         OpenInputPreview(input);
     }
 
-    private void OpenInputPreview(InputEntry input)
+    private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.Name);
+
+    private void OpenSourcePreview(ulong sourceId, string name)
     {
-        if (_inputPreviews.TryGetValue(input.Id, out var existing))
+        if (_inputPreviews.TryGetValue(sourceId, out var existing))
         {
             existing.Activate();
             return;
         }
         var monitorId = _session.NextMonitorId++;
-        var window = new InputPreviewWindow(input, monitorId, SelectedUnit.Width, SelectedUnit.Height)
+        var window = new InputPreviewWindow(name, sourceId, monitorId, SelectedUnit.Width, SelectedUnit.Height)
         {
             Owner = this
         };
-        window.Closed += (_, _) => _inputPreviews.Remove(input.Id);
-        _inputPreviews[input.Id] = window;
+        window.Closed += (_, _) => _inputPreviews.Remove(sourceId);
+        _inputPreviews[sourceId] = window;
         window.Show();
     }
 
@@ -822,12 +901,17 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Select a Scene to delete.");
             return;
         }
+        DeleteScene(_selectedScene);
+    }
+
+    private void DeleteScene(SceneEntry removed)
+    {
         if (_session.Scenes.Count <= 1)
         {
             MessageBox.Show(this, "At least one Scene is required.");
             return;
         }
-        var removed = _selectedScene;
+        CloseInputPreview(removed.GpuId);
         Commands.TryEnqueue(new DestroySceneCommand(removed.GpuId));
         _session.Scenes.Remove(removed);
         foreach (var unit in _session.Units)

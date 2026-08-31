@@ -335,14 +335,68 @@ final class MixerController: ObservableObject {
     }
 
     func removeScene() {
-        guard session.scenes.count > 1, let id = selectedSceneId,
-              let index = session.scenes.firstIndex(where: { $0.id == id })
+        guard let id = selectedSceneId,
+              let scene = session.scenes.first(where: { $0.id == id })
         else { return }
-        _ = mixer_destroy_scene(session.scenes[index].gpuId)
-        session.scenes.remove(at: index)
+        deleteScene(scene)
+    }
+
+    func deleteScene(_ scene: SceneEntry) {
+        guard session.scenes.count > 1 else { return }
+        closeInputPreview(scene.gpuId)
+        _ = mixer_destroy_scene(scene.gpuId)
+        session.scenes.removeAll { $0.id == scene.id }
         if let next = session.scenes.first {
             previewScene(next)
         }
+    }
+
+    func cutScene(_ scene: SceneEntry) {
+        previewScene(scene)
+        cut()
+    }
+
+    func toggleSceneLoop(_ scene: SceneEntry) {
+        guard let video = sceneVideo(scene),
+              let index = session.inputs.firstIndex(where: { $0.id == video.id })
+        else { return }
+        session.inputs[index].videoLoop.toggle()
+        pumps.setLoop(video.id, loop: session.inputs[index].videoLoop)
+        objectWillChange.send()
+    }
+
+    func toggleScenePlay(_ scene: SceneEntry) {
+        guard let video = sceneVideo(scene), let info = pumps.info(video.id) else { return }
+        pumps.setPlaying(video.id, playing: !info.playing)
+        objectWillChange.send()
+    }
+
+    func toggleSceneAudio(_ scene: SceneEntry) {
+        let ids = sceneInputs(scene).map(\.id)
+        guard !ids.isEmpty else { return }
+        let mute = !sceneInputs(scene).allSatisfy(\.mute)
+        for id in ids {
+            guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { continue }
+            session.inputs[index].mute = mute
+            let input = session.inputs[index]
+            _ = mixer_audio_set_input(input.id, input.busMask == 0 ? 1 : input.busMask, max(0, input.gain), mute ? 1 : 0)
+        }
+        objectWillChange.send()
+    }
+
+    func sceneVideo(_ scene: SceneEntry) -> InputEntry? {
+        sceneInputs(scene).first { $0.kind == .video }
+    }
+
+    func sceneInputs(_ scene: SceneEntry) -> [InputEntry] {
+        scene.layers.compactMap { layer in
+            session.inputs.first { $0.id == layer.inputId }
+        }
+    }
+
+    func scenePlaying(_ scene: SceneEntry) -> Bool {
+        guard let video = sceneVideo(scene), let info = pumps.info(video.id) else { return false }
+        return info.playing
     }
 
     func saveScene(_ scene: SceneEntry) {

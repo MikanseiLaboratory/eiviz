@@ -22,14 +22,19 @@ public partial class InputPreviewWindow : Window
     public ulong SourceId => _sourceId;
 
     public InputPreviewWindow(InputEntry input, ulong monitorId, uint ratioWidth, uint ratioHeight)
+        : this(input.Name, input.Id, monitorId, ratioWidth, ratioHeight)
+    {
+    }
+
+    public InputPreviewWindow(string name, ulong sourceId, ulong monitorId, uint ratioWidth, uint ratioHeight)
     {
         InitializeComponent();
         _monitorId = monitorId;
-        _sourceId = input.Id;
+        _sourceId = sourceId;
         _ratioW = Math.Max(1, ratioWidth);
         _ratioH = Math.Max(1, ratioHeight);
-        Title = input.Name;
-        TitleText.Text = input.Name;
+        Title = name;
+        TitleText.Text = name;
         VideoAspect.RatioWidth = _ratioW;
         VideoAspect.RatioHeight = _ratioH;
         SourceInitialized += (_, _) =>
