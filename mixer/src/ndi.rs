@@ -17,6 +17,8 @@ use crate::upload::{
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
 static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
+/// NDI forbids overlapping `NDIlib_find_get_current_sources` on one instance.
+static FINDER_OP: Mutex<()> = Mutex::new(());
 
 fn runtime() -> Result<&'static NDI, String> {
     match RUNTIME.get_or_init(|| {
@@ -70,6 +72,7 @@ fn finder() -> Result<&'static Finder, String> {
         let extra = lan_extra_ips();
         let mut builder = FinderOptions::builder().show_local_sources(true);
         if let Some(ips) = extra.as_deref() {
+            eprintln!("eiviz ndi finder extra_ips={ips}");
             builder = builder.extra_ips(ips);
         }
         Finder::new(ndi, &builder.build()).map_err(|error| error.to_string())
@@ -79,18 +82,15 @@ fn finder() -> Result<&'static Finder, String> {
     }
 }
 
-/// Hint NDI at every unicast IPv4 /24. A new machine often has Wi-Fi as the
-/// default route plus a dedicated LAN NIC; mDNS on the wrong adapter sees nothing.
+/// Hint NDI at each LAN NIC /24. A machine often has Wi-Fi as the default
+/// route plus a dedicated LAN NIC; mDNS on the wrong adapter sees nothing.
+/// Only adapter IPv4s are used — subnet masks / gateways / DNS look like
+/// IPv4 in `ipconfig` and would replace NDI's registry extra-IP list.
 fn lan_extra_ips() -> Option<String> {
     let mut nets = Vec::new();
     push_slash24(&mut nets, default_route_v4());
     if let Ok(output) = std::process::Command::new("ipconfig").output() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for token in text.split_whitespace() {
-            if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
-                push_slash24(&mut nets, Some(v4));
-            }
-        }
+        collect_ipconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut nets);
     }
     if nets.is_empty() {
         None
@@ -103,16 +103,38 @@ fn default_route_v4() -> Option<std::net::Ipv4Addr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     match socket.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_link_local() => Some(v4),
+        std::net::IpAddr::V4(v4) if usable_lan_v4(v4) => Some(v4),
         _ => None,
     }
+}
+
+fn collect_ipconfig_adapter_v4s(text: &str, nets: &mut Vec<String>) {
+    for line in text.lines() {
+        if !line.contains("IPv4") {
+            continue;
+        }
+        let Some(token) = line.split_whitespace().last() else {
+            continue;
+        };
+        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
+            push_slash24(nets, Some(v4));
+        }
+    }
+}
+
+fn usable_lan_v4(v4: std::net::Ipv4Addr) -> bool {
+    if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+    {
+        return false;
+    }
+    v4.octets()[0] < 224
 }
 
 fn push_slash24(nets: &mut Vec<String>, ip: Option<std::net::Ipv4Addr>) {
     let Some(v4) = ip else {
         return;
     };
-    if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() {
+    if !usable_lan_v4(v4) {
         return;
     }
     let oct = v4.octets();
@@ -122,10 +144,19 @@ fn push_slash24(nets: &mut Vec<String>, ip: Option<std::net::Ipv4Addr>) {
     }
 }
 
+fn with_finder<T>(f: impl FnOnce(&Finder) -> Result<T, String>) -> Result<T, String> {
+    let finder = finder()?;
+    let _guard = FINDER_OP
+        .lock()
+        .map_err(|_| "ndi finder lock".to_string())?;
+    f(finder)
+}
+
 pub fn warm_finder() {
-    if let Ok(finder) = finder() {
+    let _ = with_finder(|finder| {
         let _ = finder.wait_for_sources(Duration::from_secs(2));
-    }
+        Ok(())
+    });
 }
 
 pub struct NdiReceiver {
@@ -314,13 +345,16 @@ fn open_receiver(
 }
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
-    let finder = finder()?;
-    // Unicast / extra_ips responders trickle in. A single wait_for_sources
-    // returns on the first change and misses the rest; find_sources polls
-    // to the deadline (grafton-ndi 1.0).
-    let sources = finder
-        .find_sources(Duration::from_secs(5))
-        .map_err(|error| error.to_string())?;
+    // Add Input runs this on the UI thread. find_sources(5s) always waits
+    // the full window; snapshot the already-warmed finder instead.
+    let sources = with_finder(|finder| {
+        let snapshot = finder.current_sources().map_err(|error| error.to_string())?;
+        if !snapshot.is_empty() {
+            return Ok(snapshot);
+        }
+        let _ = finder.wait_for_sources(Duration::from_secs(2));
+        finder.current_sources().map_err(|error| error.to_string())
+    })?;
     Ok(sources.into_iter().map(|source| source.to_string()).collect())
 }
 
@@ -329,36 +363,33 @@ fn resolve_source(query: &str) -> Result<Source, String> {
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    if let Ok(finder) = finder() {
+    if let Ok(sources) = with_finder(|finder| {
         let _ = finder.wait_for_sources(Duration::from_millis(200));
-        if let Ok(sources) = finder
-            .current_sources()
-            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
+        finder.current_sources().map_err(|error| error.to_string())
+    }) {
+        if let Some(source) = sources
+            .iter()
+            .find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
         {
-            if let Some(source) = sources
-                .iter()
-                .find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
-            {
-                return Ok(source.clone());
-            }
-            if let Some(source) = sources
-                .iter()
-                .find(|source| source.name.eq_ignore_ascii_case(trimmed))
-            {
-                return Ok(source.clone());
-            }
-            let matches: Vec<_> = sources
-                .iter()
-                .filter(|source| {
-                    let needle = trimmed.to_ascii_lowercase();
-                    source_key(source).to_ascii_lowercase().contains(&needle)
-                        || source.name.to_ascii_lowercase().contains(&needle)
-                })
-                .cloned()
-                .collect();
-            if matches.len() == 1 {
-                return Ok(matches.into_iter().next().expect("len 1"));
-            }
+            return Ok(source.clone());
+        }
+        if let Some(source) = sources
+            .iter()
+            .find(|source| source.name.eq_ignore_ascii_case(trimmed))
+        {
+            return Ok(source.clone());
+        }
+        let matches: Vec<_> = sources
+            .iter()
+            .filter(|source| {
+                let needle = trimmed.to_ascii_lowercase();
+                source_key(source).to_ascii_lowercase().contains(&needle)
+                    || source.name.to_ascii_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect();
+        if matches.len() == 1 {
+            return Ok(matches.into_iter().next().expect("len 1"));
         }
     }
     Ok(source_from_query(trimmed))
@@ -570,5 +601,33 @@ mod tests {
             grafton_ndi::SourceAddress::Ip(ip) => assert!(ip.starts_with("192.168.0.10")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn extra_ips_ignores_masks_gateways_and_apipa() {
+        let text = "\
+Windows IP Configuration
+
+Ethernet adapter LAN:
+   IPv4 Address. . . . . . . . . . . : 192.168.3.34
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 192.168.3.1
+
+Ethernet adapter Bluetooth:
+   IPv4 Address. . . . . . . . . . . : 169.254.61.129
+   Subnet Mask . . . . . . . . . . . : 255.255.0.0
+";
+        let mut nets = Vec::new();
+        super::collect_ipconfig_adapter_v4s(text, &mut nets);
+        assert_eq!(nets, vec!["192.168.3.0/24".to_string()]);
+    }
+
+    #[test]
+    fn usable_lan_v4_rejects_reserved() {
+        assert!(super::usable_lan_v4("192.168.3.34".parse().unwrap()));
+        assert!(!super::usable_lan_v4("255.255.255.0".parse().unwrap()));
+        assert!(!super::usable_lan_v4("169.254.1.1".parse().unwrap()));
+        assert!(!super::usable_lan_v4("127.0.0.1".parse().unwrap()));
+        assert!(!super::usable_lan_v4("224.0.0.251".parse().unwrap()));
     }
 }
