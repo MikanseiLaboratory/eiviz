@@ -186,9 +186,13 @@ public partial class AddInputWindow : Window
 
     private void RefreshNdi_Click(object sender, RoutedEventArgs e) => RefreshNdi();
 
-    private void RefreshNdi()
+    private async void RefreshNdi()
     {
-        var text = MixerNative.DiscoverNdiText();
+        if (NdiStatus is not null)
+            NdiStatus.Text = "Discovering…";
+        var text = await Task.Run(MixerNative.DiscoverNdiText);
+        if (!Dispatcher.CheckAccess())
+            return;
         NdiList.ItemsSource = string.IsNullOrWhiteSpace(text)
             ? Array.Empty<string>()
             : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

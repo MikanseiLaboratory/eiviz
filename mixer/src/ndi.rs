@@ -69,13 +69,17 @@ mod macos {
 fn finder() -> Result<&'static Finder, String> {
     match FINDER.get_or_init(|| {
         let ndi = runtime()?;
-        let extra = lan_extra_ips();
-        let mut builder = FinderOptions::builder().show_local_sources(true);
-        if let Some(ips) = extra.as_deref() {
-            eprintln!("eiviz ndi finder extra_ips={ips}");
-            builder = builder.extra_ips(ips);
+        // extra_ips replaces NDI's registry/config list and wants machine IPs
+        // ("12.0.0.8,13.0.12.8"), not a CIDR of our own NIC. Passing
+        // "192.168.3.0/24" hid LAN mDNS sources. Leave it unset.
+        if let Some(ips) = lan_extra_ips() {
+            eprintln!("eiviz ndi finder lan={ips} (mDNS/registry; extra_ips unset)");
         }
-        Finder::new(ndi, &builder.build()).map_err(|error| error.to_string())
+        Finder::new(
+            ndi,
+            &FinderOptions::builder().show_local_sources(true).build(),
+        )
+        .map_err(|error| error.to_string())
     }) {
         Ok(finder) => Ok(finder),
         Err(error) => Err(error.clone()),
@@ -345,15 +349,16 @@ fn open_receiver(
 }
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
-    // Add Input runs this on the UI thread. find_sources(5s) always waits
-    // the full window; snapshot the already-warmed finder instead.
     let sources = with_finder(|finder| {
         let snapshot = finder.current_sources().map_err(|error| error.to_string())?;
         if !snapshot.is_empty() {
             return Ok(snapshot);
         }
-        let _ = finder.wait_for_sources(Duration::from_secs(2));
-        finder.current_sources().map_err(|error| error.to_string())
+        // mDNS / unicast responders trickle in. A single wait_for_sources
+        // returns on the first change and can miss the rest.
+        finder
+            .find_sources(Duration::from_secs(5))
+            .map_err(|error| error.to_string())
     })?;
     Ok(sources.into_iter().map(|source| source.to_string()).collect())
 }
