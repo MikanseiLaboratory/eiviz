@@ -450,6 +450,11 @@ struct SessionSettings: Codable {
     var defaultPresentInterval: UInt32 = 3
     var internalColorFormat: InternalColorFormat = .uyvy
     var lastSessionPath: String?
+
+    var resolvedPresentInterval: UInt32 {
+        let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
+        return max(1, min(8, frames))
+    }
 }
 
 struct MixerSessionData: Codable {

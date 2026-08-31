@@ -327,6 +327,9 @@ public sealed class SessionSettings
     public uint DefaultPresentInterval { get; set; } = 3;
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public string? LastSessionPath { get; set; }
+
+    public uint ResolvedPresentInterval() =>
+        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
 }
 
 public sealed class Session

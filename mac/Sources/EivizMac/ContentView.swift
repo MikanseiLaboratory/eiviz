@@ -265,6 +265,7 @@ struct ContentView: View {
                 .onTapGesture { mixer.previewScene(scene) }
             MetalPreviewRepresentable(
                 role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId),
+                presentInterval: mixer.session.settings.resolvedPresentInterval,
                 onClick: { mixer.previewScene(scene) },
                 onDoubleClick: {
                     mixer.editingScene = scene

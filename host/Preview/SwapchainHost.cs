@@ -16,6 +16,7 @@ internal sealed partial class SwapchainHost : HwndHost
     public ulong MonitorId { get; set; }
     public ulong SourceId { get; set; }
     public bool IsMonitor { get; set; }
+    public uint PresentInterval { get; set; } = 1;
 
     public event EventHandler? SurfaceClicked;
     public event EventHandler? SurfaceDoubleClicked;
@@ -95,6 +96,13 @@ internal sealed partial class SwapchainHost : HwndHost
 
     public void RefreshSize() => ApplySize();
 
+    public void ApplyPresentInterval()
+    {
+        if (!IsMonitor || MonitorId == 0)
+            return;
+        MixerNative.SetMonitorPresentInterval(MonitorId, Math.Clamp(PresentInterval, 1u, 8u));
+    }
+
     private void ApplySize()
     {
         if (_hwnd == nint.Zero)
@@ -104,9 +112,12 @@ internal sealed partial class SwapchainHost : HwndHost
         if (!_attached)
         {
             if (IsMonitor)
+            {
                 MixerNative.ThrowIfFailed(
                     MixerNative.AttachMonitor(MonitorId, SourceId, _hwnd, width, height),
                     "Attach source monitor");
+                ApplyPresentInterval();
+            }
             else
                 MixerNative.ThrowIfFailed(
                     MixerNative.AttachOutput(UnitId, _hwnd, width, height, OutputKind),

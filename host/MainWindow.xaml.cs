@@ -84,10 +84,17 @@ public partial class MainWindow : Window
             tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
             tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
             tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
-            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id);
+            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval());
             ScenePanel.Children.Add(tile);
         }
         RefreshSceneTiles();
+    }
+
+    private void PushScenePresentIntervals()
+    {
+        var interval = _session.Settings.ResolvedPresentInterval();
+        foreach (SceneTile tile in ScenePanel.Children)
+            tile.SetPresentInterval(interval);
     }
 
     private void RefreshSceneTiles()
@@ -1132,6 +1139,7 @@ public partial class MainWindow : Window
             layout.PushPresentInterval(_session.Settings);
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
+        PushScenePresentIntervals();
         RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();

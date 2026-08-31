@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -25,13 +26,21 @@ public partial class SceneTile : UserControl
     public event EventHandler<SceneEntry>? ScenePreviewRequested;
     public event EventHandler<SceneEntry>? SceneCloseRequested;
 
-    public void Bind(SceneEntry scene, int number, bool selected)
+    public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3)
     {
         Scene = scene;
         Title.Text = scene.Name;
         Number.Text = number.ToString();
+        Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
         Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
+        Monitor.ApplyPresentInterval();
         SetSelected(selected);
+    }
+
+    public void SetPresentInterval(uint presentInterval)
+    {
+        Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
+        Monitor.ApplyPresentInterval();
     }
 
     public void SetSelected(bool selected)
