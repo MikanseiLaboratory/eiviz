@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Navigation;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
 
@@ -50,6 +52,7 @@ public partial class SettingsWindow : Window
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
         _devices = AudioGraphSync.EnumerateDevices(0);
         RebuildBuses();
+        AboutVersion.Text = $"Version {HostVersion.Display}";
     }
 
     public SessionSettings Settings { get; }
@@ -62,7 +65,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || MultiviewPanel is null || AudioBusPanel is null)
+        if (DisplayPanel is null || MultiviewPanel is null || AudioBusPanel is null || AboutPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -70,6 +73,20 @@ public partial class SettingsWindow : Window
         MultiviewPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AboutPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AboutLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        e.Handled = true;
+    }
+
+    private void OpenNotices_Click(object sender, RoutedEventArgs e)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.md");
+        if (!File.Exists(path))
+            return;
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)

@@ -333,7 +333,15 @@ struct SettingsView: View {
     private var about: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("eiviz").font(.title)
-            Text("macOS host and Metal mixer. NDI® via grafton-ndi.")
+            Text("Version \(HostVersion.display)")
+            Text("eiviz は未完成成果物研究所が開発・保守する実験的ソフトウェアスイッチャーです。")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Shugo Kawamura / 河村 柊吾")
+            Link("https://github.com/MikanseiLaboratory/eiviz", destination: URL(string: "https://github.com/MikanseiLaboratory/eiviz")!)
+            Link("https://mikanseilaboratory.github.io/", destination: URL(string: "https://mikanseilaboratory.github.io/")!)
+            Text("Open source").fontWeight(.bold)
+            Text("eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB.")
+                .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

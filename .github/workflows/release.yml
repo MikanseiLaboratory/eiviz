@@ -193,7 +193,7 @@ jobs:
           fi
           chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          mac/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
@@ -282,7 +282,7 @@ jobs:
           fi
           chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          mac/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
