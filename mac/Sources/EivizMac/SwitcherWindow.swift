@@ -78,15 +78,39 @@ struct SwitcherView: View {
     private var scenes: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Scenes").fontWeight(.bold)
-            List(mixer.session.scenes) { scene in
+            List(mixer.session.scenes, selection: previewSelection) { scene in
                 Text(scene.name)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 3)
+                    .padding(.horizontal, 4)
+                    .background(isPreviewing(scene) ? EivizTheme.preview.opacity(0.22) : Color.clear)
+                    .overlay(
+                        Rectangle().stroke(
+                            isPreviewing(scene) ? EivizTheme.preview : Color.clear,
+                            lineWidth: 1
+                        )
+                    )
                     .contentShape(Rectangle())
-                    .onTapGesture { mixer.previewScene(scene, unitId: unitId) }
+                    .tag(scene.id)
             }
             .scrollContentBackground(.hidden)
             .background(EivizTheme.list)
         }
         .frame(height: 160)
+    }
+
+    private var previewSelection: Binding<UInt64?> {
+        Binding(
+            get: { mixer.previewingSceneId(for: unitId) },
+            set: { id in
+                guard let id, let scene = mixer.session.scenes.first(where: { $0.id == id }) else { return }
+                mixer.previewScene(scene, unitId: unitId)
+            }
+        )
+    }
+
+    private func isPreviewing(_ scene: SceneEntry) -> Bool {
+        mixer.previewingSceneId(for: unitId) == scene.id
     }
 
     private func bus(title: String, color: Color, kind: UInt32) -> some View {

@@ -215,7 +215,10 @@ struct ContentView: View {
                         Button("Preview") {
                             guard let id = mixer.selectedInputId,
                                   let input = mixer.session.inputs.first(where: { $0.id == id })
-                            else { return }
+                            else {
+                                mixer.errorText = "Select an Input to preview."
+                                return
+                            }
                             mixer.openInputPreview(inputId: input.id, name: input.name)
                         }
                         Button("Delete") { mixer.deleteSelectedInput() }
@@ -256,14 +259,21 @@ struct ContentView: View {
         let playing = mixer.scenePlaying(scene)
         let muted = mixer.sceneInputs(scene).allSatisfy(\.mute)
         return VStack(spacing: 0) {
-            Text(scene.name)
-                .font(.system(size: 12))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(Color(white: 0.2))
-                .contentShape(Rectangle())
-                .onTapGesture { mixer.previewScene(scene) }
+            HStack(spacing: 6) {
+                Text("\(number)")
+                    .font(.system(size: 11, weight: .bold))
+                Text(scene.name)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("X") { mixer.deleteScene(scene) }
+                    .buttonStyle(MixerTileButtonStyle())
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color(white: 0.2))
+            .contentShape(Rectangle())
+            .onTapGesture { mixer.previewScene(scene) }
             MetalPreviewRepresentable(
                 role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId),
                 presentInterval: mixer.session.settings.resolvedPresentInterval,
@@ -271,37 +281,22 @@ struct ContentView: View {
             )
             .frame(width: 176, height: 90)
             .background(Color.black)
-            .overlay(alignment: .topLeading) {
-                Text("\(number)")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .padding(4)
-                    .allowsHitTesting(false)
-            }
-            .overlay(alignment: .topTrailing) {
-                Button("X") { mixer.deleteScene(scene) }
-                    .font(.system(size: 10))
-                    .buttonStyle(MixerButtonStyle())
-                    .padding(2)
-            }
-            .overlay(alignment: .bottomLeading) {
-                HStack(spacing: 2) {
-                    sceneChip("CUT") { mixer.cutScene(scene) }
-                    sceneChip("Loop") { mixer.toggleSceneLoop(scene) }
-                        .opacity(video == nil ? 0.35 : (loopOn ? 1 : 0.55))
-                        .disabled(video == nil)
-                    sceneChip(playing ? "❚❚" : "▶") { mixer.toggleScenePlay(scene) }
-                        .disabled(video == nil)
-                    sceneChip("Aud") { mixer.toggleSceneAudio(scene) }
-                        .opacity(muted ? 0.45 : 1)
-                    sceneChip("Prev") { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) }
-                    sceneChip("Set") {
-                        mixer.editingScene = scene
-                        mixer.showSceneEditor = true
-                    }
+            HStack(spacing: 1) {
+                sceneChip("CUT") { mixer.cutScene(scene) }
+                sceneChip("Loop") { mixer.toggleSceneLoop(scene) }
+                    .opacity(video == nil ? 0.35 : (loopOn ? 1 : 0.55))
+                    .disabled(video == nil)
+                sceneChip(playing ? "❚❚" : "▶") { mixer.toggleScenePlay(scene) }
+                    .disabled(video == nil)
+                sceneChip("Aud") { mixer.toggleSceneAudio(scene) }
+                    .opacity(muted ? 0.45 : 1)
+                sceneChip("Prev") { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) }
+                sceneChip("Set") {
+                    mixer.editingScene = scene
+                    mixer.showSceneEditor = true
                 }
-                .padding(2)
             }
+            .padding(2)
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
@@ -316,8 +311,7 @@ struct ContentView: View {
 
     private func sceneChip(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
-            .font(.system(size: 10))
-            .buttonStyle(MixerButtonStyle())
+            .buttonStyle(MixerTileButtonStyle())
     }
 
     private var videoBar: some View {

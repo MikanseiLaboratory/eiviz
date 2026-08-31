@@ -19,6 +19,9 @@ struct InputPreviewView: View {
 }
 
 final class InputPreviewHostWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 103 {
             toggleFullScreen(nil)

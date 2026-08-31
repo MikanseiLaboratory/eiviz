@@ -81,7 +81,9 @@ final class MixerController: ObservableObject {
 
     func openInputPreview(inputId: UInt64, name: String) {
         if let existing = inputPreviewWindows[inputId] {
+            NSApp.activate(ignoringOtherApps: true)
             existing.makeKeyAndOrderFront(nil)
+            existing.orderFrontRegardless()
             return
         }
         let monitorId = session.nextMonitorId
@@ -107,9 +109,10 @@ final class MixerController: ObservableObject {
         window.contentViewController = host
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(calibratedWhite: 17 / 255, alpha: 1)
-        window.contentAspectRatio = NSSize(width: CGFloat(max(1, unit.width)), height: CGFloat(max(1, unit.height)))
+        window.minSize = NSSize(width: 320, height: 180)
         var behavior = window.collectionBehavior
         behavior.insert(.fullScreenPrimary)
+        behavior.insert(.moveToActiveSpace)
         window.collectionBehavior = behavior
         window.center()
         inputPreviewCloser.onClose = { [weak self] closedId in
@@ -119,7 +122,10 @@ final class MixerController: ObservableObject {
         }
         window.delegate = inputPreviewCloser
         inputPreviewWindows[inputId] = window
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.contentAspectRatio = NSSize(width: CGFloat(max(1, unit.width)), height: CGFloat(max(1, unit.height)))
         _ = mixer_set_monitor_present_interval(monitorId, 1)
     }
 
@@ -256,7 +262,6 @@ final class MixerController: ObservableObject {
 
     func previewScene(_ scene: SceneEntry) {
         previewScene(scene, unitId: selectedUnit.id)
-        selectedSceneId = scene.id
     }
 
     func previewScene(_ scene: SceneEntry, unitId: UInt64) {
@@ -265,6 +270,12 @@ final class MixerController: ObservableObject {
         var state = currentState(unit.id)
         state.preview_source = scene.gpuId
         fail(mixer_unit_set_state(unit.id, &state), "Preview scene")
+        selectedSceneId = scene.id
+    }
+
+    func previewingSceneId(for unitId: UInt64) -> UInt64? {
+        guard let gpuId = previewByUnit[unitId] else { return selectedSceneId }
+        return session.scenes.first { $0.gpuId == gpuId }?.id
     }
 
     func setMix(_ value: Float) {
