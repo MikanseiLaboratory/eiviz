@@ -120,9 +120,9 @@
                     <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
                     <TextBlock x:Name="AboutVersion" Margin="0,8,0,0"/>
                     <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                               Text="eiviz は未完成成果物研究所が開発・保守する実験的ソフトウェアスイッチャーです。"/>
+                               Text="eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory."/>
                     <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                               Text="Shugo Kawamura / 河村 柊吾"/>
+                               Text="Shugo Kawamura"/>
                     <TextBlock Margin="0,8,0,0">
                         <Hyperlink NavigateUri="https://github.com/MikanseiLaboratory/eiviz"
                                    RequestNavigate="AboutLink_RequestNavigate"

@@ -341,9 +341,9 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("eiviz").font(.title)
             Text("Version \(HostVersion.display)")
-            Text("eiviz は未完成成果物研究所が開発・保守する実験的ソフトウェアスイッチャーです。")
+            Text("eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Shugo Kawamura / 河村 柊吾")
+            Text("Shugo Kawamura")
             Link("https://github.com/MikanseiLaboratory/eiviz", destination: URL(string: "https://github.com/MikanseiLaboratory/eiviz")!)
             Link("https://mikanseilaboratory.github.io/", destination: URL(string: "https://mikanseilaboratory.github.io/")!)
             Text("Open source").fontWeight(.bold)
