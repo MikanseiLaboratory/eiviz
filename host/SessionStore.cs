@@ -91,7 +91,7 @@ internal static class SessionStore
             session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 3 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             session.Settings.RebarOptimization = Settings.RebarOptimization != false;
-            session.Settings.RebarDirectSample = Settings.RebarDirectSample == true;
+            session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

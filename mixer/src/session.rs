@@ -69,6 +69,8 @@ pub struct SessionSettings {
     pub rebar_optimization: bool,
     #[serde(default)]
     pub rebar_direct_sample: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub ndi_gpu_upload: bool,
     pub last_session_path: Option<String>,
 }
 
@@ -86,6 +88,7 @@ impl Default for SessionSettings {
             internal_color_format: InternalColorFormat::Uyvy,
             rebar_optimization: true,
             rebar_direct_sample: false,
+            ndi_gpu_upload: true,
             last_session_path: None,
         }
     }
@@ -679,6 +682,7 @@ mod tests {
         assert_eq!(doc.units[0].multiview_tiles.len(), 8);
         assert!(doc.settings.rebar_optimization);
         assert!(!doc.settings.rebar_direct_sample);
+        assert!(doc.settings.ndi_gpu_upload);
     }
 
     #[test]

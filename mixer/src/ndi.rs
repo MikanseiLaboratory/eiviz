@@ -12,7 +12,7 @@ use grafton_ndi::{
 use crate::abi::FMT_BGRA;
 use crate::upload::{
     ingest_audio_throttled, write_slot, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
-    UploadStore,
+    GpuVideoFrame, UploadStore,
 };
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
@@ -165,6 +165,8 @@ impl NdiReceiver {
                     );
                 }
                 let mut gpu_ring = GpuUploadRing::new();
+                #[cfg(windows)]
+                let mut rebar_ring: Option<crate::rebar::RebarIngestRing> = None;
                 let mut gpu_warned = false;
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
@@ -172,6 +174,8 @@ impl NdiReceiver {
                             &uploads,
                             gpu.as_ref(),
                             &mut gpu_ring,
+                            #[cfg(windows)]
+                            &mut rebar_ring,
                             &mut gpu_warned,
                             source_id,
                             depth,
@@ -390,6 +394,7 @@ fn ingest_video(
     uploads: &Mutex<UploadStore>,
     gpu: Option<&GpuIngest>,
     gpu_ring: &mut GpuUploadRing,
+    #[cfg(windows)] rebar_ring: &mut Option<crate::rebar::RebarIngestRing>,
     gpu_warned: &mut bool,
     source_id: u64,
     depth: u32,
@@ -411,7 +416,43 @@ fn ingest_video(
         LineStrideOrSize::LineStrideBytes(stride) if stride > 0 => stride as usize,
         _ => width as usize * bpp,
     };
-    if let Some(gpu) = gpu {
+    if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
+        #[cfg(windows)]
+        if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
+            if rebar_ring.is_none() {
+                *rebar_ring = crate::rebar::RebarIngestRing::new(&gpu.device, &gpu.queue);
+            }
+            if let Some(ring) = rebar_ring.as_mut().filter(|ring| ring.is_live()) {
+                let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+                let bgra = format == CpuFormat::Bgra;
+                let tex_format = if packed {
+                    wgpu::TextureFormat::Rgba8Unorm
+                } else if bgra {
+                    wgpu::TextureFormat::Bgra8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                };
+                match ring.upload(
+                    frame.data(),
+                    stride,
+                    width as usize * bpp,
+                    width,
+                    height,
+                    packed,
+                    bgra,
+                    tex_format,
+                    frame.timestamp(),
+                ) {
+                    Ok(uploaded) => {
+                        finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "rebar");
+                        return;
+                    }
+                    Err(error) => {
+                        eprintln!("eiviz ndi rebar upload: {error}; falling back to write_texture");
+                    }
+                }
+            }
+        }
         match gpu_ring.upload(
             gpu,
             frame.data(),
@@ -422,16 +463,7 @@ fn ingest_video(
             frame.timestamp(),
         ) {
             Ok(uploaded) => {
-                if !*gpu_warned {
-                    eprintln!(
-                        "ndi gpu {source_id} {width}x{height} {pixel_format:?} stride={stride} bytes={}",
-                        frame.data().len()
-                    );
-                    *gpu_warned = true;
-                }
-                let mut store = uploads.lock().expect("uploads lock");
-                store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
-                let _ = store.push_playout_gpu(source_id, uploaded);
+                finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "queue");
                 return;
             }
             Err(error) if !*gpu_warned => {
@@ -452,6 +484,31 @@ fn ingest_video(
     write_slot(&mut pixels, frame.data(), stride, width, height, format, opaque_x);
     let mut store = uploads.lock().expect("uploads lock");
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
+}
+
+fn finish_gpu_frame(
+    uploads: &Mutex<UploadStore>,
+    gpu_warned: &mut bool,
+    source_id: u64,
+    depth: u32,
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+    stride: usize,
+    frame: &VideoFrame,
+    uploaded: GpuVideoFrame,
+    path: &str,
+) {
+    if !*gpu_warned {
+        eprintln!(
+            "ndi gpu {source_id} {width}x{height} {pixel_format:?} stride={stride} bytes={} path={path}",
+            frame.data().len()
+        );
+        *gpu_warned = true;
+    }
+    let mut store = uploads.lock().expect("uploads lock");
+    store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
+    let _ = store.push_playout_gpu(source_id, uploaded);
 }
 
 fn to_audio(frame: &AudioFrame) -> AudioPacket {

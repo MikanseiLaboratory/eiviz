@@ -63,8 +63,8 @@ public partial class App : Application
             MixerNative.SetRebarOptimization(Session.Settings.RebarOptimizationEnabled ? 1u : 0u),
             "Set ReBAR optimization");
         MixerNative.ThrowIfFailed(
-            MixerNative.SetRebarDirectSample(Session.Settings.RebarDirectSampleEnabled ? 1u : 0u),
-            "Set ReBAR direct sample");
+            MixerNative.SetNdiGpuUpload(Session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
+            "Set NDI GPU upload");
         MixerNative.VideoFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra
             : MixerNative.FormatUyvy;

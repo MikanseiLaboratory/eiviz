@@ -73,12 +73,11 @@
                 <TextBlock Text="BAR window / VRAM"/>
                 <TextBlock x:Name="RebarMemory" Margin="0,4,0,12" Text="—"/>
                 <CheckBox x:Name="RebarOptBox" Content="Use ReBAR optimization" Margin="0,0,0,12"
-                          Foreground="#EEEEEE"
-                          Checked="RebarOpt_Changed" Unchecked="RebarOpt_Changed"/>
-                <CheckBox x:Name="RebarDirectBox" Content="Sample GPU upload textures directly (Experimental)"
-                          Margin="0,0,0,12" Foreground="#EEEEEE"/>
+                          Foreground="#EEEEEE"/>
+                <CheckBox x:Name="NdiGpuBox" Content="Upload NDI on the ingest thread" Margin="0,0,0,12"
+                          Foreground="#EEEEEE"/>
                 <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="vMix-style check: ReBAR is on when a discrete GPU exposes D3D12 GPU upload heaps, so the CPU can write the full framebuffer. wgpu's default upload still goes through system memory. With this option on, eiviz writes live input frames into a GPU upload heap and copies VRAM to VRAM. The experimental option skips that copy and samples the upload-heap texture (per-source triple buffer). Turn it off if you see flicker or a device reset. Both checkboxes are disabled when ReBAR is not available."/>
+                           Text="NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it, so the mix clock is not blocked by memcpy. Turn it off to go back to CPU frames uploaded on the render thread. ReBAR writes those frames through a D3D12 GPU upload heap (VRAM) instead of wgpu's system-memory staging. Turn ReBAR off if you see flicker or a device reset. ReBAR is disabled when the GPU does not expose GPU upload heaps."/>
             </StackPanel>
             <DockPanel x:Name="OutputPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">

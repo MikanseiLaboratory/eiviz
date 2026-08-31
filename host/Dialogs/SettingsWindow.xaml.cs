@@ -29,7 +29,7 @@ public partial class SettingsWindow : Window
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             InternalColorFormat = session.Settings.InternalColorFormat,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
-            RebarDirectSample = session.Settings.RebarDirectSampleEnabled
+            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled
         };
         foreach (var output in session.Outputs)
         {
@@ -101,20 +101,7 @@ public partial class SettingsWindow : Window
         SelectTag(ColorFormatBox, "uyvy");
         SelectTag(MvPresentBox, "3");
         RebarOptBox.IsChecked = true;
-        RebarDirectBox.IsChecked = false;
-        SyncDirectBox();
-    }
-
-    private void RebarOpt_Changed(object sender, RoutedEventArgs e)
-    {
-        SyncDirectBox();
-    }
-
-    private void SyncDirectBox()
-    {
-        if (RebarDirectBox is null || RebarOptBox is null)
-            return;
-        RebarDirectBox.IsEnabled = RebarOptBox.IsEnabled && RebarOptBox.IsChecked == true;
+        NdiGpuBox.IsChecked = true;
     }
 
     private void FillRebar()
@@ -129,8 +116,7 @@ public partial class SettingsWindow : Window
                 RebarMemory.Text = "—";
                 RebarOptBox.IsEnabled = false;
                 RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
-                RebarDirectBox.IsEnabled = false;
-                RebarDirectBox.IsChecked = Settings.RebarDirectSampleEnabled;
+                NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
                 return;
             }
             AdapterName.Text = ReadZ(info.Adapter, 128);
@@ -146,8 +132,7 @@ public partial class SettingsWindow : Window
             RebarMemory.Text = $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
             RebarOptBox.IsEnabled = info.Available != 0;
             RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
-            RebarDirectBox.IsChecked = Settings.RebarDirectSampleEnabled;
-            SyncDirectBox();
+            NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
         }
     }
 
@@ -553,7 +538,7 @@ public partial class SettingsWindow : Window
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
         Settings.RebarOptimization = RebarOptBox.IsChecked == true;
-        Settings.RebarDirectSample = RebarDirectBox.IsChecked == true;
+        Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
         DialogResult = true;

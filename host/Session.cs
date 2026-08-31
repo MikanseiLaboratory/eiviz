@@ -328,9 +328,10 @@ public sealed class SessionSettings
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public bool? RebarOptimization { get; set; } = true;
     public bool? RebarDirectSample { get; set; } = false;
+    public bool? NdiGpuUpload { get; set; } = true;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
-    public bool RebarDirectSampleEnabled => RebarDirectSample == true;
+    public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
     public string? LastSessionPath { get; set; }
 
     public uint ResolvedPresentInterval() =>

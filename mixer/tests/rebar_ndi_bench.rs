@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use eiviz_mixer::{
     mixer_copy_rebar_info, mixer_copy_source_usage, mixer_copy_stats, mixer_create,
     mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error, mixer_ndi_connect,
-    mixer_ndi_discover, mixer_set_rebar_direct_sample, mixer_set_rebar_optimization,
+    mixer_ndi_discover, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_configure, mixer_unit_set_state, MixerRebarInfo, MixerStats, OK, OverlayDesc, Rect,
     SCENE_BASE, SourceUsage, UnitState,
 };
@@ -105,13 +105,13 @@ fn lan_ndi_rebar_modes() {
     }
     println!("compose             : {width}x{height} 2x2");
 
-    for (name, opt, direct) in [
-        ("off", 0u32, 0u32),
-        ("rebar_copy", 1, 0),
-        ("rebar_direct", 1, 1),
+    for (name, gpu, rebar) in [
+        ("cpu", 0u32, 0u32),
+        ("gpu", 1, 0),
+        ("gpu_rebar", 1, 1),
     ] {
-        assert_eq!(mixer_set_rebar_optimization(opt), OK);
-        assert_eq!(mixer_set_rebar_direct_sample(direct), OK);
+        assert_eq!(mixer_set_ndi_gpu_upload(gpu), OK);
+        assert_eq!(mixer_set_rebar_optimization(rebar), OK);
         thread::sleep(WARMUP);
         let stats = sample_render();
         println!(

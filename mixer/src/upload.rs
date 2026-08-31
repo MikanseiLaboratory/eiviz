@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -92,6 +92,9 @@ pub struct GpuVideoFrame {
 pub struct GpuIngest {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub ndi_gpu: Arc<AtomicBool>,
+    pub use_rebar: Arc<AtomicBool>,
+    pub rebar_available: bool,
 }
 
 struct GpuUploadSlot {

@@ -7,7 +7,7 @@ use eiviz_mixer::{
     OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit, mixer_define_scene,
     mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping,
-    mixer_set_live_save, mixer_set_rebar_direct_sample, mixer_set_rebar_optimization,
+    mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto,
     mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
     mixer_video_start,
@@ -38,8 +38,9 @@ fn rebar_info_and_toggle() {
     }
     assert_eq!(info.active, 0);
     assert_eq!(mixer_set_rebar_optimization(1), OK);
-    assert_eq!(mixer_set_rebar_direct_sample(1), OK);
-    assert_eq!(mixer_set_rebar_direct_sample(0), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(1), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(0), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(1), OK);
     mixer_destroy();
 }
 

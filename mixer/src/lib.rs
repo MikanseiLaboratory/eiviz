@@ -134,7 +134,7 @@ struct Shared {
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
-    rebar_direct_sample: bool,
+    ndi_gpu_upload: bool,
     audio: audio::AudioEngine,
 }
 
@@ -442,11 +442,14 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         }
     };
     let omt_gpu = omt_gpu_from_device(&device);
+    let rebar = crate::rebar::probe(&device);
     let gpu_ingest = GpuIngest {
         device: device.device.clone(),
         queue: device.queue.clone(),
+        ndi_gpu: Arc::new(AtomicBool::new(true)),
+        use_rebar: Arc::new(AtomicBool::new(rebar.available)),
+        rebar_available: rebar.available,
     };
-    let rebar = crate::rebar::probe(&device);
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let telemetry = Arc::new(Mutex::new(Telemetry {
         last_error: String::new(),
@@ -475,7 +478,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         frame_buffer_frames: 3,
         rebar,
         rebar_optimization: true,
-        rebar_direct_sample: false,
+        ndi_gpu_upload: true,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
@@ -2190,16 +2193,26 @@ pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").rebar_optimization = enabled != 0;
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.rebar_optimization = enabled != 0;
+        shared
+            .gpu_ingest
+            .use_rebar
+            .store(enabled != 0 && shared.rebar.available, Ordering::Relaxed);
         OK
     })
     .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_set_rebar_direct_sample(enabled: u32) -> i32 {
+pub extern "C" fn mixer_set_ndi_gpu_upload(enabled: u32) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").rebar_direct_sample = enabled != 0;
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.ndi_gpu_upload = enabled != 0;
+        shared
+            .gpu_ingest
+            .ndi_gpu
+            .store(enabled != 0, Ordering::Relaxed);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2351,7 +2364,7 @@ fn render_loop(
         let (buffer_frames, use_rebar, direct_sample) = {
             let guard = shared.lock().expect("shared");
             let use_rebar = guard.rebar.available && guard.rebar_optimization;
-            let direct_sample = use_rebar && (cfg!(target_os = "macos") || guard.rebar_direct_sample);
+            let direct_sample = use_rebar && cfg!(target_os = "macos");
             (
                 guard.frame_buffer_frames.clamp(1, 8),
                 use_rebar,

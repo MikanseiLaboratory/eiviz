@@ -451,10 +451,11 @@ struct SessionSettings: Codable {
     var internalColorFormat: InternalColorFormat = .uyvy
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
+    var ndiGpuUpload: Bool?
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
-    var rebarDirectSampleEnabled: Bool { rebarDirectSample == true }
+    var ndiGpuUploadEnabled: Bool { ndiGpuUpload != false }
 
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval

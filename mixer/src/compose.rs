@@ -298,13 +298,7 @@ impl Composer {
         let _ = use_rebar;
         let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
         #[cfg(windows)]
-        if let Some(rebar) = self.rebar.as_mut() {
-            if direct_sample {
-                rebar.retain(&needed);
-            } else {
-                rebar.clear_direct();
-            }
-        }
+        let _ = needed;
         #[cfg(target_os = "macos")]
         if let Some(uma) = self.uma.as_mut() {
             if direct_sample {
@@ -377,38 +371,6 @@ impl Composer {
                 wgpu::TextureFormat::Rgba8Unorm
             };
             let pixels = snap.pixels.as_slice();
-            #[cfg(windows)]
-            if direct_sample && use_rebar {
-                if let Some(uploader) = self.rebar.as_mut() {
-                    if let Ok((texture, view)) = uploader.upload_direct(
-                        device,
-                        id,
-                        pixels,
-                        if packed { snap.width * 2 } else { snap.width * 4 },
-                        snap.height,
-                        tex_w,
-                        format,
-                    ) {
-                        self.blit_groups.remove(&id);
-                        self.uyvy_groups.remove(&id);
-                        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-                        self.sources.insert(
-                            id,
-                            SourceGpu {
-                                texture,
-                                view,
-                                width: tex_w,
-                                height: snap.height,
-                                packed,
-                                bgra,
-                                uploaded_pts: snap.last_pts,
-                                direct: true,
-                            },
-                        );
-                        continue;
-                    }
-                }
-            }
             #[cfg(target_os = "macos")]
             if direct_sample {
                 if let Some(uploader) = self.uma.as_mut() {

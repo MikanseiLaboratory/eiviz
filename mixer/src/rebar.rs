@@ -174,14 +174,7 @@ pub struct RebarUploader {
     d3d: windows::Win32::Graphics::Direct3D12::ID3D12Device,
     slots: Vec<StagingSlot>,
     next: usize,
-    direct: std::collections::HashMap<u64, SourceRing>,
     pending: Option<wgpu::CommandEncoder>,
-}
-
-#[cfg(windows)]
-struct SourceRing {
-    slots: Vec<StagingSlot>,
-    next: usize,
 }
 
 #[cfg(windows)]
@@ -208,48 +201,8 @@ impl RebarUploader {
             d3d,
             slots: Vec::new(),
             next: 0,
-            direct: std::collections::HashMap::new(),
             pending: None,
         })
-    }
-
-    pub fn retain(&mut self, needed: &std::collections::HashSet<u64>) {
-        self.direct.retain(|id, _| needed.contains(id));
-    }
-
-    pub fn clear_direct(&mut self) {
-        self.direct.clear();
-    }
-
-    pub fn upload_direct(
-        &mut self,
-        device: &GpuDevice,
-        source_id: u64,
-        data: &[u8],
-        row_bytes: u32,
-        height: u32,
-        tex_width: u32,
-        format: wgpu::TextureFormat,
-    ) -> Result<(wgpu::Texture, wgpu::TextureView), String> {
-        let slot_i = self.ensure_direct_slot(device, source_id, tex_width, height, format)?;
-        let (resource, pitch, texture, view) = {
-            let slot = self
-                .direct
-                .get(&source_id)
-                .and_then(|ring| ring.slots.get(slot_i))
-                .ok_or("direct ring")?;
-            (
-                slot.resource.clone(),
-                slot.row_pitch,
-                slot.imported.clone(),
-                slot.view.clone(),
-            )
-        };
-        write_mapped(&resource, data, row_bytes, height, pitch)?;
-        if let Some(ring) = self.direct.get_mut(&source_id) {
-            ring.next = (slot_i + 1) % STAGING_SLOTS;
-        }
-        Ok((texture, view))
     }
 
     pub fn upload(
@@ -317,34 +270,6 @@ impl RebarUploader {
                 .push(self.create_slot(device, width, height, format, false)?);
         }
         Ok(self.next)
-    }
-
-    fn ensure_direct_slot(
-        &mut self,
-        device: &GpuDevice,
-        source_id: u64,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> Result<usize, String> {
-        let reuse = self.direct.get(&source_id).is_some_and(|ring| {
-            ring.slots.get(ring.next).is_some_and(|slot| {
-                slot.width == width && slot.height == height && slot.format == format
-            })
-        });
-        if reuse {
-            return Ok(self.direct[&source_id].next);
-        }
-        let mut ring = SourceRing {
-            slots: Vec::new(),
-            next: 0,
-        };
-        while ring.slots.len() < STAGING_SLOTS {
-            ring.slots
-                .push(self.create_slot(device, width, height, format, true)?);
-        }
-        self.direct.insert(source_id, ring);
-        Ok(0)
     }
 
     fn create_slot(
@@ -468,6 +393,290 @@ impl RebarUploader {
 }
 
 #[cfg(windows)]
+pub struct RebarIngestRing {
+    d3d: windows::Win32::Graphics::Direct3D12::ID3D12Device,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    slots: Vec<IngestSlot>,
+    next: usize,
+    dead: bool,
+}
+
+#[cfg(windows)]
+struct IngestSlot {
+    resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    buffer: wgpu::Buffer,
+    dest: wgpu::Texture,
+    dest_view: wgpu::TextureView,
+    row_pitch: u32,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+#[cfg(windows)]
+impl RebarIngestRing {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        let d3d = unsafe {
+            device
+                .as_hal::<wgpu::hal::api::Dx12>()
+                .map(|hal| hal.raw_device().clone())
+        }?;
+        Some(Self {
+            d3d,
+            device: device.clone(),
+            queue: queue.clone(),
+            slots: Vec::new(),
+            next: 0,
+            dead: false,
+        })
+    }
+
+    pub fn is_live(&self) -> bool {
+        !self.dead
+    }
+
+    pub fn upload(
+        &mut self,
+        data: &[u8],
+        stride: usize,
+        row_bytes: usize,
+        width: u32,
+        height: u32,
+        packed: bool,
+        bgra: bool,
+        format: wgpu::TextureFormat,
+        pts: i64,
+    ) -> Result<crate::upload::GpuVideoFrame, String> {
+        if self.dead {
+            return Err("rebar ingest disabled".into());
+        }
+        match self.upload_inner(
+            data, stride, row_bytes, width, height, packed, bgra, format, pts,
+        ) {
+            Ok(frame) => Ok(frame),
+            Err(error) => {
+                self.dead = true;
+                Err(error)
+            }
+        }
+    }
+
+    fn upload_inner(
+        &mut self,
+        data: &[u8],
+        stride: usize,
+        row_bytes: usize,
+        width: u32,
+        height: u32,
+        packed: bool,
+        bgra: bool,
+        format: wgpu::TextureFormat,
+        pts: i64,
+    ) -> Result<crate::upload::GpuVideoFrame, String> {
+        let tex_w = if packed {
+            (width / 2).max(1)
+        } else {
+            width.max(1)
+        };
+        let tex_h = height.max(1);
+        let slot_i = self.ensure(tex_w, tex_h, format)?;
+        let (resource, pitch, buffer, dest, dest_view) = {
+            let slot = &self.slots[slot_i];
+            (
+                slot.resource.clone(),
+                slot.row_pitch,
+                slot.buffer.clone(),
+                slot.dest.clone(),
+                slot.dest_view.clone(),
+            )
+        };
+        write_mapped_strided(&resource, data, stride, row_bytes, tex_h, pitch)?;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz ndi rebar"),
+            });
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(tex_h),
+                },
+            },
+            dest.as_image_copy(),
+            wgpu::Extent3d {
+                width: tex_w,
+                height: tex_h,
+                depth_or_array_layers: 1,
+            },
+        );
+        {
+            let _guard = crate::device::lock_gpu_queue();
+            self.queue.submit(Some(encoder.finish()));
+        }
+        self.next = (slot_i + 1) % STAGING_SLOTS;
+        Ok(crate::upload::GpuVideoFrame {
+            pts,
+            width,
+            height,
+            packed,
+            bgra,
+            texture: dest,
+            view: dest_view,
+        })
+    }
+
+    fn ensure(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<usize, String> {
+        if self.slots.get(self.next).is_some_and(|slot| {
+            slot.width == width && slot.height == height && slot.format == format
+        }) {
+            return Ok(self.next);
+        }
+        self.slots.clear();
+        self.next = 0;
+        while self.slots.len() < STAGING_SLOTS {
+            self.slots
+                .push(create_gpu_upload_buffer(&self.d3d, &self.device, width, height, format)?);
+        }
+        Ok(self.next)
+    }
+}
+
+#[cfg(windows)]
+fn create_gpu_upload_buffer(
+    d3d: &windows::Win32::Graphics::Direct3D12::ID3D12Device,
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> Result<IngestSlot, String> {
+    use windows::Win32::Graphics::Direct3D12::{
+        ID3D12Resource, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    };
+
+    let dxgi = match format {
+        wgpu::TextureFormat::Bgra8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
+        _ => DXGI_FORMAT_R8G8B8A8_UNORM,
+    };
+    let tex_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: u64::from(width.max(1)),
+        Height: height.max(1),
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: dxgi,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: Default::default(),
+    };
+    let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total = 0u64;
+    unsafe {
+        d3d.GetCopyableFootprints(
+            &tex_desc,
+            0,
+            1,
+            0,
+            Some(std::ptr::from_mut(&mut layout)),
+            None,
+            None,
+            Some(std::ptr::from_mut(&mut total)),
+        );
+    }
+    let row_pitch = layout.Footprint.RowPitch.max(256);
+    let bytes = total.max(u64::from(row_pitch) * u64::from(height.max(1)));
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: bytes.max(256),
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: Default::default(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: Default::default(),
+    };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_GPU_UPLOAD,
+        ..Default::default()
+    };
+    let mut resource = None;
+    unsafe {
+        d3d.CreateCommittedResource::<ID3D12Resource>(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &buf_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut resource,
+        )
+        .map_err(|e| format!("GPU upload buffer: {e}"))?;
+    }
+    let resource = resource.ok_or("GPU upload heap buffer")?;
+    let hal = unsafe { wgpu::hal::dx12::Device::buffer_from_raw(resource.clone(), bytes.max(256)) };
+    let buffer = unsafe {
+        device.create_buffer_from_hal::<wgpu::hal::api::Dx12>(
+            hal,
+            &wgpu::BufferDescriptor {
+                label: Some("eiviz ndi rebar staging"),
+                size: bytes.max(256),
+                usage: wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+    };
+    let dest = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eiviz ndi rebar dest"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let dest_view = dest.create_view(&Default::default());
+    Ok(IngestSlot {
+        resource,
+        buffer,
+        dest,
+        dest_view,
+        row_pitch,
+        width,
+        height,
+        format,
+    })
+}
+
+#[cfg(windows)]
 fn write_mapped(
     resource: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     data: &[u8],
@@ -475,8 +684,20 @@ fn write_mapped(
     height: u32,
     row_pitch: u32,
 ) -> Result<(), String> {
+    write_mapped_strided(resource, data, row_bytes as usize, row_bytes as usize, height, row_pitch)
+}
+
+#[cfg(windows)]
+fn write_mapped_strided(
+    resource: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    data: &[u8],
+    stride: usize,
+    row_bytes: usize,
+    height: u32,
+    row_pitch: u32,
+) -> Result<(), String> {
     let pitch = row_pitch as usize;
-    let row = row_bytes as usize;
+    let row = row_bytes;
     unsafe {
         use windows::Win32::Graphics::Direct3D12::D3D12_RANGE;
         let mut ptr = std::ptr::null_mut();
@@ -489,16 +710,14 @@ fn write_mapped(
             return Err("GPU upload heap Map returned null".into());
         }
         let dest_bytes = ptr.cast::<u8>();
-        if row == pitch {
-            let n = row
-                .saturating_mul(height as usize)
-                .min(data.len());
+        if stride == row && row == pitch {
+            let n = row.saturating_mul(height as usize).min(data.len());
             if n > 0 {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), dest_bytes, n);
             }
         } else {
             for y in 0..height as usize {
-                let src = y * row;
+                let src = y * stride;
                 let dst = y * pitch;
                 let n = row.min(data.len().saturating_sub(src)).min(pitch);
                 if n > 0 {

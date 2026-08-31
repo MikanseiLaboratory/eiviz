@@ -37,7 +37,7 @@ struct SettingsView: View {
                     Button("OK") {
                         mixer.pushAudio()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
-                        _ = mixer_set_rebar_direct_sample(mixer.session.settings.rebarDirectSampleEnabled ? 1 : 0)
+                        _ = mixer_set_ndi_gpu_upload(mixer.session.settings.ndiGpuUploadEnabled ? 1 : 0)
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -94,7 +94,11 @@ struct SettingsView: View {
                 set: { mixer.session.settings.rebarOptimization = $0 }
             ))
             .disabled(!info.available)
-            Text("On Apple Silicon the CPU and GPU share one memory pool. With this option on, live CPU inputs (NDI / OMT) are written into MTLStorageModeShared textures and sampled directly, skipping wgpu's Private blit. Turn it off to use the default Metal upload path.")
+            Toggle("Upload NDI on the ingest thread", isOn: Binding(
+                get: { mixer.session.settings.ndiGpuUploadEnabled },
+                set: { mixer.session.settings.ndiGpuUpload = $0 }
+            ))
+            Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
