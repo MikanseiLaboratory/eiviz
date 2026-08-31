@@ -40,9 +40,10 @@ final class MixerController: ObservableObject {
     private var booted = false
     private var tbarLatching = false
     private var meterTimer: Timer?
-    private var previewByUnit: [UInt64: UInt64] = [:]
-    private var programByUnit: [UInt64: UInt64] = [:]
+    @Published private(set) var previewByUnit: [UInt64: UInt64] = [:]
+    @Published private(set) var programByUnit: [UInt64: UInt64] = [:]
     private var inputPreviewWindows: [UInt64: NSWindow] = [:]
+    private var inputPreviewControllers: [UInt64: NSWindowController] = [:]
     private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
     private let inputPreviewCloser = InputPreviewCloser()
     private var switcherWindows: [UInt64: NSWindow] = [:]
@@ -79,41 +80,52 @@ final class MixerController: ObservableObject {
         booted = false
     }
 
+    func previewSelectedInput() {
+        guard let id = selectedInputId,
+              let input = session.inputs.first(where: { $0.id == id })
+        else {
+            errorText = "Select an Input to preview."
+            let alert = NSAlert()
+            alert.messageText = "Select an Input to preview."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+        openInputPreview(inputId: input.id, name: input.name)
+    }
+
     func openInputPreview(inputId: UInt64, name: String) {
         if let existing = inputPreviewWindows[inputId] {
-            NSApp.activate(ignoringOtherApps: true)
-            existing.makeKeyAndOrderFront(nil)
-            existing.orderFrontRegardless()
+            presentInputPreview(existing)
             return
         }
         let monitorId = session.nextMonitorId
         session.nextMonitorId += 1
         inputPreviewMonitorIds[inputId] = monitorId
         let unit = selectedUnit
-        let host = NSHostingController(rootView: InputPreviewView(
-            monitorId: monitorId,
-            sourceId: inputId,
-            ratioWidth: unit.width,
-            ratioHeight: unit.height
-        ))
         let width = CGFloat(960)
         let height = width * CGFloat(max(1, unit.height)) / CGFloat(max(1, unit.width))
+        let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
         let window = InputPreviewHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            contentRect: contentRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = name
         window.identifier = NSUserInterfaceItemIdentifier("input-preview-\(inputId)")
-        window.contentViewController = host
+        window.contentAspect = CGFloat(max(1, unit.width)) / CGFloat(max(1, unit.height))
+        window.contentView = makeInputPreviewContent(
+            monitorId: monitorId,
+            sourceId: inputId,
+            frame: contentRect
+        )
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(calibratedWhite: 17 / 255, alpha: 1)
         window.minSize = NSSize(width: 320, height: 180)
-        var behavior = window.collectionBehavior
-        behavior.insert(.fullScreenPrimary)
-        behavior.insert(.moveToActiveSpace)
-        window.collectionBehavior = behavior
+        window.tabbingMode = .disallowed
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
+        window.setContentSize(NSSize(width: width, height: height))
         window.center()
         inputPreviewCloser.onClose = { [weak self] closedId in
             Task { @MainActor in
@@ -121,16 +133,25 @@ final class MixerController: ObservableObject {
             }
         }
         window.delegate = inputPreviewCloser
+        let controller = NSWindowController(window: window)
+        inputPreviewControllers[inputId] = controller
         inputPreviewWindows[inputId] = window
+        presentInputPreview(window)
+        _ = mixer_set_monitor_present_interval(monitorId, 1)
+    }
+
+    private func presentInputPreview(_ window: NSWindow) {
         NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-        window.contentAspectRatio = NSSize(width: CGFloat(max(1, unit.width)), height: CGFloat(max(1, unit.height)))
-        _ = mixer_set_monitor_present_interval(monitorId, 1)
     }
 
     func closeInputPreview(_ inputId: UInt64) {
         let window = inputPreviewWindows.removeValue(forKey: inputId)
+        inputPreviewControllers.removeValue(forKey: inputId)
         if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
             _ = mixer_detach_monitor(monitorId)
         }
@@ -146,6 +167,7 @@ final class MixerController: ObservableObject {
 
     private func inputPreviewDidClose(_ inputId: UInt64) {
         inputPreviewWindows.removeValue(forKey: inputId)
+        inputPreviewControllers.removeValue(forKey: inputId)
         if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
             _ = mixer_detach_monitor(monitorId)
         }
@@ -164,8 +186,7 @@ final class MixerController: ObservableObject {
         let preview = session.scenes.first?.gpuId ?? EIVIZ_SRC_BARS
         let program = session.scenes.count > 1 ? session.scenes[1].gpuId : preview
         for unit in session.units {
-            previewByUnit[unit.id] = preview
-            programByUnit[unit.id] = program
+            applyBusSources(unitId: unit.id, preview: preview, program: program)
             pushState(unitId: unit.id, program: program, preview: preview, mix: 0, kind: EIVIZ_TRANSITION_FADE)
         }
         attachInputs()
@@ -231,6 +252,7 @@ final class MixerController: ObservableObject {
         let unit = unit(for: unitId)
         let preset = tbarPreset(for: unit)
         fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "CUT")
+        syncUnitBuses(unit.id)
     }
 
     func auto() {
@@ -242,6 +264,7 @@ final class MixerController: ObservableObject {
         fail(mixer_unit_auto(selectedUnit.id, selectedUnit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "AUTO")
         mix = 0
         tbarLocked = false
+        syncUnitBuses(selectedUnit.id)
     }
 
     func firePreset(_ preset: TransitionPreset, index: Int) {
@@ -258,6 +281,7 @@ final class MixerController: ObservableObject {
         } else {
             fail(mixer_unit_auto(unit.id, unit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "TAKE")
         }
+        syncUnitBuses(unit.id)
     }
 
     func previewScene(_ scene: SceneEntry) {
@@ -266,15 +290,20 @@ final class MixerController: ObservableObject {
 
     func previewScene(_ scene: SceneEntry, unitId: UInt64) {
         let unit = unit(for: unitId)
-        previewByUnit[unit.id] = scene.gpuId
         var state = currentState(unit.id)
         state.preview_source = scene.gpuId
         fail(mixer_unit_set_state(unit.id, &state), "Preview scene")
+        applyBusSources(unitId: unit.id, preview: scene.gpuId, program: state.program_source)
         selectedSceneId = scene.id
     }
 
     func previewingSceneId(for unitId: UInt64) -> UInt64? {
         guard let gpuId = previewByUnit[unitId] else { return selectedSceneId }
+        return session.scenes.first { $0.gpuId == gpuId }?.id
+    }
+
+    func programmingSceneId(for unitId: UInt64) -> UInt64? {
+        guard let gpuId = programByUnit[unitId] else { return nil }
         return session.scenes.first { $0.gpuId == gpuId }?.id
     }
 
@@ -530,6 +559,7 @@ final class MixerController: ObservableObject {
         window.contentViewController = host
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(calibratedWhite: 26 / 255, alpha: 1)
+        window.tabbingMode = .disallowed
         window.center()
         switcherCloser.onClose = { [weak self] closedId in
             Task { @MainActor in
@@ -919,7 +949,31 @@ final class MixerController: ObservableObject {
             }
         }
         tickVideoTransport()
+        syncAllUnitBuses()
         updateStatus()
+    }
+
+    private func syncAllUnitBuses() {
+        for unit in session.units {
+            syncUnitBuses(unit.id)
+        }
+    }
+
+    private func syncUnitBuses(_ unitId: UInt64) {
+        var state = MixerFFI.emptyState()
+        guard mixer_unit_get_state(unitId, &state) == EIVIZ_OK else { return }
+        applyBusSources(unitId: unitId, preview: state.preview_source, program: state.program_source)
+    }
+
+    private func applyBusSources(unitId: UInt64, preview: UInt64, program: UInt64) {
+        if previewByUnit[unitId] != preview || programByUnit[unitId] != program {
+            var nextPreview = previewByUnit
+            var nextProgram = programByUnit
+            nextPreview[unitId] = preview
+            nextProgram[unitId] = program
+            previewByUnit = nextPreview
+            programByUnit = nextProgram
+        }
     }
 
     private func tickVideoTransport() {
@@ -1027,6 +1081,18 @@ private final class InputPreviewCloser: NSObject, NSWindowDelegate {
               let inputId = UInt64(raw.dropFirst("input-preview-".count))
         else { return }
         onClose?(inputId)
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let window = sender as? InputPreviewHostWindow,
+              !window.styleMask.contains(.fullScreen),
+              let content = window.contentView
+        else { return frameSize }
+        let extraW = window.frame.width - content.bounds.width
+        let extraH = window.frame.height - content.bounds.height
+        let contentW = max(320, frameSize.width - extraW)
+        let contentH = contentW / max(0.1, window.contentAspect)
+        return NSSize(width: contentW + extraW, height: contentH + extraH)
     }
 }
 

@@ -1,24 +1,24 @@
 import AppKit
-import EivizMixer
-import SwiftUI
 
-struct InputPreviewView: View {
-    let monitorId: UInt64
-    let sourceId: UInt64
-    let ratioWidth: UInt32
-    let ratioHeight: UInt32
+func makeInputPreviewContent(monitorId: UInt64, sourceId: UInt64, frame: NSRect) -> NSView {
+    let content = InputPreviewContentView(frame: frame)
+    content.wantsLayer = false
+    content.autoresizingMask = [.width, .height]
+    let surface = MetalSurfaceView(frame: content.bounds)
+    surface.autoresizingMask = [.width, .height]
+    surface.presentInterval = 1
+    surface.role = .monitor(monitorId: monitorId, sourceId: sourceId)
+    content.addSubview(surface)
+    return content
+}
 
-    var body: some View {
-        let ratio = CGFloat(max(1, ratioWidth)) / CGFloat(max(1, ratioHeight))
-        MetalPreviewRepresentable(role: .monitor(monitorId: monitorId, sourceId: sourceId))
-            .background(Color.black)
-            .aspectRatio(ratio, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(white: 17 / 255))
-    }
+final class InputPreviewContentView: NSView {
+    override var isOpaque: Bool { true }
 }
 
 final class InputPreviewHostWindow: NSWindow {
+    var contentAspect: CGFloat = 16.0 / 9.0
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 

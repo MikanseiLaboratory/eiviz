@@ -78,39 +78,71 @@ struct SwitcherView: View {
     private var scenes: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Scenes").fontWeight(.bold)
-            List(mixer.session.scenes, selection: previewSelection) { scene in
-                Text(scene.name)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 3)
-                    .padding(.horizontal, 4)
-                    .background(isPreviewing(scene) ? EivizTheme.preview.opacity(0.22) : Color.clear)
-                    .overlay(
-                        Rectangle().stroke(
-                            isPreviewing(scene) ? EivizTheme.preview : Color.clear,
-                            lineWidth: 1
-                        )
-                    )
-                    .contentShape(Rectangle())
-                    .tag(scene.id)
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(mixer.session.scenes) { scene in
+                        sceneRow(scene)
+                    }
+                }
+                .padding(4)
             }
-            .scrollContentBackground(.hidden)
             .background(EivizTheme.list)
         }
         .frame(height: 160)
     }
 
-    private var previewSelection: Binding<UInt64?> {
-        Binding(
-            get: { mixer.previewingSceneId(for: unitId) },
-            set: { id in
-                guard let id, let scene = mixer.session.scenes.first(where: { $0.id == id }) else { return }
-                mixer.previewScene(scene, unitId: unitId)
+    private func sceneRow(_ scene: SceneEntry) -> some View {
+        let preview = isPreviewing(scene)
+        let program = isProgramming(scene)
+        return HStack(spacing: 6) {
+            Text(scene.name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if program {
+                tally("PGM", EivizTheme.program)
             }
+            if preview {
+                tally("PRV", EivizTheme.preview)
+            }
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .background(rowFill(preview: preview, program: program))
+        .overlay(
+            Rectangle().stroke(rowStroke(preview: preview, program: program), lineWidth: 1)
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            mixer.previewScene(scene, unitId: unitId)
+        }
+    }
+
+    private func tally(_ title: String, _ color: Color) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(title == "PRV" ? Color(red: 0.07, green: 0.07, blue: 0.07) : Color.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color)
+    }
+
+    private func rowFill(preview: Bool, program: Bool) -> Color {
+        if program { return EivizTheme.program.opacity(0.28) }
+        if preview { return EivizTheme.preview.opacity(0.22) }
+        return Color.clear
+    }
+
+    private func rowStroke(preview: Bool, program: Bool) -> Color {
+        if preview { return EivizTheme.preview }
+        if program { return EivizTheme.program }
+        return Color.clear
     }
 
     private func isPreviewing(_ scene: SceneEntry) -> Bool {
         mixer.previewingSceneId(for: unitId) == scene.id
+    }
+
+    private func isProgramming(_ scene: SceneEntry) -> Bool {
+        mixer.programmingSceneId(for: unitId) == scene.id
     }
 
     private func bus(title: String, color: Color, kind: UInt32) -> some View {

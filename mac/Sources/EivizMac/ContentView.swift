@@ -193,10 +193,12 @@ struct ContentView: View {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
-                    List(selection: $mixer.selectedInputId) {
-                        ForEach(mixer.session.inputs) { input in
-                            Text(input.name).tag(Optional(input.id))
-                        }
+                    List(mixer.session.inputs, selection: $mixer.selectedInputId) { input in
+                        Text(input.name)
+                            .tag(input.id)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { mixer.selectedInputId = input.id }
                     }
                     .scrollContentBackground(.hidden)
                     .background(EivizTheme.list)
@@ -212,15 +214,7 @@ struct ContentView: View {
                             mixer.editingInput = input
                             mixer.showAddInput = true
                         }
-                        Button("Preview") {
-                            guard let id = mixer.selectedInputId,
-                                  let input = mixer.session.inputs.first(where: { $0.id == id })
-                            else {
-                                mixer.errorText = "Select an Input to preview."
-                                return
-                            }
-                            mixer.openInputPreview(inputId: input.id, name: input.name)
-                        }
+                        Button("Preview") { mixer.previewSelectedInput() }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
                     .buttonStyle(MixerButtonStyle())
