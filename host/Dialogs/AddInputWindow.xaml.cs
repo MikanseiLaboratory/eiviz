@@ -51,6 +51,10 @@ public partial class AddInputWindow : Window
     public bool ResultKeepFullOnMultiview { get; private set; }
     public OmtQuality ResultOmtQuality { get; private set; } = OmtQuality.Default;
     public NdiBandwidth ResultNdiBandwidth { get; private set; } = NdiBandwidth.Highest;
+    public bool ResultVideoLoop { get; private set; } = true;
+    public VideoPlayWhen ResultVideoPlayWhen { get; private set; } = VideoPlayWhen.Never;
+    public VideoTriggerWhen ResultVideoRestartWhen { get; private set; } = VideoTriggerWhen.Never;
+    public VideoTriggerWhen ResultVideoPauseWhen { get; private set; } = VideoTriggerWhen.Never;
 
     public void Load(InputEntry input)
     {
@@ -68,6 +72,10 @@ public partial class AddInputWindow : Window
         ScrollBox.IsChecked = input.Scroll;
         StillPath.Text = input.Kind == InputKind.Still ? input.PathOrAddress ?? "" : "";
         VideoPath.Text = input.Kind == InputKind.Video ? input.PathOrAddress ?? "" : "";
+        VideoLoopBox.IsChecked = input.VideoLoop;
+        SelectTag(VideoPlayBox, ((int)input.VideoPlayWhen).ToString());
+        SelectTag(VideoRestartBox, ((int)input.VideoRestartWhen).ToString());
+        SelectTag(VideoPauseBox, ((int)input.VideoPauseWhen).ToString());
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
@@ -242,6 +250,10 @@ public partial class AddInputWindow : Window
                     return;
                 ResultPath = VideoPath.Text.Trim();
                 ResultName = System.IO.Path.GetFileName(ResultPath);
+                ResultVideoLoop = VideoLoopBox.IsChecked == true;
+                ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);
+                ResultVideoRestartWhen = ReadVideoTriggerWhen(VideoRestartBox);
+                ResultVideoPauseWhen = ReadVideoTriggerWhen(VideoPauseBox);
                 Remember(VideoHistory, ResultPath);
                 break;
             case InputKind.Omt:
@@ -304,6 +316,20 @@ public partial class AddInputWindow : Window
             };
         }
         return OmtQuality.Default;
+    }
+
+    private static VideoPlayWhen ReadVideoPlayWhen(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var value))
+            return (VideoPlayWhen)Math.Clamp(value, 0u, 3u);
+        return VideoPlayWhen.Never;
+    }
+
+    private static VideoTriggerWhen ReadVideoTriggerWhen(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var value))
+            return (VideoTriggerWhen)Math.Clamp(value, 0u, 3u);
+        return VideoTriggerWhen.Never;
     }
 
     private static BandwidthSave ReadSaveMode(ComboBox box)

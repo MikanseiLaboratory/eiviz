@@ -46,6 +46,7 @@ final class MixerController: ObservableObject {
     private var inputPreviewWindows: [UInt64: NSWindow] = [:]
     private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
     private let inputPreviewCloser = InputPreviewCloser()
+    private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -320,6 +321,7 @@ final class MixerController: ObservableObject {
               !session.inputs[index].isBuiltin
         else { return }
         closeInputPreview(id)
+        videoRoles.removeValue(forKey: id)
         pumps.stop(id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
@@ -595,9 +597,9 @@ final class MixerController: ObservableObject {
             }
         case .video:
             if let path = input.pathOrAddress {
-                pumps.startFile(id: input.id, path: path)
+                pumps.startFile(id: input.id, path: path, loop: input.videoLoop, playing: input.videoStartsPlaying)
                 videoTitle = input.name
-                videoPlaying = true
+                videoPlaying = input.videoStartsPlaying
             }
         case .omt:
             if let address = input.pathOrAddress {
@@ -754,7 +756,92 @@ final class MixerController: ObservableObject {
                 videoFraction = info.position / info.duration
             }
         }
+        tickVideoTransport()
         updateStatus()
+    }
+
+    private func tickVideoTransport() {
+        var roles: [UInt64: (program: Bool, preview: Bool)] = [:]
+        for unit in session.units {
+            var state = MixerFFI.emptyState()
+            _ = mixer_unit_get_state(unit.id, &state)
+            markVideoRole(&roles, state.program_source, program: true, preview: false)
+            markVideoRole(&roles, state.preview_source, program: false, preview: true)
+            if state.mix > 0.001 {
+                markVideoRole(&roles, state.preview_source, program: true, preview: false)
+            }
+            for slot in unit.overlays where slot.enabled && slot.sceneGpuId != 0 {
+                markVideoRole(&roles, slot.sceneGpuId, program: true, preview: false)
+            }
+        }
+        for id in inputPreviewWindows.keys {
+            markVideoRole(&roles, id, program: false, preview: true)
+        }
+        for input in session.inputs where input.kind == .video {
+            let now = roles[input.id] ?? (false, false)
+            let prev = videoRoles[input.id] ?? (false, false)
+            let roseProgram = now.program && !prev.program
+            let fellProgram = !now.program && prev.program
+            let rosePreview = now.preview && !prev.preview
+            let paused = matchesTrigger(input.videoPauseWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
+            let restarted = matchesTrigger(input.videoRestartWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
+            if paused && !restarted {
+                pumps.setPlaying(input.id, playing: false)
+            }
+            if restarted {
+                pumps.seek(input.id, fraction: 0)
+                pumps.setPlaying(input.id, playing: true)
+            } else if shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
+                pumps.setPlaying(input.id, playing: true)
+            }
+            videoRoles[input.id] = now
+        }
+    }
+
+    private func markVideoRole(
+        _ roles: inout [UInt64: (program: Bool, preview: Bool)],
+        _ id: UInt64,
+        program: Bool,
+        preview: Bool
+    ) {
+        guard id != 0, id < EIVIZ_MULTIVIEW_BASE else { return }
+        if id >= EIVIZ_SCENE_BASE {
+            guard let scene = session.scenes.first(where: { $0.gpuId == id }) else { return }
+            for layer in scene.layers {
+                markVideoRole(&roles, layer.inputId, program: program, preview: preview)
+            }
+            return
+        }
+        let current = roles[id] ?? (false, false)
+        roles[id] = (current.program || program, current.preview || preview)
+    }
+
+    private func shouldPlay(
+        _ when: VideoPlayWhen,
+        roseProgram: Bool,
+        rosePreview: Bool,
+        now: (program: Bool, preview: Bool)
+    ) -> Bool {
+        switch when {
+        case .onActive: return roseProgram
+        case .onPreview: return rosePreview
+        case .always: return now.program || now.preview
+        case .never: return false
+        }
+    }
+
+    private func matchesTrigger(
+        _ when: VideoTriggerWhen,
+        roseProgram: Bool,
+        fellProgram: Bool,
+        rosePreview: Bool
+    ) -> Bool {
+        switch when {
+        case .onActive: return roseProgram
+        case .onDeactivated: return fellProgram
+        case .onPreview: return rosePreview
+        case .never: return false
+        }
     }
 
     private func updateStatus() {

@@ -61,6 +61,22 @@ public enum MvSlotKind
     MuProgram
 }
 
+public enum VideoPlayWhen
+{
+    Never = 0,
+    OnActive = 1,
+    OnPreview = 2,
+    Always = 3
+}
+
+public enum VideoTriggerWhen
+{
+    Never = 0,
+    OnActive = 1,
+    OnDeactivated = 2,
+    OnPreview = 3
+}
+
 public sealed class MvSlot
 {
     public MvSlotKind Kind { get; set; }
@@ -86,6 +102,12 @@ public sealed class InputEntry
     public bool KeepFullOnMultiview { get; set; }
     public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
     public NdiBandwidth NdiBandwidth { get; set; } = NdiBandwidth.Highest;
+    public bool VideoLoop { get; set; } = true;
+    public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
+    public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
+    public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+    public bool VideoStartsPlaying =>
+        VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
     public override string ToString() => Name;
 }

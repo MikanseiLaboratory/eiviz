@@ -33,6 +33,7 @@ static MF_ONCE: Once = Once::new();
 pub struct VideoPump {
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
     position_hns: Arc<AtomicI64>,
     duration_hns: Arc<AtomicI64>,
@@ -51,11 +52,13 @@ impl VideoPump {
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let playing = Arc::new(AtomicBool::new(true));
+        let looping = Arc::new(AtomicBool::new(true));
         let seek_hns = Arc::new(AtomicI64::new(-1));
         let position_hns = Arc::new(AtomicI64::new(0));
         let duration_hns = Arc::new(AtomicI64::new(0));
         let stop_t = Arc::clone(&stop);
         let playing_t = Arc::clone(&playing);
+        let looping_t = Arc::clone(&looping);
         let seek_t = Arc::clone(&seek_hns);
         let pos_t = Arc::clone(&position_hns);
         let dur_t = Arc::clone(&duration_hns);
@@ -64,8 +67,8 @@ impl VideoPump {
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, format, uploads, gpu, stop_t, playing_t, seek_t,
-                    pos_t, dur_t, ready_tx,
+                    source_id, path, capture, format, uploads, gpu, stop_t, playing_t, looping_t,
+                    seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -75,6 +78,7 @@ impl VideoPump {
             Ok(Ok(())) => Ok(Self {
                 stop,
                 playing,
+                looping,
                 seek_hns,
                 position_hns,
                 duration_hns,
@@ -100,6 +104,10 @@ impl VideoPump {
 
     pub fn set_playing(&self, playing: bool) {
         self.playing.store(playing, Ordering::Relaxed);
+    }
+
+    pub fn set_looping(&self, looping: bool) {
+        self.looping.store(looping, Ordering::Relaxed);
     }
 
     pub fn seek(&self, hns: i64) {
@@ -136,6 +144,7 @@ fn run_loop(
     gpu: GpuVideoContext,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
     position_hns: Arc<AtomicI64>,
     duration_hns: Arc<AtomicI64>,
@@ -223,7 +232,18 @@ fn run_loop(
             let sample = match read_sample(&reader, audio.as_ref()) {
                 Ok(Some(sample)) => sample,
                 Ok(None) => continue,
-                Err(end) if end => break,
+                Err(end) if end => {
+                    if capture {
+                        break;
+                    }
+                    if looping.load(Ordering::Relaxed) {
+                        position_hns.store(0, Ordering::Relaxed);
+                        seek_hns.store(0, Ordering::Relaxed);
+                    } else {
+                        playing.store(false, Ordering::Relaxed);
+                    }
+                    continue;
+                }
                 Err(_) => continue,
             };
             match sample {

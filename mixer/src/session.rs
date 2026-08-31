@@ -240,6 +240,32 @@ pub struct InputDto {
     pub omt_quality: OmtQuality,
     #[serde(default)]
     pub ndi_bandwidth: NdiBandwidth,
+    #[serde(default = "default_true")]
+    pub video_loop: bool,
+    #[serde(default)]
+    pub video_play_when: VideoPlayWhen,
+    #[serde(default)]
+    pub video_restart_when: VideoTriggerWhen,
+    #[serde(default)]
+    pub video_pause_when: VideoTriggerWhen,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoPlayWhen {
+    #[default]
+    Never,
+    OnActive,
+    OnPreview,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoTriggerWhen {
+    #[default]
+    Never,
+    OnActive,
+    OnDeactivated,
+    OnPreview,
 }
 
 fn one_u32() -> u32 {

@@ -1173,6 +1173,25 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
+    #[cfg(not(windows))]
+    {
+        let _ = (id, looping);
+        return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
+    }
+    #[cfg(windows)]
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let Some(pump) = shared.videos.get(&id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        pump.set_looping(looping != 0);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
     #[cfg(not(windows))]
     {

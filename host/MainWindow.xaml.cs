@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private ResourceMonitorWindow? _resourcesWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
+    private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
@@ -416,6 +417,7 @@ public partial class MainWindow : Window
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
+        _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
     private void TickVideo()
@@ -664,11 +666,13 @@ public partial class MainWindow : Window
         var nowGenerator = dialog.Kind is InputKind.Color or InputKind.Bars;
         var keepLive = replacing
             && input.Kind == dialog.Kind
-            && dialog.Kind is InputKind.Omt or InputKind.Ndi
-            && input.PathOrAddress == dialog.ResultPath
-            && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
-            && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
-            && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth);
+            && (
+                (dialog.Kind == InputKind.Video && input.PathOrAddress == dialog.ResultPath)
+                || (dialog.Kind is InputKind.Omt or InputKind.Ndi
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
+                    && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth)));
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             Commands.TryEnqueue(new DropSourceCommand(input.Id));
@@ -692,6 +696,10 @@ public partial class MainWindow : Window
             && dialog.ResultKeepFullOnMultiview;
         input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
         input.NdiBandwidth = dialog.Kind == InputKind.Ndi ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
+        input.VideoLoop = dialog.Kind == InputKind.Video && dialog.ResultVideoLoop;
+        input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
+        input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
+        input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;
         if (keepLive)
         {
             if (dialog.Kind == InputKind.Omt)
@@ -702,6 +710,8 @@ public partial class MainWindow : Window
                     input.KeepFullOnMultiview,
                     input.OmtQuality));
             }
+            if (dialog.Kind == InputKind.Video)
+                MixerNative.VideoSetLoop(input.Id, input.VideoLoop ? 1u : 0u);
             return;
         }
         switch (dialog.Kind)
@@ -720,7 +730,11 @@ public partial class MainWindow : Window
                 Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
                 break;
             case InputKind.Video:
-                Commands.TryEnqueue(new StartVideoCommand(input.Id, dialog.ResultPath!));
+                Commands.TryEnqueue(new StartVideoCommand(
+                    input.Id,
+                    dialog.ResultPath!,
+                    input.VideoLoop,
+                    input.VideoStartsPlaying));
                 break;
             case InputKind.Omt:
                 Commands.TryEnqueue(new ConnectOmtCommand(
@@ -760,6 +774,7 @@ public partial class MainWindow : Window
             return;
         }
         CloseInputPreview(input.Id);
+        _videoTransport.Forget(input.Id);
         Commands.TryEnqueue(new DropSourceCommand(input.Id));
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
@@ -1045,7 +1060,11 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(input.PathOrAddress))
                 continue;
             if (input.Kind == InputKind.Video)
-                Commands.TryEnqueue(new StartVideoCommand(input.Id, input.PathOrAddress));
+                Commands.TryEnqueue(new StartVideoCommand(
+                    input.Id,
+                    input.PathOrAddress,
+                    input.VideoLoop,
+                    input.VideoStartsPlaying));
             else if (input.Kind == InputKind.Uvc)
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
         }

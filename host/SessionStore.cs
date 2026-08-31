@@ -142,6 +142,10 @@ internal static class SessionStore
         public bool KeepFullOnMultiview { get; set; }
         public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
         public NdiBandwidth NdiBandwidth { get; set; } = NdiBandwidth.Highest;
+        public bool VideoLoop { get; set; } = true;
+        public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
+        public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
+        public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -161,7 +165,11 @@ internal static class SessionStore
             BandwidthSave = input.BandwidthSave,
             KeepFullOnMultiview = input.KeepFullOnMultiview,
             OmtQuality = input.OmtQuality,
-            NdiBandwidth = input.NdiBandwidth
+            NdiBandwidth = input.NdiBandwidth,
+            VideoLoop = input.VideoLoop,
+            VideoPlayWhen = input.VideoPlayWhen,
+            VideoRestartWhen = input.VideoRestartWhen,
+            VideoPauseWhen = input.VideoPauseWhen
         };
 
         public InputEntry ToEntry() => new()
@@ -182,7 +190,11 @@ internal static class SessionStore
             BandwidthSave = BandwidthSave,
             KeepFullOnMultiview = KeepFullOnMultiview,
             OmtQuality = OmtQuality,
-            NdiBandwidth = NdiBandwidth
+            NdiBandwidth = NdiBandwidth,
+            VideoLoop = VideoLoop,
+            VideoPlayWhen = VideoPlayWhen,
+            VideoRestartWhen = VideoRestartWhen,
+            VideoPauseWhen = VideoPauseWhen
         };
     }
 

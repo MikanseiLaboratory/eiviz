@@ -167,6 +167,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_playing")]
     internal static partial int VideoSetPlaying(ulong id, uint playing);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_loop")]
+    internal static partial int VideoSetLoop(ulong id, uint looping);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_seek")]
     internal static partial int VideoSeek(ulong id, long hns);
 

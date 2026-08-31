@@ -377,6 +377,10 @@ struct AddInputView: View {
     @State private var buffer: UInt32 = 1
     @State private var quality: UInt32 = 0
     @State private var ndiLow = false
+    @State private var videoLoop = true
+    @State private var videoPlayWhen: VideoPlayWhen = .never
+    @State private var videoRestartWhen: VideoTriggerWhen = .never
+    @State private var videoPauseWhen: VideoTriggerWhen = .never
 
     var body: some View {
         HStack(spacing: 0) {
@@ -422,6 +426,25 @@ struct AddInputView: View {
             pathRow($stillPath) { pick(["public.image"], $stillPath) }
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
+            Toggle("Loop", isOn: $videoLoop)
+            Picker("Play when", selection: $videoPlayWhen) {
+                Text("Never (manual)").tag(VideoPlayWhen.never)
+                Text("Active (Program)").tag(VideoPlayWhen.onActive)
+                Text("On Preview").tag(VideoPlayWhen.onPreview)
+                Text("Always").tag(VideoPlayWhen.always)
+            }
+            Picker("Restart when", selection: $videoRestartWhen) {
+                Text("Never").tag(VideoTriggerWhen.never)
+                Text("Active (Program)").tag(VideoTriggerWhen.onActive)
+                Text("Taken off Active").tag(VideoTriggerWhen.onDeactivated)
+                Text("On Preview").tag(VideoTriggerWhen.onPreview)
+            }
+            Picker("Pause when", selection: $videoPauseWhen) {
+                Text("Never").tag(VideoTriggerWhen.never)
+                Text("Active (Program)").tag(VideoTriggerWhen.onActive)
+                Text("Taken off Active").tag(VideoTriggerWhen.onDeactivated)
+                Text("On Preview").tag(VideoTriggerWhen.onPreview)
+            }
         case "OMT":
             mixerTextField($omtAddress, placeholder: "OMT source address")
             Button("Refresh discovery") { refreshOmt() }
@@ -506,6 +529,10 @@ struct AddInputView: View {
         buffer = editing.frameBufferFrames
         ndiLow = editing.ndiBandwidth == .lowest
         quality = editing.omtQuality.rawUInt
+        videoLoop = editing.videoLoop
+        videoPlayWhen = editing.videoPlayWhen
+        videoRestartWhen = editing.videoRestartWhen
+        videoPauseWhen = editing.videoPauseWhen
     }
 
     private func defaultName() -> String {
@@ -546,6 +573,10 @@ struct AddInputView: View {
             guard !videoPath.isEmpty else { return }
             input.kind = .video
             input.pathOrAddress = videoPath
+            input.videoLoop = videoLoop
+            input.videoPlayWhen = videoPlayWhen
+            input.videoRestartWhen = videoRestartWhen
+            input.videoPauseWhen = videoPauseWhen
         case "OMT":
             guard !omtAddress.isEmpty else { return }
             input.kind = .omt

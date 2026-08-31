@@ -6,11 +6,11 @@ import Foundation
 final class FramePump {
     private var readers: [UInt64: Pump] = [:]
 
-    func startFile(id: UInt64, path: String) {
+    func startFile(id: UInt64, path: String, loop: Bool = true, playing: Bool = true) {
         stop(id)
         let url = URL(fileURLWithPath: path)
         let asset = AVURLAsset(url: url)
-        readers[id] = Pump(id: id, asset: asset)
+        readers[id] = Pump(id: id, asset: asset, loop: loop, playing: playing)
     }
 
     func startCapture(id: UInt64, deviceId: String) {
@@ -25,7 +25,11 @@ final class FramePump {
     }
 
     func setPlaying(_ id: UInt64, playing: Bool) {
-        readers[id]?.playing = playing
+        readers[id]?.setPlaying(playing)
+    }
+
+    func setLoop(_ id: UInt64, loop: Bool) {
+        readers[id]?.loopEnabled = loop
     }
 
     func seek(_ id: UInt64, fraction: Double) {
@@ -45,6 +49,7 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     let id: UInt64
     let isFile: Bool
     var playing = true
+    var loopEnabled = true
     var position: Double = 0
     var duration: Double = 1
     private var output: AVPlayerItemVideoOutput?
@@ -52,12 +57,16 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var capture: AVCaptureSession?
     private var timer: Timer?
     private var registered = false
+    private var endObserver: NSObjectProtocol?
 
-    init(id: UInt64, asset: AVURLAsset) {
+    init(id: UInt64, asset: AVURLAsset, loop: Bool, playing: Bool) {
         self.id = id
         self.isFile = true
+        self.loopEnabled = loop
+        self.playing = playing
         super.init()
         let item = AVPlayerItem(asset: asset)
+        item.actionAtItemEnd = .none
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
@@ -65,7 +74,16 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         item.add(videoOutput)
         output = videoOutput
         player = AVPlayer(playerItem: item)
-        player?.play()
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleEnd()
+        }
+        if playing {
+            player?.play()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.pull()
         }
@@ -97,12 +115,37 @@ private final class Pump: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     func stop() {
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
         timer?.invalidate()
         timer = nil
         player?.pause()
         player = nil
         capture?.stopRunning()
         capture = nil
+    }
+
+    func setPlaying(_ playing: Bool) {
+        self.playing = playing
+        if playing {
+            player?.play()
+        } else {
+            player?.pause()
+        }
+    }
+
+    private func handleEnd() {
+        if loopEnabled {
+            position = 0
+            player?.seek(to: .zero)
+            player?.play()
+            playing = true
+        } else {
+            playing = false
+            player?.pause()
+        }
     }
 
     func seek(fraction: Double) {

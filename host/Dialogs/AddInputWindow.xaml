@@ -60,8 +60,31 @@
                         <Button DockPanel.Dock="Right" Content="Browse" Width="88" Click="BrowseVideo_Click"/>
                         <TextBox x:Name="VideoPath" Margin="0,0,8,0"/>
                     </DockPanel>
-                    <TextBlock Text="Recent" Margin="0,12,0,4"/>
-                    <ListBox x:Name="VideoRecent" Height="240" Background="#333" Foreground="#EEE"
+                    <CheckBox x:Name="VideoLoopBox" Content="Loop" IsChecked="True"
+                              Foreground="#EEE" Margin="0,12,0,8"/>
+                    <TextBlock Text="Play when" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="VideoPlayBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Never (manual)" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Active (Program)" Tag="1"/>
+                        <ComboBoxItem Content="On Preview" Tag="2"/>
+                        <ComboBoxItem Content="Always" Tag="3"/>
+                    </ComboBox>
+                    <TextBlock Text="Restart when" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="VideoRestartBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Never" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Active (Program)" Tag="1"/>
+                        <ComboBoxItem Content="Taken off Active" Tag="2"/>
+                        <ComboBoxItem Content="On Preview" Tag="3"/>
+                    </ComboBox>
+                    <TextBlock Text="Pause when" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="VideoPauseBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Never" Tag="0" IsSelected="True"/>
+                        <ComboBoxItem Content="Active (Program)" Tag="1"/>
+                        <ComboBoxItem Content="Taken off Active" Tag="2"/>
+                        <ComboBoxItem Content="On Preview" Tag="3"/>
+                    </ComboBox>
+                    <TextBlock Text="Recent" Margin="0,8,0,4"/>
+                    <ListBox x:Name="VideoRecent" Height="140" Background="#333" Foreground="#EEE"
                              MouseDoubleClick="VideoRecent_DoubleClick"/>
                 </StackPanel>
                 <StackPanel x:Name="OmtPanel" Visibility="Collapsed">

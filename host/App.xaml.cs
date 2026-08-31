@@ -112,7 +112,11 @@ public partial class App : Application
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, input.PathOrAddress), "Still load");
                         break;
                     case InputKind.Video when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new StartVideoCommand(input.Id, input.PathOrAddress));
+                        Commands.TryEnqueue(new StartVideoCommand(
+                            input.Id,
+                            input.PathOrAddress,
+                            input.VideoLoop,
+                            input.VideoStartsPlaying));
                         break;
                     case InputKind.Omt when !string.IsNullOrWhiteSpace(input.PathOrAddress):
                         Commands.TryEnqueue(new ConnectOmtCommand(
