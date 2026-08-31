@@ -21,6 +21,7 @@ mod main_thread;
 mod omt;
 mod pool;
 mod present;
+mod rebar;
 mod readback;
 mod save;
 mod session;
@@ -28,7 +29,8 @@ mod upload;
 
 pub use abi::{
     AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
-    GEN_BARS, GEN_SOLID, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
+    NATIVE_WIN32_HWND, OK,
     OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc,
     Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
@@ -129,6 +131,8 @@ struct Shared {
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     frame_buffer_frames: u32,
+    rebar: crate::rebar::RebarSnapshot,
+    rebar_optimization: bool,
     audio: audio::AudioEngine,
 }
 
@@ -436,6 +440,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         }
     };
     let omt_gpu = omt_gpu_from_device(&device);
+    let rebar = crate::rebar::probe(&device);
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let telemetry = Arc::new(Mutex::new(Telemetry {
         last_error: String::new(),
@@ -461,6 +466,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         tone_phase: HashMap::new(),
         live_save: HashMap::new(),
         frame_buffer_frames: 3,
+        rebar,
+        rebar_optimization: true,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
@@ -2141,6 +2148,40 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let snap = shared.rebar;
+        let active = snap.available && shared.rebar_optimization;
+        unsafe {
+            *out = MixerRebarInfo {
+                available: u32::from(snap.available),
+                active: u32::from(active),
+                uma: u32::from(snap.uma),
+                gpu_upload_heaps: u32::from(snap.gpu_upload_heaps),
+                bar_bytes: snap.bar_bytes,
+                vram_bytes: snap.vram_bytes,
+                adapter: snap.adapter,
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").rebar_optimization = enabled != 0;
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
@@ -2283,11 +2324,13 @@ fn render_loop(
             }
         }
         presenters.reconfigure_pending(&device);
-        let buffer_frames = shared
-            .lock()
-            .expect("shared")
-            .frame_buffer_frames
-            .clamp(1, 8);
+        let (buffer_frames, use_rebar) = {
+            let guard = shared.lock().expect("shared");
+            (
+                guard.frame_buffer_frames.clamp(1, 8),
+                guard.rebar.available && guard.rebar_optimization,
+            )
+        };
         frame_delay.set_depth(buffer_frames);
         shared
             .lock()
@@ -2419,7 +2462,7 @@ fn render_loop(
             composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
                 upload_guard.advance_playout(&used_uploads);
-                composer.upload_sources(&device, &upload_guard, &used_uploads);
+                composer.upload_sources(&device, &upload_guard, &used_uploads, use_rebar);
             }
             drop(upload_guard);
             let need_prv = outputs_snap

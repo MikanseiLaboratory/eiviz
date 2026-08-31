@@ -326,6 +326,9 @@ public sealed class SessionSettings
     public uint FrameBufferFrames { get; set; } = 3;
     public uint DefaultPresentInterval { get; set; } = 3;
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
+    public bool? RebarOptimization { get; set; } = true;
+
+    public bool RebarOptimizationEnabled => RebarOptimization != false;
     public string? LastSessionPath { get; set; }
 
     public uint ResolvedPresentInterval() =>

@@ -14,19 +14,21 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             List(selection: $category) {
                 Text("Display").tag(0)
-                Text("Outputs").tag(1)
-                Text("Multiview").tag(2)
-                Text("Audio Auxiliary").tag(3)
-                Text("About").tag(4)
+                Text("Performance").tag(1)
+                Text("Outputs").tag(2)
+                Text("Multiview").tag(3)
+                Text("Audio Auxiliary").tag(4)
+                Text("About").tag(5)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
             VStack(alignment: .leading, spacing: 12) {
                 Group {
                     if category == 0 { display }
-                    else if category == 1 { outputs }
-                    else if category == 2 { multiview }
-                    else if category == 3 { audio }
+                    else if category == 1 { performance }
+                    else if category == 2 { outputs }
+                    else if category == 3 { multiview }
+                    else if category == 4 { audio }
                     else { about }
                 }
                 Spacer()
@@ -34,6 +36,7 @@ struct SettingsView: View {
                     Spacer()
                     Button("OK") {
                         mixer.pushAudio()
+                        _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -73,6 +76,21 @@ struct SettingsView: View {
             }
             .frame(width: 220)
             Text("Master frame rate clocks the render thread. Restart the mixer after changing it.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var performance: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Resizable BAR")
+            Text("Not available (Metal)")
+            Toggle("Use ReBAR optimization", isOn: Binding(
+                get: { mixer.session.settings.rebarOptimizationEnabled },
+                set: { mixer.session.settings.rebarOptimization = $0 }
+            ))
+            .disabled(true)
+            Text("ReBAR and D3D12 GPU upload heaps are a Windows discrete-GPU path. This Mac build keeps the Metal upload path.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }

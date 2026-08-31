@@ -127,6 +127,8 @@ pub struct Composer {
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
+    #[cfg(windows)]
+    rebar: Option<crate::rebar::RebarUploader>,
 }
 
 impl Composer {
@@ -197,6 +199,8 @@ impl Composer {
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
+            #[cfg(windows)]
+            rebar: crate::rebar::RebarUploader::new(device),
         })
     }
 
@@ -278,7 +282,15 @@ impl Composer {
         }
     }
 
-    pub fn upload_sources(&mut self, device: &GpuDevice, uploads: &UploadStore, needed: &HashSet<u64>) {
+    pub fn upload_sources(
+        &mut self,
+        device: &GpuDevice,
+        uploads: &UploadStore,
+        needed: &HashSet<u64>,
+        use_rebar: bool,
+    ) {
+        #[cfg(not(windows))]
+        let _ = use_rebar;
         for id in needed {
             let Some(ring) = uploads.get(*id) else { continue };
             if !ring.has_frame {
@@ -365,14 +377,24 @@ impl Composer {
                     },
                 );
             }
-            let gpu = self.sources.get(id).expect("source inserted");
+            let format = if packed {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else if bgra {
+                wgpu::TextureFormat::Bgra8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+            let texture = self.sources.get(id).expect("source inserted").texture.clone();
             write_aligned_texture(
                 device,
-                &gpu.texture,
+                &texture,
                 ring.latest_rgba_or_packed(),
                 if packed { ring.width * 2 } else { ring.width * 4 },
                 ring.height,
                 tex_w,
+                format,
+                #[cfg(windows)]
+                self.rebar.as_mut().filter(|_| use_rebar),
             );
             if let Some(gpu) = self.sources.get_mut(id) {
                 gpu.uploaded_pts = ring.last_pts;
@@ -1435,7 +1457,20 @@ fn write_aligned_texture(
     row_bytes: u32,
     height: u32,
     tex_width: u32,
+    format: wgpu::TextureFormat,
+    #[cfg(windows)] rebar: Option<&mut crate::rebar::RebarUploader>,
 ) {
+    #[cfg(windows)]
+    if let Some(uploader) = rebar {
+        if uploader
+            .upload(device, texture, data, row_bytes, height, tex_width, format)
+            .is_ok()
+        {
+            return;
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = format;
     let aligned = row_bytes.div_ceil(256) * 256;
     let (bytes, pitch) = if aligned == row_bytes {
         (Cow::Borrowed(data), row_bytes)

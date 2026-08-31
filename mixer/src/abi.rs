@@ -88,6 +88,32 @@ pub struct MixerVideoInfo {
     pub duration_hns: i64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MixerRebarInfo {
+    pub available: u32,
+    pub active: u32,
+    pub uma: u32,
+    pub gpu_upload_heaps: u32,
+    pub bar_bytes: u64,
+    pub vram_bytes: u64,
+    pub adapter: [u8; 128],
+}
+
+impl Default for MixerRebarInfo {
+    fn default() -> Self {
+        Self {
+            available: 0,
+            active: 0,
+            uma: 0,
+            gpu_upload_heaps: 0,
+            bar_bytes: 0,
+            vram_bytes: 0,
+            adapter: [0; 128],
+        }
+    }
+}
+
 /// The ABI intentionally consists of fixed-width plain data only.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

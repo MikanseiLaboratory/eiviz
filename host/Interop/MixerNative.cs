@@ -224,6 +224,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_source_usage")]
     internal static unsafe partial int CopySourceUsage(SourceUsage* usage, uint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_rebar_info")]
+    internal static unsafe partial int CopyRebarInfo(MixerRebarInfo* info);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_rebar_optimization")]
+    internal static partial int SetRebarOptimization(uint enabled);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 
@@ -373,6 +379,18 @@ internal struct MixerStats
 {
     public float RenderMs;
     public float FrameBudgetMs;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixerRebarInfo
+{
+    public uint Available;
+    public uint Active;
+    public uint Uma;
+    public uint GpuUploadHeaps;
+    public ulong BarBytes;
+    public ulong VramBytes;
+    public fixed byte Adapter[128];
 }
 
 [StructLayout(LayoutKind.Sequential)]

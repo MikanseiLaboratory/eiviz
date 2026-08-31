@@ -102,6 +102,16 @@ typedef struct EivizMixerStats {
     float frame_budget_ms;
 } EivizMixerStats;
 
+typedef struct EivizMixerRebarInfo {
+    uint32_t available;
+    uint32_t active;
+    uint32_t uma;
+    uint32_t gpu_upload_heaps;
+    uint64_t bar_bytes;
+    uint64_t vram_bytes;
+    uint8_t adapter[128];
+} EivizMixerRebarInfo;
+
 typedef struct EivizSourceUsage {
     uint64_t source_id;
     uint32_t width;
@@ -175,6 +185,8 @@ int32_t mixer_copy_follow_audio(float *out, uint32_t cap);
 int32_t mixer_copy_audio_peaks(EivizAudioPeak *out, uint32_t cap);
 int32_t mixer_copy_source_usage(EivizSourceUsage *out, uint32_t cap);
 int32_t mixer_copy_stats(EivizMixerStats *out);
+int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);
+int32_t mixer_set_rebar_optimization(uint32_t enabled);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);

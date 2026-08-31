@@ -449,7 +449,10 @@ struct SessionSettings: Codable {
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
     var internalColorFormat: InternalColorFormat = .uyvy
+    var rebarOptimization: Bool?
     var lastSessionPath: String?
+
+    var rebarOptimizationEnabled: Bool { rebarOptimization != false }
 
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
