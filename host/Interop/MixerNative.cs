@@ -230,6 +230,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_rebar_optimization")]
     internal static partial int SetRebarOptimization(uint enabled);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_rebar_direct_sample")]
+    internal static partial int SetRebarDirectSample(uint enabled);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 

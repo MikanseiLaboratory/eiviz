@@ -2,7 +2,8 @@
 //!
 //! wgpu's `queue.write_texture` stages through system memory. When the OS exposes
 //! `D3D12_HEAP_TYPE_GPU_UPLOAD` (ReBAR on a discrete GPU, or UMA), CPU writes go
-//! straight into VRAM and we copy VRAM→VRAM into the compose texture.
+//! straight into VRAM. The default path then copies VRAM→VRAM into the compose
+//! texture. Experimental direct-sample binds the upload-heap texture instead.
 
 use crate::device::GpuDevice;
 
@@ -44,9 +45,38 @@ fn copy_cstr(dest: &mut [u8], text: &str) {
     dest[..n].copy_from_slice(&bytes[..n]);
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn probe_impl(device: &GpuDevice) -> RebarSnapshot {
+    macos_probe(device)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn probe_impl(device: &GpuDevice) -> RebarSnapshot {
     RebarSnapshot::unavailable(&device.adapter.get_info().name)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_probe(device: &GpuDevice) -> RebarSnapshot {
+    let info = device.adapter.get_info();
+    let mut adapter = [0u8; 128];
+    copy_cstr(&mut adapter, &info.name);
+    let Some((uma, vram)) = (unsafe {
+        device.device.as_hal::<wgpu::hal::api::Metal>().map(|hal| {
+            use objc2_metal::MTLDevice;
+            let raw = hal.raw_device();
+            (raw.hasUnifiedMemory(), raw.recommendedMaxWorkingSetSize())
+        })
+    }) else {
+        return RebarSnapshot::unavailable(&info.name);
+    };
+    RebarSnapshot {
+        available: uma,
+        uma,
+        gpu_upload_heaps: false,
+        bar_bytes: if uma { vram.max(1) } else { 0 },
+        vram_bytes: vram,
+        adapter,
+    }
 }
 
 #[cfg(windows)]
@@ -144,12 +174,20 @@ pub struct RebarUploader {
     d3d: windows::Win32::Graphics::Direct3D12::ID3D12Device,
     slots: Vec<StagingSlot>,
     next: usize,
+    direct: std::collections::HashMap<u64, SourceRing>,
+}
+
+#[cfg(windows)]
+struct SourceRing {
+    slots: Vec<StagingSlot>,
+    next: usize,
 }
 
 #[cfg(windows)]
 struct StagingSlot {
     resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     imported: wgpu::Texture,
+    view: wgpu::TextureView,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
@@ -169,7 +207,47 @@ impl RebarUploader {
             d3d,
             slots: Vec::new(),
             next: 0,
+            direct: std::collections::HashMap::new(),
         })
+    }
+
+    pub fn retain(&mut self, needed: &std::collections::HashSet<u64>) {
+        self.direct.retain(|id, _| needed.contains(id));
+    }
+
+    pub fn clear_direct(&mut self) {
+        self.direct.clear();
+    }
+
+    pub fn upload_direct(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+        data: &[u8],
+        row_bytes: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView), String> {
+        let slot_i = self.ensure_direct_slot(device, source_id, tex_width, height, format)?;
+        let (resource, pitch, texture, view) = {
+            let slot = self
+                .direct
+                .get(&source_id)
+                .and_then(|ring| ring.slots.get(slot_i))
+                .ok_or("direct ring")?;
+            (
+                slot.resource.clone(),
+                slot.row_pitch,
+                slot.imported.clone(),
+                slot.view.clone(),
+            )
+        };
+        write_mapped(&resource, data, row_bytes, height, pitch)?;
+        if let Some(ring) = self.direct.get_mut(&source_id) {
+            ring.next = (slot_i + 1) % STAGING_SLOTS;
+        }
+        Ok((texture, view))
     }
 
     pub fn upload(
@@ -184,28 +262,7 @@ impl RebarUploader {
     ) -> Result<(), String> {
         let slot_i = self.ensure_slot(device, tex_width, height, format)?;
         let slot = &self.slots[slot_i];
-        let pitch = slot.row_pitch as usize;
-        let row = row_bytes as usize;
-        unsafe {
-            let mut ptr = std::ptr::null_mut();
-            slot.resource
-                .Map(0, None, Some(std::ptr::from_mut(&mut ptr)))
-                .map_err(|e| e.to_string())?;
-            if ptr.is_null() {
-                slot.resource.Unmap(0, None);
-                return Err("GPU upload heap Map returned null".into());
-            }
-            let dest_bytes = ptr.cast::<u8>();
-            for y in 0..height as usize {
-                let src = y * row;
-                let dst = y * pitch;
-                let n = row.min(data.len().saturating_sub(src)).min(pitch);
-                if n > 0 {
-                    std::ptr::copy_nonoverlapping(data.as_ptr().add(src), dest_bytes.add(dst), n);
-                }
-            }
-            slot.resource.Unmap(0, None);
-        }
+        write_mapped(&slot.resource, data, row_bytes, height, slot.row_pitch)?;
         let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rebar upload"),
         });
@@ -242,9 +299,37 @@ impl RebarUploader {
         }
         while self.slots.len() < STAGING_SLOTS {
             self.slots
-                .push(self.create_slot(device, width, height, format)?);
+                .push(self.create_slot(device, width, height, format, false)?);
         }
         Ok(self.next)
+    }
+
+    fn ensure_direct_slot(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<usize, String> {
+        let reuse = self.direct.get(&source_id).is_some_and(|ring| {
+            ring.slots.get(ring.next).is_some_and(|slot| {
+                slot.width == width && slot.height == height && slot.format == format
+            })
+        });
+        if reuse {
+            return Ok(self.direct[&source_id].next);
+        }
+        let mut ring = SourceRing {
+            slots: Vec::new(),
+            next: 0,
+        };
+        while ring.slots.len() < STAGING_SLOTS {
+            ring.slots
+                .push(self.create_slot(device, width, height, format, true)?);
+        }
+        self.direct.insert(source_id, ring);
+        Ok(0)
     }
 
     fn create_slot(
@@ -253,6 +338,7 @@ impl RebarUploader {
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
+        sample: bool,
     ) -> Result<StagingSlot, String> {
         use windows::Win32::Graphics::Direct3D12::{
             ID3D12Resource, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
@@ -339,19 +425,272 @@ impl RebarUploader {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::COPY_SRC,
+                    usage: if sample {
+                        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC
+                    } else {
+                        wgpu::TextureUsages::COPY_SRC
+                    },
                     view_formats: &[],
                 },
-                wgpu::TextureUses::COPY_SRC,
+                if sample {
+                    wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC
+                } else {
+                    wgpu::TextureUses::COPY_SRC
+                },
             )
         };
+        let view = imported.create_view(&Default::default());
         Ok(StagingSlot {
             resource,
             imported,
+            view,
             width,
             height,
             format,
             row_pitch,
         })
     }
+}
+
+#[cfg(windows)]
+fn write_mapped(
+    resource: &windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    data: &[u8],
+    row_bytes: u32,
+    height: u32,
+    row_pitch: u32,
+) -> Result<(), String> {
+    let pitch = row_pitch as usize;
+    let row = row_bytes as usize;
+    unsafe {
+        let mut ptr = std::ptr::null_mut();
+        resource
+            .Map(0, None, Some(std::ptr::from_mut(&mut ptr)))
+            .map_err(|e| e.to_string())?;
+        if ptr.is_null() {
+            resource.Unmap(0, None);
+            return Err("GPU upload heap Map returned null".into());
+        }
+        let dest_bytes = ptr.cast::<u8>();
+        for y in 0..height as usize {
+            let src = y * row;
+            let dst = y * pitch;
+            let n = row.min(data.len().saturating_sub(src)).min(pitch);
+            if n > 0 {
+                std::ptr::copy_nonoverlapping(data.as_ptr().add(src), dest_bytes.add(dst), n);
+            }
+        }
+        resource.Unmap(0, None);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub struct UmaUploader {
+    mtl: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
+    rings: std::collections::HashMap<u64, UmaRing>,
+}
+
+#[cfg(target_os = "macos")]
+struct UmaRing {
+    slots: Vec<UmaSlot>,
+    next: usize,
+}
+
+#[cfg(target_os = "macos")]
+struct UmaSlot {
+    raw: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>>,
+    imported: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+#[cfg(target_os = "macos")]
+impl UmaUploader {
+    pub fn new(device: &GpuDevice) -> Option<Self> {
+        let mtl = unsafe {
+            device
+                .device
+                .as_hal::<wgpu::hal::api::Metal>()
+                .map(|hal| hal.raw_device().clone())
+        }?;
+        Some(Self {
+            mtl,
+            rings: std::collections::HashMap::new(),
+        })
+    }
+
+    pub fn retain(&mut self, needed: &std::collections::HashSet<u64>) {
+        self.rings.retain(|id, _| needed.contains(id));
+    }
+
+    pub fn clear(&mut self) {
+        self.rings.clear();
+    }
+
+    pub fn upload_direct(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+        data: &[u8],
+        row_bytes: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView), String> {
+        let slot_i = self.ensure_slot(device, source_id, tex_width, height, format)?;
+        let raw = self
+            .rings
+            .get(&source_id)
+            .and_then(|ring| ring.slots.get(slot_i))
+            .map(|slot| slot.raw.clone())
+            .ok_or("uma ring")?;
+        write_shared(&raw, data, row_bytes, height, tex_width)?;
+        let (texture, view) = {
+            let slot = self
+                .rings
+                .get(&source_id)
+                .and_then(|ring| ring.slots.get(slot_i))
+                .ok_or("uma ring")?;
+            (slot.imported.clone(), slot.view.clone())
+        };
+        if let Some(ring) = self.rings.get_mut(&source_id) {
+            ring.next = (slot_i + 1) % STAGING_SLOTS;
+        }
+        Ok((texture, view))
+    }
+
+    fn ensure_slot(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<usize, String> {
+        let reuse = self.rings.get(&source_id).is_some_and(|ring| {
+            ring.slots.get(ring.next).is_some_and(|slot| {
+                slot.width == width && slot.height == height && slot.format == format
+            })
+        });
+        if reuse {
+            return Ok(self.rings[&source_id].next);
+        }
+        let mut ring = UmaRing {
+            slots: Vec::new(),
+            next: 0,
+        };
+        while ring.slots.len() < STAGING_SLOTS {
+            ring.slots
+                .push(self.create_slot(device, width, height, format)?);
+        }
+        self.rings.insert(source_id, ring);
+        Ok(0)
+    }
+
+    fn create_slot(
+        &self,
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<UmaSlot, String> {
+        use objc2_metal::{
+            MTLDevice, MTLPixelFormat, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+            MTLTextureUsage,
+        };
+
+        let pixel = match format {
+            wgpu::TextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+            _ => MTLPixelFormat::RGBA8Unorm,
+        };
+        let desc = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                pixel,
+                width.max(1) as _,
+                height.max(1) as _,
+                false,
+            )
+        };
+        desc.setStorageMode(MTLStorageMode::Shared);
+        desc.setUsage(MTLTextureUsage::ShaderRead);
+        let raw = self
+            .mtl
+            .newTextureWithDescriptor(&desc)
+            .ok_or("unified-memory texture")?;
+        let extent = wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        };
+        let hal = unsafe {
+            wgpu::hal::metal::Device::texture_from_raw(
+                raw.clone(),
+                format,
+                MTLTextureType::Type2D,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width: extent.width,
+                    height: extent.height,
+                    depth: 1,
+                },
+                None,
+            )
+        };
+        let imported = unsafe {
+            device.device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+                hal,
+                &wgpu::TextureDescriptor {
+                    label: Some("eiviz uma shared"),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                },
+                wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+            )
+        };
+        let view = imported.create_view(&Default::default());
+        Ok(UmaSlot {
+            raw,
+            imported,
+            view,
+            width,
+            height,
+            format,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn write_shared(
+    texture: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>,
+    data: &[u8],
+    row_bytes: u32,
+    height: u32,
+    tex_width: u32,
+) -> Result<(), String> {
+    use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
+
+    let Some(ptr) = std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void) else {
+        return Err("empty uma upload".into());
+    };
+    let region = MTLRegion {
+        origin: MTLOrigin { x: 0, y: 0, z: 0 },
+        size: MTLSize {
+            width: tex_width.max(1) as _,
+            height: height.max(1) as _,
+            depth: 1,
+        },
+    };
+    unsafe {
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row_bytes as _);
+    }
+    Ok(())
 }

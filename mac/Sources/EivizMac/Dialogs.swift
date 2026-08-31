@@ -37,6 +37,7 @@ struct SettingsView: View {
                     Button("OK") {
                         mixer.pushAudio()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
+                        _ = mixer_set_rebar_direct_sample(mixer.session.settings.rebarDirectSampleEnabled ? 1 : 0)
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -83,17 +84,34 @@ struct SettingsView: View {
 
     private var performance: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Resizable BAR")
-            Text("Not available (Metal)")
-            Toggle("Use ReBAR optimization", isOn: Binding(
+            let info = copyUmaInfo()
+            Text("Graphics Adapter").fontWeight(.bold)
+            Text(info.name)
+            Text("Unified Memory")
+            Text(info.uma ? "Enabled" : "Not available")
+            Toggle("Use Unified Memory optimization", isOn: Binding(
                 get: { mixer.session.settings.rebarOptimizationEnabled },
                 set: { mixer.session.settings.rebarOptimization = $0 }
             ))
-            .disabled(true)
-            Text("ReBAR and D3D12 GPU upload heaps are a Windows discrete-GPU path. This Mac build keeps the Metal upload path.")
+            .disabled(!info.available)
+            Text("On Apple Silicon the CPU and GPU share one memory pool. With this option on, live CPU inputs (NDI / OMT) are written into MTLStorageModeShared textures and sampled directly, skipping wgpu's Private blit. Turn it off to use the default Metal upload path.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func copyUmaInfo() -> (name: String, uma: Bool, available: Bool) {
+        var info = EivizMixerRebarInfo()
+        guard mixer_copy_rebar_info(&info) == 0 else {
+            return ("Mixer is not running.", false, false)
+        }
+        var name = "—"
+        withUnsafeBytes(of: info.adapter) { raw in
+            if let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self), base.pointee != 0 {
+                name = String(cString: base)
+            }
+        }
+        return (name, info.uma != 0, info.available != 0)
     }
 
     private var outputs: some View {

@@ -133,6 +133,7 @@ struct Shared {
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
+    rebar_direct_sample: bool,
     audio: audio::AudioEngine,
 }
 
@@ -468,6 +469,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         frame_buffer_frames: 3,
         rebar,
         rebar_optimization: true,
+        rebar_direct_sample: false,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
@@ -2182,6 +2184,15 @@ pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_rebar_direct_sample(enabled: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").rebar_direct_sample = enabled != 0;
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
@@ -2324,11 +2335,14 @@ fn render_loop(
             }
         }
         presenters.reconfigure_pending(&device);
-        let (buffer_frames, use_rebar) = {
+        let (buffer_frames, use_rebar, direct_sample) = {
             let guard = shared.lock().expect("shared");
+            let use_rebar = guard.rebar.available && guard.rebar_optimization;
+            let direct_sample = use_rebar && (cfg!(target_os = "macos") || guard.rebar_direct_sample);
             (
                 guard.frame_buffer_frames.clamp(1, 8),
-                guard.rebar.available && guard.rebar_optimization,
+                use_rebar,
+                direct_sample,
             )
         };
         frame_delay.set_depth(buffer_frames);
@@ -2462,7 +2476,7 @@ fn render_loop(
             composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
                 upload_guard.advance_playout(&used_uploads);
-                composer.upload_sources(&device, &upload_guard, &used_uploads, use_rebar);
+                composer.upload_sources(&device, &upload_guard, &used_uploads, use_rebar, direct_sample);
             }
             drop(upload_guard);
             let need_prv = outputs_snap

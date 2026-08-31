@@ -67,6 +67,8 @@ pub struct SessionSettings {
     pub internal_color_format: InternalColorFormat,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub rebar_optimization: bool,
+    #[serde(default)]
+    pub rebar_direct_sample: bool,
     pub last_session_path: Option<String>,
 }
 
@@ -83,6 +85,7 @@ impl Default for SessionSettings {
             default_present_interval: 3,
             internal_color_format: InternalColorFormat::Uyvy,
             rebar_optimization: true,
+            rebar_direct_sample: false,
             last_session_path: None,
         }
     }
@@ -675,6 +678,7 @@ mod tests {
         assert_eq!(doc.units[0].transitions.len(), 2);
         assert_eq!(doc.units[0].multiview_tiles.len(), 8);
         assert!(doc.settings.rebar_optimization);
+        assert!(!doc.settings.rebar_direct_sample);
     }
 
     #[test]

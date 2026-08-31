@@ -187,6 +187,7 @@ int32_t mixer_copy_source_usage(EivizSourceUsage *out, uint32_t cap);
 int32_t mixer_copy_stats(EivizMixerStats *out);
 int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);
 int32_t mixer_set_rebar_optimization(uint32_t enabled);
+int32_t mixer_set_rebar_direct_sample(uint32_t enabled);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);

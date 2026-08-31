@@ -29,6 +29,8 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"
 grafton-ndi = { version = "1.0", default-features = false }
+objc2 = "0.6.4"
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
 
 [build-dependencies]

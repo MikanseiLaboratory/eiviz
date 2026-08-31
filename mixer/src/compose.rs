@@ -70,6 +70,7 @@ struct SourceGpu {
     packed: bool,
     bgra: bool,
     uploaded_pts: i64,
+    direct: bool,
 }
 
 pub struct UnitTargets {
@@ -129,6 +130,8 @@ pub struct Composer {
     gpu_epoch: u64,
     #[cfg(windows)]
     rebar: Option<crate::rebar::RebarUploader>,
+    #[cfg(target_os = "macos")]
+    uma: Option<crate::rebar::UmaUploader>,
 }
 
 impl Composer {
@@ -201,6 +204,8 @@ impl Composer {
             gpu_epoch: 1,
             #[cfg(windows)]
             rebar: crate::rebar::RebarUploader::new(device),
+            #[cfg(target_os = "macos")]
+            uma: crate::rebar::UmaUploader::new(device),
         })
     }
 
@@ -288,9 +293,26 @@ impl Composer {
         uploads: &UploadStore,
         needed: &HashSet<u64>,
         use_rebar: bool,
+        direct_sample: bool,
     ) {
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let _ = use_rebar;
+        #[cfg(windows)]
+        if let Some(rebar) = self.rebar.as_mut() {
+            if direct_sample {
+                rebar.retain(needed);
+            } else {
+                rebar.clear_direct();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(uma) = self.uma.as_mut() {
+            if direct_sample {
+                uma.retain(needed);
+            } else {
+                uma.clear();
+            }
+        }
         for id in needed {
             let Some(ring) = uploads.get(*id) else { continue };
             if !ring.has_frame {
@@ -319,6 +341,7 @@ impl Composer {
                             packed: false,
                             bgra: false,
                             uploaded_pts: frame.pts,
+                            direct: false,
                         },
                     );
                 }
@@ -333,6 +356,7 @@ impl Composer {
                     || gpu.height != ring.height
                     || gpu.packed != packed
                     || gpu.bgra != bgra
+                    || gpu.direct != direct_sample
             });
             if !needs_new
                 && self
@@ -342,17 +366,82 @@ impl Composer {
             {
                 continue;
             }
-            if needs_new {
+            let format = if packed {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else if bgra {
+                wgpu::TextureFormat::Bgra8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+            #[cfg(windows)]
+            if direct_sample && use_rebar {
+                if let Some(uploader) = self.rebar.as_mut() {
+                    if let Ok((texture, view)) = uploader.upload_direct(
+                        device,
+                        *id,
+                        ring.latest_rgba_or_packed(),
+                        if packed { ring.width * 2 } else { ring.width * 4 },
+                        ring.height,
+                        tex_w,
+                        format,
+                    ) {
+                        self.blit_groups.remove(id);
+                        self.uyvy_groups.remove(id);
+                        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+                        self.sources.insert(
+                            *id,
+                            SourceGpu {
+                                texture,
+                                view,
+                                width: tex_w,
+                                height: ring.height,
+                                packed,
+                                bgra,
+                                uploaded_pts: ring.last_pts,
+                                direct: true,
+                            },
+                        );
+                        continue;
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if direct_sample {
+                if let Some(uploader) = self.uma.as_mut() {
+                    if let Ok((texture, view)) = uploader.upload_direct(
+                        device,
+                        *id,
+                        ring.latest_rgba_or_packed(),
+                        if packed { ring.width * 2 } else { ring.width * 4 },
+                        ring.height,
+                        tex_w,
+                        format,
+                    ) {
+                        self.blit_groups.remove(id);
+                        self.uyvy_groups.remove(id);
+                        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+                        self.sources.insert(
+                            *id,
+                            SourceGpu {
+                                texture,
+                                view,
+                                width: tex_w,
+                                height: ring.height,
+                                packed,
+                                bgra,
+                                uploaded_pts: ring.last_pts,
+                                direct: true,
+                            },
+                        );
+                        continue;
+                    }
+                }
+            }
+            let recreate = needs_new || self.sources.get(id).is_some_and(|gpu| gpu.direct);
+            if recreate {
                 self.blit_groups.remove(id);
                 self.uyvy_groups.remove(id);
                 self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-                let format = if packed {
-                    wgpu::TextureFormat::Rgba8Unorm
-                } else if bgra {
-                    wgpu::TextureFormat::Bgra8Unorm
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                };
                 let texture = make_texture_format(
                     device,
                     tex_w,
@@ -374,16 +463,10 @@ impl Composer {
                         packed,
                         bgra,
                         uploaded_pts: i64::MIN,
+                        direct: false,
                     },
                 );
             }
-            let format = if packed {
-                wgpu::TextureFormat::Rgba8Unorm
-            } else if bgra {
-                wgpu::TextureFormat::Bgra8Unorm
-            } else {
-                wgpu::TextureFormat::Rgba8Unorm
-            };
             let texture = self.sources.get(id).expect("source inserted").texture.clone();
             write_aligned_texture(
                 device,
@@ -1052,6 +1135,7 @@ impl Composer {
                     packed: false,
                     bgra: false,
                     uploaded_pts: i64::MIN,
+                    direct: false,
                 },
             );
         }
@@ -1086,6 +1170,7 @@ impl Composer {
                         packed: false,
                         bgra: false,
                         uploaded_pts: i64::MIN,
+                        direct: false,
                     },
                 );
                 self.blit_groups.remove(&id);

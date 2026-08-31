@@ -1164,6 +1164,7 @@ public partial class MainWindow : Window
         _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
+        _session.Settings.RebarDirectSample = dialog.Settings.RebarDirectSampleEnabled;
         _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
         _session.Buses.Clear();
         foreach (var bus in dialog.Buses)
@@ -1175,6 +1176,9 @@ public partial class MainWindow : Window
         MixerNative.ThrowIfFailed(
             MixerNative.SetRebarOptimization(_session.Settings.RebarOptimizationEnabled ? 1u : 0u),
             "Set ReBAR optimization");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetRebarDirectSample(_session.Settings.RebarDirectSampleEnabled ? 1u : 0u),
+            "Set ReBAR direct sample");
         foreach (var layout in _session.Multiviews)
             layout.PushPresentInterval(_session.Settings);
         foreach (var window in _multiviews)
