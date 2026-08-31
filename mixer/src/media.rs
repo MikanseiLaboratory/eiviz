@@ -27,8 +27,8 @@ use windows::core::{GUID, PCWSTR};
 use crate::abi::{FMT_BGRA, MixerVideoInfo};
 use crate::dxgi::GpuVideoContext;
 use crate::upload::{
-    AUDIO_LIVE_FRAMES, AUDIO_RATE, AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked,
-    ingest_audio_throttled,
+    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, UploadStore,
+    ingest_audio_clocked, ingest_audio_throttled, ingest_cpu_frame,
 };
 
 static MF_ONCE: Once = Once::new();
@@ -52,6 +52,7 @@ impl VideoPump {
         format: u32,
         uploads: Arc<Mutex<UploadStore>>,
         gpu: GpuVideoContext,
+        ingest: GpuIngest,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let playing = Arc::new(AtomicBool::new(true));
@@ -70,8 +71,8 @@ impl VideoPump {
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, format, uploads, gpu, stop_t, playing_t, looping_t,
-                    seek_t, pos_t, dur_t, ready_tx,
+                    source_id, path, capture, format, uploads, gpu, ingest, stop_t, playing_t,
+                    looping_t, seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -145,6 +146,7 @@ fn run_loop(
     format: u32,
     uploads: Arc<Mutex<UploadStore>>,
     gpu: GpuVideoContext,
+    ingest: GpuIngest,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -201,6 +203,8 @@ fn run_loop(
         let mut seek_base = 0i64;
         let mut clock_start = Instant::now();
         let mut gpu_warned = false;
+        let mut gpu_ring = GpuUploadRing::new();
+        let mut rebar_ring: Option<crate::rebar::RebarIngestRing> = None;
         let mut need_frame = false;
         let mut was_playing = false;
         loop {
@@ -303,7 +307,17 @@ fn run_loop(
                             Err(_) => {}
                         }
                     }
-                    if let Err(error) = push_cpu_frame(&uploads, source_id, &sample, &layout, pts) {
+                    if let Err(error) = push_cpu_frame(
+                        &uploads,
+                        &ingest,
+                        &mut gpu_ring,
+                        &mut rebar_ring,
+                        &mut gpu_warned,
+                        source_id,
+                        &sample,
+                        &layout,
+                        pts,
+                    ) {
                         if !gpu_warned {
                             eprintln!("eiviz video cpu: {error}");
                             gpu_warned = true;
@@ -716,6 +730,10 @@ fn decode_audio(sample: &IMFSample, pts: i64, layout: &AudioLayout) -> Option<Au
 
 fn push_cpu_frame(
     uploads: &Mutex<UploadStore>,
+    ingest: &GpuIngest,
+    gpu_ring: &mut GpuUploadRing,
+    rebar_ring: &mut Option<crate::rebar::RebarIngestRing>,
+    gpu_warned: &mut bool,
     source_id: u64,
     sample: &IMFSample,
     layout: &VideoLayout,
@@ -736,9 +754,32 @@ fn push_cpu_frame(
         let Some((pixels, stride, format)) = converted else {
             return Err("unsupported CPU video layout".into());
         };
-        let mut store = uploads.lock().expect("uploads");
-        store.ensure(source_id, layout.width.max(2), layout.height.max(2), format);
-        store.push(source_id, &pixels, stride, pts)
+        let enabled = ingest.video_gpu.load(Ordering::Relaxed);
+        if enabled {
+            ingest_cpu_frame(
+                uploads,
+                Some(ingest),
+                true,
+                gpu_ring,
+                rebar_ring,
+                gpu_warned,
+                source_id,
+                1,
+                &pixels,
+                stride,
+                layout.width.max(2),
+                layout.height.max(2),
+                format,
+                pts,
+                false,
+                "video",
+            );
+            Ok(())
+        } else {
+            let mut store = uploads.lock().expect("uploads");
+            store.ensure(source_id, layout.width.max(2), layout.height.max(2), format);
+            store.push(source_id, &pixels, stride, pts)
+        }
     }
 }
 

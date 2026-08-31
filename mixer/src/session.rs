@@ -71,6 +71,20 @@ pub struct SessionSettings {
     pub rebar_direct_sample: bool,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub ndi_gpu_upload: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub video_gpu_upload: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub still_gpu_upload: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub omt_cpu_decode_ingest: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub omt_skip_jitter_copy: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub readback_off_clock: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub mf_import_no_wait: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub gpu_queue_lock_narrow: bool,
     pub last_session_path: Option<String>,
 }
 
@@ -89,6 +103,13 @@ impl Default for SessionSettings {
             rebar_optimization: true,
             rebar_direct_sample: false,
             ndi_gpu_upload: true,
+            video_gpu_upload: true,
+            still_gpu_upload: true,
+            omt_cpu_decode_ingest: true,
+            omt_skip_jitter_copy: true,
+            readback_off_clock: true,
+            mf_import_no_wait: true,
+            gpu_queue_lock_narrow: true,
             last_session_path: None,
         }
     }
@@ -683,6 +704,13 @@ mod tests {
         assert!(doc.settings.rebar_optimization);
         assert!(!doc.settings.rebar_direct_sample);
         assert!(doc.settings.ndi_gpu_upload);
+        assert!(doc.settings.video_gpu_upload);
+        assert!(doc.settings.still_gpu_upload);
+        assert!(doc.settings.omt_cpu_decode_ingest);
+        assert!(doc.settings.omt_skip_jitter_copy);
+        assert!(doc.settings.readback_off_clock);
+        assert!(doc.settings.mf_import_no_wait);
+        assert!(doc.settings.gpu_queue_lock_narrow);
     }
 
     #[test]

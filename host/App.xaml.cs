@@ -65,6 +65,27 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.SetNdiGpuUpload(Session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
             "Set NDI GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetVideoGpuUpload(Session.Settings.VideoGpuUploadEnabled ? 1u : 0u),
+            "Set video GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetStillGpuUpload(Session.Settings.StillGpuUploadEnabled ? 1u : 0u),
+            "Set still GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetOmtCpuDecodeIngest(Session.Settings.OmtCpuDecodeIngestEnabled ? 1u : 0u),
+            "Set OMT CPU decode ingest");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetOmtSkipJitterCopy(Session.Settings.OmtSkipJitterCopyEnabled ? 1u : 0u),
+            "Set OMT skip jitter copy");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetReadbackOffClock(Session.Settings.ReadbackOffClockEnabled ? 1u : 0u),
+            "Set readback off clock");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetMfImportNoWait(Session.Settings.MfImportNoWaitEnabled ? 1u : 0u),
+            "Set MF import no wait");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetGpuQueueLockNarrow(Session.Settings.GpuQueueLockNarrowEnabled ? 1u : 0u),
+            "Set GPU queue lock narrow");
         MixerNative.VideoFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra
             : MixerNative.FormatUyvy;

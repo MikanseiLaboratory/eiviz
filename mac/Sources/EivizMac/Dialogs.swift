@@ -36,8 +36,7 @@ struct SettingsView: View {
                     Spacer()
                     Button("OK") {
                         mixer.pushAudio()
-                        _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
-                        _ = mixer_set_ndi_gpu_upload(mixer.session.settings.ndiGpuUploadEnabled ? 1 : 0)
+                        mixer.applyPerformanceFlags()
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -83,6 +82,7 @@ struct SettingsView: View {
     }
 
     private var performance: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 8) {
             let info = copyUmaInfo()
             Text("Graphics Adapter").fontWeight(.bold)
@@ -98,9 +98,38 @@ struct SettingsView: View {
                 get: { mixer.session.settings.ndiGpuUploadEnabled },
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
             ))
-            Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
+            Toggle("Upload video and UVC on the ingest thread", isOn: Binding(
+                get: { mixer.session.settings.videoGpuUploadEnabled },
+                set: { mixer.session.settings.videoGpuUpload = $0 }
+            ))
+            Toggle("Upload stills on the caller thread", isOn: Binding(
+                get: { mixer.session.settings.stillGpuUploadEnabled },
+                set: { mixer.session.settings.stillGpuUpload = $0 }
+            ))
+            Toggle("OMT CPU decode plus ingest upload", isOn: Binding(
+                get: { mixer.session.settings.omtCpuDecodeIngestEnabled },
+                set: { mixer.session.settings.omtCpuDecodeIngest = $0 }
+            ))
+            Toggle("Skip OMT GPU jitter copy", isOn: Binding(
+                get: { mixer.session.settings.omtSkipJitterCopyEnabled },
+                set: { mixer.session.settings.omtSkipJitterCopy = $0 }
+            ))
+            Toggle("Map output readback off the mix clock", isOn: Binding(
+                get: { mixer.session.settings.readbackOffClockEnabled },
+                set: { mixer.session.settings.readbackOffClock = $0 }
+            ))
+            Toggle("Retire Media Foundation imports without Wait", isOn: Binding(
+                get: { mixer.session.settings.mfImportNoWaitEnabled },
+                set: { mixer.session.settings.mfImportNoWait = $0 }
+            ))
+            Toggle("Do not lock the GPU queue for ingest submit", isOn: Binding(
+                get: { mixer.session.settings.gpuQueueLockNarrowEnabled },
+                set: { mixer.session.settings.gpuQueueLockNarrow = $0 }
+            ))
+            Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path. The remaining Performance checks switch the newer write-isolation paths on and the previous mix-thread paths off. OMT CPU decode reconnects every OMT input.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+        }
         }
     }
 

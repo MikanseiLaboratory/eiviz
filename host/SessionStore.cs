@@ -92,6 +92,13 @@ internal static class SessionStore
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             session.Settings.RebarOptimization = Settings.RebarOptimization != false;
             session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
+            session.Settings.VideoGpuUpload = Settings.VideoGpuUpload != false;
+            session.Settings.StillGpuUpload = Settings.StillGpuUpload != false;
+            session.Settings.OmtCpuDecodeIngest = Settings.OmtCpuDecodeIngest != false;
+            session.Settings.OmtSkipJitterCopy = Settings.OmtSkipJitterCopy != false;
+            session.Settings.ReadbackOffClock = Settings.ReadbackOffClock != false;
+            session.Settings.MfImportNoWait = Settings.MfImportNoWait != false;
+            session.Settings.GpuQueueLockNarrow = Settings.GpuQueueLockNarrow != false;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

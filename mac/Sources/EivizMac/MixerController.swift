@@ -62,8 +62,7 @@ final class MixerController: ObservableObject {
         }
         fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
-        fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
-        fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        applyPerformanceFlags()
         applySession()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -172,6 +171,31 @@ final class MixerController: ObservableObject {
         inputPreviewControllers.removeValue(forKey: inputId)
         if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
             _ = mixer_detach_monitor(monitorId)
+        }
+    }
+
+    private var appliedOmtCpu: Bool?
+
+    func applyPerformanceFlags() {
+        fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
+        fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        fail(mixer_set_video_gpu_upload(session.settings.videoGpuUploadEnabled ? 1 : 0), "Set video GPU upload")
+        fail(mixer_set_still_gpu_upload(session.settings.stillGpuUploadEnabled ? 1 : 0), "Set still GPU upload")
+        fail(mixer_set_omt_cpu_decode_ingest(session.settings.omtCpuDecodeIngestEnabled ? 1 : 0), "Set OMT CPU decode ingest")
+        fail(mixer_set_omt_skip_jitter_copy(session.settings.omtSkipJitterCopyEnabled ? 1 : 0), "Set OMT skip jitter copy")
+        fail(mixer_set_readback_off_clock(session.settings.readbackOffClockEnabled ? 1 : 0), "Set readback off clock")
+        fail(mixer_set_mf_import_no_wait(session.settings.mfImportNoWaitEnabled ? 1 : 0), "Set MF import no wait")
+        fail(mixer_set_gpu_queue_lock_narrow(session.settings.gpuQueueLockNarrowEnabled ? 1 : 0), "Set GPU queue lock narrow")
+        let next = session.settings.omtCpuDecodeIngestEnabled
+        if let previous = appliedOmtCpu, previous != next {
+            restartOmtReceivers()
+        }
+        appliedOmtCpu = next
+    }
+
+    private func restartOmtReceivers() {
+        for input in session.inputs where input.kind == .omt {
+            attach(input)
         }
     }
 
@@ -686,8 +710,7 @@ final class MixerController: ObservableObject {
             mix = 0
             fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
             fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
-            fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
-            fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+            applyPerformanceFlags()
             applySession()
         } catch {
             errorText = error.localizedDescription

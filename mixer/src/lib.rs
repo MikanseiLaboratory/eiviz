@@ -63,7 +63,7 @@ use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device}
 use present::Presenters;
 use readback::ReadbackStore;
 use save::{LiveSave, collect_source_roles, want_full};
-use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, UploadStore};
+use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, UploadStore, ingest_cpu_frame};
 
 struct AutoTransition {
     from: f32,
@@ -259,6 +259,13 @@ enum SendCmd {
         fps_d: u32,
         busy: Arc<AtomicBool>,
     },
+    PackedReady {
+        key: u64,
+        width: u32,
+        height: u32,
+        pts: i64,
+        dests: Vec<(u64, u32, u32)>,
+    },
     Audio {
         output_id: u64,
         packet: AudioPacket,
@@ -443,13 +450,13 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     };
     let omt_gpu = omt_gpu_from_device(&device);
     let rebar = crate::rebar::probe(&device);
-    let gpu_ingest = GpuIngest {
-        device: device.device.clone(),
-        queue: device.queue.clone(),
-        ndi_gpu: Arc::new(AtomicBool::new(true)),
-        use_rebar: Arc::new(AtomicBool::new(rebar.available)),
-        rebar_available: rebar.available,
-    };
+    let gpu_ingest = GpuIngest::new(
+        device.device.clone(),
+        device.queue.clone(),
+        rebar.available,
+    );
+    crate::device::set_mf_import_no_wait(true);
+    crate::device::set_queue_lock_narrow(true);
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let telemetry = Arc::new(Mutex::new(Telemetry {
         last_error: String::new(),
@@ -490,6 +497,10 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     let render_telemetry = Arc::clone(&telemetry);
     let render_stop = Arc::clone(&stop);
     let render_send = send_tx.clone();
+    let send_device = device.device.clone();
+    let readbacks = Arc::new(Mutex::new(ReadbackStore::default()));
+    let render_readbacks = Arc::clone(&readbacks);
+    let send_readbacks = Arc::clone(&readbacks);
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
@@ -503,6 +514,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
                 rx,
                 render_send,
                 render_stop,
+                render_readbacks,
             );
         })
         .expect("render thread");
@@ -510,7 +522,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     let send_gpu = omt_gpu;
     let send = thread::Builder::new()
         .name("eiviz-omt-send".into())
-        .spawn(move || send_loop(send_rx, send_stop, send_gpu))
+        .spawn(move || send_loop(send_rx, send_stop, send_gpu, send_device, send_readbacks))
         .expect("omt send thread");
     *slot = Some(Mixer {
         shared,
@@ -1080,6 +1092,40 @@ pub unsafe extern "C" fn mixer_push_frame(
     // SAFETY: caller keeps the frame readable for this call only.
     let src = unsafe { std::slice::from_raw_parts(ptr, len) };
     with_mixer(|mixer| {
+        let ingest = mixer.shared.lock().expect("shared").gpu_ingest.clone();
+        if ingest.still_gpu.load(Ordering::Relaxed) {
+            let (width, format) = {
+                let store = mixer.uploads.lock().expect("uploads");
+                store
+                    .get(id)
+                    .map(|ring| (ring.width, ring.format))
+                    .unwrap_or((stride / 4, CpuFormat::Bgra))
+            };
+            let mut ring = GpuUploadRing::new();
+            #[cfg(windows)]
+            let mut rebar: Option<crate::rebar::RebarIngestRing> = None;
+            let mut warned = false;
+            ingest_cpu_frame(
+                mixer.uploads.as_ref(),
+                Some(&ingest),
+                true,
+                &mut ring,
+                #[cfg(windows)]
+                &mut rebar,
+                &mut warned,
+                id,
+                1,
+                src,
+                stride as usize,
+                width.max(2),
+                height,
+                format,
+                pts,
+                false,
+                "push",
+            );
+            return OK;
+        }
         match with_uploads(mixer, |uploads| uploads.push(id, src, stride as usize, pts)) {
             Ok(()) => OK,
             Err(error) => {
@@ -1133,12 +1179,39 @@ pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
     };
     let (width, height) = image.dimensions();
     with_mixer(|mixer| {
+        let ingest = mixer.shared.lock().expect("shared").gpu_ingest.clone();
         with_uploads(mixer, |uploads| {
             uploads.register(id, width, height, CpuFormat::Rgba);
-            match uploads.push(id, &image, width as usize * 4, 0) {
-                Ok(()) => OK,
-                Err(_) => ERR_IO,
-            }
+        });
+        if ingest.still_gpu.load(Ordering::Relaxed) {
+            let mut ring = GpuUploadRing::new();
+            #[cfg(windows)]
+            let mut rebar: Option<crate::rebar::RebarIngestRing> = None;
+            let mut warned = false;
+            ingest_cpu_frame(
+                mixer.uploads.as_ref(),
+                Some(&ingest),
+                true,
+                &mut ring,
+                #[cfg(windows)]
+                &mut rebar,
+                &mut warned,
+                id,
+                1,
+                &image,
+                width as usize * 4,
+                width.max(2),
+                height,
+                CpuFormat::Rgba,
+                0,
+                false,
+                "still",
+            );
+            return OK;
+        }
+        with_uploads(mixer, |uploads| match uploads.push(id, &image, width as usize * 4, 0) {
+            Ok(()) => OK,
+            Err(_) => ERR_IO,
         })
     })
     .unwrap_or_else(|code| code)
@@ -1174,16 +1247,17 @@ pub unsafe extern "C" fn mixer_video_start(
     {
         let _ = format;
         return with_mixer(|mixer| {
-            let uploads = {
+            let (uploads, ingest) = {
                 let mut shared = mixer.shared.lock().expect("shared");
                 let previous = shared.videos.remove(&id);
                 drop(shared.receivers.remove(&id));
                 let uploads = shared.uploads.clone();
+                let ingest = shared.gpu_ingest.clone();
                 drop(shared);
                 drop(previous);
-                uploads
+                (uploads, ingest)
             };
-            match VideoPump::start(id, path, capture != 0, uploads) {
+            match VideoPump::start(id, path, capture != 0, uploads, ingest) {
                 Ok(pump) => {
                     mixer.shared.lock().expect("shared").videos.insert(id, pump);
                     OK
@@ -1198,19 +1272,20 @@ pub unsafe extern "C" fn mixer_video_start(
     }
     #[cfg(windows)]
     with_mixer(|mixer| {
-        let (uploads, gpu) = {
+        let (uploads, gpu, ingest) = {
             let mut shared = mixer.shared.lock().expect("shared");
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
+            let ingest = shared.gpu_ingest.clone();
             let Some(gpu) = shared.gpu_video.clone() else {
                 return ERR_DEVICE;
             };
             drop(shared);
             drop(previous);
-            (uploads, gpu)
+            (uploads, gpu, ingest)
         };
-        match VideoPump::start(id, path, capture != 0, format, uploads, gpu) {
+        match VideoPump::start(id, path, capture != 0, format, uploads, gpu, ingest) {
             Ok(pump) => {
                 mixer.shared.lock().expect("shared").videos.insert(id, pump);
                 OK
@@ -1320,13 +1395,15 @@ pub unsafe extern "C" fn mixer_omt_connect(
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
     with_mixer(|mixer| {
-        let (uploads, gpu) = {
+        let (uploads, gpu, ingest) = {
             let mut shared = mixer.shared.lock().expect("shared");
             #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
-            let gpu = if use_gpu != 0 {
+            let ingest = shared.gpu_ingest.clone();
+            let force_cpu = ingest.omt_cpu_ingest.load(Ordering::Relaxed);
+            let gpu = if use_gpu != 0 && !force_cpu {
                 Some(shared.omt_gpu.clone())
             } else {
                 None
@@ -1334,9 +1411,9 @@ pub unsafe extern "C" fn mixer_omt_connect(
             drop(shared);
             #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
-            (uploads, gpu)
+            (uploads, gpu, ingest)
         };
-        match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
+        match OmtReceiver::start(id, address, uploads, gpu, ingest, depth, quality) {
             Ok(receiver) => {
                 mixer
                     .shared
@@ -2206,13 +2283,58 @@ pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_ndi_gpu_upload(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.ndi_gpu, enabled, |shared, on| {
+        shared.ndi_gpu_upload = on;
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_video_gpu_upload(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.video_gpu, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_still_gpu_upload(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.still_gpu, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_omt_cpu_decode_ingest(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.omt_cpu_ingest, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_omt_skip_jitter_copy(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.omt_skip_jitter, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_readback_off_clock(enabled: u32) -> i32 {
+    store_ingest_flag(|ingest| &ingest.readback_off_clock, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_mf_import_no_wait(enabled: u32) -> i32 {
+    crate::device::set_mf_import_no_wait(enabled != 0);
+    store_ingest_flag(|ingest| &ingest.mf_import_no_wait, enabled, |_, _| {})
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_gpu_queue_lock_narrow(enabled: u32) -> i32 {
+    crate::device::set_queue_lock_narrow(enabled != 0);
+    store_ingest_flag(|ingest| &ingest.queue_lock_narrow, enabled, |_, _| {})
+}
+
+fn store_ingest_flag(
+    atom: impl Fn(&GpuIngest) -> &AtomicBool,
+    enabled: u32,
+    extra: impl FnOnce(&mut Shared, bool),
+) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
-        shared.ndi_gpu_upload = enabled != 0;
-        shared
-            .gpu_ingest
-            .ndi_gpu
-            .store(enabled != 0, Ordering::Relaxed);
+        let on = enabled != 0;
+        atom(&shared.gpu_ingest).store(on, Ordering::Relaxed);
+        extra(&mut shared, on);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2258,6 +2380,7 @@ fn render_loop(
     cmds: mpsc::Receiver<GpuCmd>,
     send_tx: mpsc::Sender<SendCmd>,
     stop: Arc<AtomicBool>,
+    readbacks_shared: Arc<Mutex<ReadbackStore>>,
 ) {
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
@@ -2267,7 +2390,10 @@ fn render_loop(
         }
     };
     let mut presenters = Presenters::default();
-    let mut readbacks = ReadbackStore::default();
+    let readback_off = {
+        let guard = shared.lock().expect("shared");
+        Arc::clone(&guard.gpu_ingest.readback_off_clock)
+    };
     let mut gpu_sends = GpuSendStore::default();
     let mut frame_delay = FrameDelay::new(3);
     let frame_dt = Duration::from_nanos(1_000_000_000u64 * u64::from(fps_den) / u64::from(fps_num));
@@ -2533,6 +2659,7 @@ fn render_loop(
                 let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
                 let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
                     Vec::new();
+                let mut readbacks = readbacks_shared.lock().expect("readbacks");
                 for (unit_id, ..) in &snapshot {
                     let pack_pgm = outputs_snap.iter().any(|item| {
                         item.unit_id == *unit_id
@@ -2596,7 +2723,8 @@ fn render_loop(
                     }
                 }
                 device.submit(Some(encoder.finish()));
-                emit_packed(
+                emit_or_queue_packed(
+                    readback_off.load(Ordering::Relaxed),
                     &mut readbacks,
                     &device,
                     &packed_copies,
@@ -2623,6 +2751,7 @@ fn render_loop(
                 let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
                 let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
                     Vec::new();
+                let mut readbacks = readbacks_shared.lock().expect("readbacks");
                 for (unit_id, width, height, _, _, state) in &snapshot {
                     composer.ensure_unit(&device, *unit_id, *width, *height);
                     let pack_pgm = outputs_snap.iter().any(|item| {
@@ -2709,7 +2838,8 @@ fn render_loop(
                     snapshot.iter().map(|(id, ..)| *id),
                 );
                 device.submit(Some(encoder.finish()));
-                emit_packed(
+                emit_or_queue_packed(
+                    readback_off.load(Ordering::Relaxed),
                     &mut readbacks,
                     &device,
                     &packed_copies,
@@ -2800,6 +2930,56 @@ fn render_loop(
     }
 }
 
+fn packed_output_key(output: &OutputSnap) -> u64 {
+    if output.source_kind == SRC_KIND_MU_PROGRAM {
+        output.unit_id
+    } else {
+        0x0100_0000_0000_0000 | output.output_id
+    }
+}
+
+fn packed_dests(key: u64, outputs_snap: &[OutputSnap]) -> Vec<(u64, u32, u32)> {
+    outputs_snap
+        .iter()
+        .filter(|output| output.cpu_video() && packed_output_key(output) == key)
+        .map(|output| (output.output_id, output.fps_n, output.fps_d))
+        .collect()
+}
+
+fn emit_or_queue_packed(
+    off_clock: bool,
+    readbacks: &mut ReadbackStore,
+    device: &GpuDevice,
+    packed_copies: &[(u64, u32, u32)],
+    outputs_snap: &[OutputSnap],
+    send_tx: &mpsc::Sender<SendCmd>,
+    pts: i64,
+) {
+    if off_clock {
+        for (key, width, height) in packed_copies {
+            if let Some(rb) = readbacks.get_mut(*key) {
+                rb.mark_copied();
+            }
+            let _ = send_tx.send(SendCmd::PackedReady {
+                key: *key,
+                width: *width,
+                height: *height,
+                pts,
+                dests: packed_dests(*key, outputs_snap),
+            });
+        }
+    } else {
+        emit_packed(
+            readbacks,
+            device,
+            packed_copies,
+            outputs_snap,
+            send_tx,
+            pts,
+        );
+    }
+}
+
 fn emit_packed(
     readbacks: &mut ReadbackStore,
     device: &GpuDevice,
@@ -2810,7 +2990,7 @@ fn emit_packed(
 ) {
     for (key, width, height) in packed_copies {
         if let Some(rb) = readbacks.get_mut(*key) {
-            rb.advance(device);
+            rb.advance(&device.device);
             if let Some(packed) = rb.latest() {
                 let data: Arc<[u8]> = packed.to_vec().into();
                 last_frames().lock().expect("frames").insert(
@@ -2825,11 +3005,7 @@ fn emit_packed(
                     if !output.cpu_video() {
                         continue;
                     }
-                    let out_key = if output.source_kind == SRC_KIND_MU_PROGRAM {
-                        output.unit_id
-                    } else {
-                        0x0100_0000_0000_0000 | output.output_id
-                    };
+                    let out_key = packed_output_key(output);
                     if out_key != *key {
                         continue;
                     }
@@ -3030,13 +3206,19 @@ fn collect_live_ids(
     (scenes, uploads)
 }
 
-fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu) {
+fn send_loop(
+    rx: mpsc::Receiver<SendCmd>,
+    stop: Arc<AtomicBool>,
+    omt_gpu: OmtGpu,
+    device: wgpu::Device,
+    readbacks: Arc<Mutex<ReadbackStore>>,
+) {
     let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         loop {
             match rx.try_recv() {
                 Ok(SendCmd::Shutdown) => return,
-                Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu),
+                Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu, &device, &readbacks),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
@@ -3054,7 +3236,7 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
         }
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(SendCmd::Shutdown) => return,
-            Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu),
+            Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu, &device, &readbacks),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
@@ -3065,6 +3247,8 @@ fn apply_send_cmd(
     senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
     cmd: SendCmd,
     omt_gpu: &OmtGpu,
+    device: &wgpu::Device,
+    readbacks: &Mutex<ReadbackStore>,
 ) {
     match cmd {
         SendCmd::Add {
@@ -3109,6 +3293,46 @@ fn apply_send_cmd(
                 }));
             }
             busy.store(false, Ordering::Release);
+        }
+        SendCmd::PackedReady {
+            key,
+            width,
+            height,
+            pts,
+            dests,
+        } => {
+            let data = {
+                let mut store = readbacks.lock().expect("readbacks");
+                store.get_mut(key).and_then(|rb| {
+                    rb.harvest(device);
+                    rb.latest().map(|packed| Arc::<[u8]>::from(packed.to_vec()))
+                })
+            };
+            if let Some(data) = data {
+                last_frames().lock().expect("frames").insert(
+                    key,
+                    Acquired {
+                        data: Arc::clone(&data),
+                        stride: width * 2,
+                        pts,
+                    },
+                );
+                for (output_id, fps_n, fps_d) in dests {
+                    if let Some((sender, _)) = senders.get_mut(&output_id) {
+                        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+                            sender.send_video_uyvy(
+                                width,
+                                height,
+                                width * 2,
+                                pts,
+                                Arc::clone(&data),
+                                fps_n,
+                                fps_d,
+                            )
+                        }));
+                    }
+                }
+            }
         }
         SendCmd::Audio { output_id, packet } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {

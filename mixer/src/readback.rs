@@ -74,9 +74,9 @@ impl UnitReadback {
         );
     }
 
-    pub fn advance(&mut self, device: &GpuDevice) {
+    pub fn advance(&mut self, device: &wgpu::Device) {
         self.slots[self.write].pending = true;
-        let _ = device.device.poll(wgpu::PollType::Poll);
+        let _ = device.poll(wgpu::PollType::Poll);
         for i in 0..SLOTS {
             if !self.slots[i].waiting {
                 continue;
@@ -118,6 +118,63 @@ impl UnitReadback {
         let next = (self.write + 1) % SLOTS;
         if !self.slots[next].waiting {
             self.write = next;
+        }
+    }
+
+    /// Mark the just-submitted copy and rotate the write slot. Call on the
+    /// thread that recorded `copy_from` so the next mix frame does not reuse
+    /// a buffer the send thread is about to map.
+    pub fn mark_copied(&mut self) {
+        self.slots[self.write].pending = true;
+        let next = (self.write + 1) % SLOTS;
+        if !self.slots[next].waiting {
+            self.write = next;
+        }
+    }
+
+    /// Poll completed maps into `mapped`. Used on the send thread when
+    /// `readbackOffClock` is on; `advance` still does this on render.
+    pub fn harvest(&mut self, device: &wgpu::Device) {
+        let _ = device.poll(wgpu::PollType::Poll);
+        for i in 0..SLOTS {
+            if !self.slots[i].waiting {
+                continue;
+            }
+            let done = self.slots[i]
+                .ready
+                .as_ref()
+                .is_some_and(|rx| rx.try_recv().is_ok());
+            if !done {
+                continue;
+            }
+            let slice = self.slots[i].buffer.slice(..);
+            if let Ok(view) = slice.get_mapped_range() {
+                let mut packed = vec![0u8; (self.width * 2 * self.height) as usize];
+                for y in 0..self.height as usize {
+                    let src = y * self.stride as usize;
+                    let dst = y * self.width as usize * 2;
+                    packed[dst..dst + self.width as usize * 2]
+                        .copy_from_slice(&view[src..src + self.width as usize * 2]);
+                }
+                drop(view);
+                self.slots[i].buffer.unmap();
+                self.mapped = Some(packed);
+            }
+            self.slots[i].pending = false;
+            self.slots[i].waiting = false;
+            self.slots[i].ready = None;
+        }
+        for i in 0..SLOTS {
+            if !self.slots[i].pending || self.slots[i].waiting {
+                continue;
+            }
+            let slice = self.slots[i].buffer.slice(..);
+            let (tx, rx) = mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |_| {
+                let _ = tx.send(());
+            });
+            self.slots[i].waiting = true;
+            self.slots[i].ready = Some(rx);
         }
     }
 

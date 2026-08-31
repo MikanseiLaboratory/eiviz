@@ -452,10 +452,24 @@ struct SessionSettings: Codable {
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
     var ndiGpuUpload: Bool?
+    var videoGpuUpload: Bool?
+    var stillGpuUpload: Bool?
+    var omtCpuDecodeIngest: Bool?
+    var omtSkipJitterCopy: Bool?
+    var readbackOffClock: Bool?
+    var mfImportNoWait: Bool?
+    var gpuQueueLockNarrow: Bool?
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
     var ndiGpuUploadEnabled: Bool { ndiGpuUpload != false }
+    var videoGpuUploadEnabled: Bool { videoGpuUpload != false }
+    var stillGpuUploadEnabled: Bool { stillGpuUpload != false }
+    var omtCpuDecodeIngestEnabled: Bool { omtCpuDecodeIngest != false }
+    var omtSkipJitterCopyEnabled: Bool { omtSkipJitterCopy != false }
+    var readbackOffClockEnabled: Bool { readbackOffClock != false }
+    var mfImportNoWaitEnabled: Bool { mfImportNoWait != false }
+    var gpuQueueLockNarrowEnabled: Bool { gpuQueueLockNarrow != false }
 
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval

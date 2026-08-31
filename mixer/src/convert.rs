@@ -193,18 +193,19 @@ impl Nv12Converter {
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..6, 0..1);
         }
-        let index = {
-            let _guard = crate::device::lock_gpu_queue();
-            queue.submit(Some(encoder.finish()))
-        };
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index),
-            timeout: None,
-        });
-        drop(y_src);
-        drop(uv_src);
-        drop(y);
-        drop(uv);
+        let index = crate::device::submit_ingest(queue, Some(encoder.finish()));
+        if crate::device::mf_import_no_wait() {
+            retire_imports(device, index, vec![y_src, uv_src, y, uv]);
+        } else {
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: Some(index),
+                timeout: None,
+            });
+            drop(y_src);
+            drop(uv_src);
+            drop(y);
+            drop(uv);
+        }
         Ok(GpuVideoFrame {
             pts,
             width,
@@ -260,15 +261,16 @@ impl Nv12Converter {
                 depth_or_array_layers: 1,
             },
         );
-        let index = {
-            let _guard = crate::device::lock_gpu_queue();
-            queue.submit(Some(encoder.finish()))
-        };
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index),
-            timeout: None,
-        });
-        drop(src);
+        let index = crate::device::submit_ingest(queue, Some(encoder.finish()));
+        if crate::device::mf_import_no_wait() {
+            retire_imports(device, index, vec![src]);
+        } else {
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: Some(index),
+                timeout: None,
+            });
+            drop(src);
+        }
         let view = dest.create_view(&Default::default());
         Ok(GpuVideoFrame {
             pts,
@@ -326,6 +328,21 @@ fn import_plane(
         )
     })
 }
+
+fn retire_imports(
+    _device: &wgpu::Device,
+    _index: wgpu::SubmissionIndex,
+    textures: Vec<wgpu::Texture>,
+) {
+    let mut ring = IMPORT_RETIRE.lock().expect("mf retire");
+    while ring.len() >= 3 {
+        ring.pop_front();
+    }
+    ring.push_back(textures);
+}
+
+static IMPORT_RETIRE: std::sync::Mutex<std::collections::VecDeque<Vec<wgpu::Texture>>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
 
 fn owned_plane(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {

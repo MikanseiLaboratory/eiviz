@@ -1,5 +1,7 @@
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
 
 use thiserror::Error;
 
@@ -9,11 +11,51 @@ thread_local! {
 }
 
 static GPU_QUEUE_LOCK: Mutex<()> = Mutex::new(());
+static QUEUE_LOCK_NARROW: AtomicBool = AtomicBool::new(true);
+static CONFIGURING: AtomicBool = AtomicBool::new(false);
+static MF_IMPORT_NO_WAIT: AtomicBool = AtomicBool::new(true);
 
 /// Serializes `Queue::submit` against `Surface::configure`.
 /// wgpu treats a submit during configure's wait-idle as a validation error.
 pub fn lock_gpu_queue() -> MutexGuard<'static, ()> {
     GPU_QUEUE_LOCK.lock().expect("gpu queue lock")
+}
+
+pub fn set_queue_lock_narrow(enabled: bool) {
+    QUEUE_LOCK_NARROW.store(enabled, Ordering::Relaxed);
+}
+
+pub fn set_mf_import_no_wait(enabled: bool) {
+    MF_IMPORT_NO_WAIT.store(enabled, Ordering::Relaxed);
+}
+
+pub fn mf_import_no_wait() -> bool {
+    MF_IMPORT_NO_WAIT.load(Ordering::Relaxed)
+}
+
+pub fn begin_configure() {
+    CONFIGURING.store(true, Ordering::SeqCst);
+}
+
+pub fn end_configure() {
+    CONFIGURING.store(false, Ordering::SeqCst);
+}
+
+/// Ingest-thread submit. When the narrow lock is on, skip the global mutex
+/// unless a surface configure is in flight.
+pub fn submit_ingest(
+    queue: &wgpu::Queue,
+    command_buffers: impl IntoIterator<Item = wgpu::CommandBuffer>,
+) -> wgpu::SubmissionIndex {
+    if QUEUE_LOCK_NARROW.load(Ordering::Relaxed) {
+        while CONFIGURING.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        queue.submit(command_buffers)
+    } else {
+        let _guard = lock_gpu_queue();
+        queue.submit(command_buffers)
+    }
 }
 
 pub fn with_surface_configure<R>(f: impl FnOnce() -> R) -> (R, bool) {

@@ -29,7 +29,14 @@ public partial class SettingsWindow : Window
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             InternalColorFormat = session.Settings.InternalColorFormat,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
-            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled
+            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
+            VideoGpuUpload = session.Settings.VideoGpuUploadEnabled,
+            StillGpuUpload = session.Settings.StillGpuUploadEnabled,
+            OmtCpuDecodeIngest = session.Settings.OmtCpuDecodeIngestEnabled,
+            OmtSkipJitterCopy = session.Settings.OmtSkipJitterCopyEnabled,
+            ReadbackOffClock = session.Settings.ReadbackOffClockEnabled,
+            MfImportNoWait = session.Settings.MfImportNoWaitEnabled,
+            GpuQueueLockNarrow = session.Settings.GpuQueueLockNarrowEnabled
         };
         foreach (var output in session.Outputs)
         {
@@ -102,6 +109,25 @@ public partial class SettingsWindow : Window
         SelectTag(MvPresentBox, "3");
         RebarOptBox.IsChecked = true;
         NdiGpuBox.IsChecked = true;
+        VideoGpuBox.IsChecked = true;
+        StillGpuBox.IsChecked = true;
+        OmtCpuBox.IsChecked = true;
+        OmtSkipCopyBox.IsChecked = true;
+        ReadbackOffBox.IsChecked = true;
+        MfNoWaitBox.IsChecked = true;
+        QueueNarrowBox.IsChecked = true;
+    }
+
+    private void ApplyIngestBoxes()
+    {
+        NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
+        VideoGpuBox.IsChecked = Settings.VideoGpuUploadEnabled;
+        StillGpuBox.IsChecked = Settings.StillGpuUploadEnabled;
+        OmtCpuBox.IsChecked = Settings.OmtCpuDecodeIngestEnabled;
+        OmtSkipCopyBox.IsChecked = Settings.OmtSkipJitterCopyEnabled;
+        ReadbackOffBox.IsChecked = Settings.ReadbackOffClockEnabled;
+        MfNoWaitBox.IsChecked = Settings.MfImportNoWaitEnabled;
+        QueueNarrowBox.IsChecked = Settings.GpuQueueLockNarrowEnabled;
     }
 
     private void FillRebar()
@@ -116,7 +142,7 @@ public partial class SettingsWindow : Window
                 RebarMemory.Text = "—";
                 RebarOptBox.IsEnabled = false;
                 RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
-                NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
+                ApplyIngestBoxes();
                 return;
             }
             AdapterName.Text = ReadZ(info.Adapter, 128);
@@ -132,7 +158,7 @@ public partial class SettingsWindow : Window
             RebarMemory.Text = $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
             RebarOptBox.IsEnabled = info.Available != 0;
             RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
-            NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
+            ApplyIngestBoxes();
         }
     }
 
@@ -539,6 +565,13 @@ public partial class SettingsWindow : Window
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
         Settings.RebarOptimization = RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
+        Settings.VideoGpuUpload = VideoGpuBox.IsChecked == true;
+        Settings.StillGpuUpload = StillGpuBox.IsChecked == true;
+        Settings.OmtCpuDecodeIngest = OmtCpuBox.IsChecked == true;
+        Settings.OmtSkipJitterCopy = OmtSkipCopyBox.IsChecked == true;
+        Settings.ReadbackOffClock = ReadbackOffBox.IsChecked == true;
+        Settings.MfImportNoWait = MfNoWaitBox.IsChecked == true;
+        Settings.GpuQueueLockNarrow = QueueNarrowBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
         DialogResult = true;

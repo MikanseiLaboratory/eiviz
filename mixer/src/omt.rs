@@ -13,7 +13,10 @@ use openmediatransport::{
 use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
 use crate::save::debounce_want_full;
-use crate::upload::{AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_throttled};
+use crate::upload::{
+    ingest_audio_throttled, ingest_cpu_frame, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
+    GpuVideoFrame, UploadStore,
+};
 
 pub type OmtGpu = GpuVideoContext;
 
@@ -39,6 +42,7 @@ impl OmtReceiver {
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
         gpu: Option<OmtGpu>,
+        ingest: GpuIngest,
         frame_buffer_frames: u32,
         quality: u32,
     ) -> Result<Self, String> {
@@ -77,6 +81,10 @@ impl OmtReceiver {
                 }
                 let mut sent: Option<(bool, bool, bool, u32)> = None;
                 let mut drop_full_at: Option<Instant> = None;
+                let mut gpu_ring = GpuUploadRing::new();
+                #[cfg(windows)]
+                let mut rebar_ring: Option<crate::rebar::RebarIngestRing> = None;
+                let mut gpu_warned = false;
                 while !stop_thread.load(Ordering::Relaxed) {
                     let full = debounce_want_full(
                         want_full_thread.load(Ordering::Relaxed),
@@ -96,7 +104,8 @@ impl OmtReceiver {
                         {
                             let width = frame.width.max(2);
                             let height = frame.height.max(2);
-                            let gpu_frame = if depth > 1 {
+                            let skip_copy = ingest.omt_skip_jitter.load(Ordering::Relaxed);
+                            let gpu_frame = if !skip_copy && depth > 1 {
                                 if let Some(ctx) = gpu.as_ref() {
                                     copy_gpu_frame(
                                         ctx,
@@ -123,18 +132,43 @@ impl OmtReceiver {
                         }
                     } else if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4))
                     {
-                        let mut store = uploads.lock().expect("uploads lock");
-                        store.ensure_playout(
-                            source_id,
-                            frame.width.max(2),
-                            frame.height.max(2),
-                            CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                            depth,
-                        );
+                        let width = frame.width.max(2);
+                        let height = frame.height.max(2);
                         let stride = frame.stride.max(frame.width * 4) as usize;
-                        store
-                            .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
-                            .ok();
+                        let cpu_ingest = ingest.omt_cpu_ingest.load(Ordering::Relaxed);
+                        if cpu_ingest {
+                            ingest_cpu_frame(
+                                &uploads,
+                                Some(&ingest),
+                                true,
+                                &mut gpu_ring,
+                                #[cfg(windows)]
+                                &mut rebar_ring,
+                                &mut gpu_warned,
+                                source_id,
+                                depth,
+                                &frame.pixels,
+                                stride,
+                                width,
+                                height,
+                                CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
+                                frame.timestamp,
+                                false,
+                                "omt",
+                            );
+                        } else {
+                            let mut store = uploads.lock().expect("uploads lock");
+                            store.ensure_playout(
+                                source_id,
+                                width,
+                                height,
+                                CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
+                                depth,
+                            );
+                            store
+                                .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
+                                .ok();
+                        }
                     }
                     while let Some(audio) = session.try_recv_audio() {
                         ingest_audio_throttled(&uploads, source_id, to_audio(audio));
@@ -515,8 +549,7 @@ fn copy_gpu_frame(
             depth_or_array_layers: 1,
         },
     );
-    let _guard = crate::device::lock_gpu_queue();
-    ctx.queue.submit(Some(encoder.finish()));
+    crate::device::submit_ingest(&ctx.queue, Some(encoder.finish()));
     GpuVideoFrame {
         pts,
         width,

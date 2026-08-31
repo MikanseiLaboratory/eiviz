@@ -1165,6 +1165,15 @@ public partial class MainWindow : Window
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
+        _session.Settings.VideoGpuUpload = dialog.Settings.VideoGpuUploadEnabled;
+        _session.Settings.StillGpuUpload = dialog.Settings.StillGpuUploadEnabled;
+        var omtIngestChanged = _session.Settings.OmtCpuDecodeIngestEnabled
+            != dialog.Settings.OmtCpuDecodeIngestEnabled;
+        _session.Settings.OmtCpuDecodeIngest = dialog.Settings.OmtCpuDecodeIngestEnabled;
+        _session.Settings.OmtSkipJitterCopy = dialog.Settings.OmtSkipJitterCopyEnabled;
+        _session.Settings.ReadbackOffClock = dialog.Settings.ReadbackOffClockEnabled;
+        _session.Settings.MfImportNoWait = dialog.Settings.MfImportNoWaitEnabled;
+        _session.Settings.GpuQueueLockNarrow = dialog.Settings.GpuQueueLockNarrowEnabled;
         _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
         _session.Buses.Clear();
         foreach (var bus in dialog.Buses)
@@ -1179,12 +1188,35 @@ public partial class MainWindow : Window
         MixerNative.ThrowIfFailed(
             MixerNative.SetNdiGpuUpload(_session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
             "Set NDI GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetVideoGpuUpload(_session.Settings.VideoGpuUploadEnabled ? 1u : 0u),
+            "Set video GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetStillGpuUpload(_session.Settings.StillGpuUploadEnabled ? 1u : 0u),
+            "Set still GPU upload");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetOmtCpuDecodeIngest(_session.Settings.OmtCpuDecodeIngestEnabled ? 1u : 0u),
+            "Set OMT CPU decode ingest");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetOmtSkipJitterCopy(_session.Settings.OmtSkipJitterCopyEnabled ? 1u : 0u),
+            "Set OMT skip jitter copy");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetReadbackOffClock(_session.Settings.ReadbackOffClockEnabled ? 1u : 0u),
+            "Set readback off clock");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetMfImportNoWait(_session.Settings.MfImportNoWaitEnabled ? 1u : 0u),
+            "Set MF import no wait");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetGpuQueueLockNarrow(_session.Settings.GpuQueueLockNarrowEnabled ? 1u : 0u),
+            "Set GPU queue lock narrow");
         foreach (var layout in _session.Multiviews)
             layout.PushPresentInterval(_session.Settings);
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
         PushScenePresentIntervals();
         RestartMediaPumps();
+        if (omtIngestChanged)
+            RestartOmtReceivers();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
         UpdateStatus();
@@ -1207,6 +1239,23 @@ public partial class MainWindow : Window
                     input.VideoStartsPlaying));
             else if (input.Kind == InputKind.Uvc)
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
+        }
+    }
+
+    private void RestartOmtReceivers()
+    {
+        foreach (var input in _session.Inputs)
+        {
+            if (input.Kind != InputKind.Omt || string.IsNullOrWhiteSpace(input.PathOrAddress))
+                continue;
+            Commands.TryEnqueue(new ConnectOmtCommand(
+                input.Id,
+                input.PathOrAddress,
+                input.UseGpu,
+                input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                input.BandwidthSave,
+                input.KeepFullOnMultiview,
+                input.OmtQuality));
         }
     }
 

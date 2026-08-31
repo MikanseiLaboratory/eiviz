@@ -93,8 +93,34 @@ pub struct GpuIngest {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub ndi_gpu: Arc<AtomicBool>,
+    pub video_gpu: Arc<AtomicBool>,
+    pub still_gpu: Arc<AtomicBool>,
+    pub omt_cpu_ingest: Arc<AtomicBool>,
+    pub omt_skip_jitter: Arc<AtomicBool>,
+    pub readback_off_clock: Arc<AtomicBool>,
+    pub mf_import_no_wait: Arc<AtomicBool>,
+    pub queue_lock_narrow: Arc<AtomicBool>,
     pub use_rebar: Arc<AtomicBool>,
     pub rebar_available: bool,
+}
+
+impl GpuIngest {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue, rebar_available: bool) -> Self {
+        Self {
+            device,
+            queue,
+            ndi_gpu: Arc::new(AtomicBool::new(true)),
+            video_gpu: Arc::new(AtomicBool::new(true)),
+            still_gpu: Arc::new(AtomicBool::new(true)),
+            omt_cpu_ingest: Arc::new(AtomicBool::new(true)),
+            omt_skip_jitter: Arc::new(AtomicBool::new(true)),
+            readback_off_clock: Arc::new(AtomicBool::new(true)),
+            mf_import_no_wait: Arc::new(AtomicBool::new(true)),
+            queue_lock_narrow: Arc::new(AtomicBool::new(true)),
+            use_rebar: Arc::new(AtomicBool::new(rebar_available)),
+            rebar_available,
+        }
+    }
 }
 
 struct GpuUploadSlot {
@@ -192,7 +218,7 @@ impl GpuUploadRing {
         }
         while self.slots.len() < 3 {
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("eiviz ndi gpu"),
+                label: Some("eiviz ingest gpu"),
                 size: wgpu::Extent3d {
                     width,
                     height,
@@ -1019,6 +1045,121 @@ fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {
         CpuFormat::Bgra | CpuFormat::Rgba => (width as usize) * (height as usize) * 4,
         CpuFormat::GpuRgba => 0,
     }
+}
+
+/// Upload CPU pixels on the calling (ingest) thread when `enabled`.
+/// Returns true when a GPU frame was published.
+pub fn ingest_cpu_frame(
+    uploads: &Mutex<UploadStore>,
+    gpu: Option<&GpuIngest>,
+    enabled: bool,
+    gpu_ring: &mut GpuUploadRing,
+    #[cfg(windows)] rebar_ring: &mut Option<crate::rebar::RebarIngestRing>,
+    gpu_warned: &mut bool,
+    source_id: u64,
+    depth: u32,
+    pixels: &[u8],
+    stride: usize,
+    width: u32,
+    height: u32,
+    format: CpuFormat,
+    pts: i64,
+    opaque_x: bool,
+    log_tag: &str,
+) -> bool {
+    let width = width.max(2);
+    let height = height.max(2);
+    let bpp = match format {
+        CpuFormat::Uyvy | CpuFormat::Uyva => 2usize,
+        _ => 4usize,
+    };
+    if enabled && let Some(gpu) = gpu {
+        #[cfg(windows)]
+        if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
+            if rebar_ring.is_none() {
+                *rebar_ring = crate::rebar::RebarIngestRing::new(&gpu.device, &gpu.queue);
+            }
+            if let Some(ring) = rebar_ring.as_mut().filter(|ring| ring.is_live()) {
+                let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+                let bgra = format == CpuFormat::Bgra;
+                let tex_format = if packed {
+                    wgpu::TextureFormat::Rgba8Unorm
+                } else if bgra {
+                    wgpu::TextureFormat::Bgra8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                };
+                match ring.upload(
+                    pixels,
+                    stride,
+                    width as usize * bpp,
+                    width,
+                    height,
+                    packed,
+                    bgra,
+                    tex_format,
+                    pts,
+                ) {
+                    Ok(uploaded) => {
+                        finish_ingest_gpu(
+                            uploads, gpu_warned, source_id, depth, width, height, pts, uploaded,
+                            log_tag, "rebar",
+                        );
+                        return true;
+                    }
+                    Err(error) => {
+                        eprintln!("eiviz {log_tag} rebar upload: {error}; falling back to write_texture");
+                    }
+                }
+            }
+        }
+        match gpu_ring.upload(gpu, pixels, stride, width, height, format, pts) {
+            Ok(uploaded) => {
+                finish_ingest_gpu(
+                    uploads, gpu_warned, source_id, depth, width, height, pts, uploaded, log_tag,
+                    "queue",
+                );
+                return true;
+            }
+            Err(error) if !*gpu_warned => {
+                eprintln!("eiviz {log_tag} gpu upload: {error}; falling back to CPU frames");
+                *gpu_warned = true;
+            }
+            Err(_) => {}
+        }
+    }
+    let (mut buf, format, width, height) = {
+        let mut store = uploads.lock().expect("uploads lock");
+        match store.take_playout_buf(source_id, width, height, format, depth) {
+            Some(ready) => ready,
+            None => return false,
+        }
+    };
+    write_slot(&mut buf, pixels, stride, width, height, format, opaque_x);
+    let mut store = uploads.lock().expect("uploads lock");
+    store.finish_playout_cpu(source_id, buf, pts);
+    false
+}
+
+fn finish_ingest_gpu(
+    uploads: &Mutex<UploadStore>,
+    gpu_warned: &mut bool,
+    source_id: u64,
+    depth: u32,
+    width: u32,
+    height: u32,
+    pts: i64,
+    uploaded: GpuVideoFrame,
+    log_tag: &str,
+    path: &str,
+) {
+    if !*gpu_warned {
+        eprintln!("eiviz {log_tag} gpu {source_id} {width}x{height} pts={pts} path={path}");
+        *gpu_warned = true;
+    }
+    let mut store = uploads.lock().expect("uploads lock");
+    store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
+    let _ = store.push_playout_gpu(source_id, uploaded);
 }
 
 pub(crate) fn write_slot(

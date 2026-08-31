@@ -514,8 +514,7 @@ impl RebarIngestRing {
             },
         );
         {
-            let _guard = crate::device::lock_gpu_queue();
-            self.queue.submit(Some(encoder.finish()));
+            crate::device::submit_ingest(&self.queue, Some(encoder.finish()));
         }
         self.next = (slot_i + 1) % STAGING_SLOTS;
         Ok(crate::upload::GpuVideoFrame {

@@ -421,10 +421,12 @@ fn configure_surface(
     for _ in 0..8 {
         {
             let _guard = device::lock_gpu_queue();
+            device::begin_configure();
             wait_gpu_idle(device);
             let (_, failed) = device::with_surface_configure(|| {
                 surface.configure(device, config);
             });
+            device::end_configure();
             if !failed {
                 return Ok(());
             }

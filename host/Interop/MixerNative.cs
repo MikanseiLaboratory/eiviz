@@ -233,6 +233,27 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_ndi_gpu_upload")]
     internal static partial int SetNdiGpuUpload(uint enabled);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_video_gpu_upload")]
+    internal static partial int SetVideoGpuUpload(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_still_gpu_upload")]
+    internal static partial int SetStillGpuUpload(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_omt_cpu_decode_ingest")]
+    internal static partial int SetOmtCpuDecodeIngest(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_omt_skip_jitter_copy")]
+    internal static partial int SetOmtSkipJitterCopy(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_readback_off_clock")]
+    internal static partial int SetReadbackOffClock(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_mf_import_no_wait")]
+    internal static partial int SetMfImportNoWait(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_gpu_queue_lock_narrow")]
+    internal static partial int SetGpuQueueLockNarrow(uint enabled);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 

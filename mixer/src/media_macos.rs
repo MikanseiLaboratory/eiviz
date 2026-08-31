@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use crate::abi::MixerVideoInfo;
 use crate::upload::{
-    ingest_audio_clocked, ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore,
+    ingest_audio_clocked, ingest_audio_throttled, ingest_cpu_frame, AudioPacket, CpuFormat,
+    GpuIngest, GpuUploadRing, UploadStore,
 };
 
 const KIND_VIDEO: i32 = 1;
@@ -121,6 +122,7 @@ impl VideoPump {
         path: String,
         capture: bool,
         uploads: Arc<Mutex<UploadStore>>,
+        ingest: GpuIngest,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let playing = Arc::new(AtomicBool::new(true));
@@ -139,8 +141,8 @@ impl VideoPump {
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, uploads, stop_t, playing_t, looping_t, seek_t, pos_t,
-                    dur_t, ready_tx,
+                    source_id, path, capture, uploads, ingest, stop_t, playing_t, looping_t, seek_t,
+                    pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -212,6 +214,7 @@ fn run_loop(
     path: String,
     capture: bool,
     uploads: Arc<Mutex<UploadStore>>,
+    ingest: GpuIngest,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -245,6 +248,8 @@ fn run_loop(
         let mut clock_start = Instant::now();
         let mut need_frame = false;
         let mut was_playing = false;
+        let mut gpu_ring = GpuUploadRing::new();
+        let mut gpu_warned = false;
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
@@ -321,7 +326,9 @@ fn run_loop(
                             thread::sleep(wait.min(Duration::from_millis(40)));
                         }
                     }
-                    if let Err(error) = push_video(&uploads, source_id, &sample) {
+                    if let Err(error) =
+                        push_video(&uploads, &ingest, &mut gpu_ring, &mut gpu_warned, source_id, &sample)
+                    {
                         eprintln!("eiviz video cpu: {error}");
                     }
                     need_frame = false;
@@ -362,6 +369,9 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
 
 fn push_video(
     uploads: &Mutex<UploadStore>,
+    ingest: &GpuIngest,
+    gpu_ring: &mut GpuUploadRing,
+    gpu_warned: &mut bool,
     source_id: u64,
     sample: &AvSample,
 ) -> Result<(), String> {
@@ -371,10 +381,31 @@ fn push_video(
     let height = sample.height as u32;
     let stride = sample.stride as usize;
     let src = unsafe { std::slice::from_raw_parts(sample.data, stride * height as usize) };
+    let width = (sample.width as u32).max(2);
+    if ingest.video_gpu.load(Ordering::Relaxed) {
+        ingest_cpu_frame(
+            uploads,
+            Some(ingest),
+            true,
+            gpu_ring,
+            gpu_warned,
+            source_id,
+            1,
+            src,
+            stride,
+            width,
+            height.max(2),
+            CpuFormat::Bgra,
+            sample.pts_hns,
+            false,
+            "video",
+        );
+        return Ok(());
+    }
     let mut store = uploads.lock().expect("uploads");
     store.ensure(
         source_id,
-        (sample.width as u32).max(2),
+        width,
         height.max(2),
         CpuFormat::Bgra,
     );

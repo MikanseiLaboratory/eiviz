@@ -329,9 +329,23 @@ public sealed class SessionSettings
     public bool? RebarOptimization { get; set; } = true;
     public bool? RebarDirectSample { get; set; } = false;
     public bool? NdiGpuUpload { get; set; } = true;
+    public bool? VideoGpuUpload { get; set; } = true;
+    public bool? StillGpuUpload { get; set; } = true;
+    public bool? OmtCpuDecodeIngest { get; set; } = true;
+    public bool? OmtSkipJitterCopy { get; set; } = true;
+    public bool? ReadbackOffClock { get; set; } = true;
+    public bool? MfImportNoWait { get; set; } = true;
+    public bool? GpuQueueLockNarrow { get; set; } = true;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
+    public bool VideoGpuUploadEnabled => VideoGpuUpload != false;
+    public bool StillGpuUploadEnabled => StillGpuUpload != false;
+    public bool OmtCpuDecodeIngestEnabled => OmtCpuDecodeIngest != false;
+    public bool OmtSkipJitterCopyEnabled => OmtSkipJitterCopy != false;
+    public bool ReadbackOffClockEnabled => ReadbackOffClock != false;
+    public bool MfImportNoWaitEnabled => MfImportNoWait != false;
+    public bool GpuQueueLockNarrowEnabled => GpuQueueLockNarrow != false;
     public string? LastSessionPath { get; set; }
 
     public uint ResolvedPresentInterval() =>
