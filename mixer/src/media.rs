@@ -26,7 +26,10 @@ use windows::core::{GUID, PCWSTR};
 
 use crate::abi::{FMT_BGRA, MixerVideoInfo};
 use crate::dxgi::GpuVideoContext;
-use crate::upload::{AUDIO_RATE, AudioPacket, CpuFormat, UploadStore, ingest_audio_throttled};
+use crate::upload::{
+    AUDIO_LIVE_FRAMES, AUDIO_RATE, AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked,
+    ingest_audio_throttled,
+};
 
 static MF_ONCE: Once = Once::new();
 
@@ -249,7 +252,11 @@ fn run_loop(
             match sample {
                 Decoded::Audio { pts, packet } => {
                     if is_playing {
-                        ingest_audio_throttled(&uploads, source_id, packet);
+                        if capture {
+                            ingest_audio_throttled(&uploads, source_id, packet);
+                        } else {
+                            ingest_audio_clocked(&uploads, source_id, packet);
+                        }
                     }
                     let _ = pts;
                 }
@@ -577,7 +584,7 @@ fn drain_audio(
     let mut packets = 0u32;
     while Instant::now() < deadline && packets < 16 {
         let frames = uploads.lock().expect("uploads").fifo_frames(source_id);
-        if frames >= AUDIO_RATE as usize / 25 {
+        if frames >= AUDIO_LIVE_FRAMES {
             break;
         }
         match read_audio_sample(reader, layout) {
