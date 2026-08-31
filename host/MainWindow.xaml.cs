@@ -1065,6 +1065,8 @@ public partial class MainWindow : Window
                 continue;
             if (prior is not null)
                 Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
+            if (!output.Enabled)
+                continue;
             if (output.Transport is OutputTransport.Omt or OutputTransport.Ndi)
             {
                 Commands.TryEnqueue(new AddOutputCommand(output));
@@ -1091,7 +1093,8 @@ public partial class MainWindow : Window
         && left.SourceKind == right.SourceKind
         && left.SourceId == right.SourceId
         && left.UnitId == right.UnitId
-        && left.UseGpu == right.UseGpu;
+        && left.UseGpu == right.UseGpu
+        && left.Enabled == right.Enabled;
 
     private void UpdateStatus()
     {

@@ -245,6 +245,7 @@ public sealed class OutputEntry
     public ulong SourceId { get; set; }
     public ulong UnitId { get; set; } = 1;
     public bool UseGpu { get; set; }
+    public bool Enabled { get; set; } = true;
 }
 
 public enum InternalColorFormat

@@ -63,7 +63,8 @@ internal static class SessionStore
                 SourceKind = output.SourceKind,
                 SourceId = output.SourceId,
                 UnitId = output.UnitId,
-                UseGpu = output.UseGpu
+                UseGpu = output.UseGpu,
+                Enabled = output.Enabled
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),

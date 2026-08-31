@@ -77,6 +77,8 @@ public partial class App : Application
         AudioGraphSync.Push(Session);
         foreach (var output in Session.Outputs)
         {
+            if (!output.Enabled)
+                continue;
             if (output.Transport is not (OutputTransport.Omt or OutputTransport.Ndi))
                 continue;
             Commands.AddOutputNow(output);

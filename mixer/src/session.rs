@@ -103,6 +103,9 @@ fn theme_charcoal() -> String {
 fn one() -> u64 {
     1
 }
+fn default_true() -> bool {
+    true
+}
 fn three() -> u32 {
     3
 }
@@ -385,6 +388,8 @@ pub struct OutputDto {
     pub unit_id: u64,
     #[serde(default)]
     pub use_gpu: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

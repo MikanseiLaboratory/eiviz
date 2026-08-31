@@ -121,6 +121,13 @@ struct SettingsView: View {
                 if output.wrappedValue.transport == .omt {
                     Toggle("GPU", isOn: output.useGpu)
                 }
+                Toggle("Enabled", isOn: Binding(
+                    get: { output.wrappedValue.enabled },
+                    set: { value in
+                        output.wrappedValue.enabled = value
+                        mixer.addOutput(output.wrappedValue)
+                    }
+                ))
                 Button("Apply") { mixer.addOutput(output.wrappedValue) }
                 Button("−") {
                     _ = mixer_output_remove(output.wrappedValue.id)

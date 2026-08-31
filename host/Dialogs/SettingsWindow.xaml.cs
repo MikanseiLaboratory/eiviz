@@ -415,6 +415,17 @@ public partial class SettingsWindow : Window
             FillOutputPick(pick, output);
             pick.SelectionChanged += (_, _) => ApplyOutputPick(pick, output);
 
+            var enabled = new CheckBox
+            {
+                Content = "Enabled",
+                IsChecked = output.Enabled,
+                Foreground = System.Windows.Media.Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 6)
+            };
+            enabled.Checked += (_, _) => output.Enabled = true;
+            enabled.Unchecked += (_, _) => output.Enabled = false;
+
             var remove = new Button { Content = "−", Width = 28 };
             remove.Click += (_, _) =>
             {
@@ -429,6 +440,8 @@ public partial class SettingsWindow : Window
             Grid.SetRow(transport, 1);
             Grid.SetRow(path, 1);
             Grid.SetColumn(path, 1);
+            Grid.SetRow(enabled, 1);
+            Grid.SetColumn(enabled, 2);
             Grid.SetRow(kinds, 2);
             Grid.SetColumnSpan(kinds, 4);
             Grid.SetRow(pick, 3);
@@ -437,6 +450,7 @@ public partial class SettingsWindow : Window
             grid.Children.Add(remove);
             grid.Children.Add(transport);
             grid.Children.Add(path);
+            grid.Children.Add(enabled);
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
             box.Child = grid;
@@ -595,7 +609,8 @@ public partial class SettingsWindow : Window
         SourceKind = output.SourceKind,
         SourceId = output.SourceId,
         UnitId = output.UnitId,
-        UseGpu = output.UseGpu
+        UseGpu = output.UseGpu,
+        Enabled = output.Enabled
     };
 
     private static void SelectTag(ComboBox box, string tag)

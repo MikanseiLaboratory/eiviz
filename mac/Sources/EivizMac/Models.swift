@@ -266,6 +266,43 @@ struct OutputEntry: Identifiable, Codable {
     var sourceId: UInt64 = 0
     var unitId: UInt64 = 1
     var useGpu: Bool = true
+    var enabled: Bool = true
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled
+    }
+
+    init(
+        id: UInt64,
+        name: String,
+        transport: OutputTransport = .omt,
+        sourceKind: OutputSourceKind = .muProgram,
+        sourceId: UInt64 = 0,
+        unitId: UInt64 = 1,
+        useGpu: Bool = true,
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.transport = transport
+        self.sourceKind = sourceKind
+        self.sourceId = sourceId
+        self.unitId = unitId
+        self.useGpu = useGpu
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        transport = try container.decodeIfPresent(OutputTransport.self, forKey: .transport) ?? .omt
+        sourceKind = try container.decodeIfPresent(OutputSourceKind.self, forKey: .sourceKind) ?? .muProgram
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
+        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
 }
 
 struct MultiviewLayout: Identifiable, Codable {

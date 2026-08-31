@@ -163,7 +163,7 @@ final class MixerController: ObservableObject {
         for layout in session.multiviews {
             pushMultiview(layout)
         }
-        for output in session.outputs where output.transport != .deckLink {
+        for output in session.outputs where output.enabled && output.transport != .deckLink {
             addOutput(output)
         }
         selectedSceneId = session.scenes.first?.id
@@ -398,6 +398,7 @@ final class MixerController: ObservableObject {
             session.outputs[index] = entry
         }
         _ = mixer_output_remove(entry.id)
+        guard entry.enabled else { return }
         MixerFFI.withCString(entry.name) { name in
             fail(
                 mixer_output_add(
