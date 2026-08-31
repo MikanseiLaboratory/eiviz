@@ -11,9 +11,7 @@ public partial class SceneTile : UserControl
     {
         InitializeComponent();
         MouseLeftButtonUp += (_, _) => Select();
-        MouseDoubleClick += (_, _) => Edit();
         Monitor.SurfaceClicked += (_, _) => Select();
-        Monitor.SurfaceDoubleClicked += (_, _) => Edit();
     }
 
     public SceneEntry? Scene { get; private set; }
@@ -63,12 +61,6 @@ public partial class SceneTile : UserControl
     {
         if (Scene is { } scene)
             SceneSelected?.Invoke(this, scene);
-    }
-
-    private void Edit()
-    {
-        if (Scene is { } scene)
-            SceneEditRequested?.Invoke(this, scene);
     }
 
     private void Cut_Click(object sender, RoutedEventArgs e) => Raise(SceneCutRequested);

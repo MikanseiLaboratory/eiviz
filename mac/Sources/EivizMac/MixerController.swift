@@ -910,13 +910,12 @@ final class MixerController: ObservableObject {
             let rosePreview = now.preview && !prev.preview
             let paused = matchesTrigger(input.videoPauseWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
             let restarted = matchesTrigger(input.videoRestartWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
-            if paused && !restarted {
-                pumps.setPlaying(input.id, playing: false)
-            }
             if restarted {
                 pumps.seek(input.id, fraction: 0)
-                pumps.setPlaying(input.id, playing: true)
-            } else if shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
+            }
+            if paused {
+                pumps.setPlaying(input.id, playing: false)
+            } else if restarted || shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
                 pumps.setPlaying(input.id, playing: true)
             }
             videoRoles[input.id] = now

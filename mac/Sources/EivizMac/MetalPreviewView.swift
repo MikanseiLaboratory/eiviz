@@ -151,9 +151,9 @@ final class PreviewHostView: NSView {
     var onDoubleClick: (() -> Void)?
 
     override func mouseUp(with event: NSEvent) {
-        if event.clickCount >= 2 {
+        if event.clickCount >= 2, onDoubleClick != nil {
             onDoubleClick?()
-        } else if event.clickCount == 1 {
+        } else {
             onClick?()
         }
     }

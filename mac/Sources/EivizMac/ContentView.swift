@@ -267,11 +267,7 @@ struct ContentView: View {
             MetalPreviewRepresentable(
                 role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId),
                 presentInterval: mixer.session.settings.resolvedPresentInterval,
-                onClick: { mixer.previewScene(scene) },
-                onDoubleClick: {
-                    mixer.editingScene = scene
-                    mixer.showSceneEditor = true
-                }
+                onClick: { mixer.previewScene(scene) }
             )
             .frame(width: 176, height: 90)
             .background(Color.black)

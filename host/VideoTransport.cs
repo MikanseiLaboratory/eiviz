@@ -22,14 +22,11 @@ internal sealed class VideoTransport
             var rosePreview = now.OnPreview && !prev.OnPreview;
             var paused = Matches(input.VideoPauseWhen, roseProgram, fellProgram, rosePreview);
             var restarted = Matches(input.VideoRestartWhen, roseProgram, fellProgram, rosePreview);
-            if (paused && !restarted)
-                MixerNative.VideoSetPlaying(input.Id, 0);
             if (restarted)
-            {
                 MixerNative.VideoSeek(input.Id, 0);
-                MixerNative.VideoSetPlaying(input.Id, 1);
-            }
-            else if (ShouldPlay(input.VideoPlayWhen, roseProgram, rosePreview, now))
+            if (paused)
+                MixerNative.VideoSetPlaying(input.Id, 0);
+            else if (restarted || ShouldPlay(input.VideoPlayWhen, roseProgram, rosePreview, now))
                 MixerNative.VideoSetPlaying(input.Id, 1);
             _previous[input.Id] = now;
         }
