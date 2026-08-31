@@ -51,6 +51,7 @@ struct ContentView: View {
                 mixer.showMixingUnit = true
             }
             Button("Delete") { mixer.deleteUnit() }
+            Button("Open") { mixer.openSwitcher() }
             Spacer()
             Button("Save") { mixer.saveSession() }
             Button("Load") { mixer.loadSession() }

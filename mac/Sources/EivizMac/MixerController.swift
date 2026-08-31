@@ -46,6 +46,8 @@ final class MixerController: ObservableObject {
     private var inputPreviewWindows: [UInt64: NSWindow] = [:]
     private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
     private let inputPreviewCloser = InputPreviewCloser()
+    private var switcherWindows: [UInt64: NSWindow] = [:]
+    private let switcherCloser = SwitcherCloser()
     private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
 
     var selectedUnit: MixingUnitEntry {
@@ -72,6 +74,7 @@ final class MixerController: ObservableObject {
         meterTimer?.invalidate()
         meterTimer = nil
         closeAllInputPreviews()
+        closeAllSwitchers()
         guard booted else { return }
         mixer_destroy()
         booted = false
@@ -213,15 +216,16 @@ final class MixerController: ObservableObject {
     }
 
     func cut() {
-        takeCut()
+        takeCut(unitId: selectedUnit.id)
         mix = 0
         tbarLocked = false
         updateStatus()
     }
 
-    func takeCut() {
-        let preset = tbarPreset()
-        fail(mixer_unit_cut(selectedUnit.id, preset.swap ? 1 : 0), "CUT")
+    func takeCut(unitId: UInt64? = nil) {
+        let unit = unit(for: unitId)
+        let preset = tbarPreset(for: unit)
+        fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "CUT")
     }
 
     func auto() {
@@ -237,25 +241,31 @@ final class MixerController: ObservableObject {
 
     func firePreset(_ preset: TransitionPreset, index: Int) {
         tbarPresetIndex = index
-        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
-            fail(mixer_unit_cut(selectedUnit.id, preset.swap ? 1 : 0), "TAKE")
-        } else {
-            fail(
-                mixer_unit_auto(selectedUnit.id, selectedUnit.durationMs(preset.durationFrames), preset.swap ? 1 : 0),
-                "TAKE"
-            )
-        }
+        firePreset(preset, unitId: selectedUnit.id)
         mix = 0
         tbarLocked = false
     }
 
+    func firePreset(_ preset: TransitionPreset, unitId: UInt64) {
+        let unit = unit(for: unitId)
+        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
+            fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "TAKE")
+        } else {
+            fail(mixer_unit_auto(unit.id, unit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "TAKE")
+        }
+    }
+
     func previewScene(_ scene: SceneEntry) {
+        previewScene(scene, unitId: selectedUnit.id)
         selectedSceneId = scene.id
-        previewByUnit[selectedUnit.id] = scene.gpuId
-        var state = currentState(selectedUnit.id)
+    }
+
+    func previewScene(_ scene: SceneEntry, unitId: UInt64) {
+        let unit = unit(for: unitId)
+        previewByUnit[unit.id] = scene.gpuId
+        var state = currentState(unit.id)
         state.preview_source = scene.gpuId
-        state.mix = mix
-        fail(mixer_unit_set_state(selectedUnit.id, &state), "Preview scene")
+        fail(mixer_unit_set_state(unit.id, &state), "Preview scene")
     }
 
     func setMix(_ value: Float) {
@@ -277,9 +287,13 @@ final class MixerController: ObservableObject {
             return
         }
         mix = value
-        var state = currentState(selectedUnit.id)
+        setMix(value, unitId: selectedUnit.id)
+    }
+
+    func setMix(_ value: Float, unitId: UInt64) {
+        var state = currentState(unitId)
         state.mix = value
-        fail(mixer_unit_set_state(selectedUnit.id, &state), "T-bar")
+        fail(mixer_unit_set_state(unitId, &state), "T-bar")
     }
 
     func finishTBar() {
@@ -422,6 +436,7 @@ final class MixerController: ObservableObject {
     func deleteUnit() {
         guard session.units.count > 1 else { return }
         let id = selectedUnitId
+        closeSwitcher(id)
         _ = mixer_destroy_unit(id)
         session.units.removeAll { $0.id == id }
         selectedUnitId = session.units[0].id
@@ -434,6 +449,9 @@ final class MixerController: ObservableObject {
         fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
         fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
         selectedUnitId = unit.id
+        if let window = switcherWindows[unit.id] {
+            window.title = unit.name
+        }
         updateStatus()
     }
 
@@ -484,6 +502,47 @@ final class MixerController: ObservableObject {
         pushMultiview(layout)
         openMultiview = layout
         showMultiview = true
+    }
+
+    func openSwitcher(_ unitId: UInt64? = nil) {
+        let unit = unit(for: unitId)
+        if let existing = switcherWindows[unit.id] {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self))
+        let window = SwitcherHostWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 640),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = unit.name
+        window.identifier = NSUserInterfaceItemIdentifier("switcher-\(unit.id)")
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = NSColor(calibratedWhite: 26 / 255, alpha: 1)
+        window.center()
+        switcherCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.switcherWindows.removeValue(forKey: closedId)
+            }
+        }
+        window.delegate = switcherCloser
+        switcherWindows[unit.id] = window
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeSwitcher(_ unitId: UInt64) {
+        let window = switcherWindows.removeValue(forKey: unitId)
+        window?.delegate = nil
+        window?.close()
+    }
+
+    func closeAllSwitchers() {
+        for id in Array(switcherWindows.keys) {
+            closeSwitcher(id)
+        }
     }
 
     func deleteMultiview(_ id: UInt64) {
@@ -580,6 +639,7 @@ final class MixerController: ObservableObject {
         }
         do {
             let loaded = try SessionFile.decode(Data(buffer.prefix(Int(n))))
+            closeAllSwitchers()
             mixer_destroy()
             session = loaded
             selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
@@ -778,8 +838,17 @@ final class MixerController: ObservableObject {
         }
     }
 
+    private func unit(for id: UInt64?) -> MixingUnitEntry {
+        guard let id else { return selectedUnit }
+        return session.units.first { $0.id == id } ?? selectedUnit
+    }
+
     private func tbarPreset() -> TransitionPreset {
-        let list = selectedUnit.transitions
+        tbarPreset(for: selectedUnit)
+    }
+
+    private func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
+        let list = unit.transitions
         guard !list.isEmpty else {
             return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationFrames: 1, swap: true)
         }
@@ -922,5 +991,18 @@ private final class InputPreviewCloser: NSObject, NSWindowDelegate {
               let inputId = UInt64(raw.dropFirst("input-preview-".count))
         else { return }
         onClose?(inputId)
+    }
+}
+
+private final class SwitcherCloser: NSObject, NSWindowDelegate {
+    var onClose: ((UInt64) -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let raw = window.identifier?.rawValue,
+              raw.hasPrefix("switcher-"),
+              let unitId = UInt64(raw.dropFirst("switcher-".count))
+        else { return }
+        onClose?(unitId)
     }
 }

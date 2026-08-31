@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private ResourceMonitorWindow? _resourcesWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
+    private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
     private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
@@ -984,6 +985,37 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
+    private void OpenSwitcher_Click(object sender, RoutedEventArgs e) =>
+        OpenSwitcher(SelectedUnit);
+
+    internal void OpenSwitcher(MixingUnitEntry unit)
+    {
+        if (_switchers.TryGetValue(unit.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var window = new SwitcherWindow(unit) { Owner = this };
+        window.Closed += (_, _) => _switchers.Remove(unit.Id);
+        _switchers[unit.Id] = window;
+        window.Show();
+    }
+
+    private void CloseSwitcher(ulong unitId)
+    {
+        if (!_switchers.TryGetValue(unitId, out var window))
+            return;
+        _switchers.Remove(unitId);
+        window.Close();
+    }
+
+    private void CloseAllSwitchers()
+    {
+        foreach (var window in _switchers.Values.ToArray())
+            window.Close();
+        _switchers.Clear();
+    }
+
     private void AddUnit_Click(object sender, RoutedEventArgs e)
     {
         var draft = new MixingUnitEntry
@@ -1041,6 +1073,8 @@ public partial class MainWindow : Window
             Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         UnitBox.Items.Refresh();
         ApplyAspect();
+        if (_switchers.TryGetValue(unit.Id, out var switcher))
+            switcher.SyncFromUnit();
         UpdateStatus();
     }
 
@@ -1058,6 +1092,7 @@ public partial class MainWindow : Window
             _session.Outputs.Remove(output);
         }
         MixerNative.ThrowIfFailed(MixerNative.DestroyUnit(unit.Id), "Delete Mixing Unit");
+        CloseSwitcher(unit.Id);
         _session.Units.Remove(unit);
         UnitBox.Items.Refresh();
         UnitBox.SelectedIndex = 0;
@@ -1086,6 +1121,7 @@ public partial class MainWindow : Window
         try
         {
             _overlay?.Close();
+            CloseAllSwitchers();
             foreach (var window in _multiviews.ToArray())
                 window.Close();
             PreviewHost.ReleaseNative();
