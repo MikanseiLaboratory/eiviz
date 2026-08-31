@@ -20,6 +20,9 @@ public partial class MainWindow : Window
     private OverlayWindow? _overlay;
     private ResourceMonitorWindow? _resourcesWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
+    private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
+    private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
+    private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
@@ -70,14 +73,97 @@ public partial class MainWindow : Window
     private void RebuildScenes()
     {
         ScenePanel.Children.Clear();
+        var index = 1;
         foreach (var scene in _session.Scenes)
         {
             var tile = new SceneTile();
             tile.SceneSelected += (_, selected) => SelectScene(selected);
             tile.SceneEditRequested += (_, selected) => OpenSceneEditor(selected);
-            tile.Bind(scene, _selectedScene?.Id == scene.Id);
+            tile.SceneCutRequested += (_, selected) => CutScene(selected);
+            tile.SceneLoopRequested += (_, selected) => ToggleSceneLoop(selected);
+            tile.ScenePlayRequested += (_, selected) => ToggleScenePlay(selected);
+            tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
+            tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
+            tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
+            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval());
             ScenePanel.Children.Add(tile);
         }
+        RefreshSceneTiles();
+    }
+
+    private void PushScenePresentIntervals()
+    {
+        var interval = _session.Settings.ResolvedPresentInterval();
+        foreach (SceneTile tile in ScenePanel.Children)
+            tile.SetPresentInterval(interval);
+    }
+
+    private void RefreshSceneTiles()
+    {
+        foreach (SceneTile tile in ScenePanel.Children)
+        {
+            if (tile.Scene is not { } scene)
+                continue;
+            var video = SceneVideo(scene);
+            var playing = false;
+            if (video is not null && TryVideoInfo(video.Id, out var info))
+                playing = info.Playing != 0;
+            tile.SetTransport(
+                video is not null,
+                video?.VideoLoop == true,
+                playing,
+                SceneInputs(scene).All(item => item.Mute));
+        }
+    }
+
+    private InputEntry? SceneVideo(SceneEntry scene) =>
+        SceneInputs(scene).FirstOrDefault(item => item.Kind == InputKind.Video);
+
+    private IEnumerable<InputEntry> SceneInputs(SceneEntry scene) =>
+        scene.Layers
+            .Select(layer => _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId))
+            .OfType<InputEntry>();
+
+    private void CutScene(SceneEntry scene)
+    {
+        SelectScene(scene);
+        FirePreset(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
+    }
+
+    private void ToggleSceneLoop(SceneEntry scene)
+    {
+        if (SceneVideo(scene) is not { } video)
+            return;
+        video.VideoLoop = !video.VideoLoop;
+        MixerNative.VideoSetLoop(video.Id, video.VideoLoop ? 1u : 0u);
+        RefreshSceneTiles();
+    }
+
+    private void ToggleScenePlay(SceneEntry scene)
+    {
+        if (SceneVideo(scene) is not { } video || !TryVideoInfo(video.Id, out var info))
+            return;
+        MixerNative.VideoSetPlaying(video.Id, info.Playing == 0 ? 1u : 0u);
+        RefreshSceneTiles();
+    }
+
+    private void ToggleSceneAudio(SceneEntry scene)
+    {
+        var inputs = SceneInputs(scene).ToList();
+        if (inputs.Count == 0)
+            return;
+        var mute = !inputs.All(item => item.Mute);
+        foreach (var input in inputs)
+        {
+            input.Mute = mute;
+            MixerNative.AudioSetInput(
+                input.Id,
+                input.BusMask == 0 ? 1u : input.BusMask,
+                MixerNative.MixerGain(input.Gain),
+                mute ? 1u : 0u);
+        }
+        RebuildMeters();
+        RefreshSceneTiles();
     }
 
     private void SelectScene(SceneEntry scene)
@@ -415,6 +501,8 @@ public partial class MainWindow : Window
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
+        RefreshSceneTiles();
+        _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
     private void TickVideo()
@@ -617,6 +705,45 @@ public partial class MainWindow : Window
         InputList.Items.Refresh();
         RebuildMeters();
         TickVideo();
+        if (_inputPreviews.TryGetValue(input.Id, out var preview))
+            preview.SetTitle(input.Name);
+    }
+
+    private void PreviewInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, "Select an Input to preview.");
+            return;
+        }
+        OpenInputPreview(input);
+    }
+
+    private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.Name);
+
+    private void OpenSourcePreview(ulong sourceId, string name)
+    {
+        if (_inputPreviews.TryGetValue(sourceId, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var monitorId = _session.NextMonitorId++;
+        var window = new InputPreviewWindow(name, sourceId, monitorId, SelectedUnit.Width, SelectedUnit.Height)
+        {
+            Owner = this
+        };
+        window.Closed += (_, _) => _inputPreviews.Remove(sourceId);
+        _inputPreviews[sourceId] = window;
+        window.Show();
+    }
+
+    private void CloseInputPreview(ulong inputId)
+    {
+        if (!_inputPreviews.TryGetValue(inputId, out var window))
+            return;
+        _inputPreviews.Remove(inputId);
+        window.Close();
     }
 
     private void ApplyInputSource(InputEntry input, AddInputWindow dialog, bool replacing)
@@ -626,11 +753,13 @@ public partial class MainWindow : Window
         var nowGenerator = dialog.Kind is InputKind.Color or InputKind.Bars;
         var keepLive = replacing
             && input.Kind == dialog.Kind
-            && dialog.Kind is InputKind.Omt or InputKind.Ndi
-            && input.PathOrAddress == dialog.ResultPath
-            && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
-            && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
-            && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth);
+            && (
+                (dialog.Kind == InputKind.Video && input.PathOrAddress == dialog.ResultPath)
+                || (dialog.Kind is InputKind.Omt or InputKind.Ndi
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
+                    && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth)));
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             Commands.TryEnqueue(new DropSourceCommand(input.Id));
@@ -643,6 +772,8 @@ public partial class MainWindow : Window
         input.ColorG = dialog.ColorG;
         input.ColorB = dialog.ColorB;
         input.Scroll = dialog.Scroll;
+        input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
+        input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
         input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
             ? dialog.ResultFrameBufferFrames
@@ -654,6 +785,10 @@ public partial class MainWindow : Window
             && dialog.ResultKeepFullOnMultiview;
         input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
         input.NdiBandwidth = dialog.Kind == InputKind.Ndi ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
+        input.VideoLoop = dialog.Kind == InputKind.Video && dialog.ResultVideoLoop;
+        input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
+        input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
+        input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;
         if (keepLive)
         {
             if (dialog.Kind == InputKind.Omt)
@@ -664,6 +799,8 @@ public partial class MainWindow : Window
                     input.KeepFullOnMultiview,
                     input.OmtQuality));
             }
+            if (dialog.Kind == InputKind.Video)
+                MixerNative.VideoSetLoop(input.Id, input.VideoLoop ? 1u : 0u);
             return;
         }
         switch (dialog.Kind)
@@ -676,13 +813,19 @@ public partial class MainWindow : Window
                     dialog.ColorR,
                     dialog.ColorG,
                     dialog.ColorB,
-                    dialog.Scroll));
+                    dialog.Scroll,
+                    input.ToneHz,
+                    input.ToneLevelDbfs));
                 break;
             case InputKind.Still:
                 Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
                 break;
             case InputKind.Video:
-                Commands.TryEnqueue(new StartVideoCommand(input.Id, dialog.ResultPath!));
+                Commands.TryEnqueue(new StartVideoCommand(
+                    input.Id,
+                    dialog.ResultPath!,
+                    input.VideoLoop,
+                    input.VideoStartsPlaying));
                 break;
             case InputKind.Omt:
                 Commands.TryEnqueue(new ConnectOmtCommand(
@@ -721,6 +864,8 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Built-in generators cannot be deleted.");
             return;
         }
+        CloseInputPreview(input.Id);
+        _videoTransport.Forget(input.Id);
         Commands.TryEnqueue(new DropSourceCommand(input.Id));
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
@@ -764,12 +909,17 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Select a Scene to delete.");
             return;
         }
+        DeleteScene(_selectedScene);
+    }
+
+    private void DeleteScene(SceneEntry removed)
+    {
         if (_session.Scenes.Count <= 1)
         {
             MessageBox.Show(this, "At least one Scene is required.");
             return;
         }
-        var removed = _selectedScene;
+        CloseInputPreview(removed.GpuId);
         Commands.TryEnqueue(new DestroySceneCommand(removed.GpuId));
         _session.Scenes.Remove(removed);
         foreach (var unit in _session.Units)
@@ -835,6 +985,37 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
+    private void OpenSwitcher_Click(object sender, RoutedEventArgs e) =>
+        OpenSwitcher(SelectedUnit);
+
+    internal void OpenSwitcher(MixingUnitEntry unit)
+    {
+        if (_switchers.TryGetValue(unit.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var window = new SwitcherWindow(unit) { Owner = this };
+        window.Closed += (_, _) => _switchers.Remove(unit.Id);
+        _switchers[unit.Id] = window;
+        window.Show();
+    }
+
+    private void CloseSwitcher(ulong unitId)
+    {
+        if (!_switchers.TryGetValue(unitId, out var window))
+            return;
+        _switchers.Remove(unitId);
+        window.Close();
+    }
+
+    private void CloseAllSwitchers()
+    {
+        foreach (var window in _switchers.Values.ToArray())
+            window.Close();
+        _switchers.Clear();
+    }
+
     private void AddUnit_Click(object sender, RoutedEventArgs e)
     {
         var draft = new MixingUnitEntry
@@ -892,6 +1073,8 @@ public partial class MainWindow : Window
             Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         UnitBox.Items.Refresh();
         ApplyAspect();
+        if (_switchers.TryGetValue(unit.Id, out var switcher))
+            switcher.SyncFromUnit();
         UpdateStatus();
     }
 
@@ -909,6 +1092,7 @@ public partial class MainWindow : Window
             _session.Outputs.Remove(output);
         }
         MixerNative.ThrowIfFailed(MixerNative.DestroyUnit(unit.Id), "Delete Mixing Unit");
+        CloseSwitcher(unit.Id);
         _session.Units.Remove(unit);
         UnitBox.Items.Refresh();
         UnitBox.SelectedIndex = 0;
@@ -937,6 +1121,7 @@ public partial class MainWindow : Window
         try
         {
             _overlay?.Close();
+            CloseAllSwitchers();
             foreach (var window in _multiviews.ToArray())
                 window.Close();
             PreviewHost.ReleaseNative();
@@ -990,6 +1175,7 @@ public partial class MainWindow : Window
             layout.PushPresentInterval(_session.Settings);
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
+        PushScenePresentIntervals();
         RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
@@ -1006,7 +1192,11 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(input.PathOrAddress))
                 continue;
             if (input.Kind == InputKind.Video)
-                Commands.TryEnqueue(new StartVideoCommand(input.Id, input.PathOrAddress));
+                Commands.TryEnqueue(new StartVideoCommand(
+                    input.Id,
+                    input.PathOrAddress,
+                    input.VideoLoop,
+                    input.VideoStartsPlaying));
             else if (input.Kind == InputKind.Uvc)
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
         }
@@ -1026,6 +1216,8 @@ public partial class MainWindow : Window
                 continue;
             if (prior is not null)
                 Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
+            if (!output.Enabled)
+                continue;
             if (output.Transport is OutputTransport.Omt or OutputTransport.Ndi)
             {
                 Commands.TryEnqueue(new AddOutputCommand(output));
@@ -1052,7 +1244,8 @@ public partial class MainWindow : Window
         && left.SourceKind == right.SourceKind
         && left.SourceId == right.SourceId
         && left.UnitId == right.UnitId
-        && left.UseGpu == right.UseGpu;
+        && left.UseGpu == right.UseGpu
+        && left.Enabled == right.Enabled;
 
     private void UpdateStatus()
     {

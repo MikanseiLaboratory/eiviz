@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
-    mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, LABEL_BASE, MV_SLOT_MAX,
+    mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, TRANSITION_DIP,
 };
 use crate::device::GpuDevice;
@@ -20,7 +20,8 @@ struct ColorParams {
     color: [f32; 4],
     scroll: f32,
     flags: f32,
-    pad: [f32; 2],
+    scroll_y: f32,
+    pad: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -28,6 +29,20 @@ pub struct Generator {
     pub kind: u32,
     pub color: [f32; 4],
     pub scroll: bool,
+    pub tone_hz: f32,
+    pub tone_level_dbfs: f32,
+}
+
+impl Default for Generator {
+    fn default() -> Self {
+        Self {
+            kind: GEN_SOLID,
+            color: [0.0, 0.0, 0.0, 1.0],
+            scroll: false,
+            tone_hz: 0.0,
+            tone_level_dbfs: -20.0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -102,6 +117,7 @@ pub struct Composer {
     generators: HashMap<u64, Generator>,
     input_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
+    scroll_phase_y: f32,
     tally_red: Option<(wgpu::Texture, wgpu::TextureView)>,
     tally_green: Option<(wgpu::Texture, wgpu::TextureView)>,
     pool: UniformPool,
@@ -171,6 +187,7 @@ impl Composer {
             generators: HashMap::new(),
             input_packed: HashMap::new(),
             scroll_phase: 0.0,
+            scroll_phase_y: 0.0,
             tally_red: None,
             tally_green: None,
             pool,
@@ -973,7 +990,8 @@ impl Composer {
                 color,
                 scroll: if scroll { self.scroll_phase } else { 0.0 },
                 flags: if scroll { 1.0 } else { 0.0 },
-                pad: [0.0; 2],
+                scroll_y: if scroll { self.scroll_phase_y } else { 0.0 },
+                pad: 0.0,
             },
         );
         let mut pass = begin(encoder, dest);
@@ -988,10 +1006,11 @@ impl Composer {
             if self.sources.contains_key(&id) {
                 continue;
             }
+            let (width, height) = if id == SRC_BARS { (1920, 1080) } else { (128, 72) };
             let texture = make_texture(
                 device,
-                128,
-                72,
+                width,
+                height,
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             );
             let view = texture.create_view(&Default::default());
@@ -1006,8 +1025,8 @@ impl Composer {
                 SourceGpu {
                     texture,
                     view,
-                    width: 128,
-                    height: 72,
+                    width,
+                    height,
                     packed: false,
                     bgra: false,
                     uploaded_pts: i64::MIN,
@@ -1019,14 +1038,19 @@ impl Composer {
     pub fn bake_generators(&mut self, device: &GpuDevice, encoder: &mut wgpu::CommandEncoder) {
         let gens: Vec<(u64, Generator)> = self.generators.iter().map(|(id, spec)| (*id, *spec)).collect();
         for (id, spec) in gens {
-            if !spec.scroll && self.sources.contains_key(&id) {
+            let (width, height) = if spec.kind == GEN_BARS { (1920, 1080) } else { (128, 72) };
+            let size_ok = self
+                .sources
+                .get(&id)
+                .is_some_and(|source| source.width == width && source.height == height);
+            if !spec.scroll && size_ok {
                 continue;
             }
-            if !self.sources.contains_key(&id) {
+            if !size_ok {
                 let texture = make_texture(
                     device,
-                    128,
-                    72,
+                    width,
+                    height,
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                 );
                 let view = texture.create_view(&Default::default());
@@ -1035,8 +1059,8 @@ impl Composer {
                     SourceGpu {
                         texture,
                         view,
-                        width: 128,
-                        height: 72,
+                        width,
+                        height,
                         packed: false,
                         bgra: false,
                         uploaded_pts: i64::MIN,
@@ -1056,8 +1080,9 @@ impl Composer {
         }
     }
 
-    pub fn sync_generators(&mut self, generators: &[(u64, Generator)], phase: f32) {
+    pub fn sync_generators(&mut self, generators: &[(u64, Generator)], phase: f32, phase_y: f32) {
         self.scroll_phase = phase;
+        self.scroll_phase_y = phase_y;
         self.generators.clear();
         for (id, spec) in generators {
             self.generators.insert(*id, *spec);

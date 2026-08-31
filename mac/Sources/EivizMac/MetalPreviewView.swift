@@ -3,6 +3,7 @@ import EivizMixer
 import SwiftUI
 
 final class MetalSurfaceView: NSView {
+    var presentInterval: UInt32 = 1
     var role: SurfaceRole = .unit(unitId: 1, kind: EIVIZ_OUTPUT_PROGRAM) {
         didSet { attachIfNeeded() }
     }
@@ -94,7 +95,7 @@ final class MetalSurfaceView: NSView {
             }
             attached = code == EIVIZ_OK
             if attached, case .monitor(let monitorId, _) = role {
-                _ = mixer_set_monitor_present_interval(monitorId, 1)
+                _ = mixer_set_monitor_present_interval(monitorId, max(1, min(8, presentInterval)))
             }
             attachedWidth = width
             attachedHeight = height
@@ -119,6 +120,9 @@ final class MetalSurfaceView: NSView {
             }
             attachedWidth = width
             attachedHeight = height
+        }
+        if case .monitor(let monitorId, _) = role {
+            _ = mixer_set_monitor_present_interval(monitorId, max(1, min(8, presentInterval)))
         }
     }
 
@@ -147,9 +151,9 @@ final class PreviewHostView: NSView {
     var onDoubleClick: (() -> Void)?
 
     override func mouseUp(with event: NSEvent) {
-        if event.clickCount >= 2 {
+        if event.clickCount >= 2, onDoubleClick != nil {
             onDoubleClick?()
-        } else if event.clickCount == 1 {
+        } else {
             onClick?()
         }
     }
@@ -157,6 +161,7 @@ final class PreviewHostView: NSView {
 
 struct MetalPreviewRepresentable: NSViewRepresentable {
     let role: SurfaceRole
+    var presentInterval: UInt32 = 1
     var onClick: (() -> Void)? = nil
     var onDoubleClick: (() -> Void)? = nil
 
@@ -181,6 +186,7 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         host.onDoubleClick = { context.coordinator.onDoubleClick?() }
         let surface = MetalSurfaceView(frame: .zero)
         surface.autoresizingMask = [.width, .height]
+        surface.presentInterval = presentInterval
         surface.role = role
         host.addSubview(surface)
         return host
@@ -194,6 +200,7 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         nsView.onDoubleClick = { context.coordinator.onDoubleClick?() }
         guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
         surface.frame = nsView.bounds
+        surface.presentInterval = presentInterval
         surface.role = role
         surface.attachIfNeeded()
     }

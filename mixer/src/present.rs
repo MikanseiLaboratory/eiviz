@@ -491,7 +491,9 @@ fn draw_presenter(
             presenter.pending = Some((presenter.config.width, presenter.config.height));
             return None;
         }
-        _ => return None,
+        wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+            return None;
+        }
     };
     let dest = texture.texture.create_view(&Default::default());
     {

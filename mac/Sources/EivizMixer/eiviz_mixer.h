@@ -138,6 +138,7 @@ int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, 
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
 int32_t mixer_destroy_scene(uint64_t scene_id);
 int32_t mixer_define_generator(uint64_t id, uint32_t kind, float r, float g, float b, float a, uint32_t scroll);
+int32_t mixer_generator_set_tone(uint64_t id, float hz, float level_dbfs);
 int32_t mixer_unit_attach_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);
 int32_t mixer_unit_resize_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);
 int32_t mixer_unit_detach_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle);
@@ -153,6 +154,11 @@ int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint
 int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint32_t height, int64_t pts);
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
+int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format);
+int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
+int32_t mixer_video_set_loop(uint64_t id, uint32_t looping);
+int32_t mixer_video_seek(uint64_t id, int64_t hns);
+int32_t mixer_video_copy_info(uint64_t id, EivizVideoInfo *out);
 int32_t mixer_omt_connect(uint64_t id, const char *address, uint32_t use_gpu, uint32_t frame_buffer_frames, uint32_t quality);
 int32_t mixer_ndi_connect(uint64_t id, const char *address, uint32_t frame_buffer_frames, uint32_t low_bandwidth);
 int32_t mixer_set_live_save(uint64_t id, uint32_t mode, uint32_t flags);

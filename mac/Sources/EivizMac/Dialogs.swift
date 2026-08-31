@@ -121,6 +121,13 @@ struct SettingsView: View {
                 if output.wrappedValue.transport == .omt {
                     Toggle("GPU", isOn: output.useGpu)
                 }
+                Toggle("Enabled", isOn: Binding(
+                    get: { output.wrappedValue.enabled },
+                    set: { value in
+                        output.wrappedValue.enabled = value
+                        mixer.addOutput(output.wrappedValue)
+                    }
+                ))
                 Button("Apply") { mixer.addOutput(output.wrappedValue) }
                 Button("−") {
                     _ = mixer_output_remove(output.wrappedValue.id)
@@ -333,7 +340,15 @@ struct SettingsView: View {
     private var about: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("eiviz").font(.title)
-            Text("macOS host and Metal mixer. NDI® via grafton-ndi.")
+            Text("Version \(HostVersion.display)")
+            Text("eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Shugo Kawamura")
+            Link("https://github.com/MikanseiLaboratory/eiviz", destination: URL(string: "https://github.com/MikanseiLaboratory/eiviz")!)
+            Link("https://mikanseilaboratory.github.io/", destination: URL(string: "https://mikanseilaboratory.github.io/")!)
+            Text("Open source").fontWeight(.bold)
+            Text("eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB.")
+                .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -358,10 +373,15 @@ struct AddInputView: View {
     @State private var b: Double = 32
     @State private var bars = false
     @State private var scroll = false
+    @State private var toneHz: Float = 1000
     @State private var useGpu = true
     @State private var buffer: UInt32 = 1
     @State private var quality: UInt32 = 0
     @State private var ndiLow = false
+    @State private var videoLoop = true
+    @State private var videoPlayWhen: VideoPlayWhen = .never
+    @State private var videoRestartWhen: VideoTriggerWhen = .never
+    @State private var videoPauseWhen: VideoTriggerWhen = .never
 
     var body: some View {
         HStack(spacing: 0) {
@@ -392,7 +412,7 @@ struct AddInputView: View {
     private var form: some View {
         switch category {
         case "Colours":
-            Toggle("SMPTE colour bars", isOn: $bars)
+            Toggle("SMPTE HD colour bars", isOn: $bars)
             if !bars {
                 colorSlider("R", $r)
                 colorSlider("G", $g)
@@ -400,13 +420,38 @@ struct AddInputView: View {
                 Rectangle().fill(Color(red: r / 255, green: g / 255, blue: b / 255)).frame(height: 48)
             }
             Toggle("Scroll", isOn: $scroll)
-            Text("Scroll moves a white ident on solid colours, or shifts SMPTE bars.")
+            Picker("Test tone", selection: $toneHz) {
+                Text("Mute").tag(Float(0))
+                Text("440 Hz").tag(Float(440))
+                Text("1 kHz").tag(Float(1000))
+                Text("2 kHz").tag(Float(2000))
+            }
+            Text("Scroll shifts SMPTE HD bars (or a white ident on solid colours). Tone is -20 dBFS.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         case "Still":
             pathRow($stillPath) { pick(["public.image"], $stillPath) }
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
+            Toggle("Loop", isOn: $videoLoop)
+            Picker("Play when", selection: $videoPlayWhen) {
+                Text("Never (manual)").tag(VideoPlayWhen.never)
+                Text("Active (Program)").tag(VideoPlayWhen.onActive)
+                Text("On Preview").tag(VideoPlayWhen.onPreview)
+                Text("Always").tag(VideoPlayWhen.always)
+            }
+            Picker("Restart when", selection: $videoRestartWhen) {
+                Text("Never").tag(VideoTriggerWhen.never)
+                Text("Active (Program)").tag(VideoTriggerWhen.onActive)
+                Text("Taken off Active").tag(VideoTriggerWhen.onDeactivated)
+                Text("On Preview").tag(VideoTriggerWhen.onPreview)
+            }
+            Picker("Pause when", selection: $videoPauseWhen) {
+                Text("Never").tag(VideoTriggerWhen.never)
+                Text("Active (Program)").tag(VideoTriggerWhen.onActive)
+                Text("Taken off Active").tag(VideoTriggerWhen.onDeactivated)
+                Text("On Preview").tag(VideoTriggerWhen.onPreview)
+            }
         case "OMT":
             mixerTextField($omtAddress, placeholder: "OMT source address")
             Button("Refresh discovery") { refreshOmt() }
@@ -487,17 +532,22 @@ struct AddInputView: View {
         b = Double(editing.colorB) * 255
         bars = editing.kind == .bars
         scroll = editing.scroll
+        toneHz = editing.toneHz
         useGpu = editing.useGpu
         buffer = editing.frameBufferFrames
         ndiLow = editing.ndiBandwidth == .lowest
         quality = editing.omtQuality.rawUInt
+        videoLoop = editing.videoLoop
+        videoPlayWhen = editing.videoPlayWhen
+        videoRestartWhen = editing.videoRestartWhen
+        videoPauseWhen = editing.videoPauseWhen
     }
 
     private func defaultName() -> String {
         switch category {
         case "Colours":
             if bars {
-                return scroll ? "SMPTE Bars (scroll)" : "SMPTE Bars"
+                return scroll ? "SMPTE HD Bars (scroll)" : "SMPTE HD Bars"
             }
             return String(format: "Colour %02X%02X%02X", Int(r), Int(g), Int(b))
         case "Still":
@@ -523,6 +573,8 @@ struct AddInputView: View {
             input.colorG = Float(g / 255)
             input.colorB = Float(b / 255)
             input.scroll = scroll
+            input.toneHz = toneHz
+            input.toneLevelDbfs = toneHz > 0 ? -20 : 0
         case "Still":
             guard !stillPath.isEmpty else { return }
             input.kind = .still
@@ -531,6 +583,10 @@ struct AddInputView: View {
             guard !videoPath.isEmpty else { return }
             input.kind = .video
             input.pathOrAddress = videoPath
+            input.videoLoop = videoLoop
+            input.videoPlayWhen = videoPlayWhen
+            input.videoRestartWhen = videoRestartWhen
+            input.videoPauseWhen = videoPauseWhen
         case "OMT":
             guard !omtAddress.isEmpty else { return }
             input.kind = .omt

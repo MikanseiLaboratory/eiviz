@@ -125,6 +125,32 @@ jobs:
             throw "Published output is missing Processing.NDI.Lib.x64.dll"
           }
 
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler (ISCC.exe) was not found"
+          }
+          & $iscc `
+            "/DMyAppVersion=${{ needs.meta.outputs.version }}" `
+            "/DMyAppBase=${{ needs.meta.outputs.base }}" `
+            "/DMyAppTag=${{ needs.meta.outputs.tag }}" `
+            "/DSourceDir=${{ github.workspace }}\publish\win-x64" `
+            "/DOutputDir=${{ github.workspace }}" `
+            "${{ github.workspace }}\packaging\windows\eiviz.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = "${{ github.workspace }}\eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe"
+          if (-not (Test-Path $setup)) { throw "Installer is missing: $setup" }
+          Get-FileHash -Algorithm SHA256 $setup |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content -Encoding ascii "$setup.sha256"
+
       - name: Package zip
         shell: bash
         run: |
@@ -142,6 +168,8 @@ jobs:
           path: |
             eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
             eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
+            eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
+            eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
 
   macos-arm64:
     name: Release macOS arm64
@@ -193,7 +221,7 @@ jobs:
           fi
           chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          mac/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
@@ -222,6 +250,10 @@ jobs:
           EOF
           zip -r "${STAGING}.zip" "$STAGING"
           shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+          chmod +x packaging/macos/package-pkg.sh
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
+            packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
+          shasum -a 256 "${STAGING}.pkg" | tee "${STAGING}.pkg.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -230,6 +262,8 @@ jobs:
           path: |
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
+            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
+            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
 
   macos-x64:
     name: Release macOS x64
@@ -282,7 +316,7 @@ jobs:
           fi
           chmod +x mac/relocate-dylib.sh mac/package-app.sh
           mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          mac/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
@@ -311,6 +345,10 @@ jobs:
           EOF
           zip -r "${STAGING}.zip" "$STAGING"
           shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+          chmod +x packaging/macos/package-pkg.sh
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
+            packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
+          shasum -a 256 "${STAGING}.pkg" | tee "${STAGING}.pkg.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -319,6 +357,8 @@ jobs:
           path: |
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
+            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
+            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256
 
   publish:
     name: Publish GitHub Release
@@ -343,7 +383,13 @@ jobs:
           files: |
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
+            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
+            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
+            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256

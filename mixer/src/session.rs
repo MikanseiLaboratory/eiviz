@@ -103,6 +103,9 @@ fn theme_charcoal() -> String {
 fn one() -> u64 {
     1
 }
+fn default_true() -> bool {
+    true
+}
 fn three() -> u32 {
     3
 }
@@ -219,6 +222,10 @@ pub struct InputDto {
     pub color_b: f32,
     #[serde(default)]
     pub scroll: bool,
+    #[serde(default)]
+    pub tone_hz: f32,
+    #[serde(default = "tone_level")]
+    pub tone_level_dbfs: f32,
     #[serde(default = "one_u32")]
     pub bus_mask: u32,
     #[serde(default = "one_f32")]
@@ -237,6 +244,32 @@ pub struct InputDto {
     pub omt_quality: OmtQuality,
     #[serde(default)]
     pub ndi_bandwidth: NdiBandwidth,
+    #[serde(default = "default_true")]
+    pub video_loop: bool,
+    #[serde(default)]
+    pub video_play_when: VideoPlayWhen,
+    #[serde(default)]
+    pub video_restart_when: VideoTriggerWhen,
+    #[serde(default)]
+    pub video_pause_when: VideoTriggerWhen,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoPlayWhen {
+    #[default]
+    Never,
+    OnActive,
+    OnPreview,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoTriggerWhen {
+    #[default]
+    Never,
+    OnActive,
+    OnDeactivated,
+    OnPreview,
 }
 
 fn one_u32() -> u32 {
@@ -244,6 +277,9 @@ fn one_u32() -> u32 {
 }
 fn one_f32() -> f32 {
     1.0
+}
+fn tone_level() -> f32 {
+    -20.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,6 +421,8 @@ pub struct OutputDto {
     pub unit_id: u64,
     #[serde(default)]
     pub use_gpu: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

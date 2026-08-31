@@ -152,6 +152,20 @@ struct MvSlot: Codable, Equatable {
     var sourceId: UInt64 = 0
 }
 
+enum VideoPlayWhen: String, Codable, Hashable {
+    case never = "Never"
+    case onActive = "OnActive"
+    case onPreview = "OnPreview"
+    case always = "Always"
+}
+
+enum VideoTriggerWhen: String, Codable, Hashable {
+    case never = "Never"
+    case onActive = "OnActive"
+    case onDeactivated = "OnDeactivated"
+    case onPreview = "OnPreview"
+}
+
 struct InputEntry: Identifiable, Codable, Hashable {
     var id: UInt64
     var name: String
@@ -161,6 +175,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var colorG: Float = 0
     var colorB: Float = 0
     var scroll: Bool = false
+    var toneHz: Float = 0
+    var toneLevelDbfs: Float = -20
     var busMask: UInt32 = 1
     var gain: Float = 1
     var mute: Bool = false
@@ -170,7 +186,96 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var keepFullOnMultiview: Bool = false
     var omtQuality: OmtQuality = .default
     var ndiBandwidth: NdiBandwidth = .highest
+    var videoLoop: Bool = true
+    var videoPlayWhen: VideoPlayWhen = .never
+    var videoRestartWhen: VideoTriggerWhen = .never
+    var videoPauseWhen: VideoTriggerWhen = .never
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
+    var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
+        case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
+        case keepFullOnMultiview, omtQuality, ndiBandwidth
+        case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
+    }
+
+    init(
+        id: UInt64,
+        name: String,
+        kind: InputKind,
+        pathOrAddress: String? = nil,
+        colorR: Float = 1,
+        colorG: Float = 0,
+        colorB: Float = 0,
+        scroll: Bool = false,
+        toneHz: Float = 0,
+        toneLevelDbfs: Float = -20,
+        busMask: UInt32 = 1,
+        gain: Float = 1,
+        mute: Bool = false,
+        useGpu: Bool = true,
+        frameBufferFrames: UInt32 = 1,
+        bandwidthSave: BandwidthSave = .notOnPreviewOrProgram,
+        keepFullOnMultiview: Bool = false,
+        omtQuality: OmtQuality = .default,
+        ndiBandwidth: NdiBandwidth = .highest,
+        videoLoop: Bool = true,
+        videoPlayWhen: VideoPlayWhen = .never,
+        videoRestartWhen: VideoTriggerWhen = .never,
+        videoPauseWhen: VideoTriggerWhen = .never
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.pathOrAddress = pathOrAddress
+        self.colorR = colorR
+        self.colorG = colorG
+        self.colorB = colorB
+        self.scroll = scroll
+        self.toneHz = toneHz
+        self.toneLevelDbfs = toneLevelDbfs
+        self.busMask = busMask
+        self.gain = gain
+        self.mute = mute
+        self.useGpu = useGpu
+        self.frameBufferFrames = frameBufferFrames
+        self.bandwidthSave = bandwidthSave
+        self.keepFullOnMultiview = keepFullOnMultiview
+        self.omtQuality = omtQuality
+        self.ndiBandwidth = ndiBandwidth
+        self.videoLoop = videoLoop
+        self.videoPlayWhen = videoPlayWhen
+        self.videoRestartWhen = videoRestartWhen
+        self.videoPauseWhen = videoPauseWhen
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        kind = try container.decode(InputKind.self, forKey: .kind)
+        pathOrAddress = try container.decodeIfPresent(String.self, forKey: .pathOrAddress)
+        colorR = try container.decodeIfPresent(Float.self, forKey: .colorR) ?? 1
+        colorG = try container.decodeIfPresent(Float.self, forKey: .colorG) ?? 0
+        colorB = try container.decodeIfPresent(Float.self, forKey: .colorB) ?? 0
+        scroll = try container.decodeIfPresent(Bool.self, forKey: .scroll) ?? false
+        toneHz = try container.decodeIfPresent(Float.self, forKey: .toneHz) ?? 0
+        toneLevelDbfs = try container.decodeIfPresent(Float.self, forKey: .toneLevelDbfs) ?? -20
+        busMask = try container.decodeIfPresent(UInt32.self, forKey: .busMask) ?? 1
+        gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
+        mute = try container.decodeIfPresent(Bool.self, forKey: .mute) ?? false
+        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
+        frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 1
+        bandwidthSave = try container.decodeIfPresent(BandwidthSave.self, forKey: .bandwidthSave) ?? .notOnPreviewOrProgram
+        keepFullOnMultiview = try container.decodeIfPresent(Bool.self, forKey: .keepFullOnMultiview) ?? false
+        omtQuality = try container.decodeIfPresent(OmtQuality.self, forKey: .omtQuality) ?? .default
+        ndiBandwidth = try container.decodeIfPresent(NdiBandwidth.self, forKey: .ndiBandwidth) ?? .highest
+        videoLoop = try container.decodeIfPresent(Bool.self, forKey: .videoLoop) ?? true
+        videoPlayWhen = try container.decodeIfPresent(VideoPlayWhen.self, forKey: .videoPlayWhen) ?? .never
+        videoRestartWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoRestartWhen) ?? .never
+        videoPauseWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoPauseWhen) ?? .never
+    }
 }
 
 struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
@@ -266,6 +371,43 @@ struct OutputEntry: Identifiable, Codable {
     var sourceId: UInt64 = 0
     var unitId: UInt64 = 1
     var useGpu: Bool = true
+    var enabled: Bool = true
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled
+    }
+
+    init(
+        id: UInt64,
+        name: String,
+        transport: OutputTransport = .omt,
+        sourceKind: OutputSourceKind = .muProgram,
+        sourceId: UInt64 = 0,
+        unitId: UInt64 = 1,
+        useGpu: Bool = true,
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.transport = transport
+        self.sourceKind = sourceKind
+        self.sourceId = sourceId
+        self.unitId = unitId
+        self.useGpu = useGpu
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        transport = try container.decodeIfPresent(OutputTransport.self, forKey: .transport) ?? .omt
+        sourceKind = try container.decodeIfPresent(OutputSourceKind.self, forKey: .sourceKind) ?? .muProgram
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
+        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
 }
 
 struct MultiviewLayout: Identifiable, Codable {
@@ -308,6 +450,11 @@ struct SessionSettings: Codable {
     var defaultPresentInterval: UInt32 = 3
     var internalColorFormat: InternalColorFormat = .uyvy
     var lastSessionPath: String?
+
+    var resolvedPresentInterval: UInt32 {
+        let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
+        return max(1, min(8, frames))
+    }
 }
 
 struct MixerSessionData: Codable {
@@ -339,7 +486,7 @@ struct MixerSessionData: Codable {
         var session = MixerSessionData()
         session.inputs = [
             InputEntry(id: EIVIZ_SRC_COLOR, name: "Color Red", kind: .color, colorR: 1),
-            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE Bars", kind: .bars),
+            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE HD Bars", kind: .bars, toneHz: 1000),
             InputEntry(id: EIVIZ_SRC_BLACK, name: "Black", kind: .black, colorR: 0, colorG: 0, colorB: 0),
             InputEntry(id: EIVIZ_SRC_BLUE, name: "Blue", kind: .color, colorR: 0, colorG: 0, colorB: 1)
         ]

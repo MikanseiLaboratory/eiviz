@@ -3,11 +3,34 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:preview="clr-namespace:Eiviz.Host.Preview"
              Width="176" Margin="0,0,8,8">
+    <UserControl.Resources>
+        <Style x:Key="TileBtn" TargetType="Button">
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="MinWidth" Value="26"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Padding" Value="3,0"/>
+            <Setter Property="Margin" Value="1,0,0,0"/>
+        </Style>
+    </UserControl.Resources>
     <Border x:Name="Chrome" BorderThickness="2" BorderBrush="#555" Background="#111" Cursor="Hand">
         <DockPanel>
             <Border DockPanel.Dock="Top" Background="#333" Padding="6,3">
-                <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"/>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
+                    <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
+                               Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
             </Border>
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="2,2,2,2">
+                <Button Style="{StaticResource TileBtn}" Content="CUT" Click="Cut_Click"/>
+                <Button x:Name="LoopButton" Style="{StaticResource TileBtn}" Content="Loop" Click="Loop_Click"/>
+                <Button x:Name="PlayButton" Style="{StaticResource TileBtn}" Content="▶" Click="Play_Click"/>
+                <Button x:Name="AudioButton" Style="{StaticResource TileBtn}" Content="Aud" Click="Audio_Click"/>
+                <Button Style="{StaticResource TileBtn}" Content="Prev" Click="Preview_Click"/>
+                <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"/>
+            </StackPanel>
             <preview:SwapchainHost x:Name="Monitor" Height="90" IsMonitor="True"/>
         </DockPanel>
     </Border>

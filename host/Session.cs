@@ -61,6 +61,22 @@ public enum MvSlotKind
     MuProgram
 }
 
+public enum VideoPlayWhen
+{
+    Never = 0,
+    OnActive = 1,
+    OnPreview = 2,
+    Always = 3
+}
+
+public enum VideoTriggerWhen
+{
+    Never = 0,
+    OnActive = 1,
+    OnDeactivated = 2,
+    OnPreview = 3
+}
+
 public sealed class MvSlot
 {
     public MvSlotKind Kind { get; set; }
@@ -77,6 +93,8 @@ public sealed class InputEntry
     public float ColorG { get; set; }
     public float ColorB { get; set; }
     public bool Scroll { get; set; }
+    public float ToneHz { get; set; }
+    public float ToneLevelDbfs { get; set; } = -20;
     public uint BusMask { get; set; } = 1;
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
@@ -86,6 +104,12 @@ public sealed class InputEntry
     public bool KeepFullOnMultiview { get; set; }
     public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
     public NdiBandwidth NdiBandwidth { get; set; } = NdiBandwidth.Highest;
+    public bool VideoLoop { get; set; } = true;
+    public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
+    public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
+    public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+    public bool VideoStartsPlaying =>
+        VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
     public override string ToString() => Name;
 }
@@ -245,6 +269,7 @@ public sealed class OutputEntry
     public ulong SourceId { get; set; }
     public ulong UnitId { get; set; } = 1;
     public bool UseGpu { get; set; }
+    public bool Enabled { get; set; } = true;
 }
 
 public enum InternalColorFormat
@@ -302,6 +327,9 @@ public sealed class SessionSettings
     public uint DefaultPresentInterval { get; set; } = 3;
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public string? LastSessionPath { get; set; }
+
+    public uint ResolvedPresentInterval() =>
+        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
 }
 
 public sealed class Session
@@ -328,7 +356,7 @@ public sealed class Session
         var session = new Session();
         session.EnsureDefaultBuses();
         session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1 });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE Bars", Kind = InputKind.Bars });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };

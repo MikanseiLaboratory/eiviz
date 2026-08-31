@@ -16,6 +16,10 @@ if [ -f "$DIR/libndi.6.dylib" ]; then
   cp "$DIR/libndi.6.dylib" "$APP/Contents/MacOS/"
 fi
 cp "$ROOT/mac/Sources/EivizMac/Info.plist" "$APP/Contents/Info.plist"
+if [ -n "${EIVIZ_VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EIVIZ_VERSION" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$APP/Contents/Info.plist"
+fi
 chmod +x "$ROOT/mac/relocate-dylib.sh"
 "$ROOT/mac/relocate-dylib.sh" "$APP/Contents/MacOS/eiviz-mac" "$APP/Contents/MacOS/libeiviz_mixer.dylib"
 echo "eiviz-mac.app -> $APP"

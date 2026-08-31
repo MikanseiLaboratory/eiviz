@@ -37,12 +37,18 @@ final class MixerController: ObservableObject {
     @Published var openMultiview: MultiviewLayout?
     @Published var expandedTransitions: Set<UUID> = []
 
-    let pumps = FramePump()
     private var booted = false
     private var tbarLatching = false
     private var meterTimer: Timer?
-    private var previewByUnit: [UInt64: UInt64] = [:]
-    private var programByUnit: [UInt64: UInt64] = [:]
+    @Published private(set) var previewByUnit: [UInt64: UInt64] = [:]
+    @Published private(set) var programByUnit: [UInt64: UInt64] = [:]
+    private var inputPreviewWindows: [UInt64: NSWindow] = [:]
+    private var inputPreviewControllers: [UInt64: NSWindowController] = [:]
+    private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
+    private let inputPreviewCloser = InputPreviewCloser()
+    private var switcherWindows: [UInt64: NSWindow] = [:]
+    private let switcherCloser = SwitcherCloser()
+    private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -67,9 +73,104 @@ final class MixerController: ObservableObject {
     func shutdown() {
         meterTimer?.invalidate()
         meterTimer = nil
+        closeAllInputPreviews()
+        closeAllSwitchers()
         guard booted else { return }
         mixer_destroy()
         booted = false
+    }
+
+    func previewSelectedInput() {
+        guard let id = selectedInputId,
+              let input = session.inputs.first(where: { $0.id == id })
+        else {
+            errorText = "Select an Input to preview."
+            let alert = NSAlert()
+            alert.messageText = "Select an Input to preview."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+        openInputPreview(inputId: input.id, name: input.name)
+    }
+
+    func openInputPreview(inputId: UInt64, name: String) {
+        if let existing = inputPreviewWindows[inputId] {
+            presentInputPreview(existing)
+            return
+        }
+        let monitorId = session.nextMonitorId
+        session.nextMonitorId += 1
+        inputPreviewMonitorIds[inputId] = monitorId
+        let unit = selectedUnit
+        let width = CGFloat(960)
+        let height = width * CGFloat(max(1, unit.height)) / CGFloat(max(1, unit.width))
+        let contentRect = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = InputPreviewHostWindow(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = name
+        window.identifier = NSUserInterfaceItemIdentifier("input-preview-\(inputId)")
+        window.contentAspect = CGFloat(max(1, unit.width)) / CGFloat(max(1, unit.height))
+        window.contentView = makeInputPreviewContent(
+            monitorId: monitorId,
+            sourceId: inputId,
+            frame: contentRect
+        )
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = NSColor(calibratedWhite: 17 / 255, alpha: 1)
+        window.minSize = NSSize(width: 320, height: 180)
+        window.tabbingMode = .disallowed
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
+        window.setContentSize(NSSize(width: width, height: height))
+        window.center()
+        inputPreviewCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.inputPreviewDidClose(closedId)
+            }
+        }
+        window.delegate = inputPreviewCloser
+        let controller = NSWindowController(window: window)
+        inputPreviewControllers[inputId] = controller
+        inputPreviewWindows[inputId] = window
+        presentInputPreview(window)
+        _ = mixer_set_monitor_present_interval(monitorId, 1)
+    }
+
+    private func presentInputPreview(_ window: NSWindow) {
+        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+
+    func closeInputPreview(_ inputId: UInt64) {
+        let window = inputPreviewWindows.removeValue(forKey: inputId)
+        inputPreviewControllers.removeValue(forKey: inputId)
+        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
+            _ = mixer_detach_monitor(monitorId)
+        }
+        window?.delegate = nil
+        window?.close()
+    }
+
+    func closeAllInputPreviews() {
+        for id in Array(inputPreviewWindows.keys) {
+            closeInputPreview(id)
+        }
+    }
+
+    private func inputPreviewDidClose(_ inputId: UInt64) {
+        inputPreviewWindows.removeValue(forKey: inputId)
+        inputPreviewControllers.removeValue(forKey: inputId)
+        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
+            _ = mixer_detach_monitor(monitorId)
+        }
     }
 
     func applySession() {
@@ -85,15 +186,14 @@ final class MixerController: ObservableObject {
         let preview = session.scenes.first?.gpuId ?? EIVIZ_SRC_BARS
         let program = session.scenes.count > 1 ? session.scenes[1].gpuId : preview
         for unit in session.units {
-            previewByUnit[unit.id] = preview
-            programByUnit[unit.id] = program
+            applyBusSources(unitId: unit.id, preview: preview, program: program)
             pushState(unitId: unit.id, program: program, preview: preview, mix: 0, kind: EIVIZ_TRANSITION_FADE)
         }
         attachInputs()
         for layout in session.multiviews {
             pushMultiview(layout)
         }
-        for output in session.outputs where output.transport != .deckLink {
+        for output in session.outputs where output.enabled && output.transport != .deckLink {
             addOutput(output)
         }
         selectedSceneId = session.scenes.first?.id
@@ -142,15 +242,17 @@ final class MixerController: ObservableObject {
     }
 
     func cut() {
-        takeCut()
+        takeCut(unitId: selectedUnit.id)
         mix = 0
         tbarLocked = false
         updateStatus()
     }
 
-    func takeCut() {
-        let preset = tbarPreset()
-        fail(mixer_unit_cut(selectedUnit.id, preset.swap ? 1 : 0), "CUT")
+    func takeCut(unitId: UInt64? = nil) {
+        let unit = unit(for: unitId)
+        let preset = tbarPreset(for: unit)
+        fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "CUT")
+        syncUnitBuses(unit.id)
     }
 
     func auto() {
@@ -162,29 +264,47 @@ final class MixerController: ObservableObject {
         fail(mixer_unit_auto(selectedUnit.id, selectedUnit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "AUTO")
         mix = 0
         tbarLocked = false
+        syncUnitBuses(selectedUnit.id)
     }
 
     func firePreset(_ preset: TransitionPreset, index: Int) {
         tbarPresetIndex = index
-        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
-            fail(mixer_unit_cut(selectedUnit.id, preset.swap ? 1 : 0), "TAKE")
-        } else {
-            fail(
-                mixer_unit_auto(selectedUnit.id, selectedUnit.durationMs(preset.durationFrames), preset.swap ? 1 : 0),
-                "TAKE"
-            )
-        }
+        firePreset(preset, unitId: selectedUnit.id)
         mix = 0
         tbarLocked = false
     }
 
+    func firePreset(_ preset: TransitionPreset, unitId: UInt64) {
+        let unit = unit(for: unitId)
+        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
+            fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "TAKE")
+        } else {
+            fail(mixer_unit_auto(unit.id, unit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "TAKE")
+        }
+        syncUnitBuses(unit.id)
+    }
+
     func previewScene(_ scene: SceneEntry) {
-        selectedSceneId = scene.id
-        previewByUnit[selectedUnit.id] = scene.gpuId
-        var state = currentState(selectedUnit.id)
+        previewScene(scene, unitId: selectedUnit.id)
+    }
+
+    func previewScene(_ scene: SceneEntry, unitId: UInt64) {
+        let unit = unit(for: unitId)
+        var state = currentState(unit.id)
         state.preview_source = scene.gpuId
-        state.mix = mix
-        fail(mixer_unit_set_state(selectedUnit.id, &state), "Preview scene")
+        fail(mixer_unit_set_state(unit.id, &state), "Preview scene")
+        applyBusSources(unitId: unit.id, preview: scene.gpuId, program: state.program_source)
+        selectedSceneId = scene.id
+    }
+
+    func previewingSceneId(for unitId: UInt64) -> UInt64? {
+        guard let gpuId = previewByUnit[unitId] else { return selectedSceneId }
+        return session.scenes.first { $0.gpuId == gpuId }?.id
+    }
+
+    func programmingSceneId(for unitId: UInt64) -> UInt64? {
+        guard let gpuId = programByUnit[unitId] else { return nil }
+        return session.scenes.first { $0.gpuId == gpuId }?.id
     }
 
     func setMix(_ value: Float) {
@@ -206,9 +326,13 @@ final class MixerController: ObservableObject {
             return
         }
         mix = value
-        var state = currentState(selectedUnit.id)
+        setMix(value, unitId: selectedUnit.id)
+    }
+
+    func setMix(_ value: Float, unitId: UInt64) {
+        var state = currentState(unitId)
         state.mix = value
-        fail(mixer_unit_set_state(selectedUnit.id, &state), "T-bar")
+        fail(mixer_unit_set_state(unitId, &state), "T-bar")
     }
 
     func finishTBar() {
@@ -227,7 +351,6 @@ final class MixerController: ObservableObject {
         var entry = input
         if let id = replacing, let index = session.inputs.firstIndex(where: { $0.id == id }) {
             if !session.inputs[index].isBuiltin {
-                pumps.stop(id)
                 _ = mixer_destroy_source(id)
             }
             entry.id = id
@@ -249,7 +372,8 @@ final class MixerController: ObservableObject {
               let index = session.inputs.firstIndex(where: { $0.id == id }),
               !session.inputs[index].isBuiltin
         else { return }
-        pumps.stop(id)
+        closeInputPreview(id)
+        videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
         selectedInputId = nil
@@ -262,14 +386,68 @@ final class MixerController: ObservableObject {
     }
 
     func removeScene() {
-        guard session.scenes.count > 1, let id = selectedSceneId,
-              let index = session.scenes.firstIndex(where: { $0.id == id })
+        guard let id = selectedSceneId,
+              let scene = session.scenes.first(where: { $0.id == id })
         else { return }
-        _ = mixer_destroy_scene(session.scenes[index].gpuId)
-        session.scenes.remove(at: index)
+        deleteScene(scene)
+    }
+
+    func deleteScene(_ scene: SceneEntry) {
+        guard session.scenes.count > 1 else { return }
+        closeInputPreview(scene.gpuId)
+        _ = mixer_destroy_scene(scene.gpuId)
+        session.scenes.removeAll { $0.id == scene.id }
         if let next = session.scenes.first {
             previewScene(next)
         }
+    }
+
+    func cutScene(_ scene: SceneEntry) {
+        previewScene(scene)
+        cut()
+    }
+
+    func toggleSceneLoop(_ scene: SceneEntry) {
+        guard let video = sceneVideo(scene),
+              let index = session.inputs.firstIndex(where: { $0.id == video.id })
+        else { return }
+        session.inputs[index].videoLoop.toggle()
+        _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
+        objectWillChange.send()
+    }
+
+    func toggleScenePlay(_ scene: SceneEntry) {
+        guard let video = sceneVideo(scene), let info = copyVideoInfo(video.id) else { return }
+        _ = mixer_video_set_playing(video.id, info.playing == 0 ? 1 : 0)
+        objectWillChange.send()
+    }
+
+    func toggleSceneAudio(_ scene: SceneEntry) {
+        let ids = sceneInputs(scene).map(\.id)
+        guard !ids.isEmpty else { return }
+        let mute = !sceneInputs(scene).allSatisfy(\.mute)
+        for id in ids {
+            guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { continue }
+            session.inputs[index].mute = mute
+            let input = session.inputs[index]
+            _ = mixer_audio_set_input(input.id, input.busMask == 0 ? 1 : input.busMask, max(0, input.gain), mute ? 1 : 0)
+        }
+        objectWillChange.send()
+    }
+
+    func sceneVideo(_ scene: SceneEntry) -> InputEntry? {
+        sceneInputs(scene).first { $0.kind == .video }
+    }
+
+    func sceneInputs(_ scene: SceneEntry) -> [InputEntry] {
+        scene.layers.compactMap { layer in
+            session.inputs.first { $0.id == layer.inputId }
+        }
+    }
+
+    func scenePlaying(_ scene: SceneEntry) -> Bool {
+        guard let video = sceneVideo(scene), let info = copyVideoInfo(video.id) else { return false }
+        return info.playing != 0
     }
 
     func saveScene(_ scene: SceneEntry) {
@@ -295,6 +473,7 @@ final class MixerController: ObservableObject {
     func deleteUnit() {
         guard session.units.count > 1 else { return }
         let id = selectedUnitId
+        closeSwitcher(id)
         _ = mixer_destroy_unit(id)
         session.units.removeAll { $0.id == id }
         selectedUnitId = session.units[0].id
@@ -307,6 +486,9 @@ final class MixerController: ObservableObject {
         fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
         fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
         selectedUnitId = unit.id
+        if let window = switcherWindows[unit.id] {
+            window.title = unit.name
+        }
         updateStatus()
     }
 
@@ -327,6 +509,7 @@ final class MixerController: ObservableObject {
             session.outputs[index] = entry
         }
         _ = mixer_output_remove(entry.id)
+        guard entry.enabled else { return }
         MixerFFI.withCString(entry.name) { name in
             fail(
                 mixer_output_add(
@@ -356,6 +539,48 @@ final class MixerController: ObservableObject {
         pushMultiview(layout)
         openMultiview = layout
         showMultiview = true
+    }
+
+    func openSwitcher(_ unitId: UInt64? = nil) {
+        let unit = unit(for: unitId)
+        if let existing = switcherWindows[unit.id] {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self))
+        let window = SwitcherHostWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 640),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = unit.name
+        window.identifier = NSUserInterfaceItemIdentifier("switcher-\(unit.id)")
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = NSColor(calibratedWhite: 26 / 255, alpha: 1)
+        window.tabbingMode = .disallowed
+        window.center()
+        switcherCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.switcherWindows.removeValue(forKey: closedId)
+            }
+        }
+        window.delegate = switcherCloser
+        switcherWindows[unit.id] = window
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeSwitcher(_ unitId: UInt64) {
+        let window = switcherWindows.removeValue(forKey: unitId)
+        window?.delegate = nil
+        window?.close()
+    }
+
+    func closeAllSwitchers() {
+        for id in Array(switcherWindows.keys) {
+            closeSwitcher(id)
+        }
     }
 
     func deleteMultiview(_ id: UInt64) {
@@ -452,6 +677,7 @@ final class MixerController: ObservableObject {
         }
         do {
             let loaded = try SessionFile.decode(Data(buffer.prefix(Int(n))))
+            closeAllSwitchers()
             mixer_destroy()
             session = loaded
             selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
@@ -471,23 +697,46 @@ final class MixerController: ObservableObject {
         return id
     }
 
+    private var fileVideoId: UInt64? {
+        selectedVideoId ?? session.inputs.first { $0.kind == .video }?.id
+    }
+
+    private func copyVideoInfo(_ id: UInt64) -> EivizVideoInfo? {
+        var info = EivizVideoInfo(playing: 0, is_file: 0, position_hns: 0, duration_hns: 0)
+        guard mixer_video_copy_info(id, &info) == EIVIZ_OK else { return nil }
+        return info
+    }
+
+    private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
+        MixerFFI.withCString(path) { cstr in
+            fail(
+                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA),
+                capture == 0 ? "Video start" : "UVC start"
+            )
+        }
+        _ = mixer_video_set_loop(id, loop ? 1 : 0)
+        _ = mixer_video_set_playing(id, playing ? 1 : 0)
+    }
+
     func videoPlayToggle() {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
+        guard let id = fileVideoId else { return }
         videoPlaying.toggle()
-        pumps.setPlaying(id, playing: videoPlaying)
+        _ = mixer_video_set_playing(id, videoPlaying ? 1 : 0)
     }
 
     func videoRestart() {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
-        pumps.seek(id, fraction: 0)
-        pumps.setPlaying(id, playing: true)
+        guard let id = fileVideoId else { return }
+        _ = mixer_video_seek(id, 0)
+        _ = mixer_video_set_playing(id, 1)
         videoPlaying = true
         videoFraction = 0
     }
 
     func videoSeek(_ value: Double) {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
-        pumps.seek(id, fraction: value)
+        guard let id = fileVideoId, let info = copyVideoInfo(id) else { return }
+        let duration = max(info.duration_hns, 1)
+        let hns = Int64((max(0, min(1, value)) * Double(duration)).rounded())
+        _ = mixer_video_seek(id, hns)
         videoFraction = value
     }
 
@@ -500,19 +749,21 @@ final class MixerController: ObservableObject {
     private func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
-            if input.isBuiltin && !input.scroll { return }
-            fail(
-                mixer_define_generator(
-                    input.id,
-                    input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
-                    input.colorR,
-                    input.colorG,
-                    input.colorB,
-                    1,
-                    input.scroll ? 1 : 0
-                ),
-                "Define colour generator"
-            )
+            if !(input.isBuiltin && !input.scroll) {
+                fail(
+                    mixer_define_generator(
+                        input.id,
+                        input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
+                        input.colorR,
+                        input.colorG,
+                        input.colorB,
+                        1,
+                        input.scroll ? 1 : 0
+                    ),
+                    "Define colour generator"
+                )
+            }
+            _ = mixer_generator_set_tone(input.id, input.toneHz, input.toneLevelDbfs)
         case .black:
             break
         case .still:
@@ -523,9 +774,15 @@ final class MixerController: ObservableObject {
             }
         case .video:
             if let path = input.pathOrAddress {
-                pumps.startFile(id: input.id, path: path)
+                startVideoInput(
+                    id: input.id,
+                    path: path,
+                    capture: 0,
+                    loop: input.videoLoop,
+                    playing: input.videoStartsPlaying
+                )
                 videoTitle = input.name
-                videoPlaying = true
+                videoPlaying = input.videoStartsPlaying
             }
         case .omt:
             if let address = input.pathOrAddress {
@@ -572,11 +829,11 @@ final class MixerController: ObservableObject {
     private func startCapture(id: UInt64, deviceId: String) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            pumps.startCapture(id: id, deviceId: deviceId)
+            startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
         case .notDetermined:
             Task { @MainActor in
                 if await AVCaptureDevice.requestAccess(for: .video) {
-                    pumps.startCapture(id: id, deviceId: deviceId)
+                    startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
                 } else {
                     errorText = "Camera access was denied."
                 }
@@ -648,8 +905,17 @@ final class MixerController: ObservableObject {
         }
     }
 
+    private func unit(for id: UInt64?) -> MixingUnitEntry {
+        guard let id else { return selectedUnit }
+        return session.units.first { $0.id == id } ?? selectedUnit
+    }
+
     private func tbarPreset() -> TransitionPreset {
-        let list = selectedUnit.transitions
+        tbarPreset(for: selectedUnit)
+    }
+
+    private func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
+        let list = unit.transitions
         guard !list.isEmpty else {
             return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationFrames: 1, swap: true)
         }
@@ -675,14 +941,122 @@ final class MixerController: ObservableObject {
             resourceText = hud.text
             warnText = hud.warn
         }
-        if let id = selectedVideoId ?? pumps.activeFileId, let info = pumps.info(id) {
-            videoPlaying = info.playing
+        if let id = fileVideoId, let info = copyVideoInfo(id) {
+            videoPlaying = info.playing != 0
             videoTitle = session.inputs.first { $0.id == id }?.name ?? videoTitle
-            if info.duration > 0 {
-                videoFraction = info.position / info.duration
+            if info.duration_hns > 0 {
+                videoFraction = Double(info.position_hns) / Double(info.duration_hns)
             }
         }
+        tickVideoTransport()
+        syncAllUnitBuses()
         updateStatus()
+    }
+
+    private func syncAllUnitBuses() {
+        for unit in session.units {
+            syncUnitBuses(unit.id)
+        }
+    }
+
+    private func syncUnitBuses(_ unitId: UInt64) {
+        var state = MixerFFI.emptyState()
+        guard mixer_unit_get_state(unitId, &state) == EIVIZ_OK else { return }
+        applyBusSources(unitId: unitId, preview: state.preview_source, program: state.program_source)
+    }
+
+    private func applyBusSources(unitId: UInt64, preview: UInt64, program: UInt64) {
+        if previewByUnit[unitId] != preview || programByUnit[unitId] != program {
+            var nextPreview = previewByUnit
+            var nextProgram = programByUnit
+            nextPreview[unitId] = preview
+            nextProgram[unitId] = program
+            previewByUnit = nextPreview
+            programByUnit = nextProgram
+        }
+    }
+
+    private func tickVideoTransport() {
+        var roles: [UInt64: (program: Bool, preview: Bool)] = [:]
+        for unit in session.units {
+            var state = MixerFFI.emptyState()
+            _ = mixer_unit_get_state(unit.id, &state)
+            markVideoRole(&roles, state.program_source, program: true, preview: false)
+            markVideoRole(&roles, state.preview_source, program: false, preview: true)
+            if state.mix > 0.001 {
+                markVideoRole(&roles, state.preview_source, program: true, preview: false)
+            }
+            for slot in unit.overlays where slot.enabled && slot.sceneGpuId != 0 {
+                markVideoRole(&roles, slot.sceneGpuId, program: true, preview: false)
+            }
+        }
+        for id in inputPreviewWindows.keys {
+            markVideoRole(&roles, id, program: false, preview: true)
+        }
+        for input in session.inputs where input.kind == .video {
+            let now = roles[input.id] ?? (false, false)
+            let prev = videoRoles[input.id] ?? (false, false)
+            let roseProgram = now.program && !prev.program
+            let fellProgram = !now.program && prev.program
+            let rosePreview = now.preview && !prev.preview
+            let paused = matchesTrigger(input.videoPauseWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
+            let restarted = matchesTrigger(input.videoRestartWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
+            if restarted {
+                _ = mixer_video_seek(input.id, 0)
+            }
+            if paused {
+                _ = mixer_video_set_playing(input.id, 0)
+            } else if restarted || shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
+                _ = mixer_video_set_playing(input.id, 1)
+            }
+            videoRoles[input.id] = now
+        }
+    }
+
+    private func markVideoRole(
+        _ roles: inout [UInt64: (program: Bool, preview: Bool)],
+        _ id: UInt64,
+        program: Bool,
+        preview: Bool
+    ) {
+        guard id != 0, id < EIVIZ_MULTIVIEW_BASE else { return }
+        if id >= EIVIZ_SCENE_BASE {
+            guard let scene = session.scenes.first(where: { $0.gpuId == id }) else { return }
+            for layer in scene.layers {
+                markVideoRole(&roles, layer.inputId, program: program, preview: preview)
+            }
+            return
+        }
+        let current = roles[id] ?? (false, false)
+        roles[id] = (current.program || program, current.preview || preview)
+    }
+
+    private func shouldPlay(
+        _ when: VideoPlayWhen,
+        roseProgram: Bool,
+        rosePreview: Bool,
+        now: (program: Bool, preview: Bool)
+    ) -> Bool {
+        switch when {
+        case .onActive: return roseProgram
+        case .onPreview: return rosePreview
+        case .always: return now.program || now.preview
+        case .never: return false
+        }
+    }
+
+    private func matchesTrigger(
+        _ when: VideoTriggerWhen,
+        roseProgram: Bool,
+        fellProgram: Bool,
+        rosePreview: Bool
+    ) -> Bool {
+        switch when {
+        case .onActive: return roseProgram
+        case .onDeactivated: return fellProgram
+        case .onPreview: return rosePreview
+        case .never: return false
+        }
     }
 
     private func updateStatus() {
@@ -694,5 +1068,43 @@ final class MixerController: ObservableObject {
         if let message = MixerFFI.check(code, action) {
             errorText = message
         }
+    }
+}
+
+private final class InputPreviewCloser: NSObject, NSWindowDelegate {
+    var onClose: ((UInt64) -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let raw = window.identifier?.rawValue,
+              raw.hasPrefix("input-preview-"),
+              let inputId = UInt64(raw.dropFirst("input-preview-".count))
+        else { return }
+        onClose?(inputId)
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let window = sender as? InputPreviewHostWindow,
+              !window.styleMask.contains(.fullScreen),
+              let content = window.contentView
+        else { return frameSize }
+        let extraW = window.frame.width - content.bounds.width
+        let extraH = window.frame.height - content.bounds.height
+        let contentW = max(320, frameSize.width - extraW)
+        let contentH = contentW / max(0.1, window.contentAspect)
+        return NSSize(width: contentW + extraW, height: contentH + extraH)
+    }
+}
+
+private final class SwitcherCloser: NSObject, NSWindowDelegate {
+    var onClose: ((UInt64) -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let raw = window.identifier?.rawValue,
+              raw.hasPrefix("switcher-"),
+              let unitId = UInt64(raw.dropFirst("switcher-".count))
+        else { return }
+        onClose?(unitId)
     }
 }

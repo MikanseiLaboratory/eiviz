@@ -7,10 +7,13 @@ mod compose;
 mod convert;
 mod delay;
 mod device;
+mod generator_audio;
 #[cfg(windows)]
 mod dxgi;
 #[cfg(windows)]
 mod media;
+#[cfg(target_os = "macos")]
+mod media_macos;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 #[cfg(target_os = "macos")]
@@ -50,6 +53,8 @@ use device::GpuDevice;
 use dxgi::GpuVideoContext;
 #[cfg(windows)]
 use media::VideoPump;
+#[cfg(target_os = "macos")]
+use media_macos::VideoPump;
 #[cfg(any(windows, target_os = "macos"))]
 use ndi::{NdiReceiver, NdiSender};
 use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device};
@@ -116,18 +121,23 @@ struct Shared {
     gpu_video: Option<GpuVideoContext>,
     omt_gpu: OmtGpu,
     receivers: HashMap<u64, LiveReceiver>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
+    tone_phase: HashMap<u64, f64>,
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
+    frame_buffer_frames: u32,
+    audio: audio::AudioEngine,
+}
+
+/// Host-visible status that must not share the control lock with ingest or render.
+struct Telemetry {
     last_error: String,
     last_render_ms: f32,
-    frame_buffer_frames: u32,
     follow_primed: bool,
     monitor_pcm: VecDeque<f32>,
-    audio: audio::AudioEngine,
 }
 
 enum LiveReceiver {
@@ -305,6 +315,8 @@ enum GpuCmd {
 
 struct Mixer {
     shared: Arc<Mutex<Shared>>,
+    uploads: Arc<Mutex<UploadStore>>,
+    telemetry: Arc<Mutex<Telemetry>>,
     cmds: mpsc::Sender<GpuCmd>,
     send_tx: mpsc::Sender<SendCmd>,
     render: Option<JoinHandle<()>>,
@@ -339,8 +351,12 @@ fn send_gpu_and_wait(send: impl FnOnce(&Mixer, mpsc::Sender<i32>) -> i32) -> i32
     }
 }
 
-fn set_error(shared: &Mutex<Shared>, message: impl Into<String>) {
-    shared.lock().expect("shared").last_error = message.into();
+fn set_error(telemetry: &Mutex<Telemetry>, message: impl Into<String>) {
+    telemetry.lock().expect("telemetry").last_error = message.into();
+}
+
+fn with_uploads<T>(mixer: &Mixer, f: impl FnOnce(&mut UploadStore) -> T) -> T {
+    f(&mut mixer.uploads.lock().expect("uploads"))
 }
 
 fn session_error_slot() -> &'static Mutex<String> {
@@ -351,7 +367,7 @@ fn session_error_slot() -> &'static Mutex<String> {
 fn report_session_error(message: impl Into<String>) {
     let message = message.into();
     *session_error_slot().lock().expect("session error") = message.clone();
-    let _ = with_mixer(|mixer| set_error(&mixer.shared, message));
+    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
 }
 
 fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
@@ -386,7 +402,7 @@ fn prepare_surface_off_slot(
         )
     })
     .map_err(|error| {
-        let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
         ERR_DEVICE
     })
 }
@@ -421,6 +437,12 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     };
     let omt_gpu = omt_gpu_from_device(&device);
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
+    let telemetry = Arc::new(Mutex::new(Telemetry {
+        last_error: String::new(),
+        last_render_ms: 0.0,
+        follow_primed: false,
+        monitor_pcm: VecDeque::new(),
+    }));
     let audio = audio::AudioEngine::new();
     let shared = Arc::new(Mutex::new(Shared {
         master_fps_num: fps_num,
@@ -432,16 +454,13 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         gpu_video,
         omt_gpu: omt_gpu.clone(),
         receivers: HashMap::new(),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
+        tone_phase: HashMap::new(),
         live_save: HashMap::new(),
-        last_error: String::new(),
-        last_render_ms: 0.0,
         frame_buffer_frames: 3,
-        follow_primed: false,
-        monitor_pcm: VecDeque::new(),
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
@@ -449,6 +468,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     let (send_tx, send_rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let render_shared = Arc::clone(&shared);
+    let render_uploads = Arc::clone(&uploads);
+    let render_telemetry = Arc::clone(&telemetry);
     let render_stop = Arc::clone(&stop);
     let render_send = send_tx.clone();
     let render = thread::Builder::new()
@@ -459,7 +480,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
                 fps_num,
                 fps_den,
                 render_shared,
-                uploads,
+                render_uploads,
+                render_telemetry,
                 rx,
                 render_send,
                 render_stop,
@@ -474,6 +496,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         .expect("omt send thread");
     *slot = Some(Mixer {
         shared,
+        uploads,
+        telemetry,
         cmds: tx,
         send_tx,
         render: Some(render),
@@ -610,14 +634,37 @@ pub extern "C" fn mixer_define_generator(
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").generators.insert(
+        let mut shared = mixer.shared.lock().expect("shared");
+        let previous = shared.generators.get(&id).copied();
+        shared.generators.insert(
             id,
             Generator {
                 kind,
                 color: [r, g, b, a],
                 scroll: scroll != 0,
+                tone_hz: previous.map(|item| item.tone_hz).unwrap_or(0.0),
+                tone_level_dbfs: previous.map(|item| item.tone_level_dbfs).unwrap_or(-20.0),
             },
         );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) -> i32 {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let kind = if id == SRC_BARS { GEN_BARS } else { GEN_SOLID };
+        let entry = shared.generators.entry(id).or_insert_with(|| Generator {
+            kind,
+            ..Generator::default()
+        });
+        entry.tone_hz = hz.max(0.0);
+        entry.tone_level_dbfs = level_dbfs.clamp(-120.0, 0.0);
+        if hz <= 0.0 {
+            shared.tone_phase.remove(&id);
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -994,14 +1041,7 @@ pub extern "C" fn mixer_register_source(id: u64, width: u32, height: u32, format
         return ERR_INVALID_ARGUMENT;
     };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .uploads
-            .lock()
-            .expect("uploads")
-            .register(id, width, height, format);
+        with_uploads(mixer, |uploads| uploads.register(id, width, height, format));
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1022,18 +1062,10 @@ pub unsafe extern "C" fn mixer_push_frame(
     // SAFETY: caller keeps the frame readable for this call only.
     let src = unsafe { std::slice::from_raw_parts(ptr, len) };
     with_mixer(|mixer| {
-        match mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .uploads
-            .lock()
-            .expect("uploads")
-            .push(id, src, stride as usize, pts)
-        {
+        match with_uploads(mixer, |uploads| uploads.push(id, src, stride as usize, pts)) {
             Ok(()) => OK,
             Err(error) => {
-                set_error(&mixer.shared, error);
+                set_error(&mixer.telemetry, error);
                 ERR_INVALID_ARGUMENT
             }
         }
@@ -1057,14 +1089,9 @@ pub unsafe extern "C" fn mixer_push_audio(
     // SAFETY: caller keeps planar readable for this call only.
     let samples = unsafe { std::slice::from_raw_parts(planar, count) };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .uploads
-            .lock()
-            .expect("uploads")
-            .push_audio(id, sample_rate, channels, frames, pts, samples);
+        with_uploads(mixer, |uploads| {
+            uploads.push_audio(id, sample_rate, channels, frames, pts, samples);
+        });
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1081,20 +1108,20 @@ pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
             let _ = with_mixer(|mixer| {
-                set_error(&mixer.shared, error.to_string());
+                set_error(&mixer.telemetry, error.to_string());
             });
             return ERR_IO;
         }
     };
     let (width, height) = image.dimensions();
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let mut uploads = shared.uploads.lock().expect("uploads");
-        uploads.register(id, width, height, CpuFormat::Rgba);
-        match uploads.push(id, &image, width as usize * 4, 0) {
-            Ok(()) => OK,
-            Err(_) => ERR_IO,
-        }
+        with_uploads(mixer, |uploads| {
+            uploads.register(id, width, height, CpuFormat::Rgba);
+            match uploads.push(id, &image, width as usize * 4, 0) {
+                Ok(()) => OK,
+                Err(_) => ERR_IO,
+            }
+        })
     })
     .unwrap_or_else(|code| code)
 }
@@ -1116,12 +1143,38 @@ pub unsafe extern "C" fn mixer_video_start(
     if path.is_empty() {
         return ERR_INVALID_ARGUMENT;
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, path, capture, format);
         return with_mixer(|mixer| {
-            set_error(&mixer.shared, "Media Foundation is not available");
+            set_error(&mixer.telemetry, "Video ingest is not available");
             ERR_IO
+        })
+        .unwrap_or_else(|code| code);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = format;
+        return with_mixer(|mixer| {
+            let uploads = {
+                let mut shared = mixer.shared.lock().expect("shared");
+                let previous = shared.videos.remove(&id);
+                drop(shared.receivers.remove(&id));
+                let uploads = shared.uploads.clone();
+                drop(shared);
+                drop(previous);
+                uploads
+            };
+            match VideoPump::start(id, path, capture != 0, uploads) {
+                Ok(pump) => {
+                    mixer.shared.lock().expect("shared").videos.insert(id, pump);
+                    OK
+                }
+                Err(error) => {
+                    set_error(&mixer.telemetry, error);
+                    ERR_IO
+                }
+            }
         })
         .unwrap_or_else(|code| code);
     }
@@ -1145,7 +1198,7 @@ pub unsafe extern "C" fn mixer_video_start(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.shared, error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1155,12 +1208,12 @@ pub unsafe extern "C" fn mixer_video_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, playing);
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1173,13 +1226,32 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (id, looping);
+        return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let Some(pump) = shared.videos.get(&id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        pump.set_looping(looping != 0);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, hns);
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1196,12 +1268,12 @@ pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = id;
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1232,7 +1304,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
     with_mixer(|mixer| {
         let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
@@ -1242,7 +1314,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 None
             };
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             (uploads, gpu)
         };
@@ -1257,7 +1329,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.shared, error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1284,7 +1356,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     {
         let _ = (id, address, depth, low_bandwidth);
         return with_mixer(|mixer| {
-            set_error(&mixer.shared, "NDI is not available");
+            set_error(&mixer.telemetry, "NDI is not available");
             ERR_IO
         })
         .unwrap_or_else(|code| code);
@@ -1293,12 +1365,12 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             uploads
         };
@@ -1313,7 +1385,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
                 OK
             }
             Err(error) => {
-                set_error(&mixer.shared, error);
+                set_error(&mixer.telemetry, error);
                 ERR_IO
             }
         }
@@ -1381,7 +1453,7 @@ pub unsafe extern "C" fn mixer_output_add(
         .to_string();
     if transport == OUT_DECKLINK {
         let _ = with_mixer(|mixer| {
-            set_error(&mixer.shared, "DeckLink output is not linked in this build");
+            set_error(&mixer.telemetry, "DeckLink output is not linked in this build");
         });
         return ERR_IO;
     }
@@ -1390,7 +1462,7 @@ pub unsafe extern "C" fn mixer_output_add(
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
             {
-                let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "NDI is not available"));
                 return ERR_IO;
             }
             #[cfg(any(windows, target_os = "macos"))]
@@ -1399,12 +1471,12 @@ pub unsafe extern "C" fn mixer_output_add(
                 match started {
                     Ok(Ok(sender)) => OutputHandle::Ndi(sender),
                     Ok(Err(error)) => {
-                        let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                         return ERR_IO;
                     }
                     Err(_) => {
                         let _ = with_mixer(|mixer| {
-                            set_error(&mixer.shared, "NDI sender panicked during create")
+                            set_error(&mixer.telemetry, "NDI sender panicked during create")
                         });
                         return ERR_IO;
                     }
@@ -1416,12 +1488,12 @@ pub unsafe extern "C" fn mixer_output_add(
             match started {
                 Ok(Ok(sender)) => OutputHandle::Omt(sender),
                 Ok(Err(error)) => {
-                    let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
                 }
                 Err(_) => {
                     let _ = with_mixer(|mixer| {
-                        set_error(&mixer.shared, "OMT sender panicked during create")
+                        set_error(&mixer.telemetry, "OMT sender panicked during create")
                     });
                     return ERR_IO;
                 }
@@ -1492,7 +1564,7 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (out, cap);
-        let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "NDI is not available"));
         return 0;
     }
     #[cfg(any(windows, target_os = "macos"))]
@@ -1505,7 +1577,7 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
             n as i32
         }
         Err(error) => {
-            let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
             0
         }
     }
@@ -1551,7 +1623,7 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    let error = match with_mixer(|mixer| mixer.shared.lock().expect("shared").last_error.clone()) {
+    let error = match with_mixer(|mixer| mixer.telemetry.lock().expect("telemetry").last_error.clone()) {
         Ok(error) => error,
         Err(code) => return code,
     };
@@ -1618,14 +1690,15 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             shared.receivers.remove(&id);
             shared.generators.remove(&id);
+            shared.tone_phase.remove(&id);
             shared.live_save.remove(&id);
             let uploads = shared.uploads.clone();
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             uploads
         };
@@ -1638,14 +1711,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_flush_audio(id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .uploads
-            .lock()
-            .expect("uploads")
-            .flush_audio(id);
+        with_uploads(mixer, |uploads| uploads.flush_audio(id));
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1668,7 +1734,8 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
     let name = read_cstr(name);
     let device_id = read_cstr(device_id);
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").audio.upsert_bus(
+        let audio = mixer.shared.lock().expect("shared").audio.clone();
+        audio.upsert_bus(
             id,
             &name,
             role,
@@ -1686,7 +1753,8 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_bus_remove(id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").audio.remove_bus(id);
+        let audio = mixer.shared.lock().expect("shared").audio.clone();
+        audio.remove_bus(id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1865,14 +1933,14 @@ pub unsafe extern "C" fn mixer_copy_follow_audio(out: *mut f32, cap: u32) -> i32
     }
     with_mixer(|mixer| {
         let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
-        let mut shared = mixer.shared.lock().expect("shared");
-        if !shared.follow_primed {
+        let mut telemetry = mixer.telemetry.lock().expect("telemetry");
+        if !telemetry.follow_primed {
             dest.fill(0.0);
             return 0;
         }
-        let n = dest.len().min(shared.monitor_pcm.len());
+        let n = dest.len().min(telemetry.monitor_pcm.len());
         for slot in dest.iter_mut().take(n) {
-            *slot = shared.monitor_pcm.pop_front().unwrap_or(0.0);
+            *slot = telemetry.monitor_pcm.pop_front().unwrap_or(0.0);
         }
         let hold = dest
             .get(n.saturating_sub(1).min(dest.len().saturating_sub(1)))
@@ -1912,11 +1980,18 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let uploads = shared.uploads.lock().expect("uploads");
+        let (master, buses, uploads) = {
+            let shared = mixer.shared.lock().expect("shared");
+            let master = shared.audio.master_peak();
+            let buses = shared.audio.bus_peaks();
+            let uploads = Arc::clone(&mixer.uploads);
+            drop(shared);
+            (master, buses, uploads)
+        };
+        let uploads = uploads.lock().expect("uploads");
         let mut n = 0u32;
         if n < cap {
-            let (left, right) = shared.audio.master_peak();
+            let (left, right) = master;
             unsafe {
                 *out.add(n as usize) = AudioPeak {
                     source_id: 0,
@@ -1926,7 +2001,7 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             }
             n += 1;
         }
-        for (id, left, right) in shared.audio.bus_peaks() {
+        for (id, left, right) in buses {
             if n >= cap {
                 break;
             }
@@ -2015,13 +2090,14 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
             if !seen.insert(id) {
                 continue;
             }
+            let (width, height) = if id == SRC_BARS { (1920u32, 1080u32) } else { (128, 72) };
             unsafe {
                 *out.add(n as usize) = SourceUsage {
                     source_id: id,
-                    width: 128,
-                    height: 72,
+                    width,
+                    height,
                     ram_bytes: 0,
-                    vram_bytes: 128 * 72 * 4,
+                    vram_bytes: u64::from(width) * u64::from(height) * 4,
                 };
             }
             n += 1;
@@ -2037,11 +2113,15 @@ pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let budget = 1000.0 * shared.master_fps_den as f32 / shared.master_fps_num.max(1) as f32;
+        let (num, den) = {
+            let shared = mixer.shared.lock().expect("shared");
+            (shared.master_fps_num, shared.master_fps_den)
+        };
+        let render_ms = mixer.telemetry.lock().expect("telemetry").last_render_ms;
+        let budget = 1000.0 * den as f32 / num.max(1) as f32;
         unsafe {
             *out = MixerStats {
-                render_ms: shared.last_render_ms,
+                render_ms,
                 frame_budget_ms: budget,
             };
         }
@@ -2096,6 +2176,7 @@ fn render_loop(
     fps_den: u32,
     shared: Arc<Mutex<Shared>>,
     uploads: Arc<Mutex<UploadStore>>,
+    telemetry: Arc<Mutex<Telemetry>>,
     cmds: mpsc::Receiver<GpuCmd>,
     send_tx: mpsc::Sender<SendCmd>,
     stop: Arc<AtomicBool>,
@@ -2103,7 +2184,7 @@ fn render_loop(
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
         Err(error) => {
-            shared.lock().expect("shared").last_error = error;
+            set_error(&telemetry, error);
             return;
         }
     };
@@ -2140,7 +2221,7 @@ fn render_loop(
                     ) {
                         Ok(()) => OK,
                         Err(error) => {
-                            shared.lock().expect("shared").last_error = error;
+                            set_error(&telemetry, error);
                             ERR_DEVICE
                         }
                     };
@@ -2179,7 +2260,7 @@ fn render_loop(
                     ) {
                         Ok(()) => OK,
                         Err(error) => {
-                            shared.lock().expect("shared").last_error = error;
+                            set_error(&telemetry, error);
                             ERR_DEVICE
                         }
                     };
@@ -2330,10 +2411,12 @@ fn render_loop(
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
-            let phase = (clock_start.elapsed().as_secs_f32() * 0.12) % 1.0;
+            let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
+            let phase = ((secs * 0.12) % 1.0) as f32;
+            let phase_y = ((secs * 0.07) % 1.0) as f32;
             composer.begin_frame();
             composer.ensure_builtins(&device);
-            composer.sync_generators(&generators, phase);
+            composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
                 upload_guard.advance_playout(&used_uploads);
                 composer.upload_sources(&device, &upload_guard, &used_uploads);
@@ -2353,7 +2436,7 @@ fn render_loop(
                         .or_else(|| composer.unit_view(unit_id, kind))
                 })
             {
-                shared.lock().expect("shared").last_error = error;
+                set_error(&telemetry, error);
             }
             {
                 let mut encoder =
@@ -2450,7 +2533,7 @@ fn render_loop(
                 if let Err(error) =
                     composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
                 {
-                    shared.lock().expect("shared").last_error = error;
+                    set_error(&telemetry, error);
                 }
                 let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
                 let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
@@ -2470,7 +2553,7 @@ fn render_loop(
                         need_mv,
                         pack_pgm,
                     ) {
-                        shared.lock().expect("shared").last_error = error;
+                        set_error(&telemetry, error);
                     }
                     composer.pack_aux(&device, &mut encoder, *unit_id, need_prv, false);
                 }
@@ -2560,7 +2643,7 @@ fn render_loop(
                             .map(|view| (view, composer.source_is_packed(source_id)))
                     })
                 {
-                    shared.lock().expect("shared").last_error = error;
+                    set_error(&telemetry, error);
                 }
             }
             audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
@@ -2572,6 +2655,23 @@ fn render_loop(
                 guard.audio.clone()
             };
             let mut upload_guard = uploads.lock().expect("uploads");
+            if audio_frames > 0 {
+                let mut guard = shared.lock().expect("shared");
+                for (id, spec) in &generators {
+                    if spec.tone_hz <= 0.0 {
+                        continue;
+                    }
+                    let phase = guard.tone_phase.entry(*id).or_insert(0.0);
+                    let packet = generator_audio::sine_packet(
+                        phase,
+                        spec.tone_hz,
+                        spec.tone_level_dbfs,
+                        audio_frames,
+                        pts,
+                    );
+                    upload_guard.ingest_audio(*id, packet);
+                }
+            }
             let mixed = audio.mix(
                 &mut upload_guard,
                 &snapshot,
@@ -2581,7 +2681,7 @@ fn render_loop(
             );
             drop(upload_guard);
             {
-                let mut guard = shared.lock().expect("shared");
+                let mut guard = telemetry.lock().expect("telemetry");
                 guard.monitor_pcm.extend(mixed.iter().copied());
                 let cap = AUDIO_RATE as usize;
                 while guard.monitor_pcm.len() > cap {

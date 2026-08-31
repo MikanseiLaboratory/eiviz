@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Navigation;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
 
@@ -50,6 +52,7 @@ public partial class SettingsWindow : Window
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
         _devices = AudioGraphSync.EnumerateDevices(0);
         RebuildBuses();
+        AboutVersion.Text = $"Version {HostVersion.Display}";
     }
 
     public SessionSettings Settings { get; }
@@ -62,7 +65,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || MultiviewPanel is null || AudioBusPanel is null)
+        if (DisplayPanel is null || MultiviewPanel is null || AudioBusPanel is null || AboutPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -70,6 +73,20 @@ public partial class SettingsWindow : Window
         MultiviewPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AboutPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AboutLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        e.Handled = true;
+    }
+
+    private void OpenNotices_Click(object sender, RoutedEventArgs e)
+    {
+        var path = System.IO.Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.md");
+        if (!System.IO.File.Exists(path))
+            return;
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -398,6 +415,17 @@ public partial class SettingsWindow : Window
             FillOutputPick(pick, output);
             pick.SelectionChanged += (_, _) => ApplyOutputPick(pick, output);
 
+            var enabled = new CheckBox
+            {
+                Content = "Enabled",
+                IsChecked = output.Enabled,
+                Foreground = System.Windows.Media.Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 6)
+            };
+            enabled.Checked += (_, _) => output.Enabled = true;
+            enabled.Unchecked += (_, _) => output.Enabled = false;
+
             var remove = new Button { Content = "−", Width = 28 };
             remove.Click += (_, _) =>
             {
@@ -412,6 +440,8 @@ public partial class SettingsWindow : Window
             Grid.SetRow(transport, 1);
             Grid.SetRow(path, 1);
             Grid.SetColumn(path, 1);
+            Grid.SetRow(enabled, 1);
+            Grid.SetColumn(enabled, 2);
             Grid.SetRow(kinds, 2);
             Grid.SetColumnSpan(kinds, 4);
             Grid.SetRow(pick, 3);
@@ -420,6 +450,7 @@ public partial class SettingsWindow : Window
             grid.Children.Add(remove);
             grid.Children.Add(transport);
             grid.Children.Add(path);
+            grid.Children.Add(enabled);
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
             box.Child = grid;
@@ -578,7 +609,8 @@ public partial class SettingsWindow : Window
         SourceKind = output.SourceKind,
         SourceId = output.SourceId,
         UnitId = output.UnitId,
-        UseGpu = output.UseGpu
+        UseGpu = output.UseGpu,
+        Enabled = output.Enabled
     };
 
     private static void SelectTag(ComboBox box, string tag)

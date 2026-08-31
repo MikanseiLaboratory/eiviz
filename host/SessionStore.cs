@@ -63,7 +63,8 @@ internal static class SessionStore
                 SourceKind = output.SourceKind,
                 SourceId = output.SourceId,
                 UnitId = output.UnitId,
-                UseGpu = output.UseGpu
+                UseGpu = output.UseGpu,
+                Enabled = output.Enabled
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),
@@ -132,6 +133,8 @@ internal static class SessionStore
         public float ColorG { get; set; }
         public float ColorB { get; set; }
         public bool Scroll { get; set; }
+        public float ToneHz { get; set; }
+        public float ToneLevelDbfs { get; set; } = -20;
         public uint BusMask { get; set; } = 1;
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
@@ -141,6 +144,10 @@ internal static class SessionStore
         public bool KeepFullOnMultiview { get; set; }
         public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
         public NdiBandwidth NdiBandwidth { get; set; } = NdiBandwidth.Highest;
+        public bool VideoLoop { get; set; } = true;
+        public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
+        public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
+        public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -152,6 +159,8 @@ internal static class SessionStore
             ColorG = input.ColorG,
             ColorB = input.ColorB,
             Scroll = input.Scroll,
+            ToneHz = input.ToneHz,
+            ToneLevelDbfs = input.ToneLevelDbfs,
             BusMask = input.BusMask == 0 ? 1u : input.BusMask,
             Gain = input.Gain,
             Mute = input.Mute,
@@ -160,7 +169,11 @@ internal static class SessionStore
             BandwidthSave = input.BandwidthSave,
             KeepFullOnMultiview = input.KeepFullOnMultiview,
             OmtQuality = input.OmtQuality,
-            NdiBandwidth = input.NdiBandwidth
+            NdiBandwidth = input.NdiBandwidth,
+            VideoLoop = input.VideoLoop,
+            VideoPlayWhen = input.VideoPlayWhen,
+            VideoRestartWhen = input.VideoRestartWhen,
+            VideoPauseWhen = input.VideoPauseWhen
         };
 
         public InputEntry ToEntry() => new()
@@ -173,6 +186,8 @@ internal static class SessionStore
             ColorG = ColorG,
             ColorB = ColorB,
             Scroll = Scroll,
+            ToneHz = ToneHz,
+            ToneLevelDbfs = ToneLevelDbfs,
             BusMask = BusMask == 0 ? 1u : BusMask,
             Gain = MixerNative.MixerGain(Gain),
             Mute = Mute,
@@ -181,7 +196,11 @@ internal static class SessionStore
             BandwidthSave = BandwidthSave,
             KeepFullOnMultiview = KeepFullOnMultiview,
             OmtQuality = OmtQuality,
-            NdiBandwidth = NdiBandwidth
+            NdiBandwidth = NdiBandwidth,
+            VideoLoop = VideoLoop,
+            VideoPlayWhen = VideoPlayWhen,
+            VideoRestartWhen = VideoRestartWhen,
+            VideoPauseWhen = VideoPauseWhen
         };
     }
 

@@ -11,6 +11,8 @@
     <Authors>Shugo Kawamura; Mikansei Laboratory</Authors>
     <Copyright>Copyright 2026 Shugo Kawamura / Mikansei Laboratory</Copyright>
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
+    <Version>0.2.0</Version>
+    <InformationalVersion>0.2.0-alpha.16</InformationalVersion>
     <MixerProject>$(MSBuildThisFileDirectory)..\mixer</MixerProject>
     <MixerLibrary>$(MixerProject)\target\release\eiviz_mixer.dll</MixerLibrary>
   </PropertyGroup>
@@ -31,4 +33,10 @@
     <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />
     <Error Text="NDI runtime DLL not found. Install the NDI SDK 6 and set NDI_SDK_DIR if it is not in the default location." Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll')" />
   </Target>
+
+  <ItemGroup>
+    <Content Include="..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\NOTICE" Link="NOTICE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

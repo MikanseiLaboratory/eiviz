@@ -33,6 +33,19 @@ struct MixerButtonStyle: ButtonStyle {
     }
 }
 
+struct MixerTileButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10))
+            .foregroundStyle(EivizTheme.text)
+            .padding(.horizontal, 3)
+            .frame(minWidth: 26, minHeight: 18)
+            .background(EivizTheme.button)
+            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
 func parseUInt32(_ text: String) -> UInt32? {
     UInt32(text.filter(\.isNumber))
 }

@@ -20,12 +20,12 @@ internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool Us
 internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames, NdiBandwidth Bandwidth) : MixerCommand;
 internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality? OmtQuality = null) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
-internal sealed record StartVideoCommand(ulong SourceId, string Path) : MixerCommand;
+internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true) : MixerCommand;
 internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink) : MixerCommand;
 internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : MixerCommand;
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
-internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll) : MixerCommand;
+internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll, float ToneHz = 0, float ToneLevelDbfs = -20) : MixerCommand;
 internal sealed record DropSourceCommand(ulong SourceId) : MixerCommand;
 
 internal sealed class CommandQueue : IAsyncDisposable
@@ -370,6 +370,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                         MixerNative.ThrowIfFailed(
                             MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat),
                             "Video start");
+                        MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
+                        MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
                         break;
                     case StartUvcCommand uvc:
                         MixerNative.ThrowIfFailed(
@@ -402,6 +404,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                                 1,
                                 generator.Scroll ? 1u : 0u),
                             "Define colour generator");
+                        MixerNative.GeneratorSetTone(generator.SourceId, generator.ToneHz, generator.ToneLevelDbfs);
                         break;
                     case DropSourceCommand drop:
                         MixerNative.DestroySource(drop.SourceId);

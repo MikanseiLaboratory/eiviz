@@ -115,11 +115,35 @@
                     <StackPanel x:Name="BusRows"/>
                 </ScrollViewer>
             </DockPanel>
-            <StackPanel x:Name="AboutPanel" Margin="20" Visibility="Collapsed">
-                <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
-                <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                           Text="Windows host and DirectX 12 mixer."/>
-            </StackPanel>
+            <ScrollViewer x:Name="AboutPanel" Margin="20" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock x:Name="AboutVersion" Margin="0,8,0,0"/>
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory."/>
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="Shugo Kawamura"/>
+                    <TextBlock Margin="0,8,0,0">
+                        <Hyperlink NavigateUri="https://github.com/MikanseiLaboratory/eiviz"
+                                   RequestNavigate="AboutLink_RequestNavigate"
+                                   Foreground="#EEEEEE">
+                            https://github.com/MikanseiLaboratory/eiviz
+                        </Hyperlink>
+                    </TextBlock>
+                    <TextBlock Margin="0,4,0,0">
+                        <Hyperlink NavigateUri="https://mikanseilaboratory.github.io/"
+                                   RequestNavigate="AboutLink_RequestNavigate"
+                                   Foreground="#EEEEEE">
+                            https://mikanseilaboratory.github.io/
+                        </Hyperlink>
+                    </TextBlock>
+                    <TextBlock Margin="0,12,0,0" FontWeight="Bold" Text="Open source"/>
+                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB."/>
+                    <Button Content="THIRD_PARTY_NOTICES.md" Width="220" Height="28" Margin="0,12,0,0"
+                            HorizontalAlignment="Left" Click="OpenNotices_Click"/>
+                </StackPanel>
+            </ScrollViewer>
         </DockPanel>
     </Grid>
 </Window>

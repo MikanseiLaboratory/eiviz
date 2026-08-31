@@ -8,9 +8,12 @@ use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
 
 const SLOTS: usize = 3;
 pub const AUDIO_RATE: i32 = 48_000;
-/// ~500 ms of stereo frames at 48 kHz.
-pub const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 2;
+/// Output / burst cap. Live devices may jitter; keep this well under half a second
+/// so a file decoder that runs ahead cannot park 500 ms of audio behind picture.
+pub const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 12;
 const AUDIO_FIFO_HIGH_FRAMES: usize = AUDIO_FIFO_FRAMES * 4 / 5;
+/// Target source latency (~40 ms). File pumps must not ingest past this.
+pub const AUDIO_LIVE_FRAMES: usize = AUDIO_RATE as usize / 25;
 const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,6 +219,7 @@ impl SourceRing {
         if !self.fifo_primed {
             return (0.0, 0.0);
         }
+        self.trim_to_live();
         if self.fifo.len() >= 2 {
             let left = self.fifo.pop_front().unwrap_or(self.last_hold.0);
             let right = self.fifo.pop_front().unwrap_or(left);
@@ -230,6 +234,18 @@ impl SourceRing {
         let n = frames.saturating_mul(2).min(self.fifo.len());
         if n > 0 {
             self.fifo.drain(..n);
+        }
+    }
+
+    /// Drop old samples when a producer ran ahead of picture (typical for files).
+    fn trim_to_live(&mut self) {
+        let live = AUDIO_LIVE_FRAMES.saturating_mul(2);
+        let max = AUDIO_LIVE_FRAMES.saturating_mul(2).saturating_mul(2);
+        if self.fifo.len() > max {
+            let drop = self.fifo.len().saturating_sub(live);
+            if drop > 0 {
+                self.fifo.drain(..drop);
+            }
         }
     }
 
@@ -471,17 +487,25 @@ impl UploadStore {
 }
 
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    for _ in 0..8 {
-        let over = uploads
-            .lock()
-            .expect("uploads")
-            .fifo_over_high_water(id);
-        if !over {
+    wait_fifo_below(uploads, id, AUDIO_FIFO_HIGH_FRAMES, 8);
+    uploads.lock().expect("uploads").ingest_audio(id, packet);
+}
+
+/// File pumps are clocked by video PTS. Keep only a short audio lead so the
+/// mix does not play 400–500 ms of already-decoded sound behind the current frame.
+pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
+    wait_fifo_below(uploads, id, AUDIO_LIVE_FRAMES, 32);
+    uploads.lock().expect("uploads").ingest_audio(id, packet);
+}
+
+fn wait_fifo_below(uploads: &Mutex<UploadStore>, id: u64, limit: usize, tries: u32) {
+    for _ in 0..tries {
+        let frames = uploads.lock().expect("uploads").fifo_frames(id);
+        if frames < limit {
             break;
         }
         thread::sleep(Duration::from_millis(2));
     }
-    uploads.lock().expect("uploads").ingest_audio(id, packet);
 }
 
 fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
@@ -560,6 +584,45 @@ mod tests {
         assert!((out[0] - 0.0).abs() < 1e-6);
         assert!((out[2] - 0.5).abs() < 1e-6);
         assert!((out[4] - 1.0).abs() < 1e-6);
+    }
+
+    fn tone_packet(frames: usize) -> AudioPacket {
+        let mut pcm = Vec::with_capacity(frames * 4);
+        for i in 0..frames {
+            pcm.extend_from_slice(&(i as f32 * 0.001).to_le_bytes());
+        }
+        AudioPacket {
+            timestamp: 0,
+            sample_rate: AUDIO_RATE,
+            channels: 1,
+            samples_per_channel: frames as i32,
+            pcm_planar_f32: pcm,
+        }
+    }
+
+    #[test]
+    fn source_fifo_cannot_hold_half_a_second() {
+        let mut store = UploadStore::default();
+        store.ingest_audio(1, tone_packet(AUDIO_RATE as usize / 2));
+        assert!(
+            store.fifo_frames(1) <= AUDIO_FIFO_FRAMES,
+            "fifo held {} frames",
+            store.fifo_frames(1)
+        );
+    }
+
+    #[test]
+    fn mix_trims_file_audio_that_ran_ahead() {
+        let mut store = UploadStore::default();
+        store.ingest_audio(1, tone_packet(AUDIO_FIFO_FRAMES));
+        let before = store.fifo_frames(1);
+        assert!(before > AUDIO_LIVE_FRAMES);
+        let _ = store.pop_frames(1, 8);
+        assert!(
+            store.fifo_frames(1) <= AUDIO_LIVE_FRAMES + 8,
+            "fifo stayed at {} frames after mix",
+            store.fifo_frames(1)
+        );
     }
 }
 

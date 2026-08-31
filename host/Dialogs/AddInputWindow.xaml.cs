@@ -45,12 +45,18 @@ public partial class AddInputWindow : Window
     public float ColorG { get; private set; }
     public float ColorB { get; private set; }
     public bool Scroll { get; private set; }
+    public float ResultToneHz { get; private set; }
+    public float ResultToneLevelDbfs { get; private set; } = -20;
     public bool ResultUseGpu { get; private set; } = true;
     public uint ResultFrameBufferFrames { get; private set; } = 1;
     public BandwidthSave ResultSaveMode { get; private set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool ResultKeepFullOnMultiview { get; private set; }
     public OmtQuality ResultOmtQuality { get; private set; } = OmtQuality.Default;
     public NdiBandwidth ResultNdiBandwidth { get; private set; } = NdiBandwidth.Highest;
+    public bool ResultVideoLoop { get; private set; } = true;
+    public VideoPlayWhen ResultVideoPlayWhen { get; private set; } = VideoPlayWhen.Never;
+    public VideoTriggerWhen ResultVideoRestartWhen { get; private set; } = VideoTriggerWhen.Never;
+    public VideoTriggerWhen ResultVideoPauseWhen { get; private set; } = VideoTriggerWhen.Never;
 
     public void Load(InputEntry input)
     {
@@ -66,8 +72,13 @@ public partial class AddInputWindow : Window
         GSlider.Value = Math.Clamp(input.ColorG * 255.0, 0, 255);
         BSlider.Value = Math.Clamp(input.ColorB * 255.0, 0, 255);
         ScrollBox.IsChecked = input.Scroll;
+        SelectTag(ToneBox, ToneTag(input.ToneHz));
         StillPath.Text = input.Kind == InputKind.Still ? input.PathOrAddress ?? "" : "";
         VideoPath.Text = input.Kind == InputKind.Video ? input.PathOrAddress ?? "" : "";
+        VideoLoopBox.IsChecked = input.VideoLoop;
+        SelectTag(VideoPlayBox, ((int)input.VideoPlayWhen).ToString());
+        SelectTag(VideoRestartBox, ((int)input.VideoRestartWhen).ToString());
+        SelectTag(VideoPauseBox, ((int)input.VideoPauseWhen).ToString());
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
@@ -223,10 +234,12 @@ public partial class AddInputWindow : Window
                 ColorG = (float)(GSlider.Value / 255.0);
                 ColorB = (float)(BSlider.Value / 255.0);
                 Scroll = ScrollBox.IsChecked == true;
+                ResultToneHz = ReadToneHz(ToneBox);
+                ResultToneLevelDbfs = ResultToneHz > 0 ? -20 : 0;
                 if (BarsRadio.IsChecked == true)
                     _kind = InputKind.Bars;
                 ResultName = _kind == InputKind.Bars
-                    ? (Scroll ? "SMPTE Bars (scroll)" : "SMPTE Bars")
+                    ? (Scroll ? "SMPTE HD Bars (scroll)" : "SMPTE HD Bars")
                     : $"Colour {((byte)RSlider.Value):X2}{((byte)GSlider.Value):X2}{((byte)BSlider.Value):X2}";
                 ResultPath = "";
                 break;
@@ -242,6 +255,10 @@ public partial class AddInputWindow : Window
                     return;
                 ResultPath = VideoPath.Text.Trim();
                 ResultName = System.IO.Path.GetFileName(ResultPath);
+                ResultVideoLoop = VideoLoopBox.IsChecked == true;
+                ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);
+                ResultVideoRestartWhen = ReadVideoTriggerWhen(VideoRestartBox);
+                ResultVideoPauseWhen = ReadVideoTriggerWhen(VideoPauseBox);
                 Remember(VideoHistory, ResultPath);
                 break;
             case InputKind.Omt:
@@ -304,6 +321,30 @@ public partial class AddInputWindow : Window
             };
         }
         return OmtQuality.Default;
+    }
+
+    private static float ReadToneHz(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && float.TryParse(tag, out var hz))
+            return hz;
+        return 0;
+    }
+
+    private static string ToneTag(float hz) =>
+        hz >= 1500 ? "2000" : hz >= 700 ? "1000" : hz >= 200 ? "440" : "0";
+
+    private static VideoPlayWhen ReadVideoPlayWhen(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var value))
+            return (VideoPlayWhen)Math.Clamp(value, 0u, 3u);
+        return VideoPlayWhen.Never;
+    }
+
+    private static VideoTriggerWhen ReadVideoTriggerWhen(ComboBox box)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var value))
+            return (VideoTriggerWhen)Math.Clamp(value, 0u, 3u);
+        return VideoTriggerWhen.Never;
     }
 
     private static BandwidthSave ReadSaveMode(ComboBox box)

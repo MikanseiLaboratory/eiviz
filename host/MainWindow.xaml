@@ -18,6 +18,7 @@
                     <Button Content="Add" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
                     <Button Content="Edit" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
                     <Button Content="Delete" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
+                    <Button Content="Open" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <Button Content="Save" Width="72" Click="SaveSession_Click"/>
@@ -132,10 +133,13 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="8"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <Button Content="Add" Height="32" Click="AddInput_Click"/>
                             <Button Grid.Column="2" Content="Edit" Height="32" Click="EditInput_Click"/>
-                            <Button Grid.Column="4" Content="Delete" Height="32" Click="RemoveInput_Click"/>
+                            <Button Grid.Column="4" Content="Preview" Height="32" Click="PreviewInput_Click"/>
+                            <Button Grid.Column="6" Content="Delete" Height="32" Click="RemoveInput_Click"/>
                         </Grid>
                         <ListBox x:Name="InputList" Background="#222" Foreground="#EEE" BorderBrush="#444"
                                  SelectionChanged="InputList_SelectionChanged"

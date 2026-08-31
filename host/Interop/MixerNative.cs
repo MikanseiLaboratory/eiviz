@@ -167,6 +167,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_playing")]
     internal static partial int VideoSetPlaying(ulong id, uint playing);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_loop")]
+    internal static partial int VideoSetLoop(ulong id, uint looping);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_seek")]
     internal static partial int VideoSeek(ulong id, long hns);
 
@@ -193,6 +196,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_define_generator")]
     internal static partial int DefineGenerator(ulong id, uint kind, float r, float g, float b, float a, uint scroll);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_generator_set_tone")]
+    internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu);
