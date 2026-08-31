@@ -193,7 +193,10 @@ impl Nv12Converter {
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..6, 0..1);
         }
-        let index = queue.submit(Some(encoder.finish()));
+        let index = {
+            let _guard = crate::device::lock_gpu_queue();
+            queue.submit(Some(encoder.finish()))
+        };
         let _ = device.poll(wgpu::PollType::Wait {
             submission_index: Some(index),
             timeout: None,
@@ -255,7 +258,10 @@ impl Nv12Converter {
                 depth_or_array_layers: 1,
             },
         );
-        let index = queue.submit(Some(encoder.finish()));
+        let index = {
+            let _guard = crate::device::lock_gpu_queue();
+            queue.submit(Some(encoder.finish()))
+        };
         let _ = device.poll(wgpu::PollType::Wait {
             submission_index: Some(index),
             timeout: None,

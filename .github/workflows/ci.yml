@@ -20,6 +20,7 @@ env:
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
+  NDI_SDK_URL_MACOS: https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg
   LLVM_VERSION: "20.1.8"
 
 jobs:
@@ -57,3 +58,34 @@ jobs:
 
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
+
+  macos:
+    name: Test mixer and Mac host
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mixer
+
+      - name: Test mixer
+        working-directory: mixer
+        # mixer_create is process-global, so GPU/integration tests cannot share the process.
+        run: cargo test --locked --release -- --test-threads=1
+
+      - name: Build Mac host
+        run: |
+          chmod +x mac/build.sh
+          mac/build.sh

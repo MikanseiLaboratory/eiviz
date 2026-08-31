@@ -151,6 +151,7 @@ public partial class SettingsWindow : Window
             kind.Items.Add(new ComboBoxItem { Content = "Enabled", Tag = AudioDeviceKind.None });
             kind.Items.Add(new ComboBoxItem { Content = "WASAPI", Tag = AudioDeviceKind.Wasapi });
             kind.Items.Add(new ComboBoxItem { Content = "ASIO", Tag = AudioDeviceKind.Asio });
+            kind.Items.Add(new ComboBoxItem { Content = "Core Audio", Tag = AudioDeviceKind.CoreAudio });
             kind.SelectedIndex = (int)bus.DeviceKind;
             kind.SelectionChanged += (_, _) =>
             {
@@ -239,8 +240,10 @@ public partial class SettingsWindow : Window
     private void FillDeviceBox(ComboBox box, AudioBusEntry bus)
     {
         box.Items.Clear();
-        box.Items.Add(new ComboBoxItem { Content = bus.DeviceKind == AudioDeviceKind.Wasapi ? "Default" : "(none)", Tag = "" });
-        foreach (var device in _devices.Where(item => item.Kind == (uint)bus.DeviceKind))
+        box.Items.Add(new ComboBoxItem { Content = bus.DeviceKind is AudioDeviceKind.Wasapi or AudioDeviceKind.CoreAudio ? "Default" : "(none)", Tag = "" });
+        foreach (var device in _devices.Where(item => item.Kind == (uint)bus.DeviceKind
+            || (bus.DeviceKind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
+            || (bus.DeviceKind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
         {
             var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : $"{device.Name}  ({device.Channels}ch)";
             box.Items.Add(new ComboBoxItem { Content = label, Tag = device.Id });

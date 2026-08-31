@@ -3,49 +3,60 @@
 mod abi;
 mod audio;
 mod compose;
-mod delay;
+#[cfg(windows)]
 mod convert;
+mod delay;
 mod device;
+#[cfg(windows)]
 mod dxgi;
+#[cfg(windows)]
 mod media;
+#[cfg(any(windows, target_os = "macos"))]
 mod ndi;
+#[cfg(target_os = "macos")]
+mod main_thread;
 mod omt;
 mod pool;
 mod present;
 mod readback;
 mod save;
+mod session;
 mod upload;
 
 pub use abi::{
-    AudioPeak, MixerStats, OverlayDesc, Rect, SourceUsage, UnitState, ERR_ALREADY_CREATED, ERR_DEVICE,
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, OK, OUTPUT_MULTIVIEW,
-    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUT_DECKLINK, OUT_NDI, OUT_OMT, SAVE_FLAG_MULTIVIEW,
-    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE,
+    AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
+    GEN_BARS, GEN_SOLID, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc,
+    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
+    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
-pub use media::MixerVideoInfo;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use abi::NativeSurface;
 use compose::{Composer, Generator};
 use delay::FrameDelay;
 use device::GpuDevice;
+#[cfg(windows)]
 use dxgi::GpuVideoContext;
+#[cfg(windows)]
 use media::VideoPump;
+#[cfg(any(windows, target_os = "macos"))]
 use ndi::{NdiReceiver, NdiSender};
-use omt::{omt_gpu_from_device, GpuSendStore, OmtGpu, OmtReceiver, ProgramSender};
+use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device};
 use present::Presenters;
 use readback::ReadbackStore;
-use save::{collect_source_roles, want_full, LiveSave};
-use upload::{AudioPacket, CpuFormat, UploadStore, AUDIO_RATE};
+use save::{LiveSave, collect_source_roles, want_full};
+use upload::{AUDIO_RATE, AudioPacket, CpuFormat, UploadStore};
 
 struct AutoTransition {
     from: f32,
@@ -101,9 +112,11 @@ struct Shared {
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, (u32, u32, Arc<[crate::abi::OverlayDesc]>)>,
     uploads: Arc<Mutex<UploadStore>>,
-    gpu_video: GpuVideoContext,
+    #[cfg(windows)]
+    gpu_video: Option<GpuVideoContext>,
     omt_gpu: OmtGpu,
     receivers: HashMap<u64, LiveReceiver>,
+    #[cfg(windows)]
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
@@ -119,6 +132,7 @@ struct Shared {
 
 enum LiveReceiver {
     Omt(OmtReceiver),
+    #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiReceiver),
 }
 
@@ -127,6 +141,7 @@ impl LiveReceiver {
         match self {
             Self::Omt(receiver) => receiver.apply_save(full, on_program, on_preview),
             // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {}
         }
     }
@@ -134,6 +149,7 @@ impl LiveReceiver {
 
 enum OutputHandle {
     Omt(ProgramSender),
+    #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiSender),
 }
 
@@ -144,6 +160,7 @@ impl OutputHandle {
                 sender.pump()?;
                 Ok(sender.video_subscribed())
             }
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.pump(),
         }
     }
@@ -162,6 +179,7 @@ impl OutputHandle {
             Self::Omt(sender) => {
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             }
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => {
                 sender.send_video_uyvy(width, height, stride, pts, &data, fps_n, fps_d)
             }
@@ -182,6 +200,7 @@ impl OutputHandle {
             Self::Omt(sender) => {
                 sender.send_video_texture(omt_gpu, texture, width, height, pts, fps_n, fps_d)
             }
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
         }
     }
@@ -189,6 +208,7 @@ impl OutputHandle {
     fn send_audio(&mut self, packet: &AudioPacket) -> Result<(), String> {
         match self {
             Self::Omt(sender) => sender.send_audio(packet),
+            #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.send_audio(packet),
         }
     }
@@ -234,22 +254,23 @@ enum GpuCmd {
     Attach {
         unit_id: u64,
         kind: u32,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<present::PreparedSurface>,
         reply: mpsc::Sender<i32>,
     },
     Resize {
         unit_id: u64,
         kind: u32,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
     },
     Detach {
         unit_id: u64,
         kind: u32,
-        hwnd: isize,
+        surface: NativeSurface,
     },
     DetachUnit {
         unit_id: u64,
@@ -257,9 +278,10 @@ enum GpuCmd {
     AttachMonitor {
         monitor_id: u64,
         source_id: u64,
-        hwnd: isize,
+        surface: NativeSurface,
         width: u32,
         height: u32,
+        prepared: Option<present::PreparedSurface>,
         reply: mpsc::Sender<i32>,
     },
     ResizeMonitor {
@@ -288,6 +310,8 @@ struct Mixer {
     render: Option<JoinHandle<()>>,
     send: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    surface_gpu: present::SurfaceGpu,
 }
 
 static MIXER: OnceLock<Mutex<Option<Mixer>>> = OnceLock::new();
@@ -304,11 +328,70 @@ fn with_mixer<T>(f: impl FnOnce(&Mixer) -> T) -> Result<T, i32> {
     }
 }
 
+/// Send a GPU command that replies, without holding the mixer slot while waiting.
+/// Holding the slot across `recv` deadlocks if the render thread needs the host.
+fn send_gpu_and_wait(send: impl FnOnce(&Mixer, mpsc::Sender<i32>) -> i32) -> i32 {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    match with_mixer(|mixer| send(mixer, reply_tx)) {
+        Ok(OK) => reply_rx.recv().unwrap_or(ERR_DEVICE),
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
 fn set_error(shared: &Mutex<Shared>, message: impl Into<String>) {
     shared.lock().expect("shared").last_error = message.into();
 }
 
-/// Creates the DX12-only wgpu device. No other backend is ever attempted.
+fn session_error_slot() -> &'static Mutex<String> {
+    static SLOT: OnceLock<Mutex<String>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(String::new()))
+}
+
+fn report_session_error(message: impl Into<String>) {
+    let message = message.into();
+    *session_error_slot().lock().expect("session error") = message.clone();
+    let _ = with_mixer(|mixer| set_error(&mixer.shared, message));
+}
+
+fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
+    if src.len() > cap {
+        report_session_error(format!("session buffer too small (need {} bytes)", src.len()));
+        return -1;
+    }
+    if !src.is_empty() {
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), out, src.len()) };
+    }
+    src.len() as i32
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_surface_off_slot(
+    surface: NativeSurface,
+    width: u32,
+    height: u32,
+) -> Result<present::PreparedSurface, i32> {
+    let gpu = match with_mixer(|mixer| mixer.surface_gpu.clone()) {
+        Ok(gpu) => gpu,
+        Err(code) => return Err(code),
+    };
+    crate::main_thread::run_on_main(move || {
+        present::prepare_surface(
+            &gpu.instance,
+            &gpu.adapter,
+            &gpu.device,
+            surface,
+            width,
+            height,
+        )
+    })
+    .map_err(|error| {
+        let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+        ERR_DEVICE
+    })
+}
+
+/// Creates the OS-fixed wgpu device (DX12 on Windows, Metal on macOS).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
     if fps_num == 0 || fps_den == 0 {
@@ -318,12 +401,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     if slot.is_some() {
         return ERR_ALREADY_CREATED;
     }
-    let device = match GpuDevice::new_dx12_only() {
+    let device = match GpuDevice::new() {
         Ok(device) => device,
         Err(_) => return ERR_DEVICE,
     };
+    #[cfg(target_os = "macos")]
+    let surface_gpu = present::SurfaceGpu {
+        instance: device.instance.clone(),
+        adapter: device.adapter.clone(),
+        device: device.device.clone(),
+    };
+    #[cfg(windows)]
     let gpu_video = match GpuVideoContext::new(&device) {
-        Ok(ctx) => ctx,
+        Ok(ctx) => Some(ctx),
         Err(error) => {
             eprintln!("eiviz dxgi video: {error}");
             return ERR_DEVICE;
@@ -338,9 +428,11 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         units: HashMap::new(),
         scenes: HashMap::new(),
         uploads: Arc::clone(&uploads),
-        gpu_video: gpu_video.clone(),
+        #[cfg(windows)]
+        gpu_video,
         omt_gpu: omt_gpu.clone(),
         receivers: HashMap::new(),
+        #[cfg(windows)]
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
@@ -387,7 +479,10 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         render: Some(render),
         send: Some(send),
         stop,
+        #[cfg(target_os = "macos")]
+        surface_gpu,
     });
+    #[cfg(any(windows, target_os = "macos"))]
     let _ = thread::Builder::new()
         .name("eiviz-ndi-find".into())
         .spawn(ndi::warm_finder);
@@ -396,20 +491,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    if let Some(mut mixer) = slot.take() {
-        mixer.stop.store(true, Ordering::Relaxed);
-        if let Ok(shared) = mixer.shared.lock() {
-            shared.audio.shutdown();
-        }
-        let _ = mixer.cmds.send(GpuCmd::Shutdown);
-        if let Some(join) = mixer.render.take() {
-            let _ = join.join();
-        }
-        let _ = mixer.send_tx.send(SendCmd::Shutdown);
-        if let Some(join) = mixer.send.take() {
-            let _ = join.join();
-        }
+    let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
+        return;
+    };
+    mixer.stop.store(true, Ordering::Relaxed);
+    let audio = mixer.shared.lock().expect("shared").audio.clone();
+    audio.shutdown();
+    let _ = mixer.cmds.send(GpuCmd::Shutdown);
+    if let Some(join) = mixer.render.take() {
+        let _ = join.join();
+    }
+    let _ = mixer.send_tx.send(SendCmd::Shutdown);
+    if let Some(join) = mixer.send.take() {
+        let _ = join.join();
     }
 }
 
@@ -485,8 +579,18 @@ pub unsafe extern "C" fn mixer_define_scene(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").scenes.remove(&scene_id);
-        mixer.shared.lock().expect("shared").multiview_binds.remove(&scene_id);
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .scenes
+            .remove(&scene_id);
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .multiview_binds
+            .remove(&scene_id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -551,33 +655,58 @@ pub extern "C" fn mixer_unit_attach_output(
     height: u32,
     kind: u32,
 ) -> i32 {
-    if hwnd == 0 || width == 0 || height == 0 {
+    mixer_unit_attach_native(unit_id, kind, NATIVE_WIN32_HWND, hwnd, width, height)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_unit_attach_native(
+    unit_id: u64,
+    kind: u32,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
+    if width == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
-    match with_mixer(|mixer| {
-        if !mixer.shared.lock().expect("shared").units.contains_key(&unit_id) {
+    let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    #[cfg(target_os = "macos")]
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
+        Ok(prepared) => Some(prepared),
+        Err(code) => return code,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let prepared = None;
+    send_gpu_and_wait(|mixer, reply| {
+        if !mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .units
+            .contains_key(&unit_id)
+        {
             return ERR_INVALID_ARGUMENT;
         }
-        let (reply_tx, reply_rx) = mpsc::channel();
         if mixer
             .cmds
             .send(GpuCmd::Attach {
                 unit_id,
                 kind,
-                hwnd,
+                surface,
                 width,
                 height,
-                reply: reply_tx,
+                prepared,
+                reply,
             })
             .is_err()
         {
             return ERR_DEVICE;
         }
-        reply_rx.recv().unwrap_or(ERR_DEVICE)
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -607,7 +736,10 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
 
 fn take_cut(unit: &mut LiveUnit, swap: bool) {
     if swap {
-        std::mem::swap(&mut unit.state.program_source, &mut unit.state.preview_source);
+        std::mem::swap(
+            &mut unit.state.program_source,
+            &mut unit.state.preview_source,
+        );
     } else {
         unit.state.program_source = unit.state.preview_source;
     }
@@ -696,16 +828,31 @@ pub extern "C" fn mixer_unit_resize_output(
     width: u32,
     height: u32,
 ) -> i32 {
+    mixer_unit_resize_native(unit_id, kind, NATIVE_WIN32_HWND, hwnd, width, height)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_unit_resize_native(
+    unit_id: u64,
+    kind: u32,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
     if width == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
+    let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
+        return ERR_INVALID_ARGUMENT;
+    };
     with_mixer(|mixer| {
         if mixer
             .cmds
             .send(GpuCmd::Resize {
                 unit_id,
                 kind,
-                hwnd,
+                surface,
                 width,
                 height,
             })
@@ -720,8 +867,25 @@ pub extern "C" fn mixer_unit_resize_output(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_detach_output(unit_id: u64, kind: u32, hwnd: isize) -> i32 {
+    mixer_unit_detach_native(unit_id, kind, NATIVE_WIN32_HWND, hwnd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_unit_detach_native(
+    unit_id: u64,
+    kind: u32,
+    native_kind: u32,
+    handle: isize,
+) -> i32 {
+    let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
+        return ERR_INVALID_ARGUMENT;
+    };
     with_mixer(|mixer| {
-        let _ = mixer.cmds.send(GpuCmd::Detach { unit_id, kind, hwnd });
+        let _ = mixer.cmds.send(GpuCmd::Detach {
+            unit_id,
+            kind,
+            surface,
+        });
         OK
     })
     .unwrap_or_else(|code| code)
@@ -735,30 +899,56 @@ pub extern "C" fn mixer_attach_monitor(
     width: u32,
     height: u32,
 ) -> i32 {
-    if hwnd == 0 || width == 0 || height == 0 {
+    mixer_attach_monitor_native(
+        monitor_id,
+        source_id,
+        NATIVE_WIN32_HWND,
+        hwnd,
+        width,
+        height,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_attach_monitor_native(
+    monitor_id: u64,
+    source_id: u64,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
+    if width == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
-    match with_mixer(|mixer| {
-        let (reply_tx, reply_rx) = mpsc::channel();
+    let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    #[cfg(target_os = "macos")]
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
+        Ok(prepared) => Some(prepared),
+        Err(code) => return code,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let prepared = None;
+    send_gpu_and_wait(|mixer, reply| {
         if mixer
             .cmds
             .send(GpuCmd::AttachMonitor {
                 monitor_id,
                 source_id,
-                hwnd,
+                surface,
                 width,
                 height,
-                reply: reply_tx,
+                prepared,
+                reply,
             })
             .is_err()
         {
             return ERR_DEVICE;
         }
-        reply_rx.recv().unwrap_or(ERR_DEVICE)
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -886,9 +1076,7 @@ pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     // SAFETY: path is a NUL-terminated UTF-8 C string.
-    let path = unsafe { CStr::from_ptr(path) }
-        .to_str()
-        .unwrap_or_default();
+    let path = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or_default();
     let image = match image::open(Path::new(path)) {
         Ok(image) => image.to_rgba8(),
         Err(error) => {
@@ -928,13 +1116,25 @@ pub unsafe extern "C" fn mixer_video_start(
     if path.is_empty() {
         return ERR_INVALID_ARGUMENT;
     }
+    #[cfg(not(windows))]
+    {
+        let _ = (id, path, capture, format);
+        return with_mixer(|mixer| {
+            set_error(&mixer.shared, "Media Foundation is not available");
+            ERR_IO
+        })
+        .unwrap_or_else(|code| code);
+    }
+    #[cfg(windows)]
     with_mixer(|mixer| {
         let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
-            let gpu = shared.gpu_video.clone();
+            let Some(gpu) = shared.gpu_video.clone() else {
+                return ERR_DEVICE;
+            };
             drop(shared);
             drop(previous);
             (uploads, gpu)
@@ -955,6 +1155,12 @@ pub unsafe extern "C" fn mixer_video_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
+    #[cfg(not(windows))]
+    {
+        let _ = (id, playing);
+        return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
+    }
+    #[cfg(windows)]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -968,6 +1174,12 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
+    #[cfg(not(windows))]
+    {
+        let _ = (id, hns);
+        return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
+    }
+    #[cfg(windows)]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -984,6 +1196,12 @@ pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
+    }
+    #[cfg(windows)]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1014,6 +1232,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
     with_mixer(|mixer| {
         let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
+            #[cfg(windows)]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
@@ -1023,6 +1242,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 None
             };
             drop(shared);
+            #[cfg(windows)]
             drop(previous);
             (uploads, gpu)
         };
@@ -1060,13 +1280,25 @@ pub unsafe extern "C" fn mixer_ndi_connect(
         .unwrap_or_default()
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (id, address, depth, low_bandwidth);
+        return with_mixer(|mixer| {
+            set_error(&mixer.shared, "NDI is not available");
+            ERR_IO
+        })
+        .unwrap_or_else(|code| code);
+    }
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
+            #[cfg(windows)]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
             drop(shared);
+            #[cfg(windows)]
             drop(previous);
             uploads
         };
@@ -1156,18 +1388,26 @@ pub unsafe extern "C" fn mixer_output_add(
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
     let handle = match transport {
         OUT_NDI => {
-            let started = panic::catch_unwind(AssertUnwindSafe(|| NdiSender::start(&name)));
-            match started {
-                Ok(Ok(sender)) => OutputHandle::Ndi(sender),
-                Ok(Err(error)) => {
-                    let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
-                    return ERR_IO;
-                }
-                Err(_) => {
-                    let _ = with_mixer(|mixer| {
-                        set_error(&mixer.shared, "NDI sender panicked during create")
-                    });
-                    return ERR_IO;
+            #[cfg(not(any(windows, target_os = "macos")))]
+            {
+                let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
+                return ERR_IO;
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                let started = panic::catch_unwind(AssertUnwindSafe(|| NdiSender::start(&name)));
+                match started {
+                    Ok(Ok(sender)) => OutputHandle::Ndi(sender),
+                    Ok(Err(error)) => {
+                        let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+                        return ERR_IO;
+                    }
+                    Err(_) => {
+                        let _ = with_mixer(|mixer| {
+                            set_error(&mixer.shared, "NDI sender panicked during create")
+                        });
+                        return ERR_IO;
+                    }
                 }
             }
         }
@@ -1215,7 +1455,12 @@ pub unsafe extern "C" fn mixer_output_add(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_output_remove(output_id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").outputs.remove(&output_id);
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .outputs
+            .remove(&output_id);
         let _ = mixer.send_tx.send(SendCmd::Remove { output_id });
         OK
     })
@@ -1244,19 +1489,26 @@ pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-        match ndi::discover_sources() {
-            Ok(addresses) => {
-                let text = addresses.join("\n");
-                let bytes = text.as_bytes();
-                let n = bytes.len().min(cap);
-                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
-                n as i32
-            }
-            Err(error) => {
-                let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
-                0
-            }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (out, cap);
+        let _ = with_mixer(|mixer| set_error(&mixer.shared, "NDI is not available"));
+        return 0;
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    match ndi::discover_sources() {
+        Ok(addresses) => {
+            let text = addresses.join("\n");
+            let bytes = text.as_bytes();
+            let n = bytes.len().min(cap);
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
+            n as i32
         }
+        Err(error) => {
+            let _ = with_mixer(|mixer| set_error(&mixer.shared, error));
+            0
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1309,21 +1561,74 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
+    if path.is_null() || out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    match session::load_file(&read_cstr(path)) {
+        Ok(bytes) => copy_bytes(&bytes, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_save(
+    path: *const c_char,
+    json: *const u8,
+    len: usize,
+) -> i32 {
+    if path.is_null() || json.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    match session::save_file(&read_cstr(path), bytes) {
+        Ok(()) => OK,
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_canonicalize(
+    json: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if json.is_null() || out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    match session::canonicalize_bytes(bytes) {
+        Ok(canonical) => copy_bytes(&canonical, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
     with_mixer(|mixer| {
-        let (previous, uploads) = {
+        let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
-            (
-                shared.videos.remove(&id),
-                {
-                    shared.receivers.remove(&id);
-                    shared.generators.remove(&id);
-                    shared.live_save.remove(&id);
-                    shared.uploads.clone()
-                },
-            )
+            #[cfg(windows)]
+            let previous = shared.videos.remove(&id);
+            shared.receivers.remove(&id);
+            shared.generators.remove(&id);
+            shared.live_save.remove(&id);
+            let uploads = shared.uploads.clone();
+            drop(shared);
+            #[cfg(windows)]
+            drop(previous);
+            uploads
         };
-        drop(previous);
         uploads.lock().expect("uploads").unregister(id);
         OK
     })
@@ -1569,7 +1874,10 @@ pub unsafe extern "C" fn mixer_copy_follow_audio(out: *mut f32, cap: u32) -> i32
         for slot in dest.iter_mut().take(n) {
             *slot = shared.monitor_pcm.pop_front().unwrap_or(0.0);
         }
-        let hold = dest.get(n.saturating_sub(1).min(dest.len().saturating_sub(1))).copied().unwrap_or(0.0);
+        let hold = dest
+            .get(n.saturating_sub(1).min(dest.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0.0);
         for slot in dest.iter_mut().skip(n) {
             *slot = hold;
         }
@@ -1756,7 +2064,9 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
 pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
-        let _ = mixer.cmds.send(GpuCmd::SetMonitorInterval { monitor_id, frames });
+        let _ = mixer
+            .cmds
+            .send(GpuCmd::SetMonitorInterval { monitor_id, frames });
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1813,12 +2123,21 @@ fn render_loop(
                 GpuCmd::Attach {
                     unit_id,
                     kind,
-                    hwnd,
+                    surface,
                     width,
                     height,
+                    prepared,
                     reply,
                 } => {
-                    let code = match presenters.attach(&device, unit_id, kind, hwnd, width, height) {
+                    let code = match presenters.attach(
+                        &device,
+                        unit_id,
+                        kind,
+                        surface,
+                        width,
+                        height,
+                        prepared,
+                    ) {
                         Ok(()) => OK,
                         Err(error) => {
                             shared.lock().expect("shared").last_error = error;
@@ -1830,22 +2149,33 @@ fn render_loop(
                 GpuCmd::Resize {
                     unit_id,
                     kind,
-                    hwnd,
+                    surface,
                     width,
                     height,
-                } => presenters.resize(&device, unit_id, kind, hwnd, width, height),
-                GpuCmd::Detach { unit_id, kind, hwnd } => presenters.detach(unit_id, kind, hwnd),
+                } => presenters.resize(&device, unit_id, kind, surface, width, height),
+                GpuCmd::Detach {
+                    unit_id,
+                    kind,
+                    surface,
+                } => presenters.detach(unit_id, kind, surface),
                 GpuCmd::DetachUnit { unit_id } => presenters.detach_unit(unit_id),
                 GpuCmd::AttachMonitor {
                     monitor_id,
                     source_id,
-                    hwnd,
+                    surface,
                     width,
                     height,
+                    prepared,
                     reply,
                 } => {
                     let code = match presenters.attach_monitor(
-                        &device, monitor_id, source_id, hwnd, width, height,
+                        &device,
+                        monitor_id,
+                        source_id,
+                        surface,
+                        width,
+                        height,
+                        prepared,
                     ) {
                         Ok(()) => OK,
                         Err(error) => {
@@ -1871,6 +2201,7 @@ fn render_loop(
                 GpuCmd::Shutdown => return,
             }
         }
+        presenters.reconfigure_pending(&device);
         let buffer_frames = shared
             .lock()
             .expect("shared")
@@ -1884,7 +2215,8 @@ fn render_loop(
             .set_video_delay(buffer_frames, fps_num, fps_den);
         let now = Instant::now();
         if next + frame_dt.saturating_mul(buffer_frames) < now {
-            let target = (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
+            let target =
+                (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
             let skip = target.saturating_sub(audio_produced) as usize;
             if skip > 0 {
                 let audio = shared.lock().expect("shared").audio.clone();
@@ -1978,24 +2310,15 @@ fn render_loop(
                 tallies.insert(*scene_id, (preview_source, program_source));
             }
             frame_i = frame_i.wrapping_add(1);
-            let monitor_sources_due = presenters.attached_monitor_sources_due(frame_i);
             let monitor_sources = presenters.attached_monitor_sources();
-            let (used_scenes, used_uploads) = collect_live_ids(
-                &scene_specs,
-                &snapshot,
-                monitor_sources_due,
-                &outputs_snap,
-            );
+            let (used_scenes, used_uploads) =
+                collect_live_ids(&scene_specs, &snapshot, &monitor_sources, &outputs_snap);
             let output_refs: Vec<(u32, u64)> = outputs_snap
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
                 .collect();
-            let roles = collect_source_roles(
-                &scene_specs,
-                &snapshot,
-                &monitor_sources,
-                &output_refs,
-            );
+            let roles =
+                collect_source_roles(&scene_specs, &snapshot, &monitor_sources, &output_refs);
             {
                 let guard = shared.lock().expect("shared");
                 for (id, receiver) in &guard.receivers {
@@ -2016,34 +2339,29 @@ fn render_loop(
                 composer.upload_sources(&device, &upload_guard, &used_uploads);
             }
             drop(upload_guard);
-            let need_prv = outputs_snap.iter().any(|item| {
-                item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video()
-            });
+            let need_prv = outputs_snap
+                .iter()
+                .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
             let need_mv = snapshot
                 .iter()
                 .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
-            if let Err(error) = presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
-                frame_delay
-                    .view(unit_id, kind)
-                    .or_else(|| composer.unit_view(unit_id, kind))
-            }) {
+            if let Err(error) =
+                presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                    frame_delay
+                        .view(unit_id, kind)
+                        .or_else(|| composer.unit_view(unit_id, kind))
+                })
+            {
                 shared.lock().expect("shared").last_error = error;
             }
-            if presenters.any_monitor_due(frame_i) {
-                if let Err(error) = presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
-                    frame_delay
-                        .view_for_source(source_id)
-                        .or_else(|| composer.view_for_source(source_id))
-                        .map(|view| (view, composer.source_is_packed(source_id)))
-                }) {
-                    shared.lock().expect("shared").last_error = error;
-                }
-            }
             {
-                let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("eiviz delay out"),
-                });
+                let mut encoder =
+                    device
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("eiviz delay out"),
+                        });
                 let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
                 let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
                     Vec::new();
@@ -2109,7 +2427,7 @@ fn render_loop(
                         ));
                     }
                 }
-                device.queue.submit(Some(encoder.finish()));
+                device.submit(Some(encoder.finish()));
                 emit_packed(
                     &mut readbacks,
                     &device,
@@ -2123,9 +2441,12 @@ fn render_loop(
             frame_delay.consume_display(skip_compose);
             if !skip_compose {
                 composer.sync_scenes(&device, &scene_specs);
-                let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("eiviz compose"),
-                });
+                let mut encoder =
+                    device
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("eiviz compose"),
+                        });
                 if let Err(error) =
                     composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
                 {
@@ -2170,7 +2491,9 @@ fn render_loop(
                                 .unwrap_or((1920, 1080));
                             composer.pack_source(&device, &mut encoder, output.source_id, w, h)
                         }
-                        SRC_KIND_SCENE => composer.pack_scene(&device, &mut encoder, output.source_id),
+                        SRC_KIND_SCENE => {
+                            composer.pack_scene(&device, &mut encoder, output.source_id)
+                        }
                         _ => None,
                     };
                     if let Some(texture) = packed {
@@ -2217,7 +2540,7 @@ fn render_loop(
                     &composer,
                     snapshot.iter().map(|(id, ..)| *id),
                 );
-                device.queue.submit(Some(encoder.finish()));
+                device.submit(Some(encoder.finish()));
                 emit_packed(
                     &mut readbacks,
                     &device,
@@ -2227,6 +2550,18 @@ fn render_loop(
                     pts,
                 );
                 emit_gpu(&gpu_copies, &send_tx, pts);
+            }
+            if presenters.any_monitor_due(frame_i) {
+                if let Err(error) =
+                    presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
+                        frame_delay
+                            .view_for_source(source_id)
+                            .or_else(|| composer.view_for_source(source_id))
+                            .map(|view| (view, composer.source_is_packed(source_id)))
+                    })
+                {
+                    shared.lock().expect("shared").last_error = error;
+                }
             }
             audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
             let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;
@@ -2366,8 +2701,10 @@ fn follow_gains(
     scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
     _uploads: &UploadStore,
 ) -> Vec<(u64, f32)> {
-    let spec_map: HashMap<u64, &[OverlayDesc]> =
-        scenes.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
+    let spec_map: HashMap<u64, &[OverlayDesc]> = scenes
+        .iter()
+        .map(|spec| (spec.0, spec.3.as_ref()))
+        .collect();
     let mut gains = HashMap::<u64, f32>::new();
     fn add(
         id: u64,
@@ -2384,7 +2721,12 @@ fn follow_gains(
                     if layer.audio_follow == 0 {
                         continue;
                     }
-                    add(layer.source_id, gain * layer.opacity.max(0.0), spec_map, gains);
+                    add(
+                        layer.source_id,
+                        gain * layer.opacity.max(0.0),
+                        spec_map,
+                        gains,
+                    );
                 }
             }
             return;
@@ -2401,7 +2743,12 @@ fn follow_gains(
         add(state.program_source, 1.0 - mix, &spec_map, &mut gains);
         add(state.preview_source, mix, &spec_map, &mut gains);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
-            add(overlay.source_id, overlay.opacity.max(0.0), &spec_map, &mut gains);
+            add(
+                overlay.source_id,
+                overlay.opacity.max(0.0),
+                &spec_map,
+                &mut gains,
+            );
         }
     }
     gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
@@ -2432,11 +2779,13 @@ fn audio_for_source(
 fn collect_live_ids(
     scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
-    monitor_sources: Vec<u64>,
+    monitor_sources: &[u64],
     outputs: &[OutputSnap],
 ) -> (HashSet<u64>, HashSet<u64>) {
-    let spec_map: HashMap<u64, &[OverlayDesc]> =
-        scene_specs.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
+    let spec_map: HashMap<u64, &[OverlayDesc]> = scene_specs
+        .iter()
+        .map(|spec| (spec.0, spec.3.as_ref()))
+        .collect();
     let mut scenes = HashSet::new();
     let mut uploads = HashSet::new();
     fn add(
@@ -2473,7 +2822,7 @@ fn collect_live_ids(
             add(*slot, &spec_map, &mut scenes, &mut uploads);
         }
     }
-    for id in monitor_sources {
+    for &id in monitor_sources {
         add(id, &spec_map, &mut scenes, &mut uploads);
     }
     for output in outputs {
@@ -2591,5 +2940,51 @@ mod tests {
     #[test]
     fn rejects_invalid_framerate() {
         assert_eq!(mixer_create(0, 60_000, 0), ERR_INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn attach_rejects_null_hwnd_and_unknown_native_kind() {
+        assert_eq!(
+            mixer_unit_attach_output(1, 0, 1920, 1080, OUTPUT_PROGRAM),
+            ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, 0, 1, 1920, 1080),
+            ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, 99, 1, 1920, 1080),
+            ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            mixer_attach_monitor_native(1, 1, 99, 1, 1920, 1080),
+            ERR_INVALID_ARGUMENT
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
+            ERR_INVALID_ARGUMENT
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
+            ERR_INVALID_ARGUMENT
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
+            ERR_NOT_CREATED
+        );
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            assert_eq!(
+                mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
+                ERR_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
+                ERR_INVALID_ARGUMENT
+            );
+        }
     }
 }

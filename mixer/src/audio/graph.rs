@@ -1,14 +1,14 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 
-use crate::abi::{is_scene, mixing_unit_from_source, OverlayDesc, UnitState};
-use crate::upload::{UploadStore, AUDIO_FIFO_FRAMES};
+use crate::abi::{OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
+use crate::upload::{AUDIO_FIFO_FRAMES, UploadStore};
 
-use super::DeviceKey;
 use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
+use super::DeviceKey;
 
 pub const MASTER_BUS: u64 = 1;
 pub const HEADPHONE_BUS: u64 = 2;
@@ -18,6 +18,7 @@ pub const ROLE_AUX: u32 = 2;
 pub const DEVICE_NONE: u32 = 0;
 pub const DEVICE_WASAPI: u32 = 1;
 pub const DEVICE_ASIO: u32 = 2;
+pub const DEVICE_COREAUDIO: u32 = 3;
 pub const LINK_FOLLOW: u32 = 0;
 #[allow(dead_code)]
 pub const LINK_INDEPENDENT: u32 = 1;
@@ -134,11 +135,22 @@ impl AudioGraph {
             headphone_copy_master: false,
             master_peak: (0.0, 0.0),
         };
+        // Tests must not open the machine's output. HAL Start can block forever
+        // on CI runners, and AudioEngine used to join that thread from Drop.
+        let master_kind = if cfg!(test) {
+            DEVICE_NONE
+        } else if cfg!(windows) {
+            DEVICE_WASAPI
+        } else if cfg!(target_os = "macos") {
+            DEVICE_COREAUDIO
+        } else {
+            DEVICE_NONE
+        };
         graph.upsert_bus(
             MASTER_BUS,
             "Master",
             ROLE_MASTER,
-            DEVICE_WASAPI,
+            master_kind,
             "",
             0,
             1,
@@ -205,9 +217,8 @@ impl AudioGraph {
     }
 
     pub fn remove_bus(&mut self, id: u64) {
-        self.buses.retain(|bus| {
-            !(bus.id == id && bus.role == ROLE_AUX)
-        });
+        self.buses
+            .retain(|bus| !(bus.id == id && bus.role == ROLE_AUX));
         for link in self.unit_links.values_mut() {
             if link.bus_id == id {
                 link.bus_id = MASTER_BUS;
@@ -243,7 +254,9 @@ impl AudioGraph {
             if bus.device_kind == DEVICE_NONE {
                 continue;
             }
-            if bus.role != ROLE_MASTER && bus.device_id.is_empty() && bus.device_kind == DEVICE_WASAPI
+            if bus.role != ROLE_MASTER
+                && bus.device_id.is_empty()
+                && bus.device_kind == DEVICE_WASAPI
             {
                 continue;
             }
@@ -285,8 +298,10 @@ impl AudioGraph {
             for id in ids {
                 popped.insert(id, uploads.pop_frames(id, frames));
             }
-            let spec_map: HashMap<u64, &[OverlayDesc]> =
-                scenes.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
+            let spec_map: HashMap<u64, &[OverlayDesc]> = scenes
+                .iter()
+                .map(|spec| (spec.0, spec.3.as_ref()))
+                .collect();
             let bus_ids: Vec<u64> = self.buses.iter().map(|bus| bus.id).collect();
             for bus_id in bus_ids {
                 let (role, bit, copy_master, fader) = {
@@ -364,7 +379,8 @@ impl AudioGraph {
         spec_map: &HashMap<u64, &[OverlayDesc]>,
     ) -> Vec<(u64, f32)> {
         let mut gains = HashMap::<u64, f32>::new();
-        let follow_units: Vec<(u64, UnitState, bool)> = if role == ROLE_HEADPHONE && !self.headphone_copy_master
+        let follow_units: Vec<(u64, UnitState, bool)> = if role == ROLE_HEADPHONE
+            && !self.headphone_copy_master
         {
             snapshot
                 .iter()

@@ -53,6 +53,41 @@ pub const MU_BUS_PREVIEW: u64 = 0x1000_0000_0000_0000;
 pub const MU_BUS_MULTIVIEW: u64 = 0x2000_0000_0000_0000;
 pub const MU_ID_MASK: u64 = 0x0FFF_FFFF_FFFF_FFFF;
 
+pub const NATIVE_WIN32_HWND: u32 = 1;
+pub const NATIVE_APPKIT_NSVIEW: u32 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct NativeSurface {
+    pub kind: u32,
+    pub handle: isize,
+}
+
+impl NativeSurface {
+    pub fn parse(kind: u32, handle: isize) -> Result<Self, i32> {
+        if handle == 0 {
+            return Err(ERR_INVALID_ARGUMENT);
+        }
+        let supported = match kind {
+            NATIVE_WIN32_HWND => cfg!(windows),
+            NATIVE_APPKIT_NSVIEW => cfg!(target_os = "macos"),
+            _ => false,
+        };
+        if !supported {
+            return Err(ERR_INVALID_ARGUMENT);
+        }
+        Ok(Self { kind, handle })
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerVideoInfo {
+    pub playing: u32,
+    pub is_file: u32,
+    pub position_hns: i64,
+    pub duration_hns: i64,
+}
+
 /// The ABI intentionally consists of fixed-width plain data only.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

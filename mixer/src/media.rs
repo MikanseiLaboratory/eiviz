@@ -6,37 +6,29 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Media::MediaFoundation::{
-    IMFSample, IMFSourceReader, MFAudioFormat_Float, MFCreateAttributes, MFCreateDeviceSource,
-    MFCreateMediaType, MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL,
-    MFMediaType_Audio, MFMediaType_Video, MFStartup, MFVideoFormat_NV12, MFVideoFormat_RGB32,
-    MFVideoFormat_UYVY, MFVideoFormat_YUY2, MFSTARTUP_NOSOCKET, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+    IMFSample, IMFSourceReader, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
     MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
     MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK, MF_SOURCE_READER_ANY_STREAM,
-    MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
-    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE, MF_VERSION,
+    MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK,
+    MF_VERSION, MFAudioFormat_Float, MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
+    MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFMediaType_Audio,
+    MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_NV12, MFVideoFormat_RGB32,
+    MFVideoFormat_UYVY, MFVideoFormat_YUY2,
 };
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::System::Variant::VT_I8;
 use windows::core::{GUID, PCWSTR};
 
-use crate::abi::FMT_BGRA;
+use crate::abi::{FMT_BGRA, MixerVideoInfo};
 use crate::dxgi::GpuVideoContext;
-use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore, AUDIO_RATE};
+use crate::upload::{AUDIO_RATE, AudioPacket, CpuFormat, UploadStore, ingest_audio_throttled};
 
 static MF_ONCE: Once = Once::new();
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MixerVideoInfo {
-    pub playing: u32,
-    pub is_file: u32,
-    pub position_hns: i64,
-    pub duration_hns: i64,
-}
 
 pub struct VideoPump {
     stop: Arc<AtomicBool>,
@@ -72,18 +64,8 @@ impl VideoPump {
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id,
-                    path,
-                    capture,
-                    format,
-                    uploads,
-                    gpu,
-                    stop_t,
-                    playing_t,
-                    seek_t,
-                    pos_t,
-                    dur_t,
-                    ready_tx,
+                    source_id, path, capture, format, uploads, gpu, stop_t, playing_t, seek_t,
+                    pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -265,7 +247,13 @@ fn run_loop(
                         if wait > Duration::ZERO && wait < Duration::from_secs(2) {
                             let deadline = Instant::now() + wait;
                             while Instant::now() < deadline {
-                                drain_audio(&reader, audio.as_ref(), &uploads, source_id, is_playing);
+                                drain_audio(
+                                    &reader,
+                                    audio.as_ref(),
+                                    &uploads,
+                                    source_id,
+                                    is_playing,
+                                );
                                 let remain = deadline.saturating_duration_since(Instant::now());
                                 if remain.is_zero() {
                                     break;
@@ -328,10 +316,8 @@ fn startup() -> Result<(), String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
-    MF_ONCE.call_once(|| {
-        unsafe {
-            let _ = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
-        }
+    MF_ONCE.call_once(|| unsafe {
+        let _ = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
     });
     Ok(())
 }
@@ -394,7 +380,10 @@ fn open_reader(
     }
 }
 
-fn open_file(path: &str, attrs: &windows::Win32::Media::MediaFoundation::IMFAttributes) -> Result<IMFSourceReader, String> {
+fn open_file(
+    path: &str,
+    attrs: &windows::Win32::Media::MediaFoundation::IMFAttributes,
+) -> Result<IMFSourceReader, String> {
     unsafe {
         let url = file_url(path);
         let wide_url = wide(&url);
@@ -459,7 +448,11 @@ fn set_video_subtype(reader: &IMFSourceReader, subtype: GUID) -> Result<(), Stri
     }
 }
 
-fn read_video_layout(reader: &IMFSourceReader, gpu: bool, packed: bool) -> Result<VideoLayout, String> {
+fn read_video_layout(
+    reader: &IMFSourceReader,
+    gpu: bool,
+    packed: bool,
+) -> Result<VideoLayout, String> {
     unsafe {
         let ty = reader
             .GetCurrentMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM))
@@ -502,7 +495,9 @@ fn configure_audio(reader: &IMFSourceReader) -> Result<AudioLayout, String> {
             .GetCurrentMediaType(stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM))
             .map_err(|e| e.to_string())?;
         let channels = current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS).unwrap_or(2) as i32;
-        let rate = current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND).unwrap_or(48_000) as i32;
+        let rate = current
+            .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+            .unwrap_or(48_000) as i32;
         if channels <= 0 || rate <= 0 {
             let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false);
             return Err("no audio".into());
@@ -578,7 +573,10 @@ fn drain_audio(
     }
 }
 
-fn read_audio_sample(reader: &IMFSourceReader, layout: &AudioLayout) -> Result<Option<AudioPacket>, bool> {
+fn read_audio_sample(
+    reader: &IMFSourceReader,
+    layout: &AudioLayout,
+) -> Result<Option<AudioPacket>, bool> {
     unsafe {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
@@ -605,7 +603,10 @@ fn read_audio_sample(reader: &IMFSourceReader, layout: &AudioLayout) -> Result<O
     }
 }
 
-fn read_sample(reader: &IMFSourceReader, audio: Option<&AudioLayout>) -> Result<Option<Decoded>, bool> {
+fn read_sample(
+    reader: &IMFSourceReader,
+    audio: Option<&AudioLayout>,
+) -> Result<Option<Decoded>, bool> {
     unsafe {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
@@ -632,7 +633,9 @@ fn read_sample(reader: &IMFSourceReader, audio: Option<&AudioLayout>) -> Result<
             let Some(layout) = audio else {
                 return Ok(None);
             };
-            return Ok(decode_audio(&sample, pts, layout).map(|packet| Decoded::Audio { pts, packet }));
+            return Ok(
+                decode_audio(&sample, pts, layout).map(|packet| Decoded::Audio { pts, packet })
+            );
         }
         Ok(Some(Decoded::Video { pts, sample }))
     }
@@ -697,7 +700,9 @@ fn push_cpu_frame(
             .map_err(|e| e.to_string())?;
         let mut ptr = std::ptr::null_mut();
         let mut len = 0u32;
-        buffer.Lock(&mut ptr, None, Some(&mut len)).map_err(|e| e.to_string())?;
+        buffer
+            .Lock(&mut ptr, None, Some(&mut len))
+            .map_err(|e| e.to_string())?;
         let src = std::slice::from_raw_parts(ptr, len as usize);
         let converted = convert_cpu(src, layout);
         let _ = buffer.Unlock();
@@ -755,7 +760,12 @@ fn packed_stride(stride: i32, width: u32, bpp: u32) -> usize {
     }
 }
 
-fn nv12_to_uyvy(src: &[u8], width: u32, height: u32, y_stride: usize) -> (Vec<u8>, usize, CpuFormat) {
+fn nv12_to_uyvy(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: usize,
+) -> (Vec<u8>, usize, CpuFormat) {
     let w = (width as usize) & !1;
     let h = height as usize;
     let uv_off = y_stride.saturating_mul(h);
@@ -779,7 +789,12 @@ fn nv12_to_uyvy(src: &[u8], width: u32, height: u32, y_stride: usize) -> (Vec<u8
     (dst, dst_stride, CpuFormat::Uyvy)
 }
 
-fn nv12_to_bgra(src: &[u8], width: u32, height: u32, y_stride: usize) -> (Vec<u8>, usize, CpuFormat) {
+fn nv12_to_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: usize,
+) -> (Vec<u8>, usize, CpuFormat) {
     let w = width as usize;
     let h = height as usize;
     let uv_off = y_stride.saturating_mul(h);
@@ -859,12 +874,28 @@ fn packed_yuv_to_bgra(
                 break;
             }
             let (u, y0, v, y1) = if uyvy {
-                (src[i] as f32, src[i + 1] as f32, src[i + 2] as f32, src[i + 3] as f32)
+                (
+                    src[i] as f32,
+                    src[i + 1] as f32,
+                    src[i + 2] as f32,
+                    src[i + 3] as f32,
+                )
             } else {
-                (src[i + 1] as f32, src[i] as f32, src[i + 3] as f32, src[i + 2] as f32)
+                (
+                    src[i + 1] as f32,
+                    src[i] as f32,
+                    src[i + 3] as f32,
+                    src[i + 2] as f32,
+                )
             };
             write_yuv_bgra(&mut dst, y * dst_stride + x * 4, y0, u - 128.0, v - 128.0);
-            write_yuv_bgra(&mut dst, y * dst_stride + (x + 1) * 4, y1, u - 128.0, v - 128.0);
+            write_yuv_bgra(
+                &mut dst,
+                y * dst_stride + (x + 1) * 4,
+                y1,
+                u - 128.0,
+                v - 128.0,
+            );
         }
     }
     (dst, dst_stride, CpuFormat::Bgra)
@@ -898,7 +929,13 @@ fn copy_packed(
     (dst, row, format)
 }
 
-fn copy_bgra(src: &[u8], width: u32, height: u32, stride: usize, flip: bool) -> (Vec<u8>, usize, CpuFormat) {
+fn copy_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    flip: bool,
+) -> (Vec<u8>, usize, CpuFormat) {
     let row = width as usize * 4;
     let mut dst = vec![0u8; row * height as usize];
     for y in 0..height as usize {

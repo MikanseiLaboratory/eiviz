@@ -264,7 +264,8 @@ public enum AudioDeviceKind
 {
     None = 0,
     Wasapi = 1,
-    Asio = 2
+    Asio = 2,
+    CoreAudio = 3
 }
 
 public enum AudioLinkMode

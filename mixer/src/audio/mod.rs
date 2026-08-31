@@ -1,6 +1,12 @@
+#[cfg(windows)]
 mod asio;
+#[cfg(target_os = "macos")]
+mod coreaudio;
+#[cfg(windows)]
 mod device;
 mod graph;
+mod info;
+#[cfg(windows)]
 mod wasapi;
 
 use std::collections::{HashMap, VecDeque};
@@ -9,10 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::{OverlayDesc, UnitState};
-use crate::upload::{UploadStore, AUDIO_RATE};
+use crate::upload::{AUDIO_RATE, UploadStore};
 
-pub use device::{AudioBusInfo, AudioDeviceInfo};
-pub use graph::{AudioGraph, BusRing, DEVICE_ASIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS};
+#[cfg_attr(not(windows), allow(unused_imports))]
+pub use graph::{
+    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
+    MASTER_BUS,
+};
+pub use info::{AudioBusInfo, AudioDeviceInfo};
 
 pub(crate) const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
@@ -33,7 +43,9 @@ impl AudioDelay {
 
     pub fn set_delay_frames(&mut self, frames: usize) {
         self.delay_frames = frames;
-        let cap = frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        let cap = frames
+            .saturating_mul(2)
+            .saturating_add((AUDIO_RATE as usize / 5) * 2);
         for fifo in self.fifos.values_mut() {
             while fifo.len() > cap {
                 fifo.pop_front();
@@ -44,7 +56,10 @@ impl AudioDelay {
     pub fn push(&mut self, id: u64, pcm: &[f32]) {
         let fifo = self.fifos.entry(id).or_default();
         fifo.extend(pcm.iter().copied());
-        let cap = self.delay_frames.saturating_mul(2).saturating_add((AUDIO_RATE as usize / 5) * 2);
+        let cap = self
+            .delay_frames
+            .saturating_mul(2)
+            .saturating_add((AUDIO_RATE as usize / 5) * 2);
         while fifo.len() > cap {
             fifo.pop_front();
         }
@@ -119,14 +134,27 @@ impl AudioEngine {
     }
 
     pub fn shutdown(&self) {
-        let mut outputs = self.outputs.lock().expect("audio outputs");
-        for output in outputs.iter_mut() {
-            output.stop.store(true, Ordering::Relaxed);
-            if let Some(join) = output.join.take() {
-                let _ = join.join();
+        let joins = {
+            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut joins = Vec::new();
+            for output in outputs.iter_mut() {
+                output.stop.store(true, Ordering::Relaxed);
+                if let Some(join) = output.join.take() {
+                    joins.push(join);
+                }
             }
+            outputs.clear();
+            joins
+        };
+        // Detach joins. HAL Start/Stop can block forever on some machines;
+        // freezing mixer_destroy (and the AppKit main thread) is worse.
+        for join in joins {
+            let _ = std::thread::Builder::new()
+                .name("eiviz-audio-join".into())
+                .spawn(move || {
+                    let _ = join.join();
+                });
         }
-        outputs.clear();
     }
 
     pub fn upsert_bus(
@@ -166,7 +194,10 @@ impl AudioEngine {
     }
 
     pub fn set_bus_gain(&self, id: u64, gain: f32, mute: u32) {
-        self.graph.lock().expect("audio").set_bus_gain(id, gain, mute != 0);
+        self.graph
+            .lock()
+            .expect("audio")
+            .set_bus_gain(id, gain, mute != 0);
     }
 
     pub fn set_unit_link(&self, unit_id: u64, bus_id: u64, mode: u32) {
@@ -185,9 +216,13 @@ impl AudioEngine {
     }
 
     pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
-        let samples = (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
-            / u64::from(fps_num.max(1))) as usize;
-        self.delay.lock().expect("audio delay").set_delay_frames(samples);
+        let samples =
+            (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
+                / u64::from(fps_num.max(1))) as usize;
+        self.delay
+            .lock()
+            .expect("audio delay")
+            .set_delay_frames(samples);
     }
 
     pub fn mix(
@@ -230,67 +265,88 @@ impl AudioEngine {
 
     fn sync_outputs(&self) {
         let desired = self.graph.lock().expect("audio").device_groups();
-        let mut outputs = self.outputs.lock().expect("audio outputs");
-        let mut keep = Vec::new();
-        for mut output in outputs.drain(..) {
-            if desired.iter().any(|(key, _)| *key == output.key) {
-                keep.push(output);
-            } else {
-                output.stop.store(true, Ordering::Relaxed);
-                if let Some(join) = output.join.take() {
-                    let _ = join.join();
+        let mut stale = Vec::new();
+        {
+            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut keep = Vec::new();
+            for mut output in outputs.drain(..) {
+                if desired.iter().any(|(key, _)| *key == output.key) {
+                    keep.push(output);
+                } else {
+                    output.stop.store(true, Ordering::Relaxed);
+                    if let Some(join) = output.join.take() {
+                        stale.push(join);
+                    }
                 }
             }
+            for (key, maps) in desired {
+                if keep.iter().any(|output| output.key == key) {
+                    continue;
+                }
+                if key.kind == DEVICE_NONE || maps.is_empty() {
+                    continue;
+                }
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_t = Arc::clone(&stop);
+                let key_t = key.clone();
+                let join = std::thread::Builder::new()
+                    .name(format!("eiviz-audio-{}", key.kind))
+                    .spawn(move || run_device(key_t, maps, stop_t))
+                    .ok();
+                if let Some(join) = join {
+                    keep.push(DeviceOutput {
+                        key,
+                        stop,
+                        join: Some(join),
+                    });
+                }
+            }
+            *outputs = keep;
         }
-        for (key, maps) in desired {
-            if keep.iter().any(|output| output.key == key) {
-                continue;
-            }
-            if key.kind == DEVICE_NONE || maps.is_empty() {
-                continue;
-            }
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_t = Arc::clone(&stop);
-            let key_t = key.clone();
-            let join = std::thread::Builder::new()
-                .name(format!("eiviz-audio-{}", key.kind))
-                .spawn(move || run_device(key_t, maps, stop_t))
-                .ok();
-            if let Some(join) = join {
-                keep.push(DeviceOutput {
-                    key,
-                    stop,
-                    join: Some(join),
+        for join in stale {
+            let _ = std::thread::Builder::new()
+                .name("eiviz-audio-join".into())
+                .spawn(move || {
+                    let _ = join.join();
                 });
-            }
         }
-        *outputs = keep;
     }
 }
 
-impl Drop for AudioEngine {
-    fn drop(&mut self) {
-        self.shutdown();
+fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
+    #[cfg(windows)]
+    {
+        let kind = if key.kind == DEVICE_COREAUDIO {
+            DEVICE_WASAPI
+        } else {
+            key.kind
+        };
+        match kind {
+            DEVICE_WASAPI => {
+                if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
+                    eprintln!("eiviz wasapi: {error}");
+                }
+            }
+            DEVICE_ASIO => {
+                if let Err(error) = asio::run(&key.id, &maps, &stop) {
+                    eprintln!("eiviz asio: {error}");
+                }
+            }
+            _ => {}
+        }
     }
-}
-
-fn run_device(
-    key: DeviceKey,
-    maps: Vec<(Arc<BusRing>, i32, i32)>,
-    stop: Arc<AtomicBool>,
-) {
-    match key.kind {
-        DEVICE_WASAPI => {
-            if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
-                eprintln!("eiviz wasapi: {error}");
-            }
+    #[cfg(target_os = "macos")]
+    {
+        if key.kind == DEVICE_ASIO || key.kind == DEVICE_NONE {
+            return;
         }
-        DEVICE_ASIO => {
-            if let Err(error) = asio::run(&key.id, &maps, &stop) {
-                eprintln!("eiviz asio: {error}");
-            }
+        if let Err(error) = coreaudio::run(&key.id, &maps, &stop) {
+            eprintln!("eiviz coreaudio: {error}");
         }
-        _ => {}
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (key, maps, stop);
     }
 }
 
@@ -320,7 +376,11 @@ pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: 
     out
 }
 
-pub fn pop_stereo_rate(maps: &[(Arc<BusRing>, i32, i32)], dst_frames: usize, dst_rate: u32) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
+pub fn pop_stereo_rate(
+    maps: &[(Arc<BusRing>, i32, i32)],
+    dst_frames: usize,
+    dst_rate: u32,
+) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
     let src_frames = ((dst_frames as u64 * AUDIO_RATE as u64 + u64::from(dst_rate.max(1)) / 2)
         / u64::from(dst_rate.max(1))) as usize;
     let mut by_map = HashMap::new();
@@ -347,9 +407,38 @@ pub fn pop_stereo_rate(maps: &[(Arc<BusRing>, i32, i32)], dst_frames: usize, dst
 }
 
 pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
-    device::enumerate(kind, dest)
+    #[cfg(windows)]
+    {
+        device::enumerate(kind, dest)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if kind == 0 || kind == DEVICE_COREAUDIO || kind == DEVICE_WASAPI {
+            coreaudio::enumerate(dest)
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (kind, dest);
+        0
+    }
 }
 
 pub fn device_channels(kind: u32, device_id: &str) -> i32 {
-    device::channel_count(kind, device_id)
+    #[cfg(windows)]
+    {
+        device::channel_count(kind, device_id)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = kind;
+        coreaudio::channel_count(device_id)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (kind, device_id);
+        0
+    }
 }
