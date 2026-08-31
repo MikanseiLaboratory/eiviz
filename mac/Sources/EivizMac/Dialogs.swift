@@ -373,6 +373,7 @@ struct AddInputView: View {
     @State private var b: Double = 32
     @State private var bars = false
     @State private var scroll = false
+    @State private var toneHz: Float = 1000
     @State private var useGpu = true
     @State private var buffer: UInt32 = 1
     @State private var quality: UInt32 = 0
@@ -411,7 +412,7 @@ struct AddInputView: View {
     private var form: some View {
         switch category {
         case "Colours":
-            Toggle("SMPTE colour bars", isOn: $bars)
+            Toggle("SMPTE HD colour bars", isOn: $bars)
             if !bars {
                 colorSlider("R", $r)
                 colorSlider("G", $g)
@@ -419,7 +420,13 @@ struct AddInputView: View {
                 Rectangle().fill(Color(red: r / 255, green: g / 255, blue: b / 255)).frame(height: 48)
             }
             Toggle("Scroll", isOn: $scroll)
-            Text("Scroll moves a white ident on solid colours, or shifts SMPTE bars.")
+            Picker("Test tone", selection: $toneHz) {
+                Text("Mute").tag(Float(0))
+                Text("440 Hz").tag(Float(440))
+                Text("1 kHz").tag(Float(1000))
+                Text("2 kHz").tag(Float(2000))
+            }
+            Text("Scroll shifts SMPTE HD bars (or a white ident on solid colours). Tone is -20 dBFS.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         case "Still":
@@ -525,6 +532,7 @@ struct AddInputView: View {
         b = Double(editing.colorB) * 255
         bars = editing.kind == .bars
         scroll = editing.scroll
+        toneHz = editing.toneHz
         useGpu = editing.useGpu
         buffer = editing.frameBufferFrames
         ndiLow = editing.ndiBandwidth == .lowest
@@ -539,7 +547,7 @@ struct AddInputView: View {
         switch category {
         case "Colours":
             if bars {
-                return scroll ? "SMPTE Bars (scroll)" : "SMPTE Bars"
+                return scroll ? "SMPTE HD Bars (scroll)" : "SMPTE HD Bars"
             }
             return String(format: "Colour %02X%02X%02X", Int(r), Int(g), Int(b))
         case "Still":
@@ -565,6 +573,8 @@ struct AddInputView: View {
             input.colorG = Float(g / 255)
             input.colorB = Float(b / 255)
             input.scroll = scroll
+            input.toneHz = toneHz
+            input.toneLevelDbfs = toneHz > 0 ? -20 : 0
         case "Still":
             guard !stillPath.isEmpty else { return }
             input.kind = .still

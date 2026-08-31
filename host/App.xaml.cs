@@ -95,18 +95,20 @@ public partial class App : Application
                 {
                     case InputKind.Color:
                     case InputKind.Bars:
-                        if (input.Id <= MixerNative.Blue)
-                            continue;
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.DefineGenerator(
-                                input.Id,
-                                input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
-                                input.ColorR,
-                                input.ColorG,
-                                input.ColorB,
-                                1,
-                                input.Scroll ? 1u : 0u),
-                            "Define colour generator");
+                        if (input.Id > MixerNative.Blue)
+                        {
+                            MixerNative.ThrowIfFailed(
+                                MixerNative.DefineGenerator(
+                                    input.Id,
+                                    input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
+                                    input.ColorR,
+                                    input.ColorG,
+                                    input.ColorB,
+                                    1,
+                                    input.Scroll ? 1u : 0u),
+                                "Define colour generator");
+                        }
+                        MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
                         break;
                     case InputKind.Still when !string.IsNullOrWhiteSpace(input.PathOrAddress):
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, input.PathOrAddress), "Still load");

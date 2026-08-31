@@ -222,6 +222,10 @@ pub struct InputDto {
     pub color_b: f32,
     #[serde(default)]
     pub scroll: bool,
+    #[serde(default)]
+    pub tone_hz: f32,
+    #[serde(default = "tone_level")]
+    pub tone_level_dbfs: f32,
     #[serde(default = "one_u32")]
     pub bus_mask: u32,
     #[serde(default = "one_f32")]
@@ -273,6 +277,9 @@ fn one_u32() -> u32 {
 }
 fn one_f32() -> f32 {
     1.0
+}
+fn tone_level() -> f32 {
+    -20.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

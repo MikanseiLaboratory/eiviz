@@ -93,6 +93,8 @@ public sealed class InputEntry
     public float ColorG { get; set; }
     public float ColorB { get; set; }
     public bool Scroll { get; set; }
+    public float ToneHz { get; set; }
+    public float ToneLevelDbfs { get; set; } = -20;
     public uint BusMask { get; set; } = 1;
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
@@ -351,7 +353,7 @@ public sealed class Session
         var session = new Session();
         session.EnsureDefaultBuses();
         session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1 });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE Bars", Kind = InputKind.Bars });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };

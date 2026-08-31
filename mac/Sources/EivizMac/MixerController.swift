@@ -574,19 +574,21 @@ final class MixerController: ObservableObject {
     private func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
-            if input.isBuiltin && !input.scroll { return }
-            fail(
-                mixer_define_generator(
-                    input.id,
-                    input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
-                    input.colorR,
-                    input.colorG,
-                    input.colorB,
-                    1,
-                    input.scroll ? 1 : 0
-                ),
-                "Define colour generator"
-            )
+            if !(input.isBuiltin && !input.scroll) {
+                fail(
+                    mixer_define_generator(
+                        input.id,
+                        input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
+                        input.colorR,
+                        input.colorG,
+                        input.colorB,
+                        1,
+                        input.scroll ? 1 : 0
+                    ),
+                    "Define colour generator"
+                )
+            }
+            _ = mixer_generator_set_tone(input.id, input.toneHz, input.toneLevelDbfs)
         case .black:
             break
         case .still:

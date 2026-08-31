@@ -685,6 +685,8 @@ public partial class MainWindow : Window
         input.ColorG = dialog.ColorG;
         input.ColorB = dialog.ColorB;
         input.Scroll = dialog.Scroll;
+        input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
+        input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
         input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
             ? dialog.ResultFrameBufferFrames
@@ -724,7 +726,9 @@ public partial class MainWindow : Window
                     dialog.ColorR,
                     dialog.ColorG,
                     dialog.ColorB,
-                    dialog.Scroll));
+                    dialog.Scroll,
+                    input.ToneHz,
+                    input.ToneLevelDbfs));
                 break;
             case InputKind.Still:
                 Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));

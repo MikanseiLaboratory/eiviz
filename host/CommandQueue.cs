@@ -25,7 +25,7 @@ internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink) : Mi
 internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : MixerCommand;
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
-internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll) : MixerCommand;
+internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll, float ToneHz = 0, float ToneLevelDbfs = -20) : MixerCommand;
 internal sealed record DropSourceCommand(ulong SourceId) : MixerCommand;
 
 internal sealed class CommandQueue : IAsyncDisposable
@@ -404,6 +404,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                                 1,
                                 generator.Scroll ? 1u : 0u),
                             "Define colour generator");
+                        MixerNative.GeneratorSetTone(generator.SourceId, generator.ToneHz, generator.ToneLevelDbfs);
                         break;
                     case DropSourceCommand drop:
                         MixerNative.DestroySource(drop.SourceId);

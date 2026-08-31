@@ -175,6 +175,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var colorG: Float = 0
     var colorB: Float = 0
     var scroll: Bool = false
+    var toneHz: Float = 0
+    var toneLevelDbfs: Float = -20
     var busMask: UInt32 = 1
     var gain: Float = 1
     var mute: Bool = false
@@ -192,7 +194,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll
+        case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
         case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
@@ -207,6 +209,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         colorG: Float = 0,
         colorB: Float = 0,
         scroll: Bool = false,
+        toneHz: Float = 0,
+        toneLevelDbfs: Float = -20,
         busMask: UInt32 = 1,
         gain: Float = 1,
         mute: Bool = false,
@@ -229,6 +233,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         self.colorG = colorG
         self.colorB = colorB
         self.scroll = scroll
+        self.toneHz = toneHz
+        self.toneLevelDbfs = toneLevelDbfs
         self.busMask = busMask
         self.gain = gain
         self.mute = mute
@@ -254,6 +260,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         colorG = try container.decodeIfPresent(Float.self, forKey: .colorG) ?? 0
         colorB = try container.decodeIfPresent(Float.self, forKey: .colorB) ?? 0
         scroll = try container.decodeIfPresent(Bool.self, forKey: .scroll) ?? false
+        toneHz = try container.decodeIfPresent(Float.self, forKey: .toneHz) ?? 0
+        toneLevelDbfs = try container.decodeIfPresent(Float.self, forKey: .toneLevelDbfs) ?? -20
         busMask = try container.decodeIfPresent(UInt32.self, forKey: .busMask) ?? 1
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
         mute = try container.decodeIfPresent(Bool.self, forKey: .mute) ?? false
@@ -473,7 +481,7 @@ struct MixerSessionData: Codable {
         var session = MixerSessionData()
         session.inputs = [
             InputEntry(id: EIVIZ_SRC_COLOR, name: "Color Red", kind: .color, colorR: 1),
-            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE Bars", kind: .bars),
+            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE HD Bars", kind: .bars, toneHz: 1000),
             InputEntry(id: EIVIZ_SRC_BLACK, name: "Black", kind: .black, colorR: 0, colorG: 0, colorB: 0),
             InputEntry(id: EIVIZ_SRC_BLUE, name: "Blue", kind: .color, colorR: 0, colorG: 0, colorB: 1)
         ]

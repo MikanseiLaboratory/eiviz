@@ -7,6 +7,7 @@ mod compose;
 mod convert;
 mod delay;
 mod device;
+mod generator_audio;
 #[cfg(windows)]
 mod dxgi;
 #[cfg(windows)]
@@ -120,6 +121,7 @@ struct Shared {
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
+    tone_phase: HashMap<u64, f64>,
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     last_error: String,
@@ -436,6 +438,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
+        tone_phase: HashMap::new(),
         live_save: HashMap::new(),
         last_error: String::new(),
         last_render_ms: 0.0,
@@ -610,14 +613,37 @@ pub extern "C" fn mixer_define_generator(
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").generators.insert(
+        let mut shared = mixer.shared.lock().expect("shared");
+        let previous = shared.generators.get(&id).copied();
+        shared.generators.insert(
             id,
             Generator {
                 kind,
                 color: [r, g, b, a],
                 scroll: scroll != 0,
+                tone_hz: previous.map(|item| item.tone_hz).unwrap_or(0.0),
+                tone_level_dbfs: previous.map(|item| item.tone_level_dbfs).unwrap_or(-20.0),
             },
         );
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) -> i32 {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let kind = if id == SRC_BARS { GEN_BARS } else { GEN_SOLID };
+        let entry = shared.generators.entry(id).or_insert_with(|| Generator {
+            kind,
+            ..Generator::default()
+        });
+        entry.tone_hz = hz.max(0.0);
+        entry.tone_level_dbfs = level_dbfs.clamp(-120.0, 0.0);
+        if hz <= 0.0 {
+            shared.tone_phase.remove(&id);
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1641,6 +1667,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
             let previous = shared.videos.remove(&id);
             shared.receivers.remove(&id);
             shared.generators.remove(&id);
+            shared.tone_phase.remove(&id);
             shared.live_save.remove(&id);
             let uploads = shared.uploads.clone();
             drop(shared);
@@ -2034,13 +2061,14 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
             if !seen.insert(id) {
                 continue;
             }
+            let (width, height) = if id == SRC_BARS { (1920u32, 1080u32) } else { (128, 72) };
             unsafe {
                 *out.add(n as usize) = SourceUsage {
                     source_id: id,
-                    width: 128,
-                    height: 72,
+                    width,
+                    height,
                     ram_bytes: 0,
-                    vram_bytes: 128 * 72 * 4,
+                    vram_bytes: u64::from(width) * u64::from(height) * 4,
                 };
             }
             n += 1;
@@ -2349,10 +2377,12 @@ fn render_loop(
             let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
-            let phase = (clock_start.elapsed().as_secs_f32() * 0.12) % 1.0;
+            let secs = f64::from(frame_i) * f64::from(fps_den) / f64::from(fps_num.max(1));
+            let phase = ((secs * 0.12) % 1.0) as f32;
+            let phase_y = ((secs * 0.07) % 1.0) as f32;
             composer.begin_frame();
             composer.ensure_builtins(&device);
-            composer.sync_generators(&generators, phase);
+            composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
                 upload_guard.advance_playout(&used_uploads);
                 composer.upload_sources(&device, &upload_guard, &used_uploads);
@@ -2591,6 +2621,23 @@ fn render_loop(
                 guard.audio.clone()
             };
             let mut upload_guard = uploads.lock().expect("uploads");
+            if audio_frames > 0 {
+                let mut guard = shared.lock().expect("shared");
+                for (id, spec) in &generators {
+                    if spec.tone_hz <= 0.0 {
+                        continue;
+                    }
+                    let phase = guard.tone_phase.entry(*id).or_insert(0.0);
+                    let packet = generator_audio::sine_packet(
+                        phase,
+                        spec.tone_hz,
+                        spec.tone_level_dbfs,
+                        audio_frames,
+                        pts,
+                    );
+                    upload_guard.ingest_audio(*id, packet);
+                }
+            }
             let mixed = audio.mix(
                 &mut upload_guard,
                 &snapshot,

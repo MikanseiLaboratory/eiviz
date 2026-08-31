@@ -25,7 +25,7 @@
                 <StackPanel x:Name="ColourPanel" Visibility="Collapsed">
                     <TextBlock Text="Colour generator" Margin="0,0,0,8"/>
                     <RadioButton x:Name="SolidRadio" Content="Solid colour" GroupName="ColourMode" IsChecked="True" Foreground="#EEE"/>
-                    <RadioButton x:Name="BarsRadio" Content="SMPTE colour bars" GroupName="ColourMode" Margin="0,6,0,12" Foreground="#EEE"/>
+                    <RadioButton x:Name="BarsRadio" Content="SMPTE HD colour bars" GroupName="ColourMode" Margin="0,6,0,12" Foreground="#EEE"/>
                     <TextBlock Text="RGB"/>
                     <DockPanel Margin="0,4,0,4">
                         <TextBlock Text="R" Width="16" VerticalAlignment="Center"/>
@@ -41,8 +41,15 @@
                     </DockPanel>
                     <Border x:Name="ColourPreview" Height="48" Margin="0,0,0,12" Background="#DC2020"/>
                     <CheckBox x:Name="ScrollBox" Content="Scroll" Foreground="#EEE"/>
+                    <TextBlock Text="Test tone" Margin="0,12,0,4"/>
+                    <ComboBox x:Name="ToneBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Mute" Tag="0"/>
+                        <ComboBoxItem Content="440 Hz" Tag="440"/>
+                        <ComboBoxItem Content="1 kHz" Tag="1000" IsSelected="True"/>
+                        <ComboBoxItem Content="2 kHz" Tag="2000"/>
+                    </ComboBox>
                     <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="Scroll moves a white ident on solid colours, or shifts SMPTE bars."/>
+                               Text="Scroll shifts SMPTE HD bars (or a white ident on solid colours). Tone is -20 dBFS."/>
                 </StackPanel>
                 <StackPanel x:Name="StillPanel" Visibility="Visible">
                     <TextBlock Text="Select the still image to open." Margin="0,0,0,8"/>

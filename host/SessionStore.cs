@@ -133,6 +133,8 @@ internal static class SessionStore
         public float ColorG { get; set; }
         public float ColorB { get; set; }
         public bool Scroll { get; set; }
+        public float ToneHz { get; set; }
+        public float ToneLevelDbfs { get; set; } = -20;
         public uint BusMask { get; set; } = 1;
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
@@ -157,6 +159,8 @@ internal static class SessionStore
             ColorG = input.ColorG,
             ColorB = input.ColorB,
             Scroll = input.Scroll,
+            ToneHz = input.ToneHz,
+            ToneLevelDbfs = input.ToneLevelDbfs,
             BusMask = input.BusMask == 0 ? 1u : input.BusMask,
             Gain = input.Gain,
             Mute = input.Mute,
@@ -182,6 +186,8 @@ internal static class SessionStore
             ColorG = ColorG,
             ColorB = ColorB,
             Scroll = Scroll,
+            ToneHz = ToneHz,
+            ToneLevelDbfs = ToneLevelDbfs,
             BusMask = BusMask == 0 ? 1u : BusMask,
             Gain = MixerNative.MixerGain(Gain),
             Mute = Mute,
