@@ -27,7 +27,7 @@ static void release_sample(CMSampleBufferRef *slot) {
     }
 }
 
-@interface EivizAvPump : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate>
+@interface EivizAvPumpObj : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate>
 @property (nonatomic) BOOL capture;
 @property (nonatomic) int64_t durationHns;
 @property (nonatomic) BOOL stopped;
@@ -46,7 +46,7 @@ static void release_sample(CMSampleBufferRef *slot) {
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *inboxAudio;
 @end
 
-@implementation EivizAvPump
+@implementation EivizAvPumpObj
 
 - (instancetype)init {
     self = [super init];
@@ -377,7 +377,7 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if (![reader startReading]) {
         return NULL;
     }
-    EivizAvPump *pump = [[EivizAvPump alloc] init];
+    EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
     pump.reader = reader;
     pump.videoOut = video_out;
     pump.audioOut = audio_out;
@@ -410,7 +410,7 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id) {
         return NULL;
     }
     [session addInput:input];
-    EivizAvPump *pump = [[EivizAvPump alloc] init];
+    EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
     pump.capture = YES;
     pump.capQueue = dispatch_queue_create("eiviz.av.capture", DISPATCH_QUEUE_SERIAL);
     AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
@@ -435,7 +435,7 @@ void eiviz_av_close(EivizAvPump *pump) {
     if (!pump) {
         return;
     }
-    EivizAvPump *owned = (__bridge_transfer EivizAvPump *)pump;
+    EivizAvPumpObj *owned = (__bridge_transfer EivizAvPumpObj *)pump;
     [owned shutdown];
 }
 
@@ -443,7 +443,7 @@ int64_t eiviz_av_duration_hns(const EivizAvPump *pump) {
     if (!pump) {
         return 0;
     }
-    EivizAvPump *owned = (__bridge EivizAvPump *)pump;
+    EivizAvPumpObj *owned = (__bridge EivizAvPumpObj *)pump;
     return owned.durationHns;
 }
 
@@ -452,7 +452,7 @@ int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out) {
         return EIVIZ_AV_ERR;
     }
     memset(out, 0, sizeof(*out));
-    EivizAvPump *owned = (__bridge EivizAvPump *)pump;
+    EivizAvPumpObj *owned = (__bridge EivizAvPumpObj *)pump;
     if (owned.stopped) {
         return EIVIZ_AV_EOF;
     }
