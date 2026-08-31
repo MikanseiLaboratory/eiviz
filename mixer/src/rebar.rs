@@ -175,6 +175,7 @@ pub struct RebarUploader {
     slots: Vec<StagingSlot>,
     next: usize,
     direct: std::collections::HashMap<u64, SourceRing>,
+    pending: Option<wgpu::CommandEncoder>,
 }
 
 #[cfg(windows)]
@@ -208,6 +209,7 @@ impl RebarUploader {
             slots: Vec::new(),
             next: 0,
             direct: std::collections::HashMap::new(),
+            pending: None,
         })
     }
 
@@ -261,13 +263,20 @@ impl RebarUploader {
         format: wgpu::TextureFormat,
     ) -> Result<(), String> {
         let slot_i = self.ensure_slot(device, tex_width, height, format)?;
-        let slot = &self.slots[slot_i];
-        write_mapped(&slot.resource, data, row_bytes, height, slot.row_pitch)?;
-        let mut encoder = device.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("rebar upload"),
+        let (resource, pitch, imported) = {
+            let slot = &self.slots[slot_i];
+            (slot.resource.clone(), slot.row_pitch, slot.imported.clone())
+        };
+        write_mapped(&resource, data, row_bytes, height, pitch)?;
+        let encoder = self.pending.get_or_insert_with(|| {
+            device
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("rebar upload"),
+                })
         });
         encoder.copy_texture_to_texture(
-            slot.imported.as_image_copy(),
+            imported.as_image_copy(),
             dest.as_image_copy(),
             wgpu::Extent3d {
                 width: tex_width.max(1),
@@ -275,9 +284,14 @@ impl RebarUploader {
                 depth_or_array_layers: 1,
             },
         );
-        device.submit(Some(encoder.finish()));
         self.next = (slot_i + 1) % STAGING_SLOTS;
         Ok(())
+    }
+
+    pub fn flush(&mut self, device: &GpuDevice) {
+        if let Some(encoder) = self.pending.take() {
+            device.submit(Some(encoder.finish()));
+        }
     }
 
     fn ensure_slot(
@@ -294,6 +308,7 @@ impl RebarUploader {
             return Ok(self.next);
         }
         if self.slots.len() == STAGING_SLOTS {
+            self.flush(device);
             self.slots.clear();
             self.next = 0;
         }
@@ -463,24 +478,39 @@ fn write_mapped(
     let pitch = row_pitch as usize;
     let row = row_bytes as usize;
     unsafe {
+        use windows::Win32::Graphics::Direct3D12::D3D12_RANGE;
         let mut ptr = std::ptr::null_mut();
+        let no_read = D3D12_RANGE { Begin: 0, End: 0 };
         resource
-            .Map(0, None, Some(std::ptr::from_mut(&mut ptr)))
+            .Map(0, Some(&no_read), Some(std::ptr::from_mut(&mut ptr)))
             .map_err(|e| e.to_string())?;
         if ptr.is_null() {
             resource.Unmap(0, None);
             return Err("GPU upload heap Map returned null".into());
         }
         let dest_bytes = ptr.cast::<u8>();
-        for y in 0..height as usize {
-            let src = y * row;
-            let dst = y * pitch;
-            let n = row.min(data.len().saturating_sub(src)).min(pitch);
+        if row == pitch {
+            let n = row
+                .saturating_mul(height as usize)
+                .min(data.len());
             if n > 0 {
-                std::ptr::copy_nonoverlapping(data.as_ptr().add(src), dest_bytes.add(dst), n);
+                std::ptr::copy_nonoverlapping(data.as_ptr(), dest_bytes, n);
+            }
+        } else {
+            for y in 0..height as usize {
+                let src = y * row;
+                let dst = y * pitch;
+                let n = row.min(data.len().saturating_sub(src)).min(pitch);
+                if n > 0 {
+                    std::ptr::copy_nonoverlapping(data.as_ptr().add(src), dest_bytes.add(dst), n);
+                }
             }
         }
-        resource.Unmap(0, None);
+        let written = D3D12_RANGE {
+            Begin: 0,
+            End: pitch.saturating_mul(height as usize),
+        };
+        resource.Unmap(0, Some(&written));
     }
     Ok(())
 }

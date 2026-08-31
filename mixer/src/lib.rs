@@ -63,7 +63,7 @@ use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device}
 use present::Presenters;
 use readback::ReadbackStore;
 use save::{LiveSave, collect_source_roles, want_full};
-use upload::{AUDIO_RATE, AudioPacket, CpuFormat, UploadStore};
+use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, UploadStore};
 
 struct AutoTransition {
     from: f32,
@@ -119,6 +119,7 @@ struct Shared {
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, (u32, u32, Arc<[crate::abi::OverlayDesc]>)>,
     uploads: Arc<Mutex<UploadStore>>,
+    gpu_ingest: GpuIngest,
     #[cfg(windows)]
     gpu_video: Option<GpuVideoContext>,
     omt_gpu: OmtGpu,
@@ -441,6 +442,10 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         }
     };
     let omt_gpu = omt_gpu_from_device(&device);
+    let gpu_ingest = GpuIngest {
+        device: device.device.clone(),
+        queue: device.queue.clone(),
+    };
     let rebar = crate::rebar::probe(&device);
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let telemetry = Arc::new(Mutex::new(Telemetry {
@@ -456,6 +461,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         units: HashMap::new(),
         scenes: HashMap::new(),
         uploads: Arc::clone(&uploads),
+        gpu_ingest,
         #[cfg(windows)]
         gpu_video,
         omt_gpu: omt_gpu.clone(),
@@ -1372,18 +1378,19 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let uploads = {
+        let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
             #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
+            let gpu = shared.gpu_ingest.clone();
             drop(shared);
             #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
-            uploads
+            (uploads, gpu)
         };
-        match NdiReceiver::start(id, address, uploads, depth, low_bandwidth) {
+        match NdiReceiver::start(id, address, uploads, Some(gpu), depth, low_bandwidth) {
             Ok(receiver) => {
                 mixer
                     .shared
@@ -2051,8 +2058,14 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let uploads = shared.uploads.lock().expect("uploads");
+        let (uploads_arc, generator_ids) = {
+            let shared = mixer.shared.lock().expect("shared");
+            (
+                Arc::clone(&shared.uploads),
+                shared.generators.keys().copied().collect::<Vec<_>>(),
+            )
+        };
+        let uploads = uploads_arc.lock().expect("uploads");
         let mut n = 0u32;
         let mut seen = std::collections::HashSet::new();
         for id in uploads.ids() {
@@ -2074,7 +2087,7 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
             }
             n += 1;
         }
-        for id in shared.generators.keys().copied() {
+        for id in generator_ids {
             if n >= cap {
                 break;
             }
@@ -2465,7 +2478,6 @@ fn render_loop(
                     receiver.apply_save(want_full(save, role), role.on_program, role.on_preview);
                 }
             }
-            let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
             let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
@@ -2475,10 +2487,13 @@ fn render_loop(
             composer.ensure_builtins(&device);
             composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
-                upload_guard.advance_playout(&used_uploads);
-                composer.upload_sources(&device, &upload_guard, &used_uploads, use_rebar, direct_sample);
+                let snaps = {
+                    let mut upload_guard = uploads.lock().expect("uploads");
+                    upload_guard.advance_playout(&used_uploads);
+                    upload_guard.snapshot(&used_uploads)
+                };
+                composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
             }
-            drop(upload_guard);
             let need_prv = outputs_snap
                 .iter()
                 .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
@@ -2707,27 +2722,33 @@ fn render_loop(
             let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;
             audio_carry %= u64::from(fps_num.max(1));
             audio_produced = audio_produced.saturating_add(audio_frames as u64);
-            let audio = {
-                let guard = shared.lock().expect("shared");
-                guard.audio.clone()
+            let (audio, tone_packets) = {
+                let mut guard = shared.lock().expect("shared");
+                let audio = guard.audio.clone();
+                let mut tone_packets = Vec::new();
+                if audio_frames > 0 {
+                    for (id, spec) in &generators {
+                        if spec.tone_hz <= 0.0 {
+                            continue;
+                        }
+                        let phase = guard.tone_phase.entry(*id).or_insert(0.0);
+                        tone_packets.push((
+                            *id,
+                            generator_audio::sine_packet(
+                                phase,
+                                spec.tone_hz,
+                                spec.tone_level_dbfs,
+                                audio_frames,
+                                pts,
+                            ),
+                        ));
+                    }
+                }
+                (audio, tone_packets)
             };
             let mut upload_guard = uploads.lock().expect("uploads");
-            if audio_frames > 0 {
-                let mut guard = shared.lock().expect("shared");
-                for (id, spec) in &generators {
-                    if spec.tone_hz <= 0.0 {
-                        continue;
-                    }
-                    let phase = guard.tone_phase.entry(*id).or_insert(0.0);
-                    let packet = generator_audio::sine_packet(
-                        phase,
-                        spec.tone_hz,
-                        spec.tone_level_dbfs,
-                        audio_frames,
-                        pts,
-                    );
-                    upload_guard.ingest_audio(*id, packet);
-                }
+            for (id, packet) in tone_packets {
+                upload_guard.ingest_audio(id, packet);
             }
             let mixed = audio.mix(
                 &mut upload_guard,

@@ -10,7 +10,10 @@ use grafton_ndi::{
 };
 
 use crate::abi::FMT_BGRA;
-use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore};
+use crate::upload::{
+    ingest_audio_throttled, write_slot, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
+    UploadStore,
+};
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
 static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
@@ -64,11 +67,58 @@ mod macos {
 fn finder() -> Result<&'static Finder, String> {
     match FINDER.get_or_init(|| {
         let ndi = runtime()?;
-        Finder::new(ndi, &FinderOptions::builder().show_local_sources(true).build())
-            .map_err(|error| error.to_string())
+        let extra = lan_extra_ips();
+        let mut builder = FinderOptions::builder().show_local_sources(true);
+        if let Some(ips) = extra.as_deref() {
+            builder = builder.extra_ips(ips);
+        }
+        Finder::new(ndi, &builder.build()).map_err(|error| error.to_string())
     }) {
         Ok(finder) => Ok(finder),
         Err(error) => Err(error.clone()),
+    }
+}
+
+/// Hint NDI at every unicast IPv4 /24. A new machine often has Wi-Fi as the
+/// default route plus a dedicated LAN NIC; mDNS on the wrong adapter sees nothing.
+fn lan_extra_ips() -> Option<String> {
+    let mut nets = Vec::new();
+    push_slash24(&mut nets, default_route_v4());
+    if let Ok(output) = std::process::Command::new("ipconfig").output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for token in text.split_whitespace() {
+            if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
+                push_slash24(&mut nets, Some(v4));
+            }
+        }
+    }
+    if nets.is_empty() {
+        None
+    } else {
+        Some(nets.join(","))
+    }
+}
+
+fn default_route_v4() -> Option<std::net::Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_link_local() => Some(v4),
+        _ => None,
+    }
+}
+
+fn push_slash24(nets: &mut Vec<String>, ip: Option<std::net::Ipv4Addr>) {
+    let Some(v4) = ip else {
+        return;
+    };
+    if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() {
+        return;
+    }
+    let oct = v4.octets();
+    let cidr = format!("{}.{}.{}.0/24", oct[0], oct[1], oct[2]);
+    if !nets.contains(&cidr) {
+        nets.push(cidr);
     }
 }
 
@@ -88,6 +138,7 @@ impl NdiReceiver {
         source_id: u64,
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
+        gpu: Option<GpuIngest>,
         frame_buffer_frames: u32,
         low_bandwidth: u32,
     ) -> Result<Self, String> {
@@ -113,9 +164,19 @@ impl NdiReceiver {
                         depth,
                     );
                 }
+                let mut gpu_ring = GpuUploadRing::new();
+                let mut gpu_warned = false;
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
-                        Ok(Some(frame)) => ingest_video(&uploads, source_id, depth, &frame),
+                        Ok(Some(frame)) => ingest_video(
+                            &uploads,
+                            gpu.as_ref(),
+                            &mut gpu_ring,
+                            &mut gpu_warned,
+                            source_id,
+                            depth,
+                            &frame,
+                        ),
                         Ok(None) => {}
                         Err(_) => {}
                     }
@@ -236,7 +297,7 @@ fn open_receiver(
     low_bandwidth: bool,
 ) -> Result<Receiver, String> {
     let options = ReceiverOptions::builder(source.clone())
-        .color(ReceiverColorFormat::BGRX_BGRA)
+        .color(ReceiverColorFormat::UYVY_BGRA)
         .bandwidth(if low_bandwidth {
             ReceiverBandwidth::Lowest
         } else {
@@ -250,14 +311,12 @@ fn open_receiver(
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
     let finder = finder()?;
-    let mut sources = finder.current_sources().unwrap_or_default();
-    if sources.is_empty() {
-        let _ = finder.wait_for_sources(Duration::from_millis(1500));
-        sources = finder
-            .current_sources()
-            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
-            .map_err(|error| error.to_string())?;
-    }
+    // Unicast / extra_ips responders trickle in. A single wait_for_sources
+    // returns on the first change and misses the rest; find_sources polls
+    // to the deadline (grafton-ndi 1.0).
+    let sources = finder
+        .find_sources(Duration::from_secs(5))
+        .map_err(|error| error.to_string())?;
     Ok(sources.into_iter().map(|source| source.to_string()).collect())
 }
 
@@ -329,6 +388,9 @@ fn source_key(source: &Source) -> String {
 
 fn ingest_video(
     uploads: &Mutex<UploadStore>,
+    gpu: Option<&GpuIngest>,
+    gpu_ring: &mut GpuUploadRing,
+    gpu_warned: &mut bool,
     source_id: u64,
     depth: u32,
     frame: &VideoFrame,
@@ -349,21 +411,47 @@ fn ingest_video(
         LineStrideOrSize::LineStrideBytes(stride) if stride > 0 => stride as usize,
         _ => width as usize * bpp,
     };
-    let mut opaque = Vec::new();
-    let pixels = if matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX) {
-        opaque = frame.data().to_vec();
-        for chunk in opaque.chunks_exact_mut(4) {
-            if chunk.len() == 4 {
-                chunk[3] = 255;
+    if let Some(gpu) = gpu {
+        match gpu_ring.upload(
+            gpu,
+            frame.data(),
+            stride,
+            width,
+            height,
+            format,
+            frame.timestamp(),
+        ) {
+            Ok(uploaded) => {
+                if !*gpu_warned {
+                    eprintln!(
+                        "ndi gpu {source_id} {width}x{height} {pixel_format:?} stride={stride} bytes={}",
+                        frame.data().len()
+                    );
+                    *gpu_warned = true;
+                }
+                let mut store = uploads.lock().expect("uploads lock");
+                store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
+                let _ = store.push_playout_gpu(source_id, uploaded);
+                return;
             }
+            Err(error) if !*gpu_warned => {
+                eprintln!("eiviz ndi gpu upload: {error}; falling back to CPU frames");
+                *gpu_warned = true;
+            }
+            Err(_) => {}
         }
-        opaque.as_slice()
-    } else {
-        frame.data()
+    }
+    let opaque_x = matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX);
+    let (mut pixels, format, width, height) = {
+        let mut store = uploads.lock().expect("uploads lock");
+        match store.take_playout_buf(source_id, width, height, format, depth) {
+            Some(ready) => ready,
+            None => return,
+        }
     };
+    write_slot(&mut pixels, frame.data(), stride, width, height, format, opaque_x);
     let mut store = uploads.lock().expect("uploads lock");
-    store.ensure_playout(source_id, width, height, format, depth);
-    let _ = store.push_playout_cpu(source_id, pixels, stride, frame.timestamp());
+    store.finish_playout_cpu(source_id, pixels, frame.timestamp());
 }
 
 fn to_audio(frame: &AudioFrame) -> AudioPacket {

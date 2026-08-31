@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -46,7 +47,7 @@ pub struct SourceRing {
     pub width: u32,
     pub height: u32,
     pub format: CpuFormat,
-    slots: [Vec<u8>; SLOTS],
+    slots: [Arc<Vec<u8>>; SLOTS],
     write: AtomicUsize,
     pub last_pts: i64,
     pub has_frame: bool,
@@ -55,10 +56,24 @@ pub struct SourceRing {
     playout_depth: usize,
     cpu_fifo: VecDeque<CpuQueuedFrame>,
     gpu_fifo: VecDeque<GpuVideoFrame>,
+    free: Vec<Vec<u8>>,
     fifo: VecDeque<f32>,
     last_peak: (f32, f32),
     last_hold: (f32, f32),
     fifo_primed: bool,
+}
+
+/// CPU frame borrowed for GPU upload after the ingest lock is dropped.
+#[derive(Clone)]
+pub struct CpuFrameSnap {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: CpuFormat,
+    pub last_pts: i64,
+    pub has_frame: bool,
+    pub pixels: Arc<Vec<u8>>,
+    pub gpu: Option<GpuVideoFrame>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,8 +81,190 @@ pub struct GpuVideoFrame {
     pub pts: i64,
     pub width: u32,
     pub height: u32,
+    pub packed: bool,
+    pub bgra: bool,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+}
+
+/// wgpu device/queue handle for ingest threads. Render only binds the result.
+#[derive(Clone)]
+pub struct GpuIngest {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+struct GpuUploadSlot {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+/// Triple-buffered textures written on the NDI/OMT thread.
+pub struct GpuUploadRing {
+    slots: Vec<GpuUploadSlot>,
+    next: usize,
+}
+
+impl GpuUploadRing {
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            next: 0,
+        }
+    }
+
+    pub fn upload(
+        &mut self,
+        gpu: &GpuIngest,
+        data: &[u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        format: CpuFormat,
+        pts: i64,
+    ) -> Result<GpuVideoFrame, String> {
+        let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+        let bgra = format == CpuFormat::Bgra;
+        let bpp = if packed { 2usize } else { 4 };
+        let row_bytes = (width as usize).saturating_mul(bpp);
+        let tex_w = if packed {
+            (width / 2).max(1)
+        } else {
+            width.max(1)
+        };
+        let tex_h = height.max(1);
+        let tex_format = if packed {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else if bgra {
+            wgpu::TextureFormat::Bgra8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let slot_i = self.ensure(gpu, tex_w, tex_h, tex_format);
+        let slot = &self.slots[slot_i];
+        write_queue_texture(
+            &gpu.queue,
+            &slot.texture,
+            data,
+            stride,
+            row_bytes,
+            tex_h,
+            tex_w,
+        );
+        self.next = (slot_i + 1) % 3;
+        Ok(GpuVideoFrame {
+            pts,
+            width,
+            height,
+            packed,
+            bgra,
+            texture: slot.texture.clone(),
+            view: slot.view.clone(),
+        })
+    }
+
+    fn ensure(
+        &mut self,
+        gpu: &GpuIngest,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> usize {
+        if self.slots.get(self.next).is_some_and(|slot| {
+            slot.width == width && slot.height == height && slot.format == format
+        }) {
+            return self.next;
+        }
+        if self.slots.len() == 3
+            && self
+                .slots
+                .iter()
+                .any(|slot| slot.width != width || slot.height != height || slot.format != format)
+        {
+            self.slots.clear();
+            self.next = 0;
+        }
+        while self.slots.len() < 3 {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("eiviz ndi gpu"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            self.slots.push(GpuUploadSlot {
+                texture,
+                view,
+                width,
+                height,
+                format,
+            });
+        }
+        self.next
+    }
+}
+
+pub(crate) fn write_queue_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    data: &[u8],
+    stride: usize,
+    row_bytes: usize,
+    height: u32,
+    tex_width: u32,
+) {
+    if row_bytes == 0 || height == 0 {
+        return;
+    }
+    let tight = stride == row_bytes && stride % 256 == 0;
+    let (bytes, pitch): (Cow<[u8]>, u32) = if tight {
+        let n = row_bytes.saturating_mul(height as usize).min(data.len());
+        (Cow::Borrowed(&data[..n]), stride as u32)
+    } else if stride >= row_bytes && stride % 256 == 0 {
+        let n = stride
+            .saturating_mul(height.saturating_sub(1) as usize)
+            .saturating_add(row_bytes)
+            .min(data.len());
+        (Cow::Borrowed(&data[..n]), stride as u32)
+    } else {
+        let aligned = row_bytes.div_ceil(256) * 256;
+        let mut padded = vec![0u8; aligned.saturating_mul(height as usize)];
+        for y in 0..height as usize {
+            let src = y * stride;
+            let dst = y * aligned;
+            if src + row_bytes <= data.len() {
+                padded[dst..dst + row_bytes].copy_from_slice(&data[src..src + row_bytes]);
+            }
+        }
+        (Cow::Owned(padded), aligned as u32)
+    };
+    queue.write_texture(
+        texture.as_image_copy(),
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(pitch),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width: tex_width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +283,11 @@ impl SourceRing {
             width,
             height,
             format,
-            slots: [vec![0u8; bytes], vec![0u8; bytes], vec![0u8; bytes]],
+            slots: [
+                Arc::new(vec![0u8; bytes]),
+                Arc::new(vec![0u8; bytes]),
+                Arc::new(vec![0u8; bytes]),
+            ],
             write: AtomicUsize::new(0),
             last_pts: 0,
             has_frame: false,
@@ -95,6 +296,7 @@ impl SourceRing {
             playout_depth: 1,
             cpu_fifo: VecDeque::new(),
             gpu_fifo: VecDeque::new(),
+            free: Vec::new(),
             fifo: VecDeque::new(),
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
@@ -103,15 +305,27 @@ impl SourceRing {
     }
 
     pub fn push(&mut self, src: &[u8], stride: usize, pts: i64) {
+        self.push_opaque(src, stride, pts, false);
+    }
+
+    pub fn push_opaque(&mut self, src: &[u8], stride: usize, pts: i64, opaque_x: bool) {
         let idx = (self.write.load(Ordering::Relaxed) + 1) % SLOTS;
-        write_slot(
-            &mut self.slots[idx],
-            src,
-            stride,
-            self.width,
-            self.height,
-            self.format,
-        );
+        let bytes = slot_bytes(self.width, self.height, self.format);
+        {
+            let slot = Arc::make_mut(&mut self.slots[idx]);
+            if slot.len() != bytes {
+                slot.resize(bytes, 0);
+            }
+            write_slot(
+                slot,
+                src,
+                stride,
+                self.width,
+                self.height,
+                self.format,
+                opaque_x,
+            );
+        }
         self.write.store(idx, Ordering::Release);
         self.last_pts = pts;
         self.has_frame = true;
@@ -135,11 +349,16 @@ impl SourceRing {
     }
 
     pub fn push_playout_cpu(&mut self, src: &[u8], stride: usize, pts: i64) {
+        self.push_playout_cpu_opaque(src, stride, pts, false);
+    }
+
+    pub fn push_playout_cpu_opaque(&mut self, src: &[u8], stride: usize, pts: i64, opaque_x: bool) {
         if self.playout_depth <= 1 {
-            self.push(src, stride, pts);
+            self.push_opaque(src, stride, pts, opaque_x);
             return;
         }
-        let mut pixels = vec![0u8; slot_bytes(self.width, self.height, self.format)];
+        let bytes = slot_bytes(self.width, self.height, self.format);
+        let mut pixels = self.take_free(bytes);
         write_slot(
             &mut pixels,
             src,
@@ -147,10 +366,54 @@ impl SourceRing {
             self.width,
             self.height,
             self.format,
+            opaque_x,
         );
+        self.finish_playout_cpu(pixels, pts);
+    }
+
+    pub fn take_playout_buf(&mut self) -> Vec<u8> {
+        let bytes = slot_bytes(self.width, self.height, self.format);
+        self.take_free(bytes)
+    }
+
+    pub fn finish_playout_cpu(&mut self, pixels: Vec<u8>, pts: i64) {
+        if self.playout_depth <= 1 {
+            let idx = (self.write.load(Ordering::Relaxed) + 1) % SLOTS;
+            let old = std::mem::replace(&mut self.slots[idx], Arc::new(pixels));
+            if let Ok(buf) = Arc::try_unwrap(old) {
+                self.recycle(buf);
+            }
+            self.write.store(idx, Ordering::Release);
+            self.last_pts = pts;
+            self.has_frame = true;
+            self.gpu = None;
+            return;
+        }
         self.cpu_fifo.push_back(CpuQueuedFrame { pts, pixels });
         while self.cpu_fifo.len() > self.playout_depth {
-            self.cpu_fifo.pop_front();
+            if let Some(old) = self.cpu_fifo.pop_front() {
+                self.recycle(old.pixels);
+            }
+        }
+    }
+
+    fn take_free(&mut self, bytes: usize) -> Vec<u8> {
+        match self.free.pop() {
+            Some(buf) if buf.len() == bytes => buf,
+            Some(mut buf) => {
+                buf.resize(bytes, 0);
+                buf
+            }
+            None => vec![0u8; bytes],
+        }
+    }
+
+    fn recycle(&mut self, buf: Vec<u8>) {
+        if buf.is_empty() {
+            return;
+        }
+        if self.free.len() < 4 {
+            self.free.push(buf);
         }
     }
 
@@ -177,10 +440,9 @@ impl SourceRing {
         }
         if let Some(queued) = self.cpu_fifo.pop_front() {
             let idx = (self.write.load(Ordering::Relaxed) + 1) % SLOTS;
-            if self.slots[idx].len() == queued.pixels.len() {
-                self.slots[idx].copy_from_slice(&queued.pixels);
-            } else {
-                self.slots[idx] = queued.pixels;
+            let old = std::mem::replace(&mut self.slots[idx], Arc::new(queued.pixels));
+            if let Ok(buf) = Arc::try_unwrap(old) {
+                self.recycle(buf);
             }
             self.write.store(idx, Ordering::Release);
             self.last_pts = queued.pts;
@@ -250,7 +512,11 @@ impl SourceRing {
     }
 
     pub fn latest_rgba_or_packed(&self) -> &[u8] {
-        &self.slots[self.write.load(Ordering::Acquire)]
+        self.slots[self.write.load(Ordering::Acquire)].as_slice()
+    }
+
+    pub fn latest_pixels(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.slots[self.write.load(Ordering::Acquire)])
     }
 
     pub fn ram_bytes(&self) -> u64 {
@@ -260,6 +526,7 @@ impl SourceRing {
                 .iter()
                 .map(|frame| frame.pixels.len() as u64)
                 .sum::<u64>()
+            + self.free.iter().map(|buf| buf.len() as u64).sum::<u64>()
     }
 
     pub fn vram_bytes(&self) -> u64 {
@@ -291,6 +558,7 @@ impl UploadStore {
                 ring.gpu = old.gpu;
                 ring.cpu_fifo = old.cpu_fifo;
                 ring.gpu_fifo = old.gpu_fifo;
+                ring.free = old.free;
                 ring.has_frame = old.has_frame;
                 ring.last_pts = old.last_pts;
             }
@@ -330,12 +598,67 @@ impl UploadStore {
         stride: usize,
         pts: i64,
     ) -> Result<(), String> {
+        self.push_playout_cpu_opaque(id, src, stride, pts, false)
+    }
+
+    pub fn push_playout_cpu_opaque(
+        &mut self,
+        id: u64,
+        src: &[u8],
+        stride: usize,
+        pts: i64,
+        opaque_x: bool,
+    ) -> Result<(), String> {
         let ring = self
             .sources
             .get_mut(&id)
             .ok_or_else(|| format!("unknown source {id}"))?;
-        ring.push_playout_cpu(src, stride, pts);
+        ring.push_playout_cpu_opaque(src, stride, pts, opaque_x);
         Ok(())
+    }
+
+    pub fn take_playout_buf(
+        &mut self,
+        id: u64,
+        width: u32,
+        height: u32,
+        format: CpuFormat,
+        depth: u32,
+    ) -> Option<(Vec<u8>, CpuFormat, u32, u32)> {
+        self.ensure_playout(id, width, height, format, depth);
+        let ring = self.sources.get_mut(&id)?;
+        Some((
+            ring.take_playout_buf(),
+            ring.format,
+            ring.width,
+            ring.height,
+        ))
+    }
+
+    pub fn finish_playout_cpu(&mut self, id: u64, pixels: Vec<u8>, pts: i64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.finish_playout_cpu(pixels, pts);
+        }
+    }
+
+    pub fn snapshot(&self, needed: &HashSet<u64>) -> Vec<CpuFrameSnap> {
+        let mut out = Vec::with_capacity(needed.len());
+        for id in needed {
+            let Some(ring) = self.sources.get(id) else {
+                continue;
+            };
+            out.push(CpuFrameSnap {
+                id: *id,
+                width: ring.width,
+                height: ring.height,
+                format: ring.format,
+                last_pts: ring.last_pts,
+                has_frame: ring.has_frame,
+                pixels: ring.latest_pixels(),
+                gpu: ring.gpu.clone(),
+            });
+        }
+        out
     }
 
     pub fn push_playout_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
@@ -565,6 +888,7 @@ fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn linear_resample_48k_passthrough() {
@@ -609,6 +933,36 @@ mod tests {
             "fifo held {} frames",
             store.fifo_frames(1)
         );
+    }
+
+    #[test]
+    fn playout_fill_outside_lock_swaps_into_fifo() {
+        let mut store = UploadStore::default();
+        let (mut buf, format, width, height) =
+            store.take_playout_buf(7, 4, 2, CpuFormat::Bgra, 3).unwrap();
+        assert_eq!((format, width, height), (CpuFormat::Bgra, 4, 2));
+        buf.fill(9);
+        store.finish_playout_cpu(7, buf, 11);
+        store.advance_playout(&HashSet::from([7]));
+        let ring = store.get(7).unwrap();
+        assert_eq!(ring.last_pts, 11);
+        assert!(ring.latest_rgba_or_packed().iter().all(|&b| b == 9));
+    }
+
+    #[test]
+    fn playout_reuses_buffers_instead_of_copying_into_slots() {
+        let mut ring = SourceRing::new(4, 2, CpuFormat::Bgra);
+        ring.set_playout_depth(3);
+        let frame_a = vec![1u8; 32];
+        let frame_b = vec![2u8; 32];
+        ring.push_playout_cpu(&frame_a, 16, 1);
+        ring.push_playout_cpu(&frame_b, 16, 2);
+        ring.advance_playout();
+        assert_eq!(ring.last_pts, 1);
+        assert_eq!(ring.latest_rgba_or_packed()[..4], [1, 1, 1, 1]);
+        ring.advance_playout();
+        assert_eq!(ring.last_pts, 2);
+        assert_eq!(ring.latest_rgba_or_packed()[..4], [2, 2, 2, 2]);
     }
 
     #[test]
@@ -664,7 +1018,15 @@ fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {
     }
 }
 
-fn write_slot(dst: &mut [u8], src: &[u8], stride: usize, width: u32, height: u32, format: CpuFormat) {
+pub(crate) fn write_slot(
+    dst: &mut [u8],
+    src: &[u8],
+    stride: usize,
+    width: u32,
+    height: u32,
+    format: CpuFormat,
+    opaque_x: bool,
+) {
     let bpp = match format {
         CpuFormat::Bgra | CpuFormat::Rgba => 4usize,
         CpuFormat::Uyvy | CpuFormat::Uyva => 2,
@@ -682,13 +1044,21 @@ fn write_slot(dst: &mut [u8], src: &[u8], stride: usize, width: u32, height: u32
     if src.len() < needed_src || dst.len() < needed_dst {
         return;
     }
-    match format {
-        CpuFormat::Bgra | CpuFormat::Rgba | CpuFormat::Uyvy | CpuFormat::Uyva => {
-            for y in 0..height as usize {
-                let src_row = &src[y * stride..y * stride + row_bytes];
-                dst[y * row_bytes..y * row_bytes + row_bytes].copy_from_slice(src_row);
+    if stride == row_bytes {
+        dst[..needed_dst].copy_from_slice(&src[..needed_dst]);
+    } else {
+        for y in 0..height as usize {
+            let src_row = &src[y * stride..y * stride + row_bytes];
+            dst[y * row_bytes..y * row_bytes + row_bytes].copy_from_slice(src_row);
+        }
+    }
+    if opaque_x && matches!(format, CpuFormat::Bgra | CpuFormat::Rgba) {
+        let words = needed_dst / 4;
+        let ptr = dst.as_mut_ptr();
+        unsafe {
+            for i in 0..words {
+                *ptr.add(i * 4).cast::<u32>() |= 0xFF00_0000;
             }
         }
-        CpuFormat::GpuRgba => {}
     }
 }

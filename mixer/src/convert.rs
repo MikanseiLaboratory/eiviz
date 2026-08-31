@@ -209,6 +209,8 @@ impl Nv12Converter {
             pts,
             width,
             height,
+            packed: false,
+            bgra: false,
             texture: dest,
             view: dest_view,
         })
@@ -272,6 +274,8 @@ impl Nv12Converter {
             pts,
             width,
             height,
+            packed: false,
+            bgra: !rgba,
             texture: dest,
             view,
         })

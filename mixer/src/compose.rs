@@ -9,7 +9,7 @@ use crate::abi::{
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
-use crate::upload::{CpuFormat, UploadStore};
+use crate::upload::{CpuFormat, CpuFrameSnap};
 
 const KEY_TALLY_RED: u64 = LABEL_BASE + 0xFF01;
 const KEY_TALLY_GREEN: u64 = LABEL_BASE + 0xFF02;
@@ -290,17 +290,17 @@ impl Composer {
     pub fn upload_sources(
         &mut self,
         device: &GpuDevice,
-        uploads: &UploadStore,
-        needed: &HashSet<u64>,
+        snaps: &[CpuFrameSnap],
         use_rebar: bool,
         direct_sample: bool,
     ) {
         #[cfg(not(any(windows, target_os = "macos")))]
         let _ = use_rebar;
+        let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
         #[cfg(windows)]
         if let Some(rebar) = self.rebar.as_mut() {
             if direct_sample {
-                rebar.retain(needed);
+                rebar.retain(&needed);
             } else {
                 rebar.clear_direct();
             }
@@ -308,38 +308,41 @@ impl Composer {
         #[cfg(target_os = "macos")]
         if let Some(uma) = self.uma.as_mut() {
             if direct_sample {
-                uma.retain(needed);
+                uma.retain(&needed);
             } else {
                 uma.clear();
             }
         }
-        for id in needed {
-            let Some(ring) = uploads.get(*id) else { continue };
-            if !ring.has_frame {
+        for snap in snaps {
+            let id = snap.id;
+            if !snap.has_frame {
                 continue;
             }
-            let packed = matches!(ring.format, CpuFormat::Uyvy | CpuFormat::Uyva);
-            let bgra = ring.format == CpuFormat::Bgra;
-            if let Some(frame) = ring.gpu.as_ref() {
-                let needs_new = self.sources.get(id).is_none_or(|gpu| {
-                    gpu.width != frame.width
-                        || gpu.height != frame.height
-                        || gpu.packed
+            let packed = matches!(snap.format, CpuFormat::Uyvy | CpuFormat::Uyva);
+            let bgra = snap.format == CpuFormat::Bgra;
+            if let Some(frame) = snap.gpu.as_ref() {
+                let tex_w = frame.texture.size().width;
+                let tex_h = frame.texture.size().height;
+                let needs_new = self.sources.get(&id).is_none_or(|gpu| {
+                    gpu.width != tex_w
+                        || gpu.height != tex_h
+                        || gpu.packed != frame.packed
+                        || gpu.bgra != frame.bgra
                         || gpu.uploaded_pts != frame.pts
                 });
                 if needs_new {
-                    self.blit_groups.remove(id);
-                    self.uyvy_groups.remove(id);
+                    self.blit_groups.remove(&id);
+                    self.uyvy_groups.remove(&id);
                     self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
                     self.sources.insert(
-                        *id,
+                        id,
                         SourceGpu {
                             texture: frame.texture.clone(),
                             view: frame.view.clone(),
-                            width: frame.width,
-                            height: frame.height,
-                            packed: false,
-                            bgra: false,
+                            width: tex_w,
+                            height: tex_h,
+                            packed: frame.packed,
+                            bgra: frame.bgra,
                             uploaded_pts: frame.pts,
                             direct: false,
                         },
@@ -347,13 +350,13 @@ impl Composer {
                 }
                 continue;
             }
-            if ring.format == CpuFormat::GpuRgba {
+            if snap.format == CpuFormat::GpuRgba {
                 continue;
             }
-            let tex_w = if packed { ring.width / 2 } else { ring.width };
-            let needs_new = self.sources.get(id).is_none_or(|gpu| {
+            let tex_w = if packed { snap.width / 2 } else { snap.width };
+            let needs_new = self.sources.get(&id).is_none_or(|gpu| {
                 gpu.width != tex_w
-                    || gpu.height != ring.height
+                    || gpu.height != snap.height
                     || gpu.packed != packed
                     || gpu.bgra != bgra
                     || gpu.direct != direct_sample
@@ -361,8 +364,8 @@ impl Composer {
             if !needs_new
                 && self
                     .sources
-                    .get(id)
-                    .is_some_and(|gpu| gpu.uploaded_pts == ring.last_pts)
+                    .get(&id)
+                    .is_some_and(|gpu| gpu.uploaded_pts == snap.last_pts)
             {
                 continue;
             }
@@ -373,31 +376,32 @@ impl Composer {
             } else {
                 wgpu::TextureFormat::Rgba8Unorm
             };
+            let pixels = snap.pixels.as_slice();
             #[cfg(windows)]
             if direct_sample && use_rebar {
                 if let Some(uploader) = self.rebar.as_mut() {
                     if let Ok((texture, view)) = uploader.upload_direct(
                         device,
-                        *id,
-                        ring.latest_rgba_or_packed(),
-                        if packed { ring.width * 2 } else { ring.width * 4 },
-                        ring.height,
+                        id,
+                        pixels,
+                        if packed { snap.width * 2 } else { snap.width * 4 },
+                        snap.height,
                         tex_w,
                         format,
                     ) {
-                        self.blit_groups.remove(id);
-                        self.uyvy_groups.remove(id);
+                        self.blit_groups.remove(&id);
+                        self.uyvy_groups.remove(&id);
                         self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
                         self.sources.insert(
-                            *id,
+                            id,
                             SourceGpu {
                                 texture,
                                 view,
                                 width: tex_w,
-                                height: ring.height,
+                                height: snap.height,
                                 packed,
                                 bgra,
-                                uploaded_pts: ring.last_pts,
+                                uploaded_pts: snap.last_pts,
                                 direct: true,
                             },
                         );
@@ -410,26 +414,26 @@ impl Composer {
                 if let Some(uploader) = self.uma.as_mut() {
                     if let Ok((texture, view)) = uploader.upload_direct(
                         device,
-                        *id,
-                        ring.latest_rgba_or_packed(),
-                        if packed { ring.width * 2 } else { ring.width * 4 },
-                        ring.height,
+                        id,
+                        pixels,
+                        if packed { snap.width * 2 } else { snap.width * 4 },
+                        snap.height,
                         tex_w,
                         format,
                     ) {
-                        self.blit_groups.remove(id);
-                        self.uyvy_groups.remove(id);
+                        self.blit_groups.remove(&id);
+                        self.uyvy_groups.remove(&id);
                         self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
                         self.sources.insert(
-                            *id,
+                            id,
                             SourceGpu {
                                 texture,
                                 view,
                                 width: tex_w,
-                                height: ring.height,
+                                height: snap.height,
                                 packed,
                                 bgra,
-                                uploaded_pts: ring.last_pts,
+                                uploaded_pts: snap.last_pts,
                                 direct: true,
                             },
                         );
@@ -437,15 +441,15 @@ impl Composer {
                     }
                 }
             }
-            let recreate = needs_new || self.sources.get(id).is_some_and(|gpu| gpu.direct);
+            let recreate = needs_new || self.sources.get(&id).is_some_and(|gpu| gpu.direct);
             if recreate {
-                self.blit_groups.remove(id);
-                self.uyvy_groups.remove(id);
+                self.blit_groups.remove(&id);
+                self.uyvy_groups.remove(&id);
                 self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
                 let texture = make_texture_format(
                     device,
                     tex_w,
-                    ring.height,
+                    snap.height,
                     wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::COPY_DST
                         | wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -454,12 +458,12 @@ impl Composer {
                 );
                 let view = texture.create_view(&Default::default());
                 self.sources.insert(
-                    *id,
+                    id,
                     SourceGpu {
                         texture,
                         view,
                         width: tex_w,
-                        height: ring.height,
+                        height: snap.height,
                         packed,
                         bgra,
                         uploaded_pts: i64::MIN,
@@ -467,21 +471,25 @@ impl Composer {
                     },
                 );
             }
-            let texture = self.sources.get(id).expect("source inserted").texture.clone();
+            let texture = self.sources.get(&id).expect("source inserted").texture.clone();
             write_aligned_texture(
                 device,
                 &texture,
-                ring.latest_rgba_or_packed(),
-                if packed { ring.width * 2 } else { ring.width * 4 },
-                ring.height,
+                pixels,
+                if packed { snap.width * 2 } else { snap.width * 4 },
+                snap.height,
                 tex_w,
                 format,
                 #[cfg(windows)]
                 self.rebar.as_mut().filter(|_| use_rebar),
             );
-            if let Some(gpu) = self.sources.get_mut(id) {
-                gpu.uploaded_pts = ring.last_pts;
+            if let Some(gpu) = self.sources.get_mut(&id) {
+                gpu.uploaded_pts = snap.last_pts;
             }
+        }
+        #[cfg(windows)]
+        if let Some(rebar) = self.rebar.as_mut() {
+            rebar.flush(device);
         }
     }
 
@@ -702,8 +710,34 @@ impl Composer {
             (unit.width, unit.height)
         };
         self.draw_bus(device, encoder, unit_id, state.program_source, true, width, height)?;
-        self.draw_bus(device, encoder, unit_id, state.preview_source, false, width, height)?;
-        self.draw_mix(device, encoder, unit_id, state)?;
+        if state.preview_source == state.program_source {
+            let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
+            encoder.copy_texture_to_texture(
+                unit.program.as_image_copy(),
+                unit.preview.as_image_copy(),
+                wgpu::Extent3d {
+                    width: unit.width.max(1),
+                    height: unit.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+            );
+        } else {
+            self.draw_bus(device, encoder, unit_id, state.preview_source, false, width, height)?;
+        }
+        if state.mix == 0.0 {
+            let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
+            encoder.copy_texture_to_texture(
+                unit.program.as_image_copy(),
+                unit.mixed.as_image_copy(),
+                wgpu::Extent3d {
+                    width: unit.width.max(1),
+                    height: unit.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+            );
+        } else {
+            self.draw_mix(device, encoder, unit_id, state)?;
+        }
         self.draw_overlays_on_program(device, encoder, unit_id, state)?;
         if compose_mv {
             self.ensure_multiview(device, unit_id);
@@ -1406,7 +1440,8 @@ impl UnitTargets {
     fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC;
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST;
         let program = make_texture(device, width, height, usage);
         let preview = make_texture(device, width, height, usage);
         let mixed = make_texture(device, width, height, usage);
