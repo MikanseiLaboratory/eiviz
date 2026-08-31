@@ -83,8 +83,8 @@ public partial class SettingsWindow : Window
 
     private void OpenNotices_Click(object sender, RoutedEventArgs e)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.md");
-        if (!File.Exists(path))
+        var path = System.IO.Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.md");
+        if (!System.IO.File.Exists(path))
             return;
         Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
