@@ -10,6 +10,24 @@ fn main() {
     if cfg!(target_os = "macos") {
         copy_macos_ndi_dylib();
     }
+    #[cfg(target_os = "macos")]
+    compile_av_pump();
+}
+
+#[cfg(target_os = "macos")]
+fn compile_av_pump() {
+    println!("cargo:rerun-if-changed=native/macos/av_pump.m");
+    println!("cargo:rerun-if-changed=native/macos/av_pump.h");
+    cc::Build::new()
+        .file("native/macos/av_pump.m")
+        .include("native/macos")
+        .flag("-fobjc-arc")
+        .compile("eiviz_av_pump");
+    println!("cargo:rustc-link-lib=framework=AVFoundation");
+    println!("cargo:rustc-link-lib=framework=CoreMedia");
+    println!("cargo:rustc-link-lib=framework=CoreVideo");
+    println!("cargo:rustc-link-lib=framework=CoreAudio");
+    println!("cargo:rustc-link-lib=framework=Foundation");
 }
 
 fn copy_windows_ndi_dll() {

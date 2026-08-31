@@ -12,6 +12,8 @@ mod generator_audio;
 mod dxgi;
 #[cfg(windows)]
 mod media;
+#[cfg(target_os = "macos")]
+mod media_macos;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 #[cfg(target_os = "macos")]
@@ -51,6 +53,8 @@ use device::GpuDevice;
 use dxgi::GpuVideoContext;
 #[cfg(windows)]
 use media::VideoPump;
+#[cfg(target_os = "macos")]
+use media_macos::VideoPump;
 #[cfg(any(windows, target_os = "macos"))]
 use ndi::{NdiReceiver, NdiSender};
 use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device};
@@ -117,7 +121,7 @@ struct Shared {
     gpu_video: Option<GpuVideoContext>,
     omt_gpu: OmtGpu,
     receivers: HashMap<u64, LiveReceiver>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     videos: HashMap<u64, VideoPump>,
     outputs: HashMap<u64, LiveOutput>,
     generators: HashMap<u64, Generator>,
@@ -450,7 +454,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         gpu_video,
         omt_gpu: omt_gpu.clone(),
         receivers: HashMap::new(),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         videos: HashMap::new(),
         outputs: HashMap::new(),
         generators: HashMap::new(),
@@ -1139,12 +1143,38 @@ pub unsafe extern "C" fn mixer_video_start(
     if path.is_empty() {
         return ERR_INVALID_ARGUMENT;
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, path, capture, format);
         return with_mixer(|mixer| {
-            set_error(&mixer.telemetry, "Media Foundation is not available");
+            set_error(&mixer.telemetry, "Video ingest is not available");
             ERR_IO
+        })
+        .unwrap_or_else(|code| code);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = format;
+        return with_mixer(|mixer| {
+            let uploads = {
+                let mut shared = mixer.shared.lock().expect("shared");
+                let previous = shared.videos.remove(&id);
+                drop(shared.receivers.remove(&id));
+                let uploads = shared.uploads.clone();
+                drop(shared);
+                drop(previous);
+                uploads
+            };
+            match VideoPump::start(id, path, capture != 0, uploads) {
+                Ok(pump) => {
+                    mixer.shared.lock().expect("shared").videos.insert(id, pump);
+                    OK
+                }
+                Err(error) => {
+                    set_error(&mixer.telemetry, error);
+                    ERR_IO
+                }
+            }
         })
         .unwrap_or_else(|code| code);
     }
@@ -1178,12 +1208,12 @@ pub unsafe extern "C" fn mixer_video_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, playing);
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1197,12 +1227,12 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, looping);
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1216,12 +1246,12 @@ pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, hns);
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1238,12 +1268,12 @@ pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = id;
         return with_mixer(|_| ERR_INVALID_ARGUMENT).unwrap_or_else(|code| code);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
         let shared = mixer.shared.lock().expect("shared");
         let Some(pump) = shared.videos.get(&id) else {
@@ -1274,7 +1304,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
     with_mixer(|mixer| {
         let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
@@ -1284,7 +1314,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
                 None
             };
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             (uploads, gpu)
         };
@@ -1335,12 +1365,12 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             uploads
         };
@@ -1660,7 +1690,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
     with_mixer(|mixer| {
         let uploads = {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             shared.receivers.remove(&id);
             shared.generators.remove(&id);
@@ -1668,7 +1698,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
             shared.live_save.remove(&id);
             let uploads = shared.uploads.clone();
             drop(shared);
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
             uploads
         };

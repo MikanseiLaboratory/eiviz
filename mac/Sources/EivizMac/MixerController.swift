@@ -37,7 +37,6 @@ final class MixerController: ObservableObject {
     @Published var openMultiview: MultiviewLayout?
     @Published var expandedTransitions: Set<UUID> = []
 
-    let pumps = FramePump()
     private var booted = false
     private var tbarLatching = false
     private var meterTimer: Timer?
@@ -312,7 +311,6 @@ final class MixerController: ObservableObject {
         var entry = input
         if let id = replacing, let index = session.inputs.firstIndex(where: { $0.id == id }) {
             if !session.inputs[index].isBuiltin {
-                pumps.stop(id)
                 _ = mixer_destroy_source(id)
             }
             entry.id = id
@@ -336,7 +334,6 @@ final class MixerController: ObservableObject {
         else { return }
         closeInputPreview(id)
         videoRoles.removeValue(forKey: id)
-        pumps.stop(id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
         selectedInputId = nil
@@ -375,13 +372,13 @@ final class MixerController: ObservableObject {
               let index = session.inputs.firstIndex(where: { $0.id == video.id })
         else { return }
         session.inputs[index].videoLoop.toggle()
-        pumps.setLoop(video.id, loop: session.inputs[index].videoLoop)
+        _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
         objectWillChange.send()
     }
 
     func toggleScenePlay(_ scene: SceneEntry) {
-        guard let video = sceneVideo(scene), let info = pumps.info(video.id) else { return }
-        pumps.setPlaying(video.id, playing: !info.playing)
+        guard let video = sceneVideo(scene), let info = copyVideoInfo(video.id) else { return }
+        _ = mixer_video_set_playing(video.id, info.playing == 0 ? 1 : 0)
         objectWillChange.send()
     }
 
@@ -409,8 +406,8 @@ final class MixerController: ObservableObject {
     }
 
     func scenePlaying(_ scene: SceneEntry) -> Bool {
-        guard let video = sceneVideo(scene), let info = pumps.info(video.id) else { return false }
-        return info.playing
+        guard let video = sceneVideo(scene), let info = copyVideoInfo(video.id) else { return false }
+        return info.playing != 0
     }
 
     func saveScene(_ scene: SceneEntry) {
@@ -659,23 +656,46 @@ final class MixerController: ObservableObject {
         return id
     }
 
+    private var fileVideoId: UInt64? {
+        selectedVideoId ?? session.inputs.first { $0.kind == .video }?.id
+    }
+
+    private func copyVideoInfo(_ id: UInt64) -> EivizVideoInfo? {
+        var info = EivizVideoInfo(playing: 0, is_file: 0, position_hns: 0, duration_hns: 0)
+        guard mixer_video_copy_info(id, &info) == EIVIZ_OK else { return nil }
+        return info
+    }
+
+    private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
+        MixerFFI.withCString(path) { cstr in
+            fail(
+                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA),
+                capture == 0 ? "Video start" : "UVC start"
+            )
+        }
+        _ = mixer_video_set_loop(id, loop ? 1 : 0)
+        _ = mixer_video_set_playing(id, playing ? 1 : 0)
+    }
+
     func videoPlayToggle() {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
+        guard let id = fileVideoId else { return }
         videoPlaying.toggle()
-        pumps.setPlaying(id, playing: videoPlaying)
+        _ = mixer_video_set_playing(id, videoPlaying ? 1 : 0)
     }
 
     func videoRestart() {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
-        pumps.seek(id, fraction: 0)
-        pumps.setPlaying(id, playing: true)
+        guard let id = fileVideoId else { return }
+        _ = mixer_video_seek(id, 0)
+        _ = mixer_video_set_playing(id, 1)
         videoPlaying = true
         videoFraction = 0
     }
 
     func videoSeek(_ value: Double) {
-        guard let id = selectedVideoId ?? pumps.activeFileId else { return }
-        pumps.seek(id, fraction: value)
+        guard let id = fileVideoId, let info = copyVideoInfo(id) else { return }
+        let duration = max(info.duration_hns, 1)
+        let hns = Int64((max(0, min(1, value)) * Double(duration)).rounded())
+        _ = mixer_video_seek(id, hns)
         videoFraction = value
     }
 
@@ -713,7 +733,13 @@ final class MixerController: ObservableObject {
             }
         case .video:
             if let path = input.pathOrAddress {
-                pumps.startFile(id: input.id, path: path, loop: input.videoLoop, playing: input.videoStartsPlaying)
+                startVideoInput(
+                    id: input.id,
+                    path: path,
+                    capture: 0,
+                    loop: input.videoLoop,
+                    playing: input.videoStartsPlaying
+                )
                 videoTitle = input.name
                 videoPlaying = input.videoStartsPlaying
             }
@@ -762,11 +788,11 @@ final class MixerController: ObservableObject {
     private func startCapture(id: UInt64, deviceId: String) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            pumps.startCapture(id: id, deviceId: deviceId)
+            startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
         case .notDetermined:
             Task { @MainActor in
                 if await AVCaptureDevice.requestAccess(for: .video) {
-                    pumps.startCapture(id: id, deviceId: deviceId)
+                    startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
                 } else {
                     errorText = "Camera access was denied."
                 }
@@ -874,11 +900,11 @@ final class MixerController: ObservableObject {
             resourceText = hud.text
             warnText = hud.warn
         }
-        if let id = selectedVideoId ?? pumps.activeFileId, let info = pumps.info(id) {
-            videoPlaying = info.playing
+        if let id = fileVideoId, let info = copyVideoInfo(id) {
+            videoPlaying = info.playing != 0
             videoTitle = session.inputs.first { $0.id == id }?.name ?? videoTitle
-            if info.duration > 0 {
-                videoFraction = info.position / info.duration
+            if info.duration_hns > 0 {
+                videoFraction = Double(info.position_hns) / Double(info.duration_hns)
             }
         }
         tickVideoTransport()
@@ -911,12 +937,12 @@ final class MixerController: ObservableObject {
             let paused = matchesTrigger(input.videoPauseWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
             let restarted = matchesTrigger(input.videoRestartWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
             if restarted {
-                pumps.seek(input.id, fraction: 0)
+                _ = mixer_video_seek(input.id, 0)
             }
             if paused {
-                pumps.setPlaying(input.id, playing: false)
+                _ = mixer_video_set_playing(input.id, 0)
             } else if restarted || shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
-                pumps.setPlaying(input.id, playing: true)
+                _ = mixer_video_set_playing(input.id, 1)
             }
             videoRoles[input.id] = now
         }

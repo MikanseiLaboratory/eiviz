@@ -1,0 +1,40 @@
+#ifndef EIVIZ_AV_PUMP_H
+#define EIVIZ_AV_PUMP_H
+
+#include <stdint.h>
+
+enum {
+    EIVIZ_AV_KIND_VIDEO = 1,
+    EIVIZ_AV_KIND_AUDIO = 2,
+};
+
+typedef struct EivizAvSample {
+    int32_t kind;
+    int32_t width;
+    int32_t height;
+    int32_t stride;
+    int32_t sample_rate;
+    int32_t channels;
+    int32_t frames;
+    int64_t pts_hns;
+    const uint8_t *data;
+    uint32_t bytes;
+} EivizAvSample;
+
+typedef struct EivizAvPump EivizAvPump;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns);
+EivizAvPump *eiviz_av_open_capture(const char *device_id);
+void eiviz_av_close(EivizAvPump *pump);
+int64_t eiviz_av_duration_hns(const EivizAvPump *pump);
+int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
