@@ -1,4 +1,5 @@
 //! One-off ReBAR bench for four LAN NDI sources. Ignored by default.
+#![cfg(windows)]
 
 use std::ffi::CString;
 use std::thread;
