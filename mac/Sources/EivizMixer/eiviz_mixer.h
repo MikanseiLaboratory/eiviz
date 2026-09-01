@@ -71,6 +71,7 @@ typedef struct EivizOverlayDesc {
     int32_t z;
     uint32_t audio_follow;
     uint32_t pad;
+    const char *label;
 } EivizOverlayDesc;
 
 typedef struct EivizUnitState {
@@ -194,6 +195,8 @@ int32_t mixer_copy_stats(EivizMixerStats *out);
 int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);
 int32_t mixer_set_rebar_optimization(uint32_t enabled);
 int32_t mixer_set_ndi_gpu_upload(uint32_t enabled);
+int32_t mixer_set_bus_colors(uint8_t prv_r, uint8_t prv_g, uint8_t prv_b, uint8_t pgm_r, uint8_t pgm_g, uint8_t pgm_b, uint8_t in_r, uint8_t in_g, uint8_t in_b);
+int32_t mixer_set_mv_label(float size, uint32_t percent, uint32_t top);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);

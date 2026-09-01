@@ -50,7 +50,6 @@ public partial class App : Application
         foreach (var unit in Session.Units)
         {
             unit.EnsureDefaultTransitions();
-            unit.EnsureDefaultTiles();
             MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
             MixerNative.ThrowIfFailed(
                 MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
@@ -59,6 +58,7 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");
+        BusTheme.PushMixer(Session.Settings);
         MixerNative.ThrowIfFailed(
             MixerNative.SetRebarOptimization(Session.Settings.RebarOptimizationEnabled ? 1u : 0u),
             "Set ReBAR optimization");

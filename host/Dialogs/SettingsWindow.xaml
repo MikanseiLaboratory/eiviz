@@ -29,11 +29,42 @@
                     <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
                 </StackPanel>
             </StackPanel>
-            <StackPanel x:Name="DisplayPanel" Margin="20">
+            <ScrollViewer x:Name="DisplayPanel" Margin="20" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
                 <TextBlock Text="Theme"/>
                 <ComboBox x:Name="ThemeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="Charcoal" IsSelected="True"/>
                 </ComboBox>
+                <TextBlock Text="Preview color"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
+                    <Border x:Name="PreviewColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
+                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickPreviewColor_Click"/>
+                </StackPanel>
+                <TextBlock Text="Program color"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
+                    <Border x:Name="ProgramColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
+                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickProgramColor_Click"/>
+                </StackPanel>
+                <TextBlock Text="Inactive color"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
+                    <Border x:Name="InactiveColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
+                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
+                </StackPanel>
+                <TextBlock Text="Multiview label size"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24"/>
+                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0">
+                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
+                        <ComboBoxItem Content="%" Tag="Percent"/>
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock Text="Multiview label position"/>
+                <ComboBox x:Name="MvLabelAnchorBox" Margin="0,4,0,4" Width="168" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Bottom" Tag="Bottom" IsSelected="True"/>
+                    <ComboBoxItem Content="Top" Tag="Top"/>
+                </ComboBox>
+                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,12"
+                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window."/>
                 <TextBlock Text="Master Frame Rate"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
@@ -65,6 +96,7 @@
                 <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
                            Text="Master frame rate clocks the render thread. The frame buffer holds that many completed frames so a compose spike does not hitch the output; audio is delayed by the same amount. If the buffer runs out, compose is skipped until the clock catches up. Internal color format is how video is kept in RAM and uploaded to the GPU. UYVY is half the size of BGRA; the mixer converts to RGB only for frames that are actually composed. Each Mixing Unit can override resolution and output frame rate from the Mixing Unit dialog."/>
             </StackPanel>
+            </ScrollViewer>
             <StackPanel x:Name="PerformancePanel" Margin="20" Visibility="Collapsed">
                 <TextBlock Text="Graphics Adapter" FontWeight="Bold"/>
                 <TextBlock x:Name="AdapterName" Margin="0,4,0,12" Text="—"/>
@@ -115,7 +147,7 @@
                     <ComboBoxItem Content="Every 8 frames" Tag="8"/>
                 </ComboBox>
                 <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="Each Multiview window is a vMix-style mosaic: Preview and Program on top, eight Input or Scene windows below. Outputs can send a Multiview by picking it from the list. Fullscreen: F11. Windows set to Follow project use the interval above. Program, Preview, and outputs stay at the master frame rate. Every 3 frames is about 20 fps at 59.94."/>
+                           Text="Each Multiview window picks its own mosaic template (Preview + Program plus a lower grid, or a full 2×2 / 3×3 / 4×4). Outputs can send a Multiview by picking it from the list. Fullscreen: F11. Windows set to Follow project use the interval above. Program, Preview, and outputs stay at the master frame rate. Every 3 frames is about 20 fps at 59.94."/>
             </StackPanel>
             <DockPanel x:Name="AudioBusPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">

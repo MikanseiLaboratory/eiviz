@@ -21,10 +21,10 @@
                 </Grid.ColumnDefinitions>
                 <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
                                    HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Border BorderBrush="#E87722" BorderThickness="2" Background="#000">
+                    <Border x:Name="PreviewFrame" BorderBrush="#00FF00" BorderThickness="2" Background="#000">
                         <DockPanel>
-                            <Border DockPanel.Dock="Top" Background="#E87722" Padding="8,4">
-                                <TextBlock Text="PREVIEW" FontWeight="Bold" Foreground="#111"/>
+                            <Border x:Name="PreviewHeader" DockPanel.Dock="Top" Background="#00FF00" Padding="8,4">
+                                <TextBlock x:Name="PreviewHeaderText" Text="PREVIEW" FontWeight="Bold" Foreground="#111"/>
                             </Border>
                             <preview:SwapchainHost x:Name="PreviewHost" OutputKind="1" UnitId="1"/>
                         </DockPanel>
@@ -44,10 +44,10 @@
                 </DockPanel>
                 <preview:AspectBox x:Name="ProgramAspect" Grid.Column="2" HeaderHeight="28"
                                    HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Border BorderBrush="#2E7D32" BorderThickness="2" Background="#000">
+                    <Border x:Name="ProgramFrame" BorderBrush="#FF0000" BorderThickness="2" Background="#000">
                         <DockPanel>
-                            <Border DockPanel.Dock="Top" Background="#2E7D32" Padding="8,4">
-                                <TextBlock Text="PROGRAM" FontWeight="Bold"/>
+                            <Border x:Name="ProgramHeader" DockPanel.Dock="Top" Background="#FF0000" Padding="8,4">
+                                <TextBlock x:Name="ProgramHeaderText" Text="PROGRAM" FontWeight="Bold"/>
                             </Border>
                             <preview:SwapchainHost x:Name="ProgramHost" OutputKind="0" UnitId="1"/>
                         </DockPanel>

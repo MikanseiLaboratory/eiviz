@@ -150,6 +150,27 @@ enum InternalColorFormat: String, Codable {
 struct MvSlot: Codable, Equatable {
     var kind: MvSlotKind = .none
     var sourceId: UInt64 = 0
+    var labelFollow: Bool = true
+    var label: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case kind, sourceId, labelFollow, label
+    }
+
+    init(kind: MvSlotKind = .none, sourceId: UInt64 = 0, labelFollow: Bool = true, label: String = "") {
+        self.kind = kind
+        self.sourceId = sourceId
+        self.labelFollow = labelFollow
+        self.label = label
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(MvSlotKind.self, forKey: .kind) ?? .none
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        labelFollow = try container.decodeIfPresent(Bool.self, forKey: .labelFollow) ?? true
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+    }
 }
 
 enum VideoPlayWhen: String, Codable, Hashable {
@@ -349,7 +370,6 @@ struct MixingUnitEntry: Identifiable, Codable {
     var fpsDen: UInt32 = 1_001
     var transitions: [TransitionPreset] = []
     var overlays: [OverlaySlot] = []
-    var multiviewTiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
     var audioBusId: UInt64 = 1
     var audioLink: AudioLinkMode = .follow
     var displayName: String { "\(name)  \(width)x\(height) \(fpsLabel)" }
@@ -410,6 +430,165 @@ struct OutputEntry: Identifiable, Codable {
     }
 }
 
+enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
+    case previewProgram8 = "PreviewProgram8"
+    case previewProgram8Bottom = "PreviewProgram8Bottom"
+    case previewProgram8Left = "PreviewProgram8Left"
+    case previewProgram8Right = "PreviewProgram8Right"
+    case previewProgram2 = "PreviewProgram2"
+    case quad4TopLeft = "Quad4TopLeft"
+    case quad4TopRight = "Quad4TopRight"
+    case quad4BottomLeft = "Quad4BottomLeft"
+    case quad4BottomRight = "Quad4BottomRight"
+    case large5TopLeft = "Large5TopLeft"
+    case large5TopRight = "Large5TopRight"
+    case large5BottomLeft = "Large5BottomLeft"
+    case large5BottomRight = "Large5BottomRight"
+    case grid2x2 = "Grid2x2"
+    case grid3x3 = "Grid3x3"
+    case grid4x4 = "Grid4x4"
+
+    var id: String { rawValue }
+
+    static let groups: [(title: String, items: [MultiviewTemplate])] = [
+        ("Preview + Program + 8", [.previewProgram8, .previewProgram8Bottom, .previewProgram8Left, .previewProgram8Right]),
+        ("Preview + Program + 2", [.previewProgram2]),
+        ("1 + 5", [.large5TopLeft, .large5TopRight, .large5BottomLeft, .large5BottomRight]),
+        ("3 + 4", [.quad4TopLeft, .quad4TopRight, .quad4BottomLeft, .quad4BottomRight]),
+        ("Grid", [.grid2x2, .grid3x3, .grid4x4])
+    ]
+
+    static var choices: [MultiviewTemplate] { groups.flatMap(\.items) }
+
+    var title: String {
+        switch self {
+        case .previewProgram8: return "Buses on top"
+        case .previewProgram8Bottom: return "Buses on bottom"
+        case .previewProgram8Left: return "Buses on left"
+        case .previewProgram8Right: return "Buses on right"
+        case .previewProgram2: return "Buses on top"
+        case .large5TopLeft: return "Large top-left"
+        case .large5TopRight: return "Large top-right"
+        case .large5BottomLeft: return "Large bottom-left"
+        case .large5BottomRight: return "Large bottom-right"
+        case .quad4TopLeft: return "Four top-left"
+        case .quad4TopRight: return "Four top-right"
+        case .quad4BottomLeft: return "Four bottom-left"
+        case .quad4BottomRight: return "Four bottom-right"
+        case .grid2x2: return "2×2"
+        case .grid3x3: return "3×3"
+        case .grid4x4: return "4×4"
+        default: return rawValue
+        }
+    }
+
+    var tileCount: Int {
+        switch self {
+        case .previewProgram2, .grid2x2: return 4
+        case .quad4TopLeft, .quad4TopRight, .quad4BottomLeft, .quad4BottomRight: return 7
+        case .large5TopLeft, .large5TopRight, .large5BottomLeft, .large5BottomRight: return 6
+        case .grid3x3: return 9
+        case .grid4x4: return 16
+        default: return 10
+        }
+    }
+
+    var panes: [MultiviewPane] {
+        switch self {
+        case .previewProgram2:
+            return [
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
+            ] + MultiviewPane.grid(cols: 2, rows: 1, x: 0, y: 0.5, width: 1, height: 0.5)
+        case .previewProgram8:
+            return [
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
+            ] + MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0.5, width: 1, height: 0.5)
+        case .previewProgram8Bottom:
+            return MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0, width: 1, height: 0.5) + [
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5)
+            ]
+        case .previewProgram8Left:
+            return [
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5)
+            ] + MultiviewPane.grid(cols: 2, rows: 4, x: 0.5, y: 0, width: 0.5, height: 1)
+        case .previewProgram8Right:
+            return MultiviewPane.grid(cols: 2, rows: 4, x: 0, y: 0, width: 0.5, height: 1) + [
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
+            ]
+        case .quad4TopLeft: return MultiviewPane.quad4(smallQuad: 0)
+        case .quad4TopRight: return MultiviewPane.quad4(smallQuad: 1)
+        case .quad4BottomLeft: return MultiviewPane.quad4(smallQuad: 2)
+        case .quad4BottomRight: return MultiviewPane.quad4(smallQuad: 3)
+        case .large5TopLeft: return MultiviewPane.large5(largeCol: 0, largeRow: 0)
+        case .large5TopRight: return MultiviewPane.large5(largeCol: 1, largeRow: 0)
+        case .large5BottomLeft: return MultiviewPane.large5(largeCol: 0, largeRow: 1)
+        case .large5BottomRight: return MultiviewPane.large5(largeCol: 1, largeRow: 1)
+        case .grid3x3:
+            return MultiviewPane.grid(cols: 3, rows: 3, x: 0, y: 0, width: 1, height: 1)
+        case .grid4x4:
+            return MultiviewPane.grid(cols: 4, rows: 4, x: 0, y: 0, width: 1, height: 1)
+        default:
+            return MultiviewPane.grid(cols: 2, rows: 2, x: 0, y: 0, width: 1, height: 1)
+        }
+    }
+}
+
+struct MultiviewPane {
+    var x: Float
+    var y: Float
+    var width: Float
+    var height: Float
+
+    static func grid(cols: Int, rows: Int, x: Float, y: Float, width: Float, height: Float) -> [MultiviewPane] {
+        return (0..<(cols * rows)).map { i in
+            let col = i % cols
+            let row = i / cols
+            let x0 = x + width * Float(col) / Float(cols)
+            let y0 = y + height * Float(row) / Float(rows)
+            let x1 = x + width * Float(col + 1) / Float(cols)
+            let y1 = y + height * Float(row + 1) / Float(rows)
+            return MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+        }
+    }
+
+    static func quad4(smallQuad: Int) -> [MultiviewPane] {
+        (0..<4).flatMap { quad -> [MultiviewPane] in
+            let x = Float(quad % 2) * 0.5
+            let y = Float(quad / 2) * 0.5
+            if quad == smallQuad {
+                return grid(cols: 2, rows: 2, x: x, y: y, width: 0.5, height: 0.5)
+            }
+            return [MultiviewPane(x: x, y: y, width: 0.5, height: 0.5)]
+        }
+    }
+
+    static func large5(largeCol: Int, largeRow: Int) -> [MultiviewPane] {
+        let x0 = Float(largeCol) / 3
+        let y0 = Float(largeRow) / 3
+        let x1 = Float(largeCol + 2) / 3
+        let y1 = Float(largeRow + 2) / 3
+        var panes = [MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0)]
+        for row in 0..<3 {
+            for col in 0..<3 {
+                if col >= largeCol && col < largeCol + 2 && row >= largeRow && row < largeRow + 2 {
+                    continue
+                }
+                let sx0 = Float(col) / 3
+                let sy0 = Float(row) / 3
+                let sx1 = Float(col + 1) / 3
+                let sy1 = Float(row + 1) / 3
+                panes.append(MultiviewPane(x: sx0, y: sy0, width: sx1 - sx0, height: sy1 - sy0))
+            }
+        }
+        return panes
+    }
+}
+
 struct MultiviewLayout: Identifiable, Codable {
     var id: UInt64
     var name: String
@@ -417,11 +596,106 @@ struct MultiviewLayout: Identifiable, Codable {
     var previewUnitId: UInt64 = 1
     var programUnitId: UInt64 = 1
     var presentInterval: UInt32 = 0
-    var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
+    var template: MultiviewTemplate = .previewProgram8
+    var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10)
+    var previewLabelFollow: Bool = true
+    var previewLabel: String = ""
+    var programLabelFollow: Bool = true
+    var programLabel: String = ""
     var gpuId: UInt64 { EIVIZ_MULTIVIEW_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, previewUnitId, programUnitId, presentInterval, tiles
+        case id, name, previewUnitId, programUnitId, presentInterval, tiles, template
+        case previewLabelFollow, previewLabel, programLabelFollow, programLabel
+    }
+
+    init(
+        id: UInt64,
+        name: String,
+        monitorId: UInt64 = 0,
+        previewUnitId: UInt64 = 1,
+        programUnitId: UInt64 = 1,
+        presentInterval: UInt32 = 0,
+        template: MultiviewTemplate = .previewProgram8,
+        tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10),
+        previewLabelFollow: Bool = true,
+        previewLabel: String = "",
+        programLabelFollow: Bool = true,
+        programLabel: String = ""
+    ) {
+        self.id = id
+        self.name = name
+        self.monitorId = monitorId
+        self.previewUnitId = previewUnitId
+        self.programUnitId = programUnitId
+        self.presentInterval = presentInterval
+        self.template = template
+        self.tiles = tiles
+        self.previewLabelFollow = previewLabelFollow
+        self.previewLabel = previewLabel
+        self.programLabelFollow = programLabelFollow
+        self.programLabel = programLabel
+        ensureTiles()
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Multiview \(id)"
+        previewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .previewUnitId) ?? 1
+        programUnitId = try container.decodeIfPresent(UInt64.self, forKey: .programUnitId) ?? 1
+        presentInterval = try container.decodeIfPresent(UInt32.self, forKey: .presentInterval) ?? 0
+        template = try container.decodeIfPresent(MultiviewTemplate.self, forKey: .template) ?? .previewProgram8
+        tiles = try container.decodeIfPresent([MvSlot].self, forKey: .tiles) ?? []
+        previewLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .previewLabelFollow) ?? true
+        previewLabel = try container.decodeIfPresent(String.self, forKey: .previewLabel) ?? ""
+        programLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .programLabelFollow) ?? true
+        programLabel = try container.decodeIfPresent(String.self, forKey: .programLabel) ?? ""
+        ensureTiles()
+    }
+
+    mutating func ensureTiles() {
+        absorbFixedBusPanes()
+        let want = template.tileCount
+        if tiles.count < want {
+            tiles.append(contentsOf: Array(repeating: MvSlot(), count: want - tiles.count))
+        }
+        if tiles.count > want {
+            tiles.removeLast(tiles.count - want)
+        }
+    }
+
+    mutating func seedDefaultBuses(_ unitId: UInt64) {
+        guard unitId != 0, tiles.count >= 2, tiles.allSatisfy({ $0.kind == .none }) else { return }
+        tiles[0].kind = .muPreview
+        tiles[0].sourceId = unitId
+        tiles[1].kind = .muProgram
+        tiles[1].sourceId = unitId
+    }
+
+    private mutating func absorbFixedBusPanes() {
+        let buses = [
+            MvSlot(
+                kind: .muPreview,
+                sourceId: max(1, previewUnitId),
+                labelFollow: previewLabelFollow,
+                label: previewLabel
+            ),
+            MvSlot(
+                kind: .muProgram,
+                sourceId: max(1, programUnitId),
+                labelFollow: programLabelFollow,
+                label: programLabel
+            )
+        ]
+        switch (template, tiles.count) {
+        case (.previewProgram2, 2), (.previewProgram8, 8), (.previewProgram8Left, 8):
+            tiles.insert(contentsOf: buses, at: 0)
+        case (.previewProgram8Bottom, 8), (.previewProgram8Right, 8):
+            tiles.append(contentsOf: buses)
+        default:
+            break
+        }
     }
 }
 
@@ -439,6 +713,26 @@ struct AudioBusEntry: Identifiable, Codable {
     var mute: Bool = false
 }
 
+struct RgbColor: Codable, Equatable, Hashable {
+    var r: UInt8
+    var g: UInt8
+    var b: UInt8
+
+    static let previewDefault = RgbColor(r: 0, g: 255, b: 0)
+    static let programDefault = RgbColor(r: 255, g: 0, b: 0)
+    static let inactiveDefault = RgbColor(r: 64, g: 64, b: 64)
+}
+
+enum MvLabelUnit: String, Codable {
+    case px = "Px"
+    case percent = "Percent"
+}
+
+enum MvLabelAnchor: String, Codable {
+    case top = "Top"
+    case bottom = "Bottom"
+}
+
 struct SessionSettings: Codable {
     var masterFpsNum: UInt32 = 60_000
     var masterFpsDen: UInt32 = 1_001
@@ -452,6 +746,12 @@ struct SessionSettings: Codable {
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
     var ndiGpuUpload: Bool?
+    var previewColor: RgbColor = .previewDefault
+    var programColor: RgbColor = .programDefault
+    var inactiveColor: RgbColor = .inactiveDefault
+    var multiviewLabelSize: Float = 18
+    var multiviewLabelUnit: MvLabelUnit = .px
+    var multiviewLabelAnchor: MvLabelAnchor = .bottom
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
@@ -460,6 +760,31 @@ struct SessionSettings: Codable {
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
         return max(1, min(8, frames))
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        masterFpsNum = try container.decodeIfPresent(UInt32.self, forKey: .masterFpsNum) ?? 60_000
+        masterFpsDen = try container.decodeIfPresent(UInt32.self, forKey: .masterFpsDen) ?? 1_001
+        defaultWidth = try container.decodeIfPresent(UInt32.self, forKey: .defaultWidth) ?? 1920
+        defaultHeight = try container.decodeIfPresent(UInt32.self, forKey: .defaultHeight) ?? 1080
+        theme = try container.decodeIfPresent(String.self, forKey: .theme) ?? "Charcoal"
+        defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
+        frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
+        defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
+        rebarOptimization = try container.decodeIfPresent(Bool.self, forKey: .rebarOptimization)
+        rebarDirectSample = try container.decodeIfPresent(Bool.self, forKey: .rebarDirectSample)
+        ndiGpuUpload = try container.decodeIfPresent(Bool.self, forKey: .ndiGpuUpload)
+        previewColor = try container.decodeIfPresent(RgbColor.self, forKey: .previewColor) ?? .previewDefault
+        programColor = try container.decodeIfPresent(RgbColor.self, forKey: .programColor) ?? .programDefault
+        inactiveColor = try container.decodeIfPresent(RgbColor.self, forKey: .inactiveColor) ?? .inactiveDefault
+        multiviewLabelSize = try container.decodeIfPresent(Float.self, forKey: .multiviewLabelSize) ?? 18
+        multiviewLabelUnit = try container.decodeIfPresent(MvLabelUnit.self, forKey: .multiviewLabelUnit) ?? .px
+        multiviewLabelAnchor = try container.decodeIfPresent(MvLabelAnchor.self, forKey: .multiviewLabelAnchor) ?? .bottom
+        lastSessionPath = try container.decodeIfPresent(String.self, forKey: .lastSessionPath)
     }
 }
 
@@ -531,13 +856,14 @@ struct MixerSessionData: Codable {
 
     @discardableResult
     mutating func addMultiview(unitId: UInt64) -> MultiviewLayout {
-        let layout = MultiviewLayout(
+        var layout = MultiviewLayout(
             id: nextMultiviewId,
             name: "Multiview \(nextMultiviewId)",
             monitorId: nextMonitorId,
             previewUnitId: unitId,
             programUnitId: unitId
         )
+        layout.seedDefaultBuses(unitId)
         nextMultiviewId += 1
         nextMonitorId += 1
         multiviews.append(layout)

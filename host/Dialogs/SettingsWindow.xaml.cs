@@ -29,7 +29,13 @@ public partial class SettingsWindow : Window
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             InternalColorFormat = session.Settings.InternalColorFormat,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
-            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled
+            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
+            PreviewColor = RgbColor.FromOrDefault(session.Settings.PreviewColor, RgbColor.PreviewDefault),
+            ProgramColor = RgbColor.FromOrDefault(session.Settings.ProgramColor, RgbColor.ProgramDefault),
+            InactiveColor = RgbColor.FromOrDefault(session.Settings.InactiveColor, RgbColor.InactiveDefault),
+            MultiviewLabelSize = session.Settings.MultiviewLabelSize,
+            MultiviewLabelUnit = session.Settings.MultiviewLabelUnit,
+            MultiviewLabelAnchor = session.Settings.MultiviewLabelAnchor
         };
         foreach (var output in session.Outputs)
         {
@@ -56,6 +62,10 @@ public partial class SettingsWindow : Window
         RebuildBuses();
         AboutVersion.Text = $"Version {HostVersion.Display}";
         FillRebar();
+        PaintBusColors();
+        MvLabelSizeBox.Text = Settings.MultiviewLabelSize.ToString("0.##");
+        SelectTag(MvLabelUnitBox, Settings.MultiviewLabelUnit == MvLabelUnit.Percent ? "Percent" : "Px");
+        SelectTag(MvLabelAnchorBox, Settings.MultiviewLabelAnchor == MvLabelAnchor.Top ? "Top" : "Bottom");
     }
 
     public SessionSettings Settings { get; }
@@ -102,6 +112,53 @@ public partial class SettingsWindow : Window
         SelectTag(MvPresentBox, "3");
         RebarOptBox.IsChecked = true;
         NdiGpuBox.IsChecked = true;
+        Settings.ResetBusColors();
+        PaintBusColors();
+        MvLabelSizeBox.Text = "18";
+        SelectTag(MvLabelUnitBox, "Px");
+        SelectTag(MvLabelAnchorBox, "Bottom");
+    }
+
+    private void PickPreviewColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Preview color", Settings.PreviewColor) is { } color)
+        {
+            Settings.PreviewColor = color;
+            PaintBusColors();
+        }
+    }
+
+    private void PickProgramColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Program color", Settings.ProgramColor) is { } color)
+        {
+            Settings.ProgramColor = color;
+            PaintBusColors();
+        }
+    }
+
+    private void PickInactiveColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Inactive color", Settings.InactiveColor) is { } color)
+        {
+            Settings.InactiveColor = color;
+            PaintBusColors();
+        }
+    }
+
+    private RgbColor? PickColor(string title, RgbColor current)
+    {
+        var dialog = new ColorPickWindow(title, current) { Owner = this };
+        return dialog.ShowDialog() == true ? dialog.Result : null;
+    }
+
+    private void PaintBusColors()
+    {
+        if (PreviewColorSwatch is null || ProgramColorSwatch is null || InactiveColorSwatch is null)
+            return;
+        PreviewColorSwatch.Background = BusTheme.PreviewBrush(Settings);
+        ProgramColorSwatch.Background = BusTheme.ProgramBrush(Settings);
+        InactiveColorSwatch.Background = BusTheme.InactiveBrush(Settings);
     }
 
     private void FillRebar()
@@ -537,6 +594,13 @@ public partial class SettingsWindow : Window
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
+        if (float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var labelSize)
+            || float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out labelSize))
+            Settings.MultiviewLabelSize = Math.Clamp(labelSize, 1f, 200f);
+        if (MvLabelUnitBox.SelectedItem is ComboBoxItem unitItem && unitItem.Tag is string unitTag)
+            Settings.MultiviewLabelUnit = unitTag == "Percent" ? MvLabelUnit.Percent : MvLabelUnit.Px;
+        if (MvLabelAnchorBox.SelectedItem is ComboBoxItem anchorItem && anchorItem.Tag is string anchorTag)
+            Settings.MultiviewLabelAnchor = anchorTag == "Top" ? MvLabelAnchor.Top : MvLabelAnchor.Bottom;
         Settings.RebarOptimization = RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;

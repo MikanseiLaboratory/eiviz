@@ -7,6 +7,7 @@ mod compose;
 mod convert;
 mod delay;
 mod device;
+mod labels;
 mod generator_audio;
 #[cfg(windows)]
 mod dxgi;
@@ -117,11 +118,54 @@ impl OutputSnap {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BusColors {
+    preview: [u8; 3],
+    program: [u8; 3],
+    inactive: [u8; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MvLabelStyle {
+    size: f32,
+    percent: bool,
+    top: bool,
+}
+
+impl Default for MvLabelStyle {
+    fn default() -> Self {
+        Self {
+            size: 18.0,
+            percent: false,
+            top: false,
+        }
+    }
+}
+
+impl Default for BusColors {
+    fn default() -> Self {
+        Self {
+            preview: [0, 255, 0],
+            program: [255, 0, 0],
+            inactive: [64, 64, 64],
+        }
+    }
+}
+
+struct SceneSpec {
+    width: u32,
+    height: u32,
+    layers: Arc<[crate::abi::OverlayDesc]>,
+    labels: Arc<[String]>,
+}
+
 struct Shared {
     master_fps_num: u32,
     master_fps_den: u32,
     units: HashMap<u64, LiveUnit>,
-    scenes: HashMap<u64, (u32, u32, Arc<[crate::abi::OverlayDesc]>)>,
+    scenes: HashMap<u64, SceneSpec>,
+    bus_colors: BusColors,
+    mv_label: MvLabelStyle,
     uploads: Arc<Mutex<UploadStore>>,
     gpu_ingest: GpuIngest,
     #[cfg(windows)]
@@ -467,6 +511,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         master_fps_den: fps_den,
         units: HashMap::new(),
         scenes: HashMap::new(),
+        bus_colors: BusColors::default(),
+        mv_label: MvLabelStyle::default(),
         uploads: Arc::clone(&uploads),
         gpu_ingest,
         #[cfg(windows)]
@@ -604,19 +650,29 @@ pub unsafe extern "C" fn mixer_define_scene(
     if count > 0 && layers.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    let copied: Arc<[OverlayDesc]> = if count == 0 {
-        Arc::from([])
+    let (copied, labels) = if count == 0 {
+        (Arc::from([]), Arc::from([]))
     } else {
-        // SAFETY: caller keeps count OverlayDesc values readable.
-        Arc::from(unsafe { std::slice::from_raw_parts(layers, count as usize) })
+        // SAFETY: caller keeps count OverlayDesc values readable for this call.
+        let slice = unsafe { std::slice::from_raw_parts(layers, count as usize) };
+        let mut descs = slice.to_vec();
+        let mut texts = Vec::with_capacity(descs.len());
+        for desc in &mut descs {
+            texts.push(copy_c_label(desc.label));
+            desc.label = std::ptr::null();
+        }
+        (Arc::from(descs), Arc::from(texts))
     };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .scenes
-            .insert(scene_id, (width, height, copied));
+        mixer.shared.lock().expect("shared").scenes.insert(
+            scene_id,
+            SceneSpec {
+                width,
+                height,
+                layers: copied,
+                labels,
+            },
+        );
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2188,6 +2244,52 @@ pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_bus_colors(
+    prv_r: u8,
+    prv_g: u8,
+    prv_b: u8,
+    pgm_r: u8,
+    pgm_g: u8,
+    pgm_b: u8,
+    in_r: u8,
+    in_g: u8,
+    in_b: u8,
+) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").bus_colors = BusColors {
+            preview: [prv_r, prv_g, prv_b],
+            program: [pgm_r, pgm_g, pgm_b],
+            inactive: [in_r, in_g, in_b],
+        };
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_mv_label(size: f32, percent: u32, top: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").mv_label = MvLabelStyle {
+            size: crate::labels::clamp_size(size),
+            percent: percent != 0,
+            top: top != 0,
+        };
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+fn copy_c_label(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    // SAFETY: host keeps the UTF-8 C string readable for this FFI call.
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
@@ -2461,8 +2563,15 @@ fn render_loop(
             let scene_specs: Vec<(u64, u32, u32, Arc<[OverlayDesc]>)> = guard
                 .scenes
                 .iter()
-                .map(|(id, (w, h, layers))| (*id, *w, *h, Arc::clone(layers)))
+                .map(|(id, spec)| (*id, spec.width, spec.height, Arc::clone(&spec.layers)))
                 .collect();
+            let scene_labels: HashMap<u64, Arc<[String]>> = guard
+                .scenes
+                .iter()
+                .map(|(id, spec)| (*id, Arc::clone(&spec.labels)))
+                .collect();
+            let bus_colors = guard.bus_colors;
+            let mv_label = guard.mv_label;
             let generators: Vec<(u64, Generator)> = guard
                 .generators
                 .iter()
@@ -2490,7 +2599,6 @@ fn render_loop(
                     use_gpu: output.use_gpu,
                 })
                 .collect();
-            let binds: HashMap<u64, (u64, u64)> = guard.multiview_binds.clone();
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -2507,20 +2615,10 @@ fn render_loop(
                 skip_compose = false;
                 frame_delay.discard(changed_units);
             }
-            let mut tallies = HashMap::new();
-            for (scene_id, (preview_unit, program_unit)) in &binds {
-                let preview_source = snapshot
-                    .iter()
-                    .find(|(id, ..)| *id == *preview_unit)
-                    .map(|item| item.5.preview_source)
-                    .unwrap_or(0);
-                let program_source = snapshot
-                    .iter()
-                    .find(|(id, ..)| *id == *program_unit)
-                    .map(|item| item.5.program_source)
-                    .unwrap_or(0);
-                tallies.insert(*scene_id, (preview_source, program_source));
-            }
+            let tallies: Vec<(u64, u64)> = snapshot
+                .iter()
+                .map(|item| (item.5.preview_source, item.5.program_source))
+                .collect();
             frame_i = frame_i.wrapping_add(1);
             let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) =
@@ -2603,9 +2701,6 @@ fn render_loop(
                     }
                     let packed = match output.source_kind {
                         SRC_KIND_MU_PREVIEW => frame_delay.packed(output.unit_id, OUTPUT_PREVIEW),
-                        SRC_KIND_MU_MULTIVIEW => {
-                            frame_delay.packed(output.unit_id, OUTPUT_MULTIVIEW)
-                        }
                         _ => None,
                     };
                     if let Some(texture) = packed {
@@ -2625,7 +2720,6 @@ fn render_loop(
                     let rgba = match output.source_kind {
                         SRC_KIND_MU_PROGRAM => frame_delay.rgba(output.unit_id, OUTPUT_PROGRAM),
                         SRC_KIND_MU_PREVIEW => frame_delay.rgba(output.unit_id, OUTPUT_PREVIEW),
-                        SRC_KIND_MU_MULTIVIEW => frame_delay.rgba(output.unit_id, OUTPUT_MULTIVIEW),
                         _ => None,
                     };
                     if let Some(src) = rgba
@@ -2656,7 +2750,9 @@ fn render_loop(
             }
             frame_delay.consume_display(skip_compose);
             if !skip_compose {
-                composer.sync_scenes(&device, &scene_specs);
+                composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
+                composer.set_mv_label(mv_label.size, mv_label.percent, mv_label.top);
+                composer.sync_scenes(&device, &scene_specs, &scene_labels);
                 let mut encoder =
                     device
                         .device
@@ -2693,7 +2789,6 @@ fn render_loop(
                 for output in &outputs_snap {
                     if output.source_kind == SRC_KIND_MU_PROGRAM
                         || output.source_kind == SRC_KIND_MU_PREVIEW
-                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
                         || !output.cpu_video()
                     {
                         continue;
@@ -2707,7 +2802,7 @@ fn render_loop(
                                 .unwrap_or((1920, 1080));
                             composer.pack_source(&device, &mut encoder, output.source_id, w, h)
                         }
-                        SRC_KIND_SCENE => {
+                        SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
                             composer.pack_scene(&device, &mut encoder, output.source_id)
                         }
                         _ => None,
@@ -2725,14 +2820,15 @@ fn render_loop(
                 for output in &outputs_snap {
                     if output.source_kind == SRC_KIND_MU_PROGRAM
                         || output.source_kind == SRC_KIND_MU_PREVIEW
-                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
                         || !output.gpu_video()
                     {
                         continue;
                     }
                     let src = match output.source_kind {
                         SRC_KIND_INPUT => composer.source_texture(output.source_id),
-                        SRC_KIND_SCENE => composer.scene_texture(output.source_id),
+                        SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
+                            composer.scene_texture(output.source_id)
+                        }
                         _ => None,
                     };
                     if let Some(src) = src
@@ -2999,9 +3095,10 @@ fn follow_gains(
     gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
 }
 
+#[allow(dead_code)]
 fn audio_for_source(
     uploads: &UploadStore,
-    scenes: &HashMap<u64, (u32, u32, Arc<[OverlayDesc]>)>,
+    scenes: &HashMap<u64, SceneSpec>,
     source_id: u64,
 ) -> Option<AudioPacket> {
     if let Some(ring) = uploads.get(source_id) {
@@ -3010,9 +3107,9 @@ fn audio_for_source(
         }
     }
     if crate::abi::is_scene(source_id)
-        && let Some((_, _, layers)) = scenes.get(&source_id)
+        && let Some(spec) = scenes.get(&source_id)
     {
-        for layer in layers.iter() {
+        for layer in spec.layers.iter() {
             if let Some(audio) = audio_for_source(uploads, scenes, layer.source_id) {
                 return Some(audio);
             }

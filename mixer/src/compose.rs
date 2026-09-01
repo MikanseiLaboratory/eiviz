@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
-    OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, TRANSITION_DIP,
+    OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    TRANSITION_DIP,
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
@@ -98,6 +99,7 @@ struct SceneGpu {
     width: u32,
     height: u32,
     layers: Arc<[OverlayDesc]>,
+    labels: Arc<[String]>,
 }
 
 pub struct Composer {
@@ -121,6 +123,13 @@ pub struct Composer {
     scroll_phase_y: f32,
     tally_red: Option<(wgpu::Texture, wgpu::TextureView)>,
     tally_green: Option<(wgpu::Texture, wgpu::TextureView)>,
+    preview_rgb: [u8; 3],
+    program_rgb: [u8; 3],
+    inactive_rgb: [u8; 3],
+    label_cache: HashMap<LabelTexKey, (wgpu::Texture, wgpu::TextureView)>,
+    label_size: f32,
+    label_percent: bool,
+    label_top: bool,
     pool: UniformPool,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
@@ -195,6 +204,13 @@ impl Composer {
             scroll_phase_y: 0.0,
             tally_red: None,
             tally_green: None,
+            preview_rgb: [0, 255, 0],
+            program_rgb: [255, 0, 0],
+            inactive_rgb: [64, 64, 64],
+            label_cache: HashMap::new(),
+            label_size: 18.0,
+            label_percent: false,
+            label_top: false,
             pool,
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
@@ -455,23 +471,65 @@ impl Composer {
         }
     }
 
+    pub fn set_bus_colors(&mut self, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) {
+        if self.preview_rgb == preview && self.program_rgb == program && self.inactive_rgb == inactive
+        {
+            return;
+        }
+        self.preview_rgb = preview;
+        self.program_rgb = program;
+        self.inactive_rgb = inactive;
+        self.tally_red = None;
+        self.tally_green = None;
+        self.clear_labels();
+    }
+
+    pub fn set_mv_label(&mut self, size: f32, percent: bool, top: bool) {
+        let size = crate::labels::clamp_size(size);
+        let same = (self.label_size - size).abs() < f32::EPSILON && self.label_percent == percent;
+        if same && self.label_top == top {
+            return;
+        }
+        self.label_size = size;
+        self.label_percent = percent;
+        self.label_top = top;
+        if !same {
+            self.clear_labels();
+        }
+    }
+
+    fn clear_labels(&mut self) {
+        for key in self.label_cache.keys() {
+            self.blit_groups.remove(&label_cache_key(key));
+        }
+        self.label_cache.clear();
+    }
+
     pub fn sync_scenes(
         &mut self,
         device: &GpuDevice,
         specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+        labels: &HashMap<u64, Arc<[String]>>,
     ) {
         let keep: std::collections::HashSet<u64> = specs.iter().map(|spec| spec.0).collect();
         self.scenes.retain(|id, _| keep.contains(id));
         for (id, width, height, layers) in specs {
+            let scene_labels = labels
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| Arc::from([]));
             if let Some(existing) = self.scenes.get_mut(id) {
                 if existing.width == *width && existing.height == *height {
                     if !Arc::ptr_eq(&existing.layers, layers) {
                         existing.layers = Arc::clone(layers);
                     }
+                    if !Arc::ptr_eq(&existing.labels, &scene_labels) {
+                        existing.labels = scene_labels;
+                    }
                     continue;
                 }
             }
-            self.define_scene(device, *id, *width, *height, Arc::clone(layers));
+            self.define_scene(device, *id, *width, *height, Arc::clone(layers), scene_labels);
         }
     }
 
@@ -482,6 +540,7 @@ impl Composer {
         width: u32,
         height: u32,
         layers: Arc<[OverlayDesc]>,
+        labels: Arc<[String]>,
     ) {
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
@@ -501,6 +560,7 @@ impl Composer {
                 width,
                 height,
                 layers,
+                labels,
             },
         );
     }
@@ -516,7 +576,7 @@ impl Composer {
         device: &GpuDevice,
         used: &HashSet<u64>,
         encoder: &mut wgpu::CommandEncoder,
-        tallies: &HashMap<u64, (u64, u64)>,
+        tallies: &[(u64, u64)],
     ) -> Result<(), String> {
         let mut order = Vec::new();
         let mut visited = HashSet::new();
@@ -555,14 +615,15 @@ impl Composer {
         device: &GpuDevice,
         encoder: &mut wgpu::CommandEncoder,
         scene_id: u64,
-        tallies: &HashMap<u64, (u64, u64)>,
+        tallies: &[(u64, u64)],
     ) -> Result<(), String> {
-        let (width, height, mut layers, view) = {
+        let (width, height, mut layers, labels, view) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
             (
                 scene.width,
                 scene.height,
                 scene.layers.iter().copied().collect::<Vec<_>>(),
+                scene.labels.clone(),
                 scene.view.clone(),
             )
         };
@@ -582,21 +643,81 @@ impl Composer {
                     )?;
                 }
             }
-            if is_multiview(scene_id)
-                && let Some(&(preview_source, program_source)) = tallies.get(&scene_id)
-            {
-                self.draw_mv_tally_pass(
-                    device,
-                    &mut pass,
-                    &layers,
-                    preview_source,
-                    program_source,
-                    width,
-                    height,
-                );
+            if is_multiview(scene_id) {
+                self.draw_mv_label_pass(device, &mut pass, &layers, &labels, width, height);
+                self.draw_mv_tally_pass(device, &mut pass, &layers, tallies, width, height);
             }
         }
         Ok(())
+    }
+
+    fn draw_mv_label_pass(
+        &mut self,
+        device: &GpuDevice,
+        pass: &mut wgpu::RenderPass,
+        layers: &[OverlayDesc],
+        labels: &[String],
+        canvas_w: u32,
+        canvas_h: u32,
+    ) {
+        let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
+        for (index, layer) in video.iter().enumerate() {
+            let rgb = mv_label_rgb(layer.source_id, self.preview_rgb, self.program_rgb, self.inactive_rgb);
+            let text = labels.get(index).map(String::as_str).unwrap_or("");
+            let tile_h = layer.rect.height * canvas_h.max(1) as f32;
+            let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
+            let font_px = crate::labels::font_px(self.label_size, self.label_percent, tile_h);
+            let dest_h = crate::labels::band_height(font_px);
+            let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h) else {
+                continue;
+            };
+            let key = LabelTexKey::new(text, rgb, font_px, dest_w);
+            let nh = dest_h as f32 / canvas_h.max(1) as f32;
+            let y = if self.label_top {
+                layer.rect.y
+            } else {
+                layer.rect.y + layer.rect.height - nh
+            };
+            let dst = [layer.rect.x, y, layer.rect.width, nh];
+            self.blit_pass(device, pass, label_cache_key(&key), &view, dst, 1.0, false);
+        }
+    }
+
+    fn ensure_label_texture(
+        &mut self,
+        device: &GpuDevice,
+        text: &str,
+        rgb: [u8; 3],
+        font_px: f32,
+        dest_w: u32,
+        dest_h: u32,
+    ) -> Option<wgpu::TextureView> {
+        let key = LabelTexKey::new(text, rgb, font_px, dest_w);
+        if let Some((_, view)) = self.label_cache.get(&key) {
+            return Some(view.clone());
+        }
+        let raster = crate::labels::raster(text, rgb, font_px, dest_w, dest_h);
+        let texture = make_texture(
+            device,
+            raster.width,
+            raster.height,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        write_aligned_texture(
+            device,
+            &texture,
+            &raster.pixels,
+            raster.width * 4,
+            raster.height,
+            raster.width,
+            wgpu::TextureFormat::Rgba8Unorm,
+            #[cfg(windows)]
+            self.rebar.as_mut(),
+        );
+        let view = texture.create_view(&Default::default());
+        self.blit_groups.remove(&label_cache_key(&key));
+        self.label_cache.insert(key, (texture, view.clone()));
+        Some(view)
     }
 
     fn draw_mv_tally_pass(
@@ -604,8 +725,7 @@ impl Composer {
         device: &GpuDevice,
         pass: &mut wgpu::RenderPass,
         layers: &[OverlayDesc],
-        preview_source: u64,
-        program_source: u64,
+        tallies: &[(u64, u64)],
         width: u32,
         height: u32,
     ) {
@@ -613,20 +733,10 @@ impl Composer {
         let tx = 3.0 / width.max(1) as f32;
         let ty = 3.0 / height.max(1) as f32;
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
-        for (index, layer) in video.iter().enumerate().take(10) {
-            let mut use_red = index == 1;
-            let mut use_green = index == 0;
-            if index >= 2 {
-                if layer.source_id != 0 && layer.source_id == program_source {
-                    use_red = true;
-                    use_green = false;
-                } else if layer.source_id != 0 && layer.source_id == preview_source {
-                    use_green = true;
-                }
-            }
-            if !use_red && !use_green {
+        for layer in video {
+            let Some(use_red) = mv_tally_program(layer.source_id, tallies) else {
                 continue;
-            }
+            };
             let (key, swatch) = if use_red {
                 (KEY_TALLY_RED, self.tally_red.as_ref().map(|item| item.1.clone()))
             } else {
@@ -651,10 +761,16 @@ impl Composer {
             return;
         }
         if self.tally_red.is_none() {
-            self.tally_red = Some(solid_swatch(device, [220, 32, 32, 255]));
+            self.tally_red = Some(solid_swatch(
+                device,
+                [self.program_rgb[0], self.program_rgb[1], self.program_rgb[2], 255],
+            ));
         }
         if self.tally_green.is_none() {
-            self.tally_green = Some(solid_swatch(device, [32, 200, 64, 255]));
+            self.tally_green = Some(solid_swatch(
+                device,
+                [self.preview_rgb[0], self.preview_rgb[1], self.preview_rgb[2], 255],
+            ));
         }
     }
 
@@ -1656,5 +1772,59 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct LabelTexKey {
+    text: String,
+    rgb: [u8; 3],
+    font_q: u16,
+    dest_w: u32,
+}
+
+impl LabelTexKey {
+    fn new(text: &str, rgb: [u8; 3], font_px: f32, dest_w: u32) -> Self {
+        Self {
+            text: text.to_string(),
+            rgb,
+            font_q: (font_px * 2.0).round() as u16,
+            dest_w,
+        }
+    }
+}
+
+fn label_cache_key(key: &LabelTexKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    LABEL_BASE.wrapping_add(0xF000) ^ hasher.finish()
+}
+
+fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) -> [u8; 3] {
+    if mixing_unit_from_source(source_id).is_none() {
+        return inactive;
+    }
+    match mixing_unit_bus(source_id) {
+        OUTPUT_PREVIEW => preview,
+        OUTPUT_PROGRAM => program,
+        _ => inactive,
+    }
+}
+
+fn mv_tally_program(source_id: u64, tallies: &[(u64, u64)]) -> Option<bool> {
+    if mixing_unit_from_source(source_id).is_some() {
+        return match mixing_unit_bus(source_id) {
+            OUTPUT_PREVIEW => Some(false),
+            OUTPUT_PROGRAM => Some(true),
+            _ => None,
+        };
+    }
+    if source_id != 0 && tallies.iter().any(|(_, program)| *program == source_id) {
+        return Some(true);
+    }
+    if source_id != 0 && tallies.iter().any(|(preview, _)| *preview == source_id) {
+        return Some(false);
+    }
+    None
 }
 

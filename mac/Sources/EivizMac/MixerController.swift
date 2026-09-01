@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import Darwin
 import EivizMixer
 import Foundation
 import SwiftUI
@@ -64,6 +65,7 @@ final class MixerController: ObservableObject {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        applyBusColors()
         applySession()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -600,9 +602,7 @@ final class MixerController: ObservableObject {
     func pushMultiview(_ layout: MultiviewLayout) {
         guard let index = session.multiviews.firstIndex(where: { $0.id == layout.id }) else { return }
         var item = layout
-        if item.tiles.count < 8 {
-            item.tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - item.tiles.count))
-        }
+        item.ensureTiles()
         session.multiviews[index] = item
         var layers: [EivizOverlayDesc] = []
         func layer(_ source: UInt64, _ x: Float, _ y: Float, _ w: Float, _ h: Float, _ z: Int32) {
@@ -613,12 +613,25 @@ final class MixerController: ObservableObject {
             desc.z = z
             layers.append(desc)
         }
-        layer(MvSlotKind.muPreview.encoded(item.previewUnitId), 0, 0, 0.5, 0.5, 0)
-        layer(MvSlotKind.muProgram.encoded(item.programUnitId), 0.5, 0, 0.5, 0.5, 1)
-        for i in 0..<8 {
-            let col = Float(i % 4)
-            let row = Float(i / 4)
-            layer(item.tiles[i].kind.encoded(item.tiles[i].sourceId), col / 4, 0.5 + row / 4, 0.25, 0.25, Int32(2 + i))
+        for (z, pane) in item.template.panes.enumerated() {
+            let source = z < item.tiles.count
+                ? item.tiles[z].kind.encoded(item.tiles[z].sourceId)
+                : 0
+            layer(source, pane.x, pane.y, pane.width, pane.height, Int32(z))
+        }
+        let names = slotNames(item)
+        var owned = names.map { $0.isEmpty ? nil : strdup($0) }
+        defer {
+            for pointer in owned {
+                if let pointer {
+                    free(pointer)
+                }
+            }
+        }
+        for i in layers.indices where i < owned.count {
+            if let pointer = owned[i] {
+                layers[i].label = UnsafePointer(pointer)
+            }
         }
         layers.withUnsafeMutableBufferPointer { ptr in
             fail(
@@ -626,9 +639,55 @@ final class MixerController: ObservableObject {
                 "Define Multiview"
             )
         }
-        fail(mixer_bind_multiview(item.gpuId, item.previewUnitId, item.programUnitId), "Bind Multiview")
+        let previewUnit = item.tiles.first(where: { $0.kind == .muPreview })?.sourceId ?? item.previewUnitId
+        let programUnit = item.tiles.first(where: { $0.kind == .muProgram })?.sourceId ?? item.programUnitId
+        fail(mixer_bind_multiview(item.gpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit), "Bind Multiview")
         let interval = item.presentInterval == 0 ? session.settings.defaultPresentInterval : item.presentInterval
         _ = mixer_set_monitor_present_interval(item.monitorId, max(1, interval))
+    }
+
+    func applyBusColors() {
+        let preview = session.settings.previewColor
+        let program = session.settings.programColor
+        let inactive = session.settings.inactiveColor
+        _ = mixer_set_bus_colors(
+            preview.r, preview.g, preview.b,
+            program.r, program.g, program.b,
+            inactive.r, inactive.g, inactive.b
+        )
+        let size = min(200, max(1, session.settings.multiviewLabelSize))
+        session.settings.multiviewLabelSize = size
+        _ = mixer_set_mv_label(
+            size,
+            session.settings.multiviewLabelUnit == .percent ? 1 : 0,
+            session.settings.multiviewLabelAnchor == .top ? 1 : 0
+        )
+    }
+
+    private func slotNames(_ layout: MultiviewLayout) -> [String] {
+        layout.template.panes.indices.map { index in
+            index < layout.tiles.count ? tileLabel(layout.tiles[index]) : ""
+        }
+    }
+
+    private func tileLabel(_ tile: MvSlot) -> String {
+        if !tile.labelFollow {
+            return tile.label
+        }
+        switch tile.kind {
+        case .input:
+            return session.inputs.first(where: { $0.id == tile.sourceId })?.name ?? ""
+        case .scene:
+            return session.scenes.first(where: { $0.gpuId == tile.sourceId })?.name ?? ""
+        case .muPreview:
+            let name = session.units.first(where: { $0.id == tile.sourceId })?.name ?? String(tile.sourceId)
+            return "PRV  \(name)"
+        case .muProgram:
+            let name = session.units.first(where: { $0.id == tile.sourceId })?.name ?? String(tile.sourceId)
+            return "PGM  \(name)"
+        default:
+            return ""
+        }
     }
 
     func setOverlayEnabled(_ id: UUID, enabled: Bool) {
@@ -688,6 +747,7 @@ final class MixerController: ObservableObject {
             fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
             fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
             fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+            applyBusColors()
             applySession()
         } catch {
             errorText = error.localizedDescription
@@ -901,11 +961,6 @@ final class MixerController: ObservableObject {
             desc.z = slot.z
             desc.audio_follow = 1
             MixerFFI.setOverlay(&state, index: index, desc)
-        }
-        let tiles = unit.multiviewTiles
-        state.mv_slot_count = UInt32(min(16, tiles.count))
-        for (index, tile) in tiles.prefix(16).enumerated() {
-            MixerFFI.setMv(&state, index: index, tile.kind.encoded(tile.sourceId))
         }
     }
 

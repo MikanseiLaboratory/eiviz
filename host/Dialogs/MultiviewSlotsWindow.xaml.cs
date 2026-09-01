@@ -1,5 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -8,8 +11,7 @@ public partial class MultiviewSlotsWindow : Window
     private readonly MultiviewLayout _layout;
     private readonly Session _session;
     private readonly List<MvSlot> _tiles;
-    private ulong _previewUnit;
-    private ulong _programUnit;
+    private MultiviewTemplate _template;
     private bool _suppress;
 
     public MultiviewSlotsWindow(Session session, MultiviewLayout layout)
@@ -17,9 +19,9 @@ public partial class MultiviewSlotsWindow : Window
         InitializeComponent();
         _session = session;
         _layout = layout;
+        _template = layout.Template;
+        layout.Template = _template;
         layout.EnsureTiles();
-        _previewUnit = layout.PreviewUnitId;
-        _programUnit = layout.ProgramUnitId;
         _tiles = layout.Tiles.Select(Clone).ToList();
         Rebuild();
     }
@@ -28,43 +30,92 @@ public partial class MultiviewSlotsWindow : Window
     {
         SlotRows.Children.Clear();
         _suppress = true;
-        SlotRows.Children.Add(UnitRow("PRV (top left)", true));
-        SlotRows.Children.Add(UnitRow("PGM (top right)", false));
-        for (var i = 0; i < 8; i++)
+        EnsureTileCount();
+        SlotRows.Children.Add(TemplateRow());
+        for (var i = 0; i < _tiles.Count; i++)
             SlotRows.Children.Add(TileRow(i, _tiles[i]));
         _suppress = false;
     }
 
-    private Border UnitRow(string title, bool preview)
+    private void EnsureTileCount()
+    {
+        var want = MultiviewGeometry.TileCount(_template);
+        while (_tiles.Count < want)
+            _tiles.Add(new MvSlot());
+        while (_tiles.Count > want)
+            _tiles.RemoveAt(_tiles.Count - 1);
+    }
+
+    private Border TemplateRow()
     {
         var box = Frame();
         var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
-        var pick = new ComboBox();
-        pick.ItemsSource = _session.Units;
-        pick.DisplayMemberPath = "Name";
-        pick.SelectedValuePath = "Id";
-        pick.SelectedValue = preview ? _previewUnit : _programUnit;
-        if (pick.SelectedItem is MixingUnitEntry selected)
+        stack.Children.Add(new TextBlock { Text = "Template", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
+        foreach (var (title, items) in MultiviewGeometry.Groups)
         {
-            if (preview)
-                _previewUnit = selected.Id;
-            else
-                _programUnit = selected.Id;
-        }
-        pick.SelectionChanged += (_, _) =>
-        {
-            if (pick.SelectedItem is MixingUnitEntry unit)
+            stack.Children.Add(new TextBlock
             {
-                if (preview)
-                    _previewUnit = unit.Id;
-                else
-                    _programUnit = unit.Id;
-            }
-        };
-        stack.Children.Add(pick);
+                Text = title,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+                Margin = new Thickness(0, 8, 0, 4)
+            });
+            var row = new WrapPanel();
+            foreach (var item in items)
+                row.Children.Add(TemplateCard(item));
+            stack.Children.Add(row);
+        }
         box.Child = stack;
         return box;
+    }
+
+    private UIElement TemplateCard(MultiviewTemplate template)
+    {
+        var selected = template == _template;
+        const double width = 148;
+        const double height = 83;
+        var canvas = new Canvas
+        {
+            Width = width,
+            Height = height,
+            Background = Brushes.Black
+        };
+        foreach (var pane in MultiviewGeometry.Panes(template))
+        {
+            canvas.Children.Add(new Rectangle
+            {
+                Width = Math.Max(1, pane.Width * width - 1),
+                Height = Math.Max(1, pane.Height * height - 1),
+                Fill = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x4A)),
+                Stroke = Brushes.Black,
+                StrokeThickness = 1
+            });
+            Canvas.SetLeft(canvas.Children[^1], pane.X * width);
+            Canvas.SetTop(canvas.Children[^1], pane.Y * height);
+        }
+        var card = new StackPanel { Width = width, Margin = new Thickness(0, 0, 8, 8), Cursor = Cursors.Hand };
+        card.Children.Add(new Border
+        {
+            BorderBrush = selected
+                ? Brushes.White
+                : new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(selected ? 2 : 1),
+            Child = canvas
+        });
+        card.Children.Add(new TextBlock
+        {
+            Text = MultiviewGeometry.Title(template),
+            FontSize = 11,
+            Margin = new Thickness(0, 4, 0, 0),
+            TextAlignment = TextAlignment.Center
+        });
+        card.MouseLeftButtonUp += (_, _) =>
+        {
+            if (_suppress || template == _template)
+                return;
+            _template = template;
+            Rebuild();
+        };
+        return card;
     }
 
     private Border TileRow(int index, MvSlot tile)
@@ -76,6 +127,8 @@ public partial class MultiviewSlotsWindow : Window
         AddRadio(kinds, tile, MvSlotKind.None, "None", index);
         AddRadio(kinds, tile, MvSlotKind.Input, "Input", index);
         AddRadio(kinds, tile, MvSlotKind.Scene, "Scene", index);
+        AddRadio(kinds, tile, MvSlotKind.MuPreview, "MU PRV", index);
+        AddRadio(kinds, tile, MvSlotKind.MuProgram, "MU PGM", index);
         stack.Children.Add(kinds);
         var pick = new ComboBox { Margin = new Thickness(0, 8, 0, 0) };
         FillPick(pick, tile);
@@ -85,8 +138,64 @@ public partial class MultiviewSlotsWindow : Window
                 tile.SourceId = choice.Id;
         };
         stack.Children.Add(pick);
+        stack.Children.Add(LabelEditor(
+            $"label-tile-{index}",
+            tile.LabelFollow,
+            tile.Label,
+            follow =>
+            {
+                tile.LabelFollow = follow;
+                Rebuild();
+            },
+            text => tile.Label = text));
         box.Child = stack;
         return box;
+    }
+
+    private UIElement LabelEditor(string group, bool follow, string custom, Action<bool> setFollow, Action<string> setCustom)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var modes = new WrapPanel();
+        var followRadio = new RadioButton
+        {
+            Content = "Follow",
+            GroupName = group,
+            IsChecked = follow,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 12, 4)
+        };
+        var customRadio = new RadioButton
+        {
+            Content = "Custom",
+            GroupName = group,
+            IsChecked = !follow,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 12, 4)
+        };
+        followRadio.Checked += (_, _) =>
+        {
+            if (_suppress)
+                return;
+            setFollow(true);
+        };
+        customRadio.Checked += (_, _) =>
+        {
+            if (_suppress)
+                return;
+            setFollow(false);
+        };
+        modes.Children.Add(followRadio);
+        modes.Children.Add(customRadio);
+        stack.Children.Add(modes);
+        var box = new TextBox
+        {
+            Text = custom,
+            IsEnabled = !follow,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        box.TextChanged += (_, _) => setCustom(box.Text);
+        stack.Children.Add(box);
+        return stack;
     }
 
     private static Border Frame() => new()
@@ -124,6 +233,8 @@ public partial class MultiviewSlotsWindow : Window
             choices.AddRange(_session.Scenes.Select(item => new SlotChoice(item.Name, item.GpuId)));
         else if (tile.Kind == MvSlotKind.Input)
             choices.AddRange(_session.Inputs.Select(item => new SlotChoice(item.Name, item.Id)));
+        else if (tile.Kind is MvSlotKind.MuPreview or MvSlotKind.MuProgram)
+            choices.AddRange(_session.Units.Select(item => new SlotChoice(item.Name, item.Id)));
         box.ItemsSource = choices;
         box.DisplayMemberPath = "Label";
         box.IsEnabled = choices.Count > 0;
@@ -134,16 +245,25 @@ public partial class MultiviewSlotsWindow : Window
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        _layout.PreviewUnitId = _previewUnit;
-        _layout.ProgramUnitId = _programUnit;
+        _layout.Template = _template;
         _layout.Tiles.Clear();
         foreach (var tile in _tiles)
             _layout.Tiles.Add(tile);
         _layout.EnsureTiles();
+        _layout.PreviewUnitId = _layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuPreview)?.SourceId
+            ?? _layout.PreviewUnitId;
+        _layout.ProgramUnitId = _layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuProgram)?.SourceId
+            ?? _layout.ProgramUnitId;
         DialogResult = true;
     }
 
-    private static MvSlot Clone(MvSlot slot) => new() { Kind = slot.Kind, SourceId = slot.SourceId };
+    private static MvSlot Clone(MvSlot slot) => new()
+    {
+        Kind = slot.Kind,
+        SourceId = slot.SourceId,
+        LabelFollow = slot.LabelFollow,
+        Label = slot.Label ?? ""
+    };
 
     private sealed record SlotChoice(string Label, ulong Id);
 }

@@ -92,6 +92,12 @@ internal static class SessionStore
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             session.Settings.RebarOptimization = Settings.RebarOptimization != false;
             session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
+            session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
+            session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
+            session.Settings.InactiveColor = RgbColor.FromOrDefault(Settings.InactiveColor, RgbColor.InactiveDefault);
+            session.Settings.MultiviewLabelSize = Settings.MultiviewLabelSize <= 0 ? 18 : Math.Clamp(Settings.MultiviewLabelSize, 1f, 200f);
+            session.Settings.MultiviewLabelUnit = Settings.MultiviewLabelUnit;
+            session.Settings.MultiviewLabelAnchor = Settings.MultiviewLabelAnchor;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)
@@ -115,7 +121,6 @@ internal static class SessionStore
             {
                 var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
                 unit.EnsureDefaultTransitions();
-                unit.EnsureDefaultTiles();
                 session.Units.Add(unit);
                 session.NextUnitId = 2;
             }
@@ -243,7 +248,6 @@ internal static class SessionStore
         public uint FpsDen { get; set; }
         public List<TransitionPreset> Transitions { get; set; } = [];
         public List<OverlaySlot> Overlays { get; set; } = [];
-        public List<MvSlot> MultiviewTiles { get; set; } = [];
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
 
@@ -257,7 +261,6 @@ internal static class SessionStore
             FpsDen = unit.FpsDen,
             Transitions = [.. unit.Transitions],
             Overlays = [.. unit.Overlays],
-            MultiviewTiles = [.. unit.MultiviewTiles],
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
             AudioLink = unit.AudioLink
         };
@@ -279,10 +282,7 @@ internal static class SessionStore
                 unit.Transitions.Add(preset);
             foreach (var overlay in Overlays)
                 unit.Overlays.Add(overlay);
-            foreach (var tile in MultiviewTiles)
-                unit.MultiviewTiles.Add(tile);
             unit.EnsureDefaultTransitions();
-            unit.EnsureDefaultTiles();
             return unit;
         }
     }
@@ -294,7 +294,12 @@ internal static class SessionStore
         public ulong PreviewUnitId { get; set; }
         public ulong ProgramUnitId { get; set; }
         public uint PresentInterval { get; set; }
+        public MultiviewTemplate Template { get; set; } = MultiviewTemplate.PreviewProgram8;
         public List<MvSlot> Tiles { get; set; } = [];
+        public bool PreviewLabelFollow { get; set; } = true;
+        public string PreviewLabel { get; set; } = "";
+        public bool ProgramLabelFollow { get; set; } = true;
+        public string ProgramLabel { get; set; } = "";
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
         {
@@ -303,7 +308,12 @@ internal static class SessionStore
             PreviewUnitId = layout.PreviewUnitId,
             ProgramUnitId = layout.ProgramUnitId,
             PresentInterval = layout.PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(layout.PresentInterval),
-            Tiles = [.. layout.Tiles]
+            Template = layout.Template,
+            Tiles = [.. layout.Tiles],
+            PreviewLabelFollow = layout.PreviewLabelFollow,
+            PreviewLabel = layout.PreviewLabel ?? "",
+            ProgramLabelFollow = layout.ProgramLabelFollow,
+            ProgramLabel = layout.ProgramLabel ?? ""
         };
 
         public MultiviewLayout ToEntry(Session session)
@@ -315,7 +325,12 @@ internal static class SessionStore
                 MonitorId = session.NextMonitorId++,
                 PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
                 ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId,
-                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval)
+                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval),
+                Template = Template,
+                PreviewLabelFollow = PreviewLabelFollow,
+                PreviewLabel = PreviewLabel ?? "",
+                ProgramLabelFollow = ProgramLabelFollow,
+                ProgramLabel = ProgramLabel ?? ""
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);

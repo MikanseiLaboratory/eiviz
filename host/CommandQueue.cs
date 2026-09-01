@@ -1,9 +1,8 @@
-using System.Collections.Concurrent;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using System.Windows;
 using Eiviz.Host.Interop;
-using Eiviz.Host.Media;
 using Rect = Eiviz.Host.Interop.Rect;
 
 namespace Eiviz.Host;
@@ -34,8 +33,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _consumer;
-    private static readonly ConcurrentDictionary<ulong, string> LabelCache = [];
-
     public CommandQueue()
     {
         _consumer = Task.Factory.StartNew(
@@ -92,9 +89,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         };
         var enabled = unit.Overlays.Where(slot => slot.Enabled).Take(8).ToList();
         state.OverlayCount = (uint)enabled.Count;
-        unit.EnsureDefaultTiles();
-        var tiles = unit.MultiviewTiles.Take(16).ToList();
-        state.MvSlotCount = (uint)tiles.Count;
         for (var i = 0; i < 8; i++)
         {
             var slot = i < enabled.Count ? enabled[i] : null;
@@ -110,8 +104,6 @@ internal sealed class CommandQueue : IAsyncDisposable
                 };
             SetOverlay(ref state, i, desc);
         }
-        for (var i = 0; i < 16; i++)
-            SetMv(ref state, i, i < tiles.Count ? EncodeSlot(tiles[i]) : 0);
         return state;
     }
 
@@ -139,29 +131,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         }
     }
 
-    private static void SetMv(ref UnitState state, int index, ulong id)
-    {
-        switch (index)
-        {
-            case 0: state.Mv0 = id; break;
-            case 1: state.Mv1 = id; break;
-            case 2: state.Mv2 = id; break;
-            case 3: state.Mv3 = id; break;
-            case 4: state.Mv4 = id; break;
-            case 5: state.Mv5 = id; break;
-            case 6: state.Mv6 = id; break;
-            case 7: state.Mv7 = id; break;
-            case 8: state.Mv8 = id; break;
-            case 9: state.Mv9 = id; break;
-            case 10: state.Mv10 = id; break;
-            case 11: state.Mv11 = id; break;
-            case 12: state.Mv12 = id; break;
-            case 13: state.Mv13 = id; break;
-            case 14: state.Mv14 = id; break;
-            default: state.Mv15 = id; break;
-        }
-    }
-
     private static void PushScene(SceneEntry scene, uint width, uint height)
     {
         PushLayers(scene.GpuId, width, height, scene.Layers.Select(layer => new OverlayDesc
@@ -177,44 +146,20 @@ internal sealed class CommandQueue : IAsyncDisposable
     internal static void PushLayout(MultiviewLayout layout, uint width, uint height, Session? session)
     {
         layout.EnsureTiles();
-        var layers = new List<OverlayDesc>(20);
-        layers.Add(BusLayer(MixerNative.MuPreview(layout.PreviewUnitId), 0f, 0f, 0.5f, 0.5f, 0));
-        layers.Add(BusLayer(MixerNative.MuProgram(layout.ProgramUnitId), 0.5f, 0f, 0.5f, 0.5f, 1));
-        for (var i = 0; i < 8; i++)
+        var panes = MultiviewGeometry.Panes(layout.Template);
+        var layers = new List<OverlayDesc>(panes.Count);
+        var names = session is null ? new string[panes.Count] : SlotNames(layout, session, panes);
+        for (var i = 0; i < panes.Count; i++)
         {
-            var col = i % 4;
-            var row = i / 4;
-            layers.Add(BusLayer(
-                EncodeSlot(layout.Tiles[i]),
-                col / 4f,
-                0.5f + row / 4f,
-                0.25f,
-                0.25f,
-                2 + i));
+            var pane = panes[i];
+            var source = i < layout.Tiles.Count ? EncodeSlot(layout.Tiles[i]) : 0;
+            layers.Add(BusLayer(source, pane.X, pane.Y, pane.Width, pane.Height, i));
         }
-        var names = session is null ? Enumerable.Repeat(" ", 10).ToArray() : SlotNames(layout, session);
-        for (var i = 0; i < 10; i++)
-        {
-            var id = MixerNative.LabelBase | (layout.Id << 8) | (uint)i;
-            var (x, y, w, h) = i switch
-            {
-                0 => (0f, 0.42f, 0.5f, 0.08f),
-                1 => (0.5f, 0.42f, 0.5f, 0.08f),
-                _ => ((i - 2) % 4 / 4f, 0.5f + (i - 2) / 4 / 4f + 0.18f, 0.25f, 0.07f)
-            };
-            layers.Add(new OverlayDesc
-            {
-                SourceId = id,
-                Rect = new Rect { X = x, Y = y, Width = w, Height = h },
-                Opacity = 1,
-                Z = 100 + i,
-                AudioFollow = 0
-            });
-            UploadLabel(id, names[i]);
-        }
-        PushLayers(layout.GpuId, width, height, layers.ToArray());
+        PushLayers(layout.GpuId, width, height, layers.ToArray(), names);
+        var previewUnit = layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuPreview)?.SourceId ?? layout.PreviewUnitId;
+        var programUnit = layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuProgram)?.SourceId ?? layout.ProgramUnitId;
         MixerNative.ThrowIfFailed(
-            MixerNative.BindMultiview(layout.GpuId, layout.PreviewUnitId, layout.ProgramUnitId),
+            MixerNative.BindMultiview(layout.GpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit),
             "Bind multiview");
     }
 
@@ -227,66 +172,64 @@ internal sealed class CommandQueue : IAsyncDisposable
         AudioFollow = 0
     };
 
-    private static string[] SlotNames(MultiviewLayout layout, Session session)
+    private static string[] SlotNames(MultiviewLayout layout, Session session, IReadOnlyList<MultiviewPane> panes)
     {
-        var prv = session.Units.FirstOrDefault(item => item.Id == layout.PreviewUnitId);
-        var pgm = session.Units.FirstOrDefault(item => item.Id == layout.ProgramUnitId);
-        var names = new string[10];
-        names[0] = $"PRV  {prv?.Name ?? layout.PreviewUnitId.ToString()}";
-        names[1] = $"PGM  {pgm?.Name ?? layout.ProgramUnitId.ToString()}";
-        for (var i = 0; i < 8; i++)
-            names[2 + i] = TileName(layout.Tiles[i], session);
+        var names = new string[panes.Count];
+        for (var i = 0; i < panes.Count; i++)
+            names[i] = i < layout.Tiles.Count ? TileLabel(layout.Tiles[i], session) : "";
         return names;
     }
+
+    private static string TileLabel(MvSlot tile, Session session) =>
+        tile.LabelFollow ? TileName(tile, session) : tile.Label ?? "";
 
     private static string TileName(MvSlot tile, Session session) => tile.Kind switch
     {
         MvSlotKind.Input => session.Inputs.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? "",
         MvSlotKind.Scene => session.Scenes.FirstOrDefault(item => item.GpuId == tile.SourceId)?.Name ?? "",
+        MvSlotKind.MuPreview => $"PRV  {session.Units.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? tile.SourceId.ToString()}",
+        MvSlotKind.MuProgram => $"PGM  {session.Units.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? tile.SourceId.ToString()}",
         _ => ""
     };
 
-    private static void UploadLabel(ulong id, string text)
+    private static void PushLayers(ulong gpuId, uint width, uint height, OverlayDesc[] layers, string[]? labels = null)
     {
-        if (LabelCache.TryGetValue(id, out var previous) && previous == text)
-            return;
-        byte[] pixels;
-        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
-            pixels = dispatcher.Invoke(() => LabelRaster.Bgra(text));
-        else
-            pixels = LabelRaster.Bgra(text);
-        MixerNative.ThrowIfFailed(
-            MixerNative.RegisterSource(id, LabelRaster.Width, LabelRaster.Height, MixerNative.FormatBgra),
-            "Register label");
-        unsafe
+        var pins = new List<nint>();
+        try
         {
-            fixed (byte* ptr = pixels)
+            if (labels is not null)
             {
-                MixerNative.ThrowIfFailed(
-                    MixerNative.PushFrame(id, ptr, LabelRaster.Width * 4, LabelRaster.Height, 0),
-                    "Push label");
+                var n = Math.Min(layers.Length, labels.Length);
+                for (var i = 0; i < n; i++)
+                {
+                    if (string.IsNullOrEmpty(labels[i]))
+                        continue;
+                    var ptr = Marshal.StringToCoTaskMemUTF8(labels[i]);
+                    pins.Add(ptr);
+                    layers[i].Label = ptr;
+                }
+            }
+            unsafe
+            {
+                if (layers.Length == 0)
+                {
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.DefineScene(gpuId, width, height, 0, null),
+                        "Define scene");
+                    return;
+                }
+                fixed (OverlayDesc* ptr = layers)
+                {
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.DefineScene(gpuId, width, height, (uint)layers.Length, ptr),
+                        "Define scene");
+                }
             }
         }
-        LabelCache[id] = text;
-    }
-
-    private static void PushLayers(ulong gpuId, uint width, uint height, OverlayDesc[] layers)
-    {
-        unsafe
+        finally
         {
-            if (layers.Length == 0)
-            {
-                MixerNative.ThrowIfFailed(
-                    MixerNative.DefineScene(gpuId, width, height, 0, null),
-                    "Define scene");
-                return;
-            }
-            fixed (OverlayDesc* ptr = layers)
-            {
-                MixerNative.ThrowIfFailed(
-                    MixerNative.DefineScene(gpuId, width, height, (uint)layers.Length, ptr),
-                    "Define scene");
-            }
+            foreach (var pin in pins)
+                Marshal.FreeCoTaskMem(pin);
         }
     }
 

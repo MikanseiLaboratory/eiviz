@@ -141,7 +141,7 @@ pub struct Rect {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct OverlayDesc {
     pub source_id: u64,
     pub rect: Rect,
@@ -149,7 +149,27 @@ pub struct OverlayDesc {
     pub z: i32,
     pub audio_follow: u32,
     pub pad: u32,
+    pub label: *const std::ffi::c_char,
 }
+
+impl Default for OverlayDesc {
+    fn default() -> Self {
+        Self {
+            source_id: 0,
+            rect: Rect::default(),
+            opacity: 0.0,
+            z: 0,
+            audio_follow: 0,
+            pad: 0,
+            label: std::ptr::null(),
+        }
+    }
+}
+
+/// Host copies the UTF-8 string in `mixer_define_scene` and then nulls `label`.
+/// Stored overlays never dereference this pointer.
+unsafe impl Send for OverlayDesc {}
+unsafe impl Sync for OverlayDesc {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

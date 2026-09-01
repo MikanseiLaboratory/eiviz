@@ -17,9 +17,9 @@ struct SwitcherView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                bus(title: "PREVIEW", color: EivizTheme.preview, kind: EIVIZ_OUTPUT_PREVIEW)
+                bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                 transitions
-                bus(title: "PROGRAM", color: EivizTheme.program, kind: EIVIZ_OUTPUT_PROGRAM)
+                bus(title: "PROGRAM", color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
             }
             .frame(maxHeight: .infinity)
             scenes
@@ -42,7 +42,7 @@ struct SwitcherView: View {
                                 .padding(4)
                                 .overlay(
                                     Rectangle().stroke(
-                                        index == tbarPresetIndex ? EivizTheme.preview : EivizTheme.stroke,
+                                        index == tbarPresetIndex ? mixer.session.settings.previewColor.color : EivizTheme.stroke,
                                         lineWidth: 1
                                     )
                                 )
@@ -68,7 +68,7 @@ struct SwitcherView: View {
                     if !editing { finishTBar() }
                 }
             )
-            .tint(EivizTheme.preview)
+            .tint(mixer.session.settings.previewColor.color)
             .frame(width: 132)
             .frame(maxWidth: .infinity)
         }
@@ -98,10 +98,10 @@ struct SwitcherView: View {
             Text(scene.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if program {
-                tally("PGM", EivizTheme.program)
+                tally("PGM", mixer.session.settings.programColor)
             }
             if preview {
-                tally("PRV", EivizTheme.preview)
+                tally("PRV", mixer.session.settings.previewColor)
             }
         }
         .padding(.vertical, 3)
@@ -116,25 +116,25 @@ struct SwitcherView: View {
         }
     }
 
-    private func tally(_ title: String, _ color: Color) -> some View {
+    private func tally(_ title: String, _ color: RgbColor) -> some View {
         Text(title)
             .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(title == "PRV" ? Color(red: 0.07, green: 0.07, blue: 0.07) : Color.white)
+            .foregroundStyle(color.headerForeground)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background(color)
+            .background(color.color)
     }
 
     private func rowFill(preview: Bool, program: Bool) -> Color {
-        if program { return EivizTheme.program.opacity(0.28) }
-        if preview { return EivizTheme.preview.opacity(0.22) }
+        if program { return mixer.session.settings.programColor.color.opacity(0.28) }
+        if preview { return mixer.session.settings.previewColor.color.opacity(0.22) }
         return Color.clear
     }
 
     private func rowStroke(preview: Bool, program: Bool) -> Color {
-        if preview { return EivizTheme.preview }
-        if program { return EivizTheme.program }
-        return Color.clear
+        if preview { return mixer.session.settings.previewColor.color }
+        if program { return mixer.session.settings.programColor.color }
+        return mixer.session.settings.inactiveColor.color
     }
 
     private func isPreviewing(_ scene: SceneEntry) -> Bool {
@@ -145,19 +145,19 @@ struct SwitcherView: View {
         mixer.programmingSceneId(for: unitId) == scene.id
     }
 
-    private func bus(title: String, color: Color, kind: UInt32) -> some View {
+    private func bus(title: String, color: RgbColor, kind: UInt32) -> some View {
         VStack(spacing: 0) {
             Text(title)
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(title == "PREVIEW" ? Color(red: 0.07, green: 0.07, blue: 0.07) : Color.white)
+                .foregroundStyle(color.headerForeground)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(color)
+                .background(color.color)
             MetalPreviewRepresentable(role: .unit(unitId: unitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .background(Rectangle().stroke(color, lineWidth: 2))
+        .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
