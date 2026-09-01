@@ -4,7 +4,7 @@
 //   @fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 //       return user_transition(in.uv, params.mix);
 //   }
-// Available uniforms: params.mix, params.direction, params.dip.
+// Available uniforms: params.mix, params.direction, params.dip, params.softness, params.param.
 
 fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
     let pgm = textureSample(pgm_tex, src_samp, uv);

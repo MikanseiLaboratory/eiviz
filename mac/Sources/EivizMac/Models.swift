@@ -466,35 +466,71 @@ struct TransitionPreset: Identifiable, Codable {
     var dipG: Float = 0
     var dipB: Float = 0
     var dipA: Float = 1
+    var softness: Float = 0.02
+    var param: Float = 0
     var customWgsl: String?
     var durationLabel: String { "\(durationValue)\(durationUnit == EIVIZ_DURATION_MS ? "ms" : "f")" }
     var hasDuration: Bool { kind != EIVIZ_TRANSITION_CUT }
     var hasEasing: Bool { hasDuration }
-    var hasDirection: Bool {
-        kind == EIVIZ_TRANSITION_WIPE || kind == EIVIZ_TRANSITION_SLIDE
-            || kind == EIVIZ_TRANSITION_PUSH || kind == EIVIZ_TRANSITION_BLINDS
-    }
-    var hasDipColor: Bool { kind == EIVIZ_TRANSITION_DIP || kind == EIVIZ_TRANSITION_PUSH }
+    var hasDirection: Bool { TransitionCatalog.info(kind).hasDirection }
+    var hasDipColor: Bool { TransitionCatalog.info(kind).hasDipColor }
+    var hasSoftness: Bool { TransitionCatalog.info(kind).hasSoftness }
+    var hasParam: Bool { TransitionCatalog.info(kind).hasParam }
     var hasCustomWgsl: Bool { kind == EIVIZ_TRANSITION_CUSTOM }
-    var label: String {
-        switch kind {
-        case EIVIZ_TRANSITION_CUT: return "Cut"
-        case EIVIZ_TRANSITION_DIP: return "Dip"
-        case EIVIZ_TRANSITION_WIPE: return "Wipe"
-        case EIVIZ_TRANSITION_SLIDE: return "Slide"
-        case EIVIZ_TRANSITION_PUSH: return "Push"
-        case EIVIZ_TRANSITION_IRIS: return "Iris"
-        case EIVIZ_TRANSITION_BLINDS: return "Blinds"
-        case EIVIZ_TRANSITION_ZOOM: return "Zoom"
-        case EIVIZ_TRANSITION_ADDITIVE: return "Additive"
-        case EIVIZ_TRANSITION_CUSTOM: return "Custom"
-        case EIVIZ_TRANSITION_STINGER: return "Stinger"
-        default: return "Fade"
-        }
-    }
+    var label: String { TransitionCatalog.label(kind) }
 
     enum CodingKeys: String, CodingKey {
-        case kind, durationValue, durationUnit, swap, keepPreview, easing, direction, dipR, dipG, dipB, dipA, customWgsl
+        case kind, durationValue, durationUnit, swap, keepPreview, easing, direction, dipR, dipG, dipB, dipA, softness, param, customWgsl
+    }
+
+    init(
+        kind: UInt32 = EIVIZ_TRANSITION_FADE,
+        durationValue: UInt32 = 30,
+        durationUnit: UInt32 = 0,
+        swap: Bool = true,
+        keepPreview: Bool = true,
+        easing: UInt32 = 0,
+        direction: UInt32 = 0,
+        dipR: Float = 0,
+        dipG: Float = 0,
+        dipB: Float = 0,
+        dipA: Float = 1,
+        softness: Float = 0.02,
+        param: Float = 0,
+        customWgsl: String? = nil
+    ) {
+        self.kind = kind
+        self.durationValue = durationValue
+        self.durationUnit = durationUnit
+        self.swap = swap
+        self.keepPreview = keepPreview
+        self.easing = easing
+        self.direction = direction
+        self.dipR = dipR
+        self.dipG = dipG
+        self.dipB = dipB
+        self.dipA = dipA
+        self.softness = softness
+        self.param = param
+        self.customWgsl = customWgsl
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(UInt32.self, forKey: .kind) ?? EIVIZ_TRANSITION_FADE
+        durationValue = try container.decodeIfPresent(UInt32.self, forKey: .durationValue) ?? 30
+        durationUnit = try container.decodeIfPresent(UInt32.self, forKey: .durationUnit) ?? 0
+        swap = try container.decodeIfPresent(Bool.self, forKey: .swap) ?? true
+        keepPreview = try container.decodeIfPresent(Bool.self, forKey: .keepPreview) ?? true
+        easing = try container.decodeIfPresent(UInt32.self, forKey: .easing) ?? 0
+        direction = try container.decodeIfPresent(UInt32.self, forKey: .direction) ?? 0
+        dipR = try container.decodeIfPresent(Float.self, forKey: .dipR) ?? 0
+        dipG = try container.decodeIfPresent(Float.self, forKey: .dipG) ?? 0
+        dipB = try container.decodeIfPresent(Float.self, forKey: .dipB) ?? 0
+        dipA = try container.decodeIfPresent(Float.self, forKey: .dipA) ?? 1
+        softness = try container.decodeIfPresent(Float.self, forKey: .softness) ?? 0.02
+        param = try container.decodeIfPresent(Float.self, forKey: .param) ?? 0
+        customWgsl = try container.decodeIfPresent(String.self, forKey: .customWgsl)
     }
 }
 

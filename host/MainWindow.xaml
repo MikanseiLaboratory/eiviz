@@ -20,13 +20,7 @@
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <TextBlock Text="{Binding [chrome.mixingUnit], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox x:Name="UnitBox" Width="280" SelectionChanged="UnitBox_SelectionChanged"/>
-                    <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
-                    <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
-                    <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
-                    <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
-                    <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
+                    <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Click="Resources_Click"/>
                     <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
                     <Button Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
                     <Button Content="{Binding [chrome.preferences], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Preferences_Click"/>
@@ -38,7 +32,16 @@
                 <TextBlock x:Name="ResourceText" DockPanel.Dock="Right" Foreground="{DynamicResource HudForeground}" Margin="16,0,0,0"
                            Cursor="Hand" MouseLeftButtonUp="ResourceHud_MouseUp"/>
                 <TextBlock x:Name="WarnText" DockPanel.Dock="Right" Foreground="{DynamicResource WarnForeground}" Margin="0,0,12,0"/>
-                <TextBlock x:Name="StatusText" Foreground="{DynamicResource StatusForeground}"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding [chrome.mixingUnit], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="UnitBox" Width="280" SelectionChanged="UnitBox_SelectionChanged"/>
+                    <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
+                    <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
+                    <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
+                    <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
+                    <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="16,0,0,0"
+                               Foreground="{DynamicResource StatusForeground}"/>
+                </StackPanel>
             </DockPanel>
         </Border>
         <Grid>

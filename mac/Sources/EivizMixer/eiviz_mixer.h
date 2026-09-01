@@ -42,6 +42,35 @@ extern "C" {
 #define EIVIZ_TRANSITION_BLINDS 7u
 #define EIVIZ_TRANSITION_ZOOM 8u
 #define EIVIZ_TRANSITION_ADDITIVE 9u
+#define EIVIZ_TRANSITION_CUBE 10u
+#define EIVIZ_TRANSITION_CROSS_ZOOM 11u
+#define EIVIZ_TRANSITION_FLY_ROTATE 12u
+#define EIVIZ_TRANSITION_BARN_DOOR 13u
+#define EIVIZ_TRANSITION_CLOCK 14u
+#define EIVIZ_TRANSITION_LOREZ 15u
+#define EIVIZ_TRANSITION_METAMIX 16u
+#define EIVIZ_TRANSITION_TILE 17u
+#define EIVIZ_TRANSITION_FLIP 18u
+#define EIVIZ_TRANSITION_GLITCH 19u
+#define EIVIZ_TRANSITION_SWIRL 20u
+#define EIVIZ_TRANSITION_LUMA_MORPH 21u
+#define EIVIZ_TRANSITION_PARTS 22u
+#define EIVIZ_TRANSITION_STATIC 23u
+#define EIVIZ_TRANSITION_SHIFT_RGB 24u
+#define EIVIZ_TRANSITION_DISPLACE 25u
+#define EIVIZ_TRANSITION_RIPPLE 26u
+#define EIVIZ_TRANSITION_GRID_DISSOLVE 27u
+#define EIVIZ_TRANSITION_CUBE_ZOOM 28u
+#define EIVIZ_TRANSITION_PAGE_CURL 29u
+#define EIVIZ_TRANSITION_KALEIDOSCOPE 30u
+#define EIVIZ_TRANSITION_POLAR 31u
+#define EIVIZ_TRANSITION_FILM_BURN 32u
+#define EIVIZ_TRANSITION_ZOOM_BLUR 33u
+#define EIVIZ_TRANSITION_MULTITASK 34u
+#define EIVIZ_TRANSITION_HEART 35u
+#define EIVIZ_TRANSITION_DIAMOND 36u
+#define EIVIZ_TRANSITION_STAR 37u
+#define EIVIZ_TRANSITION_ROLLER_DOOR 38u
 #define EIVIZ_TRANSITION_CUSTOM 50u
 #define EIVIZ_TRANSITION_STINGER 100u
 
@@ -116,6 +145,8 @@ typedef struct EivizUnitState {
     float dip_b;
     float dip_a;
     uint64_t incoming_source;
+    float softness;
+    float param;
 } EivizUnitState;
 
 typedef struct EivizVideoInfo {
@@ -206,7 +237,7 @@ int32_t mixer_monitor_set_source(uint64_t monitor_id, uint64_t source_id);
 int32_t mixer_unit_set_state(uint64_t unit_id, const EivizUnitState *state);
 int32_t mixer_unit_get_state(uint64_t unit_id, EivizUnitState *out);
 int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap, uint64_t incoming_source);
-int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source);
+int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source, float softness, float param);
 int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_ms, const EivizOverlayDesc *desc);
 int32_t mixer_unit_set_custom_wgsl(uint64_t unit_id, const char *wgsl);
 int32_t mixer_validate_custom_wgsl(const char *wgsl);

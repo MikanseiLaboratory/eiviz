@@ -24,7 +24,9 @@ internal sealed record AutoCommand(
     float DipG,
     float DipB,
     float DipA,
-    string? CustomWgsl) : MixerCommand;
+    string? CustomWgsl,
+    float Softness = 0.02f,
+    float Param = 0f) : MixerCommand;
 internal sealed record PreviewSceneCommand(ulong UnitId, ulong SceneGpuId) : MixerCommand;
 internal sealed record PushUnitStateCommand(ulong UnitId, UnitState State) : MixerCommand;
 internal sealed record DefineSceneCommand(SceneEntry Scene, uint Width, uint Height) : MixerCommand;
@@ -402,6 +404,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                 current.DipG = auto.DipG;
                 current.DipB = auto.DipB;
                 current.DipA = auto.DipA <= 0 ? 1 : auto.DipA;
+                current.Softness = auto.Softness;
+                current.Param = auto.Param;
                 MixerNative.SetUnitState(auto.UnitId, &current);
             }
         }
@@ -419,7 +423,9 @@ internal sealed class CommandQueue : IAsyncDisposable
                 auto.DipG,
                 auto.DipB,
                 auto.DipA <= 0 ? 1 : auto.DipA,
-                MixerNative.IncomingPreview),
+                MixerNative.IncomingPreview,
+                auto.Softness,
+                auto.Param),
             "AUTO");
     }
 
@@ -451,6 +457,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                 return;
             var state = BuildState(unit, current.ProgramSource, current.PreviewSource, current.Mix, current.TransitionKind);
             state.IncomingSource = current.IncomingSource;
+            state.Softness = current.Softness;
+            state.Param = current.Param;
             MixerNative.SetUnitState(unitId, &state);
         }
     }
@@ -472,6 +480,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                 current.DipG = look.DipG;
                 current.DipB = look.DipB;
                 current.DipA = look.DipA <= 0 ? 1 : look.DipA;
+                current.Softness = look.Softness;
+                current.Param = look.Param;
                 MixerNative.SetCustomWgsl(unitId, ResolveCustomWgsl(look.Kind, look.CustomWgsl));
             }
             MixerNative.SetUnitState(unitId, &current);

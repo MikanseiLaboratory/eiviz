@@ -526,6 +526,10 @@ pub struct TransitionPreset {
     pub dip_b: f32,
     #[serde(default = "one_f32")]
     pub dip_a: f32,
+    #[serde(default = "softness_default")]
+    pub softness: f32,
+    #[serde(default)]
+    pub param: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_wgsl: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -537,6 +541,9 @@ fn fade() -> u32 {
 }
 fn thirty() -> u32 {
     30
+}
+fn softness_default() -> f32 {
+    0.02
 }
 
 fn transition_label(kind: u32) -> &'static str {
@@ -550,6 +557,35 @@ fn transition_label(kind: u32) -> &'static str {
         7 => "Blinds",
         8 => "Zoom",
         9 => "Additive",
+        10 => "Cube",
+        11 => "CrossZoom",
+        12 => "FlyRotate",
+        13 => "BarnDoor",
+        14 => "Clock",
+        15 => "LoRez",
+        16 => "MetaMix",
+        17 => "Tile",
+        18 => "Flip",
+        19 => "Glitch",
+        20 => "Swirl",
+        21 => "LumaMorph",
+        22 => "Parts",
+        23 => "Static",
+        24 => "Shift RGB",
+        25 => "Displace",
+        26 => "Ripple",
+        27 => "GridDissolve",
+        28 => "CubeZoom",
+        29 => "PageCurl",
+        30 => "Kaleidoscope",
+        31 => "Polar",
+        32 => "FilmBurn",
+        33 => "ZoomBlur",
+        34 => "MultiTask",
+        35 => "Heart",
+        36 => "Diamond",
+        37 => "Star",
+        38 => "RollerDoor",
         50 => "Custom",
         100 => "Stinger",
         _ => "Fade",
@@ -570,6 +606,8 @@ impl Default for TransitionPreset {
             dip_g: 0.0,
             dip_b: 0.0,
             dip_a: 1.0,
+            softness: 0.02,
+            param: 0.0,
             custom_wgsl: None,
             label: None,
         }

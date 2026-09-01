@@ -11,7 +11,8 @@ use eiviz_mixer::{
     mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
     mixer_unit_release_frame, mixer_unit_set_state, mixer_video_enum_captures, mixer_video_start,
-    EASING_IN_OUT, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_SLIDE, TRANSITION_WIPE,
+    EASING_IN_OUT, TRANSITION_CUBE, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_GLITCH,
+    TRANSITION_HEART, TRANSITION_LOREZ, TRANSITION_PAGE_CURL, TRANSITION_SLIDE, TRANSITION_WIPE,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -106,7 +107,7 @@ fn dx12_compose_omt_and_program_out() {
     }
     assert_eq!(mixer_unit_cut(1, 1, 0), OK);
     assert_eq!(
-        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0),
+        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
         OK
     );
 
@@ -413,7 +414,7 @@ fn keep_preview_freezes_incoming_source() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0),
+            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
             OK
         );
         state.preview_source = SRC_BARS;
@@ -444,7 +445,7 @@ fn easing_completes_with_cut() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0, 0),
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
             OK
         );
     }
@@ -483,6 +484,37 @@ fn wipe_and_slide_emit_frames() {
 }
 
 #[test]
+fn shader_transitions_emit_frames() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let kinds = [
+        TRANSITION_CUBE,
+        TRANSITION_LOREZ,
+        TRANSITION_GLITCH,
+        TRANSITION_PAGE_CURL,
+        TRANSITION_HEART,
+    ];
+    for kind in kinds {
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.45,
+            transition_kind: kind,
+            softness: 0.02,
+            param: 0.0,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+            thread::sleep(Duration::from_millis(80));
+            try_acquire(1);
+        }
+    }
+    mixer_destroy();
+}
+
+#[test]
 fn dip_uses_preset_color() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
@@ -497,7 +529,7 @@ fn dip_uses_preset_color() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0, 0),
+            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0, 0, 0.02, 0.0),
             OK
         );
         let mut out = UnitState::default();
@@ -526,7 +558,7 @@ fn auto_uses_incoming_source_instead_of_preview() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 0, 0, 0, 0.0, 0.0, 0.0, 1.0, SRC_BARS),
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 0, 0, 0, 0.0, 0.0, 0.0, 1.0, SRC_BARS, 0.02, 0.0),
             OK
         );
     }

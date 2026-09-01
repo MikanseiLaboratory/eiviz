@@ -75,20 +75,6 @@ struct ContentView: View {
                 Text("▾")
             }
             Spacer()
-            Text(L10n.t("chrome.mixingUnit"))
-            Picker("", selection: $mixer.selectedUnitId) {
-                ForEach(mixer.session.units) { unit in
-                    Text(unit.displayName).tag(unit.id)
-                }
-            }
-            .frame(width: 280)
-            Button(L10n.t("chrome.add")) { mixer.addUnit() }
-            Button(L10n.t("chrome.edit")) {
-                mixer.editingUnit = mixer.selectedUnit
-                mixer.showMixingUnit = true
-            }
-            Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
-            Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
@@ -191,6 +177,44 @@ struct ContentView: View {
         mixer.saveUnit(unit)
     }
 
+    private func transitionKindGrid(index: Int, preset: TransitionPreset) -> some View {
+        let selected = mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind
+        return VStack(alignment: .leading, spacing: 4) {
+            ForEach(TransitionGroup.allCases, id: \.self) { group in
+                let items = TransitionCatalog.items(in: group)
+                if !items.isEmpty {
+                    Text(group.title)
+                        .font(.system(size: 11))
+                        .foregroundStyle(EivizTheme.dim)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                        ForEach(items) { item in
+                            Button(item.label) {
+                                updateTransition(index) {
+                                    $0.kind = item.kind
+                                    if item.kind == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
+                                        $0.customWgsl = CustomWgslEditor.template
+                                    }
+                                }
+                                if item.kind == EIVIZ_TRANSITION_CUSTOM {
+                                    let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
+                                        ?? CustomWgslEditor.template
+                                    wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
+                                }
+                            }
+                            .buttonStyle(MixerButtonStyle())
+                            .overlay(
+                                Rectangle().stroke(
+                                    selected == item.kind ? mixer.session.settings.previewColor.color : EivizTheme.stroke,
+                                    lineWidth: 1
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func transitionRow(index: Int, preset: TransitionPreset) -> some View {
         let selected = index == mixer.tbarPresetIndex
         return HStack(alignment: .top, spacing: 4) {
@@ -207,34 +231,7 @@ struct ContentView: View {
                 )
             ) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("", selection: Binding(
-                        get: { mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind },
-                            set: { value in
-                                updateTransition(index) {
-                                    $0.kind = value
-                                    if value == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
-                                        $0.customWgsl = CustomWgslEditor.template
-                                    }
-                                }
-                                if value == EIVIZ_TRANSITION_CUSTOM {
-                                    let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
-                                        ?? CustomWgslEditor.template
-                                    wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
-                                }
-                            }
-                    )) {
-                        Text("Cut").tag(EIVIZ_TRANSITION_CUT)
-                        Text("Fade").tag(EIVIZ_TRANSITION_FADE)
-                        Text("Dip").tag(EIVIZ_TRANSITION_DIP)
-                        Text("Wipe").tag(EIVIZ_TRANSITION_WIPE)
-                        Text("Slide").tag(EIVIZ_TRANSITION_SLIDE)
-                        Text("Push").tag(EIVIZ_TRANSITION_PUSH)
-                        Text("Iris").tag(EIVIZ_TRANSITION_IRIS)
-                        Text("Blinds").tag(EIVIZ_TRANSITION_BLINDS)
-                        Text("Zoom").tag(EIVIZ_TRANSITION_ZOOM)
-                        Text("Additive").tag(EIVIZ_TRANSITION_ADDITIVE)
-                        Text("Custom WGSL").tag(EIVIZ_TRANSITION_CUSTOM)
-                    }
+                    transitionKindGrid(index: index, preset: preset)
                     if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasDuration {
                         Text("Duration").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         mixerUintField(Binding(
@@ -273,6 +270,22 @@ struct ContentView: View {
                             Text("Up").tag(EIVIZ_DIR_UP)
                             Text("Down").tag(EIVIZ_DIR_DOWN)
                         }
+                    }
+                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasSoftness {
+                        Text(TransitionCatalog.info(mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind).softnessLabel)
+                            .font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                        mixerFloatField(Binding(
+                            get: { mixer.selectedUnit.transitions[safe: index]?.softness ?? preset.softness },
+                            set: { value in updateTransition(index) { $0.softness = max(0, value) } }
+                        ))
+                    }
+                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasParam {
+                        Text(TransitionCatalog.info(mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind).paramLabel)
+                            .font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                        mixerFloatField(Binding(
+                            get: { mixer.selectedUnit.transitions[safe: index]?.param ?? preset.param },
+                            set: { value in updateTransition(index) { $0.param = max(0, value) } }
+                        ))
                     }
                     Toggle("Swap", isOn: Binding(
                         get: { mixer.selectedUnit.transitions[safe: index]?.swap ?? true },
@@ -504,9 +517,30 @@ struct ContentView: View {
         }
     }
 
+    private var mixUnitBar: some View {
+        HStack(spacing: 8) {
+            Text(L10n.t("chrome.mixingUnit"))
+            Picker("", selection: $mixer.selectedUnitId) {
+                ForEach(mixer.session.units) { unit in
+                    Text(unit.displayName).tag(unit.id)
+                }
+            }
+            .frame(width: 280)
+            Button(L10n.t("chrome.add")) { mixer.addUnit() }
+            Button(L10n.t("chrome.edit")) {
+                mixer.editingUnit = mixer.selectedUnit
+                mixer.showMixingUnit = true
+            }
+            Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
+            Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
+            Text(mixer.status).foregroundStyle(EivizTheme.status)
+        }
+        .buttonStyle(MixerButtonStyle())
+    }
+
     private var statusBar: some View {
         HStack {
-            Text(mixer.status).foregroundStyle(EivizTheme.status)
+            mixUnitBar
             Spacer()
             if !mixer.warnText.isEmpty {
                 Text(mixer.warnText).foregroundStyle(EivizTheme.warn)

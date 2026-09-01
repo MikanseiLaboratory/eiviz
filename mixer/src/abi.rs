@@ -28,6 +28,35 @@ pub const TRANSITION_IRIS: u32 = 6;
 pub const TRANSITION_BLINDS: u32 = 7;
 pub const TRANSITION_ZOOM: u32 = 8;
 pub const TRANSITION_ADDITIVE: u32 = 9;
+pub const TRANSITION_CUBE: u32 = 10;
+pub const TRANSITION_CROSS_ZOOM: u32 = 11;
+pub const TRANSITION_FLY_ROTATE: u32 = 12;
+pub const TRANSITION_BARN_DOOR: u32 = 13;
+pub const TRANSITION_CLOCK: u32 = 14;
+pub const TRANSITION_LOREZ: u32 = 15;
+pub const TRANSITION_METAMIX: u32 = 16;
+pub const TRANSITION_TILE: u32 = 17;
+pub const TRANSITION_FLIP: u32 = 18;
+pub const TRANSITION_GLITCH: u32 = 19;
+pub const TRANSITION_SWIRL: u32 = 20;
+pub const TRANSITION_LUMA_MORPH: u32 = 21;
+pub const TRANSITION_PARTS: u32 = 22;
+pub const TRANSITION_STATIC: u32 = 23;
+pub const TRANSITION_SHIFT_RGB: u32 = 24;
+pub const TRANSITION_DISPLACE: u32 = 25;
+pub const TRANSITION_RIPPLE: u32 = 26;
+pub const TRANSITION_GRID_DISSOLVE: u32 = 27;
+pub const TRANSITION_CUBE_ZOOM: u32 = 28;
+pub const TRANSITION_PAGE_CURL: u32 = 29;
+pub const TRANSITION_KALEIDOSCOPE: u32 = 30;
+pub const TRANSITION_POLAR: u32 = 31;
+pub const TRANSITION_FILM_BURN: u32 = 32;
+pub const TRANSITION_ZOOM_BLUR: u32 = 33;
+pub const TRANSITION_MULTITASK: u32 = 34;
+pub const TRANSITION_HEART: u32 = 35;
+pub const TRANSITION_DIAMOND: u32 = 36;
+pub const TRANSITION_STAR: u32 = 37;
+pub const TRANSITION_ROLLER_DOOR: u32 = 38;
 pub const TRANSITION_CUSTOM: u32 = 50;
 pub const TRANSITION_STINGER: u32 = 100;
 
@@ -231,6 +260,8 @@ pub struct UnitState {
     /// Report of the active mix incoming when it is not Preview. `0` means Preview.
     /// Auto/Cut arguments: `0` Preview, `u64::MAX` (`-1`) Program, otherwise a source id.
     pub incoming_source: u64,
+    pub softness: f32,
+    pub param: f32,
 }
 
 impl UnitState {

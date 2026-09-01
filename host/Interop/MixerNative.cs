@@ -31,6 +31,35 @@ internal static partial class MixerNative
     internal const uint TransitionBlinds = 7;
     internal const uint TransitionZoom = 8;
     internal const uint TransitionAdditive = 9;
+    internal const uint TransitionCube = 10;
+    internal const uint TransitionCrossZoom = 11;
+    internal const uint TransitionFlyRotate = 12;
+    internal const uint TransitionBarnDoor = 13;
+    internal const uint TransitionClock = 14;
+    internal const uint TransitionLorez = 15;
+    internal const uint TransitionMetamix = 16;
+    internal const uint TransitionTile = 17;
+    internal const uint TransitionFlip = 18;
+    internal const uint TransitionGlitch = 19;
+    internal const uint TransitionSwirl = 20;
+    internal const uint TransitionLumaMorph = 21;
+    internal const uint TransitionParts = 22;
+    internal const uint TransitionStatic = 23;
+    internal const uint TransitionShiftRgb = 24;
+    internal const uint TransitionDisplace = 25;
+    internal const uint TransitionRipple = 26;
+    internal const uint TransitionGridDissolve = 27;
+    internal const uint TransitionCubeZoom = 28;
+    internal const uint TransitionPageCurl = 29;
+    internal const uint TransitionKaleidoscope = 30;
+    internal const uint TransitionPolar = 31;
+    internal const uint TransitionFilmBurn = 32;
+    internal const uint TransitionZoomBlur = 33;
+    internal const uint TransitionMultitask = 34;
+    internal const uint TransitionHeart = 35;
+    internal const uint TransitionDiamond = 36;
+    internal const uint TransitionStar = 37;
+    internal const uint TransitionRollerDoor = 38;
     internal const uint TransitionCustom = 50;
     internal const uint TransitionStinger = 100;
     internal const uint DurationFrames = 0;
@@ -41,21 +70,7 @@ internal static partial class MixerNative
     internal const uint EasingInOut = 3;
     internal const uint EasingSmoothstep = 4;
 
-    internal static string TransitionLabel(uint kind) => kind switch
-    {
-        TransitionCut => "Cut",
-        TransitionDip => "Dip",
-        TransitionWipe => "Wipe",
-        TransitionSlide => "Slide",
-        TransitionPush => "Push",
-        TransitionIris => "Iris",
-        TransitionBlinds => "Blinds",
-        TransitionZoom => "Zoom",
-        TransitionAdditive => "Additive",
-        TransitionCustom => "Custom",
-        TransitionStinger => "Stinger",
-        _ => "Fade"
-    };
+    internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
@@ -146,7 +161,9 @@ internal static partial class MixerNative
         float dipG,
         float dipB,
         float dipA,
-        ulong incomingSource);
+        ulong incomingSource,
+        float softness,
+        float param);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_overlay_auto")]
     internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationMs, OverlayDesc* desc);
@@ -574,6 +591,8 @@ internal struct UnitState
     public float DipB;
     public float DipA;
     public ulong IncomingSource;
+    public float Softness;
+    public float Param;
 }
 
 [StructLayout(LayoutKind.Sequential)]

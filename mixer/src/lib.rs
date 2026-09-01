@@ -41,10 +41,17 @@ pub use abi::{
     INCOMING_PREVIEW, INCOMING_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
     SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
     SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
-    TRANSITION_BLINDS, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DIP,
-    TRANSITION_FADE, TRANSITION_IRIS, TRANSITION_PUSH, TRANSITION_SLIDE, TRANSITION_STINGER,
-    TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
-    TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, DURATION_FRAMES, DURATION_MS, EASING_IN,
+    TRANSITION_BARN_DOOR, TRANSITION_BLINDS, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM,
+    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DIAMOND,
+    TRANSITION_DIP, TRANSITION_DISPLACE, TRANSITION_FADE, TRANSITION_FILM_BURN, TRANSITION_FLIP,
+    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_GRID_DISSOLVE, TRANSITION_HEART,
+    TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE, TRANSITION_LOREZ, TRANSITION_LUMA_MORPH,
+    TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
+    TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE, TRANSITION_ROLLER_DOOR,
+    TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_STATIC, TRANSITION_STINGER,
+    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR,
+    TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT, TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP,
+    DURATION_FRAMES, DURATION_MS, EASING_IN,
     EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP, UnitState, UnitSnap,
     VideoCaptureInfo, VideoCaptureMode,
 };
@@ -980,6 +987,7 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
             let program = unit.state.program_source;
             let keep_preview = unit.state.keep_preview;
             let dip = (unit.state.dip_r, unit.state.dip_g, unit.state.dip_b, unit.state.dip_a);
+            let look = (unit.state.softness, unit.state.param);
             let frozen = unit.frozen_preview;
             unit.state = state;
             unit.state.mix = mix;
@@ -989,6 +997,8 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
             unit.state.dip_g = dip.1;
             unit.state.dip_b = dip.2;
             unit.state.dip_a = dip.3;
+            unit.state.softness = look.0;
+            unit.state.param = look.1;
             unit.frozen_preview = frozen;
         } else {
             let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
@@ -1165,6 +1175,8 @@ pub extern "C" fn mixer_unit_auto(
     dip_b: f32,
     dip_a: f32,
     incoming_source: u64,
+    softness: f32,
+    param: f32,
 ) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
@@ -1184,6 +1196,8 @@ pub extern "C" fn mixer_unit_auto(
         unit.state.dip_g = dip_g;
         unit.state.dip_b = dip_b;
         unit.state.dip_a = if dip_a <= 0.0 { 1.0 } else { dip_a };
+        unit.state.softness = softness;
+        unit.state.param = param;
         let keep = keep_preview != 0;
         let incoming = resolve_incoming(
             incoming_source,

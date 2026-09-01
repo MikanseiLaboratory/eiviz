@@ -81,6 +81,8 @@ struct MixParams {
     direction: u32,
     softness: f32,
     dip: [f32; 4],
+    param: f32,
+    pad: [f32; 3],
 }
 
 struct SourceGpu {
@@ -1078,13 +1080,15 @@ impl Composer {
                     state.transition_kind
                 },
                 direction: state.transition_direction,
-                softness: 0.02,
+                softness: state.softness,
                 dip: [
                     state.dip_r,
                     state.dip_g,
                     state.dip_b,
                     if state.dip_a <= 0.0 { 1.0 } else { state.dip_a },
                 ],
+                param: state.param,
+                pad: [0.0; 3],
             },
         );
         let dest = self.units.get(&unit_id).ok_or("unit missing")?.mixed_view.clone();
@@ -1729,6 +1733,8 @@ struct MixParams {
     direction: u32,
     softness: f32,
     dip: vec4<f32>,
+    param: f32,
+    _pad: vec3<f32>,
 }
 @group(0) @binding(0) var pgm_tex: texture_2d<f32>;
 @group(0) @binding(1) var pvw_tex: texture_2d<f32>;

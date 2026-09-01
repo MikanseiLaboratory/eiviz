@@ -351,39 +351,9 @@ public partial class MainWindow : Window
             expander.Collapsed += (_, _) => _transitionExpanded.Remove(index);
 
             var stack = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
-            var kind = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
-            foreach (var (label, value) in new (string, uint)[]
-            {
-                ("Cut", MixerNative.TransitionCut),
-                ("Fade", MixerNative.TransitionFade),
-                ("Dip", MixerNative.TransitionDip),
-                ("Wipe", MixerNative.TransitionWipe),
-                ("Slide", MixerNative.TransitionSlide),
-                ("Push", MixerNative.TransitionPush),
-                ("Iris", MixerNative.TransitionIris),
-                ("Blinds", MixerNative.TransitionBlinds),
-                ("Zoom", MixerNative.TransitionZoom),
-                ("Additive", MixerNative.TransitionAdditive),
-                ("Custom WGSL", MixerNative.TransitionCustom)
-            })
-                kind.Items.Add(new ComboBoxItem { Content = label, Tag = value });
             if (preset.Kind == MixerNative.TransitionStinger)
                 preset.Kind = MixerNative.TransitionFade;
-            kind.SelectedIndex = Math.Max(0, Enumerable.Range(0, kind.Items.Count)
-                .FirstOrDefault(i => kind.Items[i] is ComboBoxItem item && item.Tag is uint value && value == preset.Kind));
-            kind.SelectionChanged += (_, _) =>
-            {
-                if (kind.SelectedItem is ComboBoxItem item && item.Tag is uint value)
-                {
-                    preset.Kind = value;
-                    if (value == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
-                    {
-                        preset.CustomWgsl = CustomWgslWindow.WgslTemplate;
-                        MixerNative.SetCustomWgsl(unit.Id, preset.CustomWgsl);
-                    }
-                }
-                RebuildTransitions();
-            };
+            stack.Children.Add(BuildTransitionKindGrid(preset, unit));
             var duration = new TextBox { Text = preset.DurationValue.ToString(), Margin = new Thickness(0, 0, 0, 4) };
             duration.TextChanged += (_, _) =>
             {
@@ -438,7 +408,6 @@ public partial class MainWindow : Window
                 _tbarPresetIndex = Math.Clamp(_tbarPresetIndex, 0, Math.Max(0, unit.Transitions.Count - 1));
                 RebuildTransitions();
             };
-            stack.Children.Add(kind);
             if (preset.HasDuration)
             {
                 stack.Children.Add(new TextBlock { Text = "Duration", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
@@ -454,6 +423,18 @@ public partial class MainWindow : Window
             {
                 stack.Children.Add(new TextBlock { Text = "Direction", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
                 stack.Children.Add(direction);
+            }
+            if (preset.HasSoftness)
+            {
+                var info = TransitionCatalog.Info(preset.Kind);
+                stack.Children.Add(new TextBlock { Text = info.SoftnessLabel, FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(TransitionFloatBox(() => preset.Softness, value => preset.Softness = Math.Clamp(value, 0f, 4f), "0.###"));
+            }
+            if (preset.HasParam)
+            {
+                var info = TransitionCatalog.Info(preset.Kind);
+                stack.Children.Add(new TextBlock { Text = info.ParamLabel, FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(TransitionFloatBox(() => preset.Param, value => preset.Param = Math.Max(0f, value), "0.##"));
             }
             stack.Children.Add(swap);
             stack.Children.Add(keep);
@@ -497,6 +478,72 @@ public partial class MainWindow : Window
             row.Children.Add(expander);
             TransitionPanel.Children.Add(row);
         }
+    }
+
+    private UIElement BuildTransitionKindGrid(TransitionPreset preset, MixingUnitEntry unit)
+    {
+        var root = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+        foreach (var group in new[] { TransitionGroup.Basic, TransitionGroup.Wipe, TransitionGroup.Motion, TransitionGroup.Shader })
+        {
+            var items = TransitionCatalog.All.Where(item => item.Group == group).ToArray();
+            if (items.Length == 0)
+                continue;
+            root.Children.Add(new TextBlock
+            {
+                Text = TransitionCatalog.GroupName(group),
+                FontSize = 11,
+                Foreground = System.Windows.Media.Brushes.Silver,
+                Margin = new Thickness(0, 4, 0, 2)
+            });
+            var grid = new UniformGrid { Columns = 3 };
+            foreach (var item in items)
+            {
+                var kind = item.Kind;
+                var on = preset.Kind == kind;
+                var button = new Button
+                {
+                    Content = item.Label,
+                    Height = 22,
+                    FontSize = 11,
+                    Margin = new Thickness(1),
+                    Padding = new Thickness(2, 0, 2, 0),
+                    Tag = kind,
+                    Foreground = System.Windows.Media.Brushes.White,
+                    Background = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
+                    BorderBrush = on
+                        ? BusTheme.PreviewBrush(_session.Settings)
+                        : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+                    BorderThickness = new Thickness(1)
+                };
+                button.Click += (_, _) =>
+                {
+                    preset.Kind = kind;
+                    if (kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
+                    {
+                        preset.CustomWgsl = CustomWgslWindow.WgslTemplate;
+                        MixerNative.SetCustomWgsl(unit.Id, preset.CustomWgsl);
+                    }
+                    RebuildTransitions();
+                };
+                grid.Children.Add(button);
+            }
+            root.Children.Add(grid);
+        }
+        return root;
+    }
+
+    private static TextBox TransitionFloatBox(Func<float> get, Action<float> set, string format)
+    {
+        var box = new TextBox { Text = get().ToString(format), Margin = new Thickness(0, 0, 0, 4) };
+        void Apply()
+        {
+            if (float.TryParse(box.Text, out var value))
+                set(value);
+        }
+        box.TextChanged += (_, _) => Apply();
+        NumericDrag.AttachBox(box, 80f, Apply, Apply, format);
+        return box;
     }
 
     internal void RebuildOverlayToggles()

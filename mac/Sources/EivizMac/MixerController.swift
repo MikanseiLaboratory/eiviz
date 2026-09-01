@@ -285,7 +285,9 @@ final class MixerController: ObservableObject {
                 preset.dipG,
                 preset.dipB,
                 preset.dipA,
-                EIVIZ_INCOMING_PREVIEW
+                EIVIZ_INCOMING_PREVIEW,
+                preset.softness,
+                preset.param
             ),
             reason
         )
@@ -381,6 +383,8 @@ final class MixerController: ObservableObject {
         state.dip_g = preset.dipG
         state.dip_b = preset.dipB
         state.dip_a = preset.dipA <= 0 ? 1 : preset.dipA
+        state.softness = preset.softness
+        state.param = preset.param
         let wgsl = resolvedCustomWgsl(preset)
         if wgsl.isEmpty {
             _ = mixer_unit_set_custom_wgsl(unitId, nil)

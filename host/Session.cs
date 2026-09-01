@@ -439,15 +439,17 @@ public sealed class TransitionPreset
     public float DipG { get; set; }
     public float DipB { get; set; }
     public float DipA { get; set; } = 1;
+    public float Softness { get; set; } = 0.02f;
+    public float Param { get; set; }
     public string? CustomWgsl { get; set; }
     public string Label => MixerNative.TransitionLabel(Kind);
 
     public bool HasDuration => Kind != MixerNative.TransitionCut;
     public bool HasEasing => HasDuration;
-    public bool HasDirection =>
-        Kind is MixerNative.TransitionWipe or MixerNative.TransitionSlide
-            or MixerNative.TransitionPush or MixerNative.TransitionBlinds;
-    public bool HasDipColor => Kind is MixerNative.TransitionDip or MixerNative.TransitionPush;
+    public bool HasDirection => TransitionCatalog.Info(Kind).HasDirection;
+    public bool HasDipColor => TransitionCatalog.Info(Kind).HasDipColor;
+    public bool HasSoftness => TransitionCatalog.Info(Kind).HasSoftness;
+    public bool HasParam => TransitionCatalog.Info(Kind).HasParam;
     public bool HasCustomWgsl => Kind == MixerNative.TransitionCustom;
 
     public uint DurationMsFor(MixingUnitEntry unit) =>
@@ -468,7 +470,9 @@ public sealed class TransitionPreset
             DipG,
             DipB,
             DipA,
-            CustomWgsl);
+            CustomWgsl,
+            Softness,
+            Param);
 }
 
 public enum OverlaySourceKind
