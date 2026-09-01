@@ -321,21 +321,77 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var z: Int32 = 0
     var audioFollow: Bool = true
     var locked: Bool = false
+    var hidden: Bool = false
     var sizeLinked: Bool = true
     var cropX: Float = 0
     var cropY: Float = 0
     var cropWidth: Float = 1
     var cropHeight: Float = 1
 
-    mutating func clampCrop() {
-        cropX = min(0.99, max(0, cropX))
-        cropY = min(0.99, max(0, cropY))
-        cropWidth = min(1 - cropX, max(0.01, cropWidth))
-        cropHeight = min(1 - cropY, max(0.01, cropHeight))
+    mutating func clampCrop(minX: Float = 0.001, minY: Float = 0.001) {
+        cropX = min(1 - minX, max(0, cropX))
+        cropY = min(1 - minY, max(0, cropY))
+        cropWidth = min(1 - cropX, max(minX, cropWidth))
+        cropHeight = min(1 - cropY, max(minY, cropHeight))
+    }
+
+    mutating func resetLayout() {
+        x = 0
+        y = 0
+        width = 1
+        height = 1
+        sizeLinked = true
+        resetLayoutExtras()
+    }
+
+    mutating func resetLayoutExtras() {
+        opacity = 1
+        cropX = 0
+        cropY = 0
+        cropWidth = 1
+        cropHeight = 1
     }
 
     enum CodingKeys: String, CodingKey {
-        case inputId, x, y, width, height, opacity, z, audioFollow, locked, sizeLinked, cropX, cropY, cropWidth, cropHeight
+        case inputId, x, y, width, height, opacity, z, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
+    }
+
+    init(inputId: UInt64, x: Float = 0, y: Float = 0, width: Float = 1, height: Float = 1, opacity: Float = 1, z: Int32 = 0, audioFollow: Bool = true, locked: Bool = false, hidden: Bool = false, sizeLinked: Bool = true, cropX: Float = 0, cropY: Float = 0, cropWidth: Float = 1, cropHeight: Float = 1) {
+        self.id = UUID()
+        self.inputId = inputId
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.opacity = opacity
+        self.z = z
+        self.audioFollow = audioFollow
+        self.locked = locked
+        self.hidden = hidden
+        self.sizeLinked = sizeLinked
+        self.cropX = cropX
+        self.cropY = cropY
+        self.cropWidth = cropWidth
+        self.cropHeight = cropHeight
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        inputId = try container.decode(UInt64.self, forKey: .inputId)
+        x = try container.decodeIfPresent(Float.self, forKey: .x) ?? 0
+        y = try container.decodeIfPresent(Float.self, forKey: .y) ?? 0
+        width = try container.decodeIfPresent(Float.self, forKey: .width) ?? 1
+        height = try container.decodeIfPresent(Float.self, forKey: .height) ?? 1
+        opacity = try container.decodeIfPresent(Float.self, forKey: .opacity) ?? 1
+        z = try container.decodeIfPresent(Int32.self, forKey: .z) ?? 0
+        audioFollow = try container.decodeIfPresent(Bool.self, forKey: .audioFollow) ?? true
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        sizeLinked = try container.decodeIfPresent(Bool.self, forKey: .sizeLinked) ?? true
+        cropX = try container.decodeIfPresent(Float.self, forKey: .cropX) ?? 0
+        cropY = try container.decodeIfPresent(Float.self, forKey: .cropY) ?? 0
+        cropWidth = try container.decodeIfPresent(Float.self, forKey: .cropWidth) ?? 1
+        cropHeight = try container.decodeIfPresent(Float.self, forKey: .cropHeight) ?? 1
     }
 }
 
@@ -407,8 +463,14 @@ struct TransitionPreset: Identifiable, Codable {
     }
 }
 
+enum OverlaySourceKind: String, Codable {
+    case scene = "Scene"
+    case input = "Input"
+}
+
 struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var id = UUID()
+    var sourceKind: OverlaySourceKind = .scene
     var sceneGpuId: UInt64 = 0
     var x: Float = 0.62
     var y: Float = 0.08
@@ -416,14 +478,70 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var height: Float = 0.32
     var opacity: Float = 1
     var z: Int32 = 0
-    var enabled: Bool = true
+    var enabled: Bool = false
     var transitionKind: UInt32 = EIVIZ_TRANSITION_FADE
     var durationValue: UInt32 = 15
     var durationUnit: UInt32 = 0
     var audioFollow: Bool = true
+    var locked: Bool = false
+    var hidden: Bool = false
+    var sizeLinked: Bool = true
+    var cropX: Float = 0
+    var cropY: Float = 0
+    var cropWidth: Float = 1
+    var cropHeight: Float = 1
+
+    mutating func clampCrop(minX: Float = 0.001, minY: Float = 0.001) {
+        cropX = min(1 - minX, max(0, cropX))
+        cropY = min(1 - minY, max(0, cropY))
+        cropWidth = min(1 - cropX, max(minX, cropWidth))
+        cropHeight = min(1 - cropY, max(minY, cropHeight))
+    }
+
+    mutating func resetLayout() {
+        x = 0.62
+        y = 0.08
+        width = 0.32
+        height = 0.32
+        sizeLinked = true
+        opacity = 1
+        cropX = 0
+        cropY = 0
+        cropWidth = 1
+        cropHeight = 1
+    }
 
     enum CodingKeys: String, CodingKey {
-        case sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit, audioFollow
+        case sourceKind, sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
+    }
+
+    init(sourceKind: OverlaySourceKind = .scene, sceneGpuId: UInt64 = 0) {
+        self.sourceKind = sourceKind
+        self.sceneGpuId = sceneGpuId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceKind = try container.decodeIfPresent(OverlaySourceKind.self, forKey: .sourceKind) ?? .scene
+        sceneGpuId = try container.decodeIfPresent(UInt64.self, forKey: .sceneGpuId) ?? 0
+        x = try container.decodeIfPresent(Float.self, forKey: .x) ?? 0.62
+        y = try container.decodeIfPresent(Float.self, forKey: .y) ?? 0.08
+        width = try container.decodeIfPresent(Float.self, forKey: .width) ?? 0.32
+        height = try container.decodeIfPresent(Float.self, forKey: .height) ?? 0.32
+        opacity = try container.decodeIfPresent(Float.self, forKey: .opacity) ?? 1
+        z = try container.decodeIfPresent(Int32.self, forKey: .z) ?? 0
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        transitionKind = try container.decodeIfPresent(UInt32.self, forKey: .transitionKind) ?? EIVIZ_TRANSITION_FADE
+        durationValue = try container.decodeIfPresent(UInt32.self, forKey: .durationValue) ?? 15
+        durationUnit = try container.decodeIfPresent(UInt32.self, forKey: .durationUnit) ?? 0
+        audioFollow = try container.decodeIfPresent(Bool.self, forKey: .audioFollow) ?? true
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        sizeLinked = try container.decodeIfPresent(Bool.self, forKey: .sizeLinked) ?? true
+        cropX = try container.decodeIfPresent(Float.self, forKey: .cropX) ?? 0
+        cropY = try container.decodeIfPresent(Float.self, forKey: .cropY) ?? 0
+        cropWidth = try container.decodeIfPresent(Float.self, forKey: .cropWidth) ?? 1
+        cropHeight = try container.decodeIfPresent(Float.self, forKey: .cropHeight) ?? 1
     }
 }
 

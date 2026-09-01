@@ -1451,18 +1451,19 @@ struct CustomWgslEditor: View {
         self.onCancel = onCancel
     }
 
-    private static let template = """
+    static let template = """
     fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
         let a = textureSample(pgm_tex, src_samp, uv);
         let b = textureSample(pvw_tex, src_samp, uv);
-        return mix(a, b, t);
+        let w = smoothstep(t - 0.02, t + 0.02, uv.x);
+        return mix(b, a, w);
     }
     """
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Custom WGSL").fontWeight(.bold)
-            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. pgm_tex, pvw_tex, and src_samp are already bound.")
+            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. pgm_tex, pvw_tex, and src_samp are bound.")
                 .font(.system(size: 11))
                 .foregroundStyle(EivizTheme.dim)
             TextEditor(text: $text)

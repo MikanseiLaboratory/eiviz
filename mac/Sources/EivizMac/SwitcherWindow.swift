@@ -8,6 +8,7 @@ struct SwitcherView: View {
     @State private var mix: Float = 0
     @State private var tbarLocked = false
     @State private var tbarLatching = false
+    @State private var tbarDragging = false
     @State private var tbarPresetIndex = 0
 
     private var unit: MixingUnitEntry {
@@ -22,6 +23,13 @@ struct SwitcherView: View {
         return "PREVIEW"
     }
 
+    private var displayedMix: Float {
+        if tbarLocked || tbarDragging || tbarLatching {
+            return mix
+        }
+        return mixer.mixByUnit[unitId] ?? mix
+    }
+
     private var programTitle: String {
         if let id = mixer.programmingSceneId(for: unitId),
            let scene = mixer.session.scenes.first(where: { $0.id == id }) {
@@ -32,7 +40,7 @@ struct SwitcherView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 16) {
                 bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                 transitions
                 bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
@@ -66,7 +74,6 @@ struct SwitcherView: View {
                             Button("TAKE") {
                                 tbarPresetIndex = index
                                 mixer.firePreset(preset, unitId: unitId)
-                                mix = 0
                                 tbarLocked = false
                             }
                             .buttonStyle(MixerButtonStyle())
@@ -76,18 +83,21 @@ struct SwitcherView: View {
             }
             Slider(
                 value: Binding(
-                    get: { Double(mix) },
+                    get: { Double(displayedMix) },
                     set: { setMix(Float($0)) }
                 ),
                 in: 0 ... 1,
                 onEditingChanged: { editing in
+                    tbarDragging = editing
                     if !editing { finishTBar() }
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
             .frame(width: 220)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
         }
+        .padding(.horizontal, 12)
         .frame(width: 260)
     }
 

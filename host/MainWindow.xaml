@@ -26,7 +26,6 @@
                     <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
-                    <Button x:Name="MultiviewButton" Content="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="OpenMultiview_Click"/>
                     <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
                     <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
                     <Button Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
@@ -42,34 +41,25 @@
                 <TextBlock x:Name="StatusText" Foreground="{DynamicResource StatusForeground}"/>
             </DockPanel>
         </Border>
-        <Border DockPanel.Dock="Bottom" Background="{DynamicResource PanelBackground}" Padding="8,6">
-            <DockPanel>
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                    <TextBlock Text="{Binding [chrome.audio], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
-                </DockPanel>
-                <Button DockPanel.Dock="Right" Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}"
-                        Width="88" Height="28" Margin="8,0,0,0" VerticalAlignment="Bottom" Click="OpenOverlay_Click"/>
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <StackPanel Orientation="Horizontal">
-                        <StackPanel x:Name="MeterPanel" Orientation="Horizontal"/>
-                        <StackPanel x:Name="OverlayTogglePanel" Orientation="Horizontal" Margin="8,0,0,0"/>
-                    </StackPanel>
-                </ScrollViewer>
-            </DockPanel>
-        </Border>
-        <Grid Margin="8">
+        <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="1.2*"/>
+                <RowDefinition Height="*" MinHeight="200"/>
+                <RowDefinition Height="140" MinHeight="80"/>
+            </Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" MinHeight="160"/>
+                <RowDefinition Height="1.2*" MinHeight="160"/>
             </Grid.RowDefinitions>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="260"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*" MinWidth="160"/>
+                    <ColumnDefinition Width="260" MinWidth="220"/>
+                    <ColumnDefinition Width="*" MinWidth="160"/>
                 </Grid.ColumnDefinitions>
                 <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Margin="0,0,8,0">
                     <Border x:Name="PreviewFrame" BorderBrush="#00FF00" BorderThickness="2" Background="{DynamicResource VideoSurface}">
                         <DockPanel>
                             <Border x:Name="PreviewHeader" DockPanel.Dock="Top" Background="#00FF00" Padding="8,4">
@@ -79,13 +69,16 @@
                         </DockPanel>
                     </Border>
                 </preview:AspectBox>
-                <DockPanel Grid.Column="1" Margin="8,0">
+                <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                              Background="{DynamicResource ButtonBorder}"/>
+                <DockPanel Grid.Column="1" Margin="16,0">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTransition_Click"/>
                         <TextBlock Text="{Binding [chrome.transitions], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <Slider x:Name="TBar" DockPanel.Dock="Bottom" Orientation="Horizontal" Minimum="0" Maximum="1"
-                            Width="220" HorizontalAlignment="Center" Margin="0,10,0,0" Height="18"
+                            Width="220" HorizontalAlignment="Center" Margin="8,10,8,0" Height="18"
                             IsMoveToPointEnabled="True"
                             ValueChanged="TBar_ValueChanged"
                             PreviewMouseLeftButtonUp="TBar_MouseUp"
@@ -94,8 +87,12 @@
                         <StackPanel x:Name="TransitionPanel"/>
                     </ScrollViewer>
                 </DockPanel>
+                <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                              Background="{DynamicResource ButtonBorder}"/>
                 <preview:AspectBox x:Name="ProgramAspect" Grid.Column="2" HeaderHeight="28"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Margin="8,0,0,0">
                     <Border x:Name="ProgramFrame" BorderBrush="#FF0000" BorderThickness="2" Background="{DynamicResource VideoSurface}">
                         <DockPanel>
                             <Border x:Name="ProgramHeader" DockPanel.Dock="Top" Background="#FF0000" Padding="8,4">
@@ -106,6 +103,9 @@
                     </Border>
                 </preview:AspectBox>
             </Grid>
+            <GridSplitter Grid.Row="0" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+                          ResizeDirection="Rows" ResizeBehavior="CurrentAndNext"
+                          Background="{DynamicResource ButtonBorder}"/>
             <DockPanel Grid.Row="1">
                 <Border x:Name="VideoBar" DockPanel.Dock="Bottom" Background="{DynamicResource VideoBarBackground}" Padding="8,6" Margin="0,8,0,0"
                         Visibility="Collapsed">
@@ -127,8 +127,8 @@
                 </Border>
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="240"/>
-                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="240" MinWidth="140"/>
+                        <ColumnDefinition Width="*" MinWidth="200"/>
                     </Grid.ColumnDefinitions>
                     <DockPanel>
                         <TextBlock DockPanel.Dock="Top" Text="{Binding [chrome.inputs], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" Margin="0,0,0,6"/>
@@ -151,6 +151,9 @@
                                  SelectionChanged="InputList_SelectionChanged"
                                  MouseDoubleClick="InputList_DoubleClick"/>
                     </DockPanel>
+                    <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                                  ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                                  Background="{DynamicResource ButtonBorder}"/>
                     <DockPanel Grid.Column="1" Margin="8,0,0,0">
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -166,6 +169,38 @@
                     </DockPanel>
                 </Grid>
             </DockPanel>
+        </Grid>
+            <GridSplitter Grid.Row="0" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+                          ResizeDirection="Rows" ResizeBehavior="CurrentAndNext"
+                          Background="{DynamicResource ButtonBorder}"/>
+            <Border Grid.Row="1" Background="{DynamicResource PanelBackground}" Padding="8,6">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                        <TextBlock Text="{Binding [chrome.audio], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom">
+                        <Button x:Name="MultiviewButton" Content="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}"
+                                Width="96" Height="28" Margin="8,0,8,0" Click="OpenMultiview_Click"/>
+                        <Button Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}"
+                                Width="88" Height="28" Click="OpenOverlay_Click"/>
+                    </StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="80"/>
+                            <ColumnDefinition Width="280" MinWidth="80"/>
+                        </Grid.ColumnDefinitions>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="MeterPanel" Orientation="Horizontal"/>
+                        </ScrollViewer>
+                        <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                                      ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                                      Background="{DynamicResource ButtonBorder}"/>
+                        <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="OverlayTogglePanel" Orientation="Horizontal" HorizontalAlignment="Right"/>
+                        </ScrollViewer>
+                    </Grid>
+                </DockPanel>
+            </Border>
         </Grid>
     </DockPanel>
 </Window>

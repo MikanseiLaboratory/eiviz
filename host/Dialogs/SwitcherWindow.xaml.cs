@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Eiviz.Host;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
@@ -44,6 +45,9 @@ public partial class SwitcherWindow : Window
     private Session Session => ((App)Application.Current).Session;
 
     private CommandQueue Commands => ((App)Application.Current).Commands;
+
+    internal void ApplyMixerMix() =>
+        MainWindow.ApplyTBarFromMixer(_unit.Id, TBar, ref _tbarLatching, ref _tbarLocked);
 
     internal void SyncFromUnit()
     {

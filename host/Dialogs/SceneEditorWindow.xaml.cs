@@ -18,6 +18,7 @@ public partial class SceneEditorWindow : Window
     private SceneLayer? _selected;
     private bool _dragging;
     private bool _resizing;
+    private bool _suppress;
     private Point _last;
     private DateTime _lastGpuPush;
 
@@ -36,6 +37,7 @@ public partial class SceneEditorWindow : Window
         WireCanvas.Height = height;
         WireLabel.Text = $"Wireframe ({width}x{height})";
         InputPick.ItemsSource = session.Inputs;
+        LayerInputBox.ItemsSource = session.Inputs;
         if (session.Inputs.Count > 0)
             InputPick.SelectedIndex = 0;
         PreviewHost.RetargetMonitor(monitorId, scene.GpuId);
@@ -44,9 +46,12 @@ public partial class SceneEditorWindow : Window
         Loaded += (_, _) =>
         {
             FillPresets();
+            _scene.Layers.Sort((a, b) => b.Z.CompareTo(a.Z));
+            NormalizeOrder();
             RefreshLayers();
             PushGpu();
             AttachDrags();
+            ListReorder.Attach(LayerList, MoveLayer);
         };
     }
 
@@ -81,6 +86,7 @@ public partial class SceneEditorWindow : Window
         Z = layer.Z,
         AudioFollow = layer.AudioFollow,
         Locked = layer.Locked,
+        Hidden = layer.Hidden,
         SizeLinked = layer.SizeLinked,
         CropX = layer.CropX,
         CropY = layer.CropY,
@@ -88,11 +94,36 @@ public partial class SceneEditorWindow : Window
         CropHeight = layer.CropHeight
     };
 
+    private void NormalizeOrder()
+    {
+        for (var i = 0; i < _scene.Layers.Count; i++)
+            _scene.Layers[i].Z = _scene.Layers.Count - 1 - i;
+    }
+
+    private bool MoveLayer(int from, int to)
+    {
+        if (from < 0 || from >= _scene.Layers.Count)
+            return false;
+        to = Math.Clamp(to, 0, _scene.Layers.Count);
+        if (to == from || to == from + 1)
+            return false;
+        var layer = _scene.Layers[from];
+        _scene.Layers.RemoveAt(from);
+        if (to > from)
+            to--;
+        _scene.Layers.Insert(to, layer);
+        _selected = layer;
+        NormalizeOrder();
+        RefreshLayers();
+        PushGpu();
+        return true;
+    }
+
     private void RefreshLayers()
     {
-        _scene.Layers.Sort((a, b) => a.Z.CompareTo(b.Z));
-        LayerList.ItemsSource = null;
-        LayerList.ItemsSource = _scene.Layers.Select(LayerLabel).ToArray();
+        LayerList.Items.Clear();
+        foreach (var layer in _scene.Layers)
+            LayerList.Items.Add(BuildLayerRow(layer));
         if (_selected is not null)
         {
             var index = _scene.Layers.IndexOf(_selected);
@@ -103,10 +134,49 @@ public partial class SceneEditorWindow : Window
         FillNumeric();
     }
 
+    private DockPanel BuildLayerRow(SceneLayer layer)
+    {
+        var hide = new Button
+        {
+            Content = layer.Hidden ? "–" : "👁",
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Tag = layer,
+            ToolTip = "Hide"
+        };
+        var lockBtn = new Button
+        {
+            Content = layer.Locked ? "🔒" : "🔓",
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            Tag = layer,
+            ToolTip = "Lock"
+        };
+        hide.Click += LayerHide_Click;
+        lockBtn.Click += LayerLock_Click;
+        DockPanel.SetDock(lockBtn, Dock.Right);
+        DockPanel.SetDock(hide, Dock.Right);
+        var name = new TextBlock
+        {
+            Text = LayerLabel(layer),
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = layer.Hidden ? new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)) : Brushes.White
+        };
+        var row = new DockPanel { Tag = layer };
+        row.Children.Add(lockBtn);
+        row.Children.Add(hide);
+        row.Children.Add(name);
+        return row;
+    }
+
     private string LayerLabel(SceneLayer layer)
     {
         var input = _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId);
-        return $"{layer.Z}: {input?.Name ?? layer.InputId.ToString()}{(layer.Locked ? " 🔒" : "")}";
+        var order = _scene.Layers.IndexOf(layer) + 1;
+        return $"{order}. {input?.Name ?? layer.InputId.ToString()}";
     }
 
     private void DrawWireframe()
@@ -120,17 +190,18 @@ public partial class SceneEditorWindow : Window
             Color.FromRgb(0xAB, 0x47, 0xBC),
             Color.FromRgb(0xEF, 0x53, 0x50)
         };
-        for (var i = 0; i < _scene.Layers.Count; i++)
+        for (var i = _scene.Layers.Count - 1; i >= 0; i--)
         {
             var layer = _scene.Layers[i];
-            var color = hues[i % hues.Length];
+            var color = layer.Hidden ? Color.FromRgb(0x55, 0x55, 0x55) : hues[i % hues.Length];
             var rect = new Rectangle
             {
                 Width = Math.Max(8, layer.Width * WireCanvas.Width),
                 Height = Math.Max(8, layer.Height * WireCanvas.Height),
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = ReferenceEquals(layer, _selected) ? 4 : 2,
-                Fill = new SolidColorBrush(Color.FromArgb(40, color.R, color.G, color.B)),
+                StrokeDashArray = layer.Hidden ? new DoubleCollection { 4, 3 } : null,
+                Fill = new SolidColorBrush(Color.FromArgb(layer.Hidden ? (byte)20 : (byte)40, color.R, color.G, color.B)),
                 Tag = layer
             };
             Canvas.SetLeft(rect, layer.X * WireCanvas.Width);
@@ -186,7 +257,11 @@ public partial class SceneEditorWindow : Window
         OpBox.Text = (layer?.Opacity ?? 1).ToString("0.###");
         AudioFollowBox.IsChecked = layer?.AudioFollow ?? true;
         LinkBox.IsChecked = layer?.SizeLinked ?? true;
-        LockBox.IsChecked = layer?.Locked ?? false;
+        _suppress = true;
+        LayerInputBox.SelectedItem = layer is null
+            ? null
+            : _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId);
+        _suppress = false;
         var edit = layer is { Locked: false };
         XBox.IsEnabled = edit;
         YBox.IsEnabled = edit;
@@ -232,11 +307,11 @@ public partial class SceneEditorWindow : Window
         PushGpu();
     }
 
-    private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftZ(1);
+    private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftDisplay(-1);
 
-    private void ZDown_Click(object sender, RoutedEventArgs e) => ShiftZ(-1);
+    private void ZDown_Click(object sender, RoutedEventArgs e) => ShiftDisplay(1);
 
-    private void ShiftZ(int delta)
+    private void ShiftDisplay(int delta)
     {
         if (_selected is null)
             return;
@@ -244,19 +319,22 @@ public partial class SceneEditorWindow : Window
         var target = index + delta;
         if (target < 0 || target >= _scene.Layers.Count)
             return;
-        (_scene.Layers[index].Z, _scene.Layers[target].Z) = (_scene.Layers[target].Z, _scene.Layers[index].Z);
+        (_scene.Layers[index], _scene.Layers[target]) = (_scene.Layers[target], _scene.Layers[index]);
+        NormalizeOrder();
         RefreshLayers();
         PushGpu();
     }
 
     private void LayerList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (LayerList.SelectedIndex >= 0 && LayerList.SelectedIndex < _scene.Layers.Count)
-        {
+        if (LayerList.SelectedItem is FrameworkElement { Tag: SceneLayer layer })
+            _selected = layer;
+        else if (LayerList.SelectedIndex >= 0 && LayerList.SelectedIndex < _scene.Layers.Count)
             _selected = _scene.Layers[LayerList.SelectedIndex];
-            DrawWireframe();
-            FillNumeric();
-        }
+        else
+            return;
+        DrawWireframe();
+        FillNumeric();
     }
 
     private void Numeric_LostFocus(object sender, RoutedEventArgs e) => ApplyNumeric(true, sender);
@@ -292,9 +370,9 @@ public partial class SceneEditorWindow : Window
         }
         if (float.TryParse(CropXBox.Text, out var cx)) _selected.CropX = cx / _width;
         if (float.TryParse(CropYBox.Text, out var cy)) _selected.CropY = cy / _height;
-        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = Math.Max(1f, cw) / _width;
-        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = Math.Max(1f, ch) / _height;
-        ClampCrop(_selected);
+        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = cw / _width;
+        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = ch / _height;
+        _selected.ClampCrop(1f / Math.Max(1, _width), 1f / Math.Max(1, _height));
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
         if (push)
@@ -405,12 +483,43 @@ public partial class SceneEditorWindow : Window
         _selected.SizeLinked = LinkBox.IsChecked == true;
     }
 
-    private void Lock_Click(object sender, RoutedEventArgs e)
+    private void LayerLock_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null)
+        if (sender is not Button { Tag: SceneLayer layer })
             return;
-        _selected.Locked = LockBox.IsChecked == true;
+        layer.Locked = !layer.Locked;
+        _selected = layer;
         RefreshLayers();
+        e.Handled = true;
+    }
+
+    private void LayerHide_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: SceneLayer layer })
+            return;
+        layer.Hidden = !layer.Hidden;
+        _selected = layer;
+        RefreshLayers();
+        PushGpu();
+        e.Handled = true;
+    }
+
+    private void LayerInput_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _selected is null || LayerInputBox.SelectedItem is not InputEntry input)
+            return;
+        _selected.InputId = input.Id;
+        RefreshLayers();
+        PushGpu();
+    }
+
+    private void ResetLayer_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null || _selected.Locked)
+            return;
+        _selected.ResetLayout();
+        RefreshLayers();
+        PushGpu();
     }
 
     private void FillPresets()
@@ -484,7 +593,12 @@ public partial class SceneEditorWindow : Window
                 _scene.Layers[i].CropY = src.CropY;
                 _scene.Layers[i].CropWidth = src.CropWidth;
                 _scene.Layers[i].CropHeight = src.CropHeight;
+                _scene.Layers[i].SizeLinked = src.SizeLinked;
+                _scene.Layers[i].AudioFollow = src.AudioFollow;
+                _scene.Layers[i].ClampCrop();
             }
+            _scene.Layers.Sort((a, b) => b.Z.CompareTo(a.Z));
+            NormalizeOrder();
             RefreshLayers();
             PushGpu();
             return;
@@ -497,6 +611,7 @@ public partial class SceneEditorWindow : Window
                 layer.Y = 0;
                 layer.Width = 1;
                 layer.Height = 1;
+                layer.ResetLayoutExtras();
             }
             RefreshLayers();
             PushGpu();
@@ -521,17 +636,10 @@ public partial class SceneEditorWindow : Window
             unlocked[i].Y = y;
             unlocked[i].Width = w;
             unlocked[i].Height = h;
+            unlocked[i].ResetLayoutExtras();
         }
         RefreshLayers();
         PushGpu();
-    }
-
-    private static void ClampCrop(SceneLayer layer)
-    {
-        layer.CropX = Math.Clamp(layer.CropX, 0, 0.99f);
-        layer.CropY = Math.Clamp(layer.CropY, 0, 0.99f);
-        layer.CropWidth = Math.Clamp(layer.CropWidth, 0.01f, 1f - layer.CropX);
-        layer.CropHeight = Math.Clamp(layer.CropHeight, 0.01f, 1f - layer.CropY);
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)

@@ -7,28 +7,40 @@
         Background="#2B2B2B" Foreground="#EEEEEE">
     <Grid Margin="12">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260"/>
+            <ColumnDefinition Width="240"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="320"/>
         </Grid.ColumnDefinitions>
         <DockPanel>
-            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button DockPanel.Dock="Right" Content="+" Width="28" Click="Add_Click"/>
-                <TextBlock Text="Overlays" FontWeight="Bold" VerticalAlignment="Center"/>
-            </DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Overlays" FontWeight="Bold" Margin="0,0,0,6"/>
             <StackPanel DockPanel.Dock="Bottom">
-                <Button Content="Z up" Height="28" Click="ZUp_Click"/>
-                <Button Content="Z down" Height="28" Margin="0,6,0,0" Click="ZDown_Click"/>
-                <Button Content="Delete" Height="28" Margin="0,6,0,0" Click="Delete_Click"/>
+                <ComboBox x:Name="AddKindBox" Margin="0,8,0,6" SelectionChanged="AddKind_SelectionChanged">
+                    <ComboBoxItem Content="Scene"/>
+                    <ComboBoxItem Content="Input"/>
+                </ComboBox>
+                <ComboBox x:Name="AddSourceBox" Margin="0,0,0,6" DisplayMemberPath="Name"/>
+                <Button Content="Add overlay" Height="28" Click="Add_Click"/>
+                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                    <Button Content="Z up" Width="72" Click="ZUp_Click"/>
+                    <Button Content="Z down" Width="72" Margin="6,0,0,0" Click="ZDown_Click"/>
+                    <Button Content="Delete" Width="72" Margin="6,0,0,0" Click="Delete_Click"/>
+                </StackPanel>
             </StackPanel>
             <ListBox x:Name="SlotList" Background="#222" Foreground="#EEE" BorderBrush="#444"
-                     SelectionChanged="SlotList_SelectionChanged"/>
+                     SelectionChanged="SlotList_SelectionChanged">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Setter Property="Padding" Value="4,2"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
         </DockPanel>
         <DockPanel Grid.Column="1" Margin="12,0">
-            <TextBlock DockPanel.Dock="Top" Text="Layout (16:9 Program)" FontWeight="Bold" Margin="0,0,0,6"/>
+            <TextBlock x:Name="WireLabel" DockPanel.Dock="Top" Text="Wireframe" FontWeight="Bold" Margin="0,0,0,6"/>
             <Border Background="#111" BorderBrush="#555" BorderThickness="1">
                 <Viewbox Stretch="Uniform">
-                    <Canvas x:Name="WireCanvas" Width="1600" Height="900" Background="#0A0A0A"
+                    <Canvas x:Name="WireCanvas" Width="1920" Height="1080" Background="#0A0A0A"
                             MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
                             MouseMove="WireCanvas_MouseMove"
                             MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"/>
@@ -36,38 +48,55 @@
             </Border>
         </DockPanel>
         <DockPanel Grid.Column="2">
-            <TextBlock DockPanel.Dock="Top" Text="Scene preview" FontWeight="Bold" Margin="0,0,0,6"/>
+            <TextBlock DockPanel.Dock="Top" Text="Live preview" FontWeight="Bold" Margin="0,0,0,6"/>
             <StackPanel DockPanel.Dock="Bottom">
-                <CheckBox x:Name="OnBox" Content="ON" Foreground="#EEE" Margin="0,8,0,8"
-                          Checked="OnBox_Changed" Unchecked="OnBox_Changed"/>
-                <TextBlock Text="Scene"/>
-                <ComboBox x:Name="SceneBox" Margin="0,4,0,8" DisplayMemberPath="Name"
-                          SelectionChanged="SceneBox_SelectionChanged"/>
+                <TextBlock Text="Source" Margin="0,8,0,0"/>
+                <ComboBox x:Name="SourceKindBox" Margin="0,4,0,6" SelectionChanged="SourceKind_SelectionChanged">
+                    <ComboBoxItem Content="Scene"/>
+                    <ComboBoxItem Content="Input"/>
+                </ComboBox>
+                <ComboBox x:Name="SourceBox" Margin="0,0,0,8" DisplayMemberPath="Name"
+                          SelectionChanged="SourceBox_SelectionChanged"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="56"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="48"/>
+                        <ColumnDefinition Width="56"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="X" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
                     <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
-                    <TextBox x:Name="YBox" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Text="W" VerticalAlignment="Center"/>
-                    <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="H" VerticalAlignment="Center"/>
-                    <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="2" Text="Op" VerticalAlignment="Center"/>
-                    <TextBox x:Name="OpBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="YBox" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
+                    <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,4,6" LostFocus="Numeric_LostFocus"/>
+                    <CheckBox x:Name="LinkBox" Grid.Row="1" Grid.Column="2"
+                              Content="Link" VerticalAlignment="Center" Margin="0,0,4,6" Foreground="#EEEEEE"
+                              Click="Link_Click"/>
+                    <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Crop X" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Crop Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Crop W" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Crop H" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
+                    <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                 </Grid>
                 <CheckBox x:Name="AudioFollowBox" Content="Audio Follow" Foreground="#EEE" Margin="0,8,0,8"
                           Checked="AudioFollow_Changed" Unchecked="AudioFollow_Changed"/>
+                <Button Content="Reset" Height="26" Margin="0,0,0,8" Click="Reset_Click"/>
                 <TextBlock Text="On/Off" Margin="0,8,0,4"/>
                 <ComboBox x:Name="KindBox" Margin="0,0,0,8" SelectionChanged="KindBox_SelectionChanged">
                     <ComboBoxItem Content="Cut" Tag="0"/>

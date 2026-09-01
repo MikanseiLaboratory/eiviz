@@ -38,7 +38,8 @@ pub use abi::{
     GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
     NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW,
     OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
-    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    INCOMING_PREVIEW, INCOMING_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
     SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
     TRANSITION_BLINDS, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DIP,
     TRANSITION_FADE, TRANSITION_IRIS, TRANSITION_PUSH, TRANSITION_SLIDE, TRANSITION_STINGER,
@@ -83,6 +84,7 @@ struct AutoTransition {
     duration: Duration,
     swap: bool,
     keep_preview: bool,
+    incoming_locked: bool,
     frozen_preview: u64,
     easing: u32,
 }
@@ -971,7 +973,7 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
             return ERR_INVALID_ARGUMENT;
         };
         let keep = state.keep_preview != 0
-            || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview);
+            || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
         if unit.auto.is_some() && keep {
             let mix = unit.state.mix;
             let program = unit.state.program_source;
@@ -994,11 +996,14 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
                 unit.auto = None;
             }
         }
-        if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview) {
-            unit.frozen_preview.get_or_insert(unit.state.preview_source);
+        unit.state.incoming_source = 0;
+        if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked) {
+            unit.frozen_preview
+                .get_or_insert(unit.state.preview_source);
         } else if unit.state.mix > 0.001 {
             if unit.state.keep_preview != 0 {
-                unit.frozen_preview.get_or_insert(unit.state.preview_source);
+                unit.frozen_preview
+                    .get_or_insert(unit.state.preview_source);
             } else {
                 unit.frozen_preview = None;
             }
@@ -1043,32 +1048,70 @@ fn merge_overlay(state: &mut UnitState, desc: OverlayDesc) {
     }
 }
 
+fn live_incoming(unit: &LiveUnit) -> u64 {
+    if let Some(auto) = &unit.auto
+        && (auto.keep_preview || auto.incoming_locked)
+    {
+        return auto.frozen_preview;
+    }
+    unit.frozen_preview
+        .unwrap_or(unit.state.preview_source)
+}
+
+fn resolve_incoming(requested: u64, preview: u64, program: u64) -> u64 {
+    if requested == INCOMING_PREVIEW {
+        preview
+    } else if requested == INCOMING_PROGRAM {
+        program
+    } else {
+        requested
+    }
+}
+
+fn snapshot_mix_preview(unit: &LiveUnit) -> u64 {
+    let incoming = live_incoming(unit);
+    if incoming == unit.state.preview_source {
+        0
+    } else {
+        incoming
+    }
+}
+
 fn take_cut(unit: &mut LiveUnit, swap: bool) {
-    let incoming = unit
-        .auto
-        .as_ref()
-        .and_then(|auto| auto.keep_preview.then_some(auto.frozen_preview))
-        .or(unit.frozen_preview)
-        .unwrap_or(unit.state.preview_source);
-    if swap {
+    take_cut_to(unit, swap, live_incoming(unit));
+}
+
+fn take_cut_to(unit: &mut LiveUnit, swap: bool, incoming: u64) {
+    let preview = unit.state.preview_source;
+    if swap && incoming == preview {
         unit.state.preview_source = unit.state.program_source;
         unit.state.program_source = incoming;
     } else {
         unit.state.program_source = incoming;
     }
     unit.state.mix = 0.0;
+    unit.state.incoming_source = 0;
     unit.auto = None;
     unit.frozen_preview = None;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32) -> i32 {
+pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        take_cut(unit, swap != 0);
+        let incoming = if incoming_source == INCOMING_PREVIEW {
+            live_incoming(unit)
+        } else {
+            resolve_incoming(
+                incoming_source,
+                unit.state.preview_source,
+                unit.state.program_source,
+            )
+        };
+        take_cut_to(unit, swap != 0, incoming);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1087,6 +1130,7 @@ pub extern "C" fn mixer_unit_auto(
     dip_g: f32,
     dip_b: f32,
     dip_a: f32,
+    incoming_source: u64,
 ) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
@@ -1107,8 +1151,14 @@ pub extern "C" fn mixer_unit_auto(
         unit.state.dip_b = dip_b;
         unit.state.dip_a = if dip_a <= 0.0 { 1.0 } else { dip_a };
         let keep = keep_preview != 0;
-        if keep {
-            unit.frozen_preview = Some(unit.state.preview_source);
+        let incoming = resolve_incoming(
+            incoming_source,
+            unit.state.preview_source,
+            unit.state.program_source,
+        );
+        let incoming_locked = keep || incoming_source != INCOMING_PREVIEW;
+        if incoming_locked {
+            unit.frozen_preview = Some(incoming);
         } else {
             unit.frozen_preview = None;
         }
@@ -1119,7 +1169,8 @@ pub extern "C" fn mixer_unit_auto(
             duration: Duration::from_millis(u64::from(duration_ms.max(1))),
             swap: swap != 0,
             keep_preview: keep,
-            frozen_preview: unit.frozen_preview.unwrap_or(unit.state.preview_source),
+            incoming_locked,
+            frozen_preview: incoming,
             easing,
         });
         OK
@@ -1237,7 +1288,9 @@ pub unsafe extern "C" fn mixer_unit_get_state(unit_id: u64, out: *mut UnitState)
         let Some(unit) = shared.units.get(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        unsafe { *out = unit.state };
+        let mut state = unit.state;
+        state.incoming_source = snapshot_mix_preview(unit);
+        unsafe { *out = state };
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2731,7 +2784,7 @@ fn render_loop(
     let mut frame_i = 0u64;
     let mut audio_produced = 0u64;
     let mut audio_carry = 0u64;
-    let mut last_bus: HashMap<u64, (u64, u64, u32)> = HashMap::new();
+    let mut last_bus: HashMap<u64, (u64, u64, u32, u64)> = HashMap::new();
     let mut skip_units_streak = 0u32;
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
@@ -2904,14 +2957,17 @@ fn render_loop(
                 .units
                 .iter()
                 .map(|(id, unit)| {
+                    let mix_preview = snapshot_mix_preview(unit);
+                    let mut state = unit.state;
+                    state.incoming_source = mix_preview;
                     (
                         *id,
                         unit.width,
                         unit.height,
                         unit.fps_num,
                         unit.fps_den,
-                        unit.state,
-                        unit.frozen_preview.unwrap_or(0),
+                        state,
+                        mix_preview,
                         unit.custom_wgsl.clone(),
                     )
                 })
@@ -2957,11 +3013,12 @@ fn render_loop(
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
-                .filter(|(id, _, _, _, _, state, _, _)| {
-                    last_bus.get(id).is_none_or(|(program, preview, mix)| {
+                .filter(|(id, _, _, _, _, state, mix_preview, _)| {
+                    last_bus.get(id).is_none_or(|(program, preview, mix, incoming)| {
                         *program != state.program_source
                             || *preview != state.preview_source
                             || *mix != state.mix.to_bits()
+                            || *incoming != *mix_preview
                     })
                 })
                 .map(|(id, ..)| *id)
@@ -3156,10 +3213,10 @@ fn render_loop(
                 if !skip_units {
                     for (unit_id, width, height, _, _, state, mix_preview, custom) in &snapshot {
                         composer.ensure_unit(&device, *unit_id, *width, *height);
-                        if let Some(wgsl) = custom {
-                            if let Err(error) = composer.set_custom_mix(&device, *unit_id, wgsl) {
-                                crate::diag::error(&format!("custom wgsl: {error}"));
-                            }
+                        if let Err(error) =
+                            composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
+                        {
+                            crate::diag::error(&format!("custom wgsl: {error}"));
                         }
                         let pack_pgm = outputs_snap.iter().any(|item| {
                             item.unit_id == *unit_id
@@ -3257,10 +3314,15 @@ fn render_loop(
                         pts,
                     );
                     emit_gpu(&gpu_copies, &send_tx, pts);
-                    for (id, _, _, _, _, state, ..) in &snapshot {
+                    for (id, _, _, _, _, state, mix_preview, ..) in &snapshot {
                         last_bus.insert(
                             *id,
-                            (state.program_source, state.preview_source, state.mix.to_bits()),
+                            (
+                                state.program_source,
+                                state.preview_source,
+                                state.mix.to_bits(),
+                                *mix_preview,
+                            ),
                         );
                     }
                 }
@@ -3481,14 +3543,25 @@ fn follow_gains(
             return;
         }
         if id > 0 {
-            *gains.entry(id).or_insert(0.0) += gain;
+            gains
+                .entry(id)
+                .and_modify(|current| *current = (*current).max(gain))
+                .or_insert(gain);
         }
     }
-    for (_, _, _, _, _, state, _, _) in snapshot {
+    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
         let mix = state.mix.clamp(0.0, 1.0);
+        let incoming = if *mix_preview != 0 {
+            *mix_preview
+        } else {
+            state.mix_incoming()
+        };
         add(state.program_source, 1.0 - mix, &spec_map, &mut gains);
-        add(state.preview_source, mix, &spec_map, &mut gains);
+        add(incoming, mix, &spec_map, &mut gains);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+            if overlay.audio_follow == 0 {
+                continue;
+            }
             add(
                 overlay.source_id,
                 overlay.opacity.max(0.0),
@@ -3559,9 +3632,15 @@ fn collect_live_ids(
             uploads.insert(id);
         }
     }
-    for (_, _, _, _, _, state, _, _) in snapshot {
+    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
         add(state.program_source, &spec_map, &mut scenes, &mut uploads);
         add(state.preview_source, &spec_map, &mut scenes, &mut uploads);
+        let incoming = if *mix_preview != 0 {
+            *mix_preview
+        } else {
+            state.mix_incoming()
+        };
+        add(incoming, &spec_map, &mut scenes, &mut uploads);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
             add(overlay.source_id, &spec_map, &mut scenes, &mut uploads);
         }

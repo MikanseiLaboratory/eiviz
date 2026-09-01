@@ -10,6 +10,9 @@ pub const SRC_BARS: u64 = 2;
 pub const SRC_BLACK: u64 = 3;
 pub const SRC_BLUE: u64 = 4;
 
+pub const INCOMING_PREVIEW: u64 = 0;
+pub const INCOMING_PROGRAM: u64 = u64::MAX;
+
 pub const FMT_UYVY: u32 = 0;
 pub const FMT_BGRA: u32 = 1;
 pub const FMT_UYVA: u32 = 2;
@@ -182,7 +185,7 @@ pub struct OverlayDesc {
     pub opacity: f32,
     pub z: i32,
     pub audio_follow: u32,
-    pub pad: u32,
+    pub hidden: u32,
     pub label: *const std::ffi::c_char,
 }
 
@@ -195,7 +198,7 @@ impl Default for OverlayDesc {
             opacity: 0.0,
             z: 0,
             audio_follow: 0,
-            pad: 0,
+            hidden: 0,
             label: std::ptr::null(),
         }
     }
@@ -225,6 +228,19 @@ pub struct UnitState {
     pub dip_g: f32,
     pub dip_b: f32,
     pub dip_a: f32,
+    /// Report of the active mix incoming when it is not Preview. `0` means Preview.
+    /// Auto/Cut arguments: `0` Preview, `u64::MAX` (`-1`) Program, otherwise a source id.
+    pub incoming_source: u64,
+}
+
+impl UnitState {
+    pub fn mix_incoming(&self) -> u64 {
+        if self.incoming_source != 0 {
+            self.incoming_source
+        } else {
+            self.preview_source
+        }
+    }
 }
 
 pub type UnitSnap = (u64, u32, u32, u32, u32, UnitState, u64, Option<String>);

@@ -447,6 +447,8 @@ pub struct SceneLayer {
     pub crop_width: f32,
     #[serde(default = "one_f32")]
     pub crop_height: f32,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 fn true_bool() -> bool {
@@ -601,6 +603,12 @@ pub struct OverlaySlot {
     pub duration_unit: u32,
     #[serde(default = "true_bool")]
     pub audio_follow: bool,
+    #[serde(default)]
+    pub source_kind: u32,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 fn fifteen() -> u32 {

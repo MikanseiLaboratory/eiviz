@@ -14,6 +14,8 @@ extern "C" {
 #define EIVIZ_SRC_BARS 2ull
 #define EIVIZ_SRC_BLACK 3ull
 #define EIVIZ_SRC_BLUE 4ull
+#define EIVIZ_INCOMING_PREVIEW 0ull
+#define EIVIZ_INCOMING_PROGRAM 0xffffffffffffffffull
 
 #define EIVIZ_OUTPUT_PROGRAM 0u
 #define EIVIZ_OUTPUT_PREVIEW 1u
@@ -92,7 +94,7 @@ typedef struct EivizOverlayDesc {
     float opacity;
     int32_t z;
     uint32_t audio_follow;
-    uint32_t pad;
+    uint32_t hidden;
     const char *label;
 } EivizOverlayDesc;
 
@@ -113,6 +115,7 @@ typedef struct EivizUnitState {
     float dip_g;
     float dip_b;
     float dip_a;
+    uint64_t incoming_source;
 } EivizUnitState;
 
 typedef struct EivizVideoInfo {
@@ -202,8 +205,8 @@ int32_t mixer_detach_monitor(uint64_t monitor_id);
 int32_t mixer_monitor_set_source(uint64_t monitor_id, uint64_t source_id);
 int32_t mixer_unit_set_state(uint64_t unit_id, const EivizUnitState *state);
 int32_t mixer_unit_get_state(uint64_t unit_id, EivizUnitState *out);
-int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap);
-int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a);
+int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap, uint64_t incoming_source);
+int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source);
 int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_ms, const EivizOverlayDesc *desc);
 int32_t mixer_unit_set_custom_wgsl(uint64_t unit_id, const char *wgsl);
 int32_t mixer_validate_custom_wgsl(const char *wgsl);

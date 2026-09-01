@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Eiviz.Host;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
@@ -17,6 +18,7 @@ public partial class OverlayWindow : Window
     private bool _resizing;
     private Point _last;
     private bool _suppress;
+    private DateTime _lastGpuPush;
 
     public OverlayWindow(Session session, MixingUnitEntry unit)
     {
@@ -24,11 +26,22 @@ public partial class OverlayWindow : Window
         _session = session;
         _unit = unit;
         _monitorId = session.NextMonitorId++;
-        SceneBox.ItemsSource = session.Scenes;
+        AddKindBox.SelectedIndex = 0;
+        FillAddSources();
         Title = $"Overlays — {unit.Name}";
         PreviewAspect.RatioWidth = unit.Width;
         PreviewAspect.RatioHeight = unit.Height;
-        Loaded += (_, _) => RefreshList();
+        WireCanvas.Width = unit.Width;
+        WireCanvas.Height = unit.Height;
+        WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
+        Loaded += (_, _) =>
+        {
+            _unit.Overlays.Sort((a, b) => b.Z.CompareTo(a.Z));
+            NormalizeOrder();
+            RefreshList();
+            AttachDrags();
+            ListReorder.Attach(SlotList, MoveSlot);
+        };
     }
 
     public void Reload(MixingUnitEntry unit)
@@ -37,8 +50,34 @@ public partial class OverlayWindow : Window
         Title = $"Overlays — {unit.Name}";
         PreviewAspect.RatioWidth = unit.Width;
         PreviewAspect.RatioHeight = unit.Height;
+        WireCanvas.Width = unit.Width;
+        WireCanvas.Height = unit.Height;
+        WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
         _selected = unit.Overlays.FirstOrDefault();
         RefreshList();
+    }
+
+    private float WidthPx => _unit.Width;
+    private float HeightPx => _unit.Height;
+
+    private void AttachDrags()
+    {
+        void Bind(FrameworkElement handle, TextBox box, float scale)
+        {
+            void Preview() => ApplyNumeric(false, box);
+            void Commit() => ApplyNumeric(true, box);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit);
+            NumericDrag.AttachBox(box, scale, Preview, Commit);
+        }
+        Bind(PosXLabel, XBox, 2);
+        Bind(PosYLabel, YBox, 2);
+        Bind(SizeXLabel, WBox, 2);
+        Bind(SizeYLabel, HBox, 2);
+        Bind(CropXLabel, CropXBox, 2);
+        Bind(CropYLabel, CropYBox, 2);
+        Bind(CropWLabel, CropWBox, 2);
+        Bind(CropHLabel, CropHBox, 2);
+        Bind(OpLabel, OpBox, 80);
     }
 
     private void Push()
@@ -48,12 +87,37 @@ public partial class OverlayWindow : Window
             main.RebuildOverlayToggles();
     }
 
+    private void NormalizeOrder()
+    {
+        for (var i = 0; i < _unit.Overlays.Count; i++)
+            _unit.Overlays[i].Z = _unit.Overlays.Count - 1 - i;
+    }
+
+    private bool MoveSlot(int from, int to)
+    {
+        if (from < 0 || from >= _unit.Overlays.Count)
+            return false;
+        to = Math.Clamp(to, 0, _unit.Overlays.Count);
+        if (to == from || to == from + 1)
+            return false;
+        var slot = _unit.Overlays[from];
+        _unit.Overlays.RemoveAt(from);
+        if (to > from)
+            to--;
+        _unit.Overlays.Insert(to, slot);
+        _selected = slot;
+        NormalizeOrder();
+        RefreshList();
+        Push();
+        return true;
+    }
+
     private void RefreshList()
     {
         _suppress = true;
-        SlotList.ItemsSource = null;
-        SlotList.ItemsSource = _unit.Overlays.Select((slot, index) =>
-            $"{(slot.Enabled ? "ON" : "off")}  {index + 1}: {SceneName(slot)}").ToArray();
+        SlotList.Items.Clear();
+        foreach (var slot in _unit.Overlays)
+            SlotList.Items.Add(BuildSlotRow(slot));
         if (_selected is not null)
         {
             var index = _unit.Overlays.IndexOf(_selected);
@@ -71,8 +135,44 @@ public partial class OverlayWindow : Window
         UpdatePreview();
     }
 
-    private string SceneName(OverlaySlot slot) =>
-        _session.Scenes.FirstOrDefault(item => item.GpuId == slot.SceneGpuId)?.Name ?? "(none)";
+    private DockPanel BuildSlotRow(OverlaySlot slot)
+    {
+        var onBtn = new Button
+        {
+            Content = slot.Enabled ? "ON" : "OFF",
+            Width = 36,
+            Height = 22,
+            Padding = new Thickness(0),
+            Tag = slot,
+            ToolTip = "On/Off"
+        };
+        var lockBtn = new Button
+        {
+            Content = slot.Locked ? "🔒" : "🔓",
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            Tag = slot,
+            ToolTip = "Lock"
+        };
+        onBtn.Click += SlotOn_Click;
+        lockBtn.Click += SlotLock_Click;
+        DockPanel.SetDock(lockBtn, Dock.Right);
+        DockPanel.SetDock(onBtn, Dock.Right);
+        var dim = !slot.Enabled;
+        var name = new TextBlock
+        {
+            Text = $"{_unit.Overlays.IndexOf(slot) + 1}. {slot.DisplayName(_session)}",
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = dim ? new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)) : Brushes.White
+        };
+        var row = new DockPanel { Tag = slot };
+        row.Children.Add(lockBtn);
+        row.Children.Add(onBtn);
+        row.Children.Add(name);
+        return row;
+    }
 
     private void DrawWireframe()
     {
@@ -82,9 +182,10 @@ public partial class OverlayWindow : Window
             Color.FromRgb(0xE8, 0x77, 0x22),
             Color.FromRgb(0x42, 0xA5, 0xF5),
             Color.FromRgb(0x66, 0xBB, 0x6A),
-            Color.FromRgb(0xAB, 0x47, 0xBC)
+            Color.FromRgb(0xAB, 0x47, 0xBC),
+            Color.FromRgb(0xEF, 0x53, 0x50)
         };
-        for (var i = 0; i < _unit.Overlays.Count; i++)
+        for (var i = _unit.Overlays.Count - 1; i >= 0; i--)
         {
             var slot = _unit.Overlays[i];
             var color = hues[i % hues.Length];
@@ -102,7 +203,27 @@ public partial class OverlayWindow : Window
             Canvas.SetLeft(rect, slot.X * WireCanvas.Width);
             Canvas.SetTop(rect, slot.Y * WireCanvas.Height);
             WireCanvas.Children.Add(rect);
-            if (ReferenceEquals(slot, _selected))
+            var cropW = Math.Clamp(slot.CropWidth, 0.01f, 1f);
+            var cropH = Math.Clamp(slot.CropHeight, 0.01f, 1f);
+            var cropX = Math.Clamp(slot.CropX, 0f, 1f - cropW);
+            var cropY = Math.Clamp(slot.CropY, 0f, 1f - cropH);
+            if (cropX > 0.001f || cropY > 0.001f || cropW < 0.999f || cropH < 0.999f)
+            {
+                var crop = new Rectangle
+                {
+                    Width = Math.Max(4, rect.Width * cropW),
+                    Height = Math.Max(4, rect.Height * cropH),
+                    Stroke = new SolidColorBrush(color),
+                    StrokeThickness = 1,
+                    StrokeDashArray = new DoubleCollection { 3, 2 },
+                    Fill = Brushes.Transparent,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(crop, Canvas.GetLeft(rect) + rect.Width * cropX);
+                Canvas.SetTop(crop, Canvas.GetTop(rect) + rect.Height * cropY);
+                WireCanvas.Children.Add(crop);
+            }
+            if (ReferenceEquals(slot, _selected) && !slot.Locked)
             {
                 var handle = new Rectangle
                 {
@@ -123,18 +244,56 @@ public partial class OverlayWindow : Window
         if (_selected is null)
             return;
         _suppress = true;
-        OnBox.IsChecked = _selected.Enabled;
-        SceneBox.SelectedItem = _session.Scenes.FirstOrDefault(item => item.GpuId == _selected.SceneGpuId);
-        XBox.Text = _selected.X.ToString("0.####");
-        YBox.Text = _selected.Y.ToString("0.####");
-        WBox.Text = _selected.Width.ToString("0.####");
-        HBox.Text = _selected.Height.ToString("0.####");
+        SourceKindBox.SelectedIndex = _selected.SourceKind == OverlaySourceKind.Input ? 1 : 0;
+        FillSourceBox();
+        XBox.Text = (_selected.X * WidthPx).ToString("0.#");
+        YBox.Text = (_selected.Y * HeightPx).ToString("0.#");
+        WBox.Text = (_selected.Width * WidthPx).ToString("0.#");
+        HBox.Text = (_selected.Height * HeightPx).ToString("0.#");
+        CropXBox.Text = (_selected.CropX * WidthPx).ToString("0.#");
+        CropYBox.Text = (_selected.CropY * HeightPx).ToString("0.#");
+        CropWBox.Text = (_selected.CropWidth * WidthPx).ToString("0.#");
+        CropHBox.Text = (_selected.CropHeight * HeightPx).ToString("0.#");
         OpBox.Text = _selected.Opacity.ToString("0.###");
+        LinkBox.IsChecked = _selected.SizeLinked;
         AudioFollowBox.IsChecked = _selected.AudioFollow;
         KindBox.SelectedIndex = _selected.TransitionKind == MixerNative.TransitionCut ? 0 : 1;
         DurationBox.Text = _selected.DurationValue.ToString();
         DurationUnitBox.SelectedIndex = _selected.DurationUnit == MixerNative.DurationMs ? 1 : 0;
+        var edit = !_selected.Locked;
+        XBox.IsEnabled = edit;
+        YBox.IsEnabled = edit;
+        WBox.IsEnabled = edit;
+        HBox.IsEnabled = edit;
+        CropXBox.IsEnabled = edit;
+        CropYBox.IsEnabled = edit;
+        CropWBox.IsEnabled = edit;
+        CropHBox.IsEnabled = edit;
+        LinkBox.IsEnabled = edit;
+        OpBox.IsEnabled = edit;
         _suppress = false;
+    }
+
+    private void FillAddSources()
+    {
+        var kind = AddKindBox.SelectedIndex == 1 ? OverlaySourceKind.Input : OverlaySourceKind.Scene;
+        AddSourceBox.ItemsSource = kind == OverlaySourceKind.Input
+            ? _session.Inputs
+            : (System.Collections.IEnumerable)_session.Scenes;
+        if (AddSourceBox.Items.Count > 0)
+            AddSourceBox.SelectedIndex = 0;
+    }
+
+    private void FillSourceBox()
+    {
+        if (_selected is null)
+            return;
+        SourceBox.ItemsSource = _selected.SourceKind == OverlaySourceKind.Input
+            ? _session.Inputs
+            : (System.Collections.IEnumerable)_session.Scenes;
+        SourceBox.SelectedItem = _selected.SourceKind == OverlaySourceKind.Input
+            ? _session.Inputs.FirstOrDefault(item => item.Id == _selected.SceneGpuId)
+            : _session.Scenes.FirstOrDefault(item => item.GpuId == _selected.SceneGpuId);
     }
 
     private void UpdatePreview()
@@ -147,22 +306,20 @@ public partial class OverlayWindow : Window
             PreviewHost.UpdateMonitorSource(_selected.SceneGpuId);
     }
 
-    private void Commit()
-    {
-        DrawWireframe();
-        Push();
-        RefreshList();
-    }
-
     private void Add_Click(object sender, RoutedEventArgs e)
     {
         if (_unit.Overlays.Count >= 8)
             return;
-        var sceneId = _session.Scenes.Count > 0 ? _session.Scenes[0].GpuId : 0UL;
-        var slot = new OverlaySlot { SceneGpuId = sceneId, Z = _unit.Overlays.Count, Enabled = true };
-        _unit.Overlays.Add(slot);
+        var kind = AddKindBox.SelectedIndex == 1 ? OverlaySourceKind.Input : OverlaySourceKind.Scene;
+        var id = kind == OverlaySourceKind.Input
+            ? (AddSourceBox.SelectedItem as InputEntry)?.Id ?? _session.Inputs.FirstOrDefault()?.Id ?? 0UL
+            : (AddSourceBox.SelectedItem as SceneEntry)?.GpuId ?? _session.Scenes.FirstOrDefault()?.GpuId ?? 0UL;
+        var slot = new OverlaySlot { SourceKind = kind, SceneGpuId = id };
+        _unit.Overlays.Insert(0, slot);
         _selected = slot;
-        Commit();
+        NormalizeOrder();
+        RefreshList();
+        Push();
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)
@@ -170,15 +327,17 @@ public partial class OverlayWindow : Window
         if (_selected is null)
             return;
         _unit.Overlays.Remove(_selected);
-        _selected = _unit.Overlays.LastOrDefault();
-        Commit();
+        _selected = _unit.Overlays.FirstOrDefault();
+        NormalizeOrder();
+        RefreshList();
+        Push();
     }
 
-    private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftZ(1);
+    private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftDisplay(-1);
 
-    private void ZDown_Click(object sender, RoutedEventArgs e) => ShiftZ(-1);
+    private void ZDown_Click(object sender, RoutedEventArgs e) => ShiftDisplay(1);
 
-    private void ShiftZ(int delta)
+    private void ShiftDisplay(int delta)
     {
         if (_selected is null)
             return;
@@ -187,25 +346,24 @@ public partial class OverlayWindow : Window
         if (target < 0 || target >= _unit.Overlays.Count)
             return;
         (_unit.Overlays[index], _unit.Overlays[target]) = (_unit.Overlays[target], _unit.Overlays[index]);
-        Commit();
+        NormalizeOrder();
+        RefreshList();
+        Push();
     }
 
     private void SlotList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppress || SlotList.SelectedIndex < 0 || SlotList.SelectedIndex >= _unit.Overlays.Count)
+        if (_suppress)
             return;
-        _selected = _unit.Overlays[SlotList.SelectedIndex];
+        if (SlotList.SelectedItem is FrameworkElement { Tag: OverlaySlot slot })
+            _selected = slot;
+        else if (SlotList.SelectedIndex >= 0 && SlotList.SelectedIndex < _unit.Overlays.Count)
+            _selected = _unit.Overlays[SlotList.SelectedIndex];
+        else
+            return;
         DrawWireframe();
         FillFields();
         UpdatePreview();
-    }
-
-    private void OnBox_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_suppress || _selected is null)
-            return;
-        _selected.Enabled = OnBox.IsChecked == true;
-        Commit();
     }
 
     private void AudioFollow_Changed(object sender, RoutedEventArgs e)
@@ -216,12 +374,84 @@ public partial class OverlayWindow : Window
         Push();
     }
 
-    private void SceneBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void Link_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppress || _selected is null || SceneBox.SelectedItem is not SceneEntry scene)
+        if (_selected is null)
             return;
-        _selected.SceneGpuId = scene.GpuId;
-        Commit();
+        _selected.SizeLinked = LinkBox.IsChecked == true;
+    }
+
+    private void AddKind_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded)
+            return;
+        FillAddSources();
+    }
+
+    private void SourceKind_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _selected is null)
+            return;
+        var kind = SourceKindBox.SelectedIndex == 1 ? OverlaySourceKind.Input : OverlaySourceKind.Scene;
+        if (_selected.SourceKind == kind)
+            return;
+        _selected.SourceKind = kind;
+        _selected.SceneGpuId = kind == OverlaySourceKind.Input
+            ? _session.Inputs.FirstOrDefault()?.Id ?? 0UL
+            : _session.Scenes.FirstOrDefault()?.GpuId ?? 0UL;
+        RefreshList();
+        Push();
+        UpdatePreview();
+    }
+
+    private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _selected is null)
+            return;
+        if (_selected.SourceKind == OverlaySourceKind.Input && SourceBox.SelectedItem is InputEntry input)
+            _selected.SceneGpuId = input.Id;
+        else if (_selected.SourceKind == OverlaySourceKind.Scene && SourceBox.SelectedItem is SceneEntry scene)
+            _selected.SceneGpuId = scene.GpuId;
+        else
+            return;
+        RefreshList();
+        Push();
+        UpdatePreview();
+    }
+
+    private void SlotLock_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: OverlaySlot slot })
+            return;
+        slot.Locked = !slot.Locked;
+        _selected = slot;
+        RefreshList();
+        e.Handled = true;
+    }
+
+    private void SlotOn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: OverlaySlot slot })
+            return;
+        _selected = slot;
+        if (Owner is MainWindow main)
+            main.ToggleOverlay(_unit, slot, !slot.Enabled);
+        else
+        {
+            slot.Enabled = !slot.Enabled;
+            Push();
+        }
+        RefreshList();
+        e.Handled = true;
+    }
+
+    private void Reset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null || _selected.Locked)
+            return;
+        _selected.ResetLayout();
+        RefreshList();
+        Push();
     }
 
     private void KindBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -253,22 +483,67 @@ public partial class OverlayWindow : Window
         Push();
     }
 
-    private void Numeric_LostFocus(object sender, RoutedEventArgs e)
+    private void Numeric_LostFocus(object sender, RoutedEventArgs e) => ApplyNumeric(true, sender);
+
+    private void ApplyNumeric(bool push, object? sender)
     {
-        if (_selected is null)
+        if (_selected is null || _selected.Locked)
             return;
-        if (float.TryParse(XBox.Text, out var x)) _selected.X = x;
-        if (float.TryParse(YBox.Text, out var y)) _selected.Y = y;
-        if (float.TryParse(WBox.Text, out var w)) _selected.Width = Math.Max(0.01f, w);
-        if (float.TryParse(HBox.Text, out var h)) _selected.Height = Math.Max(0.01f, h);
+        if (float.TryParse(XBox.Text, out var x)) _selected.X = x / WidthPx;
+        if (float.TryParse(YBox.Text, out var y)) _selected.Y = y / HeightPx;
+        var fromW = ReferenceEquals(sender, WBox);
+        var fromH = ReferenceEquals(sender, HBox);
+        if (fromW && float.TryParse(WBox.Text, out var w))
+        {
+            var width = Math.Max(1f, w) / WidthPx;
+            if (_selected.SizeLinked && _selected.Width > 0)
+                _selected.Height = width * (_selected.Height / _selected.Width);
+            _selected.Width = width;
+        }
+        else if (fromH && float.TryParse(HBox.Text, out var h))
+        {
+            var height = Math.Max(1f, h) / HeightPx;
+            if (_selected.SizeLinked && _selected.Height > 0)
+                _selected.Width = height * (_selected.Width / _selected.Height);
+            _selected.Height = height;
+        }
+        else
+        {
+            if (float.TryParse(WBox.Text, out var bothW))
+                _selected.Width = Math.Max(1f, bothW) / WidthPx;
+            if (float.TryParse(HBox.Text, out var bothH))
+                _selected.Height = Math.Max(1f, bothH) / HeightPx;
+        }
+        if (float.TryParse(CropXBox.Text, out var cx)) _selected.CropX = cx / WidthPx;
+        if (float.TryParse(CropYBox.Text, out var cy)) _selected.CropY = cy / HeightPx;
+        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = cw / WidthPx;
+        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = ch / HeightPx;
+        _selected.ClampCrop(1f / Math.Max(1, WidthPx), 1f / Math.Max(1, HeightPx));
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
-        Commit();
+        DrawWireframe();
+        if (push)
+        {
+            FillFields();
+            Push();
+        }
+        else
+        {
+            if (fromW)
+                HBox.Text = (_selected.Height * HeightPx).ToString("0.#");
+            else if (fromH)
+                WBox.Text = (_selected.Width * WidthPx).ToString("0.#");
+            if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+            {
+                _lastGpuPush = DateTime.UtcNow;
+                Push();
+            }
+        }
     }
 
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(WireCanvas);
-        if (e.OriginalSource is Rectangle { Tag: "handle" })
+        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false })
         {
             _resizing = true;
             _last = pos;
@@ -276,7 +551,7 @@ public partial class OverlayWindow : Window
             return;
         }
         OverlaySlot? hit = null;
-        foreach (var slot in _unit.Overlays.AsEnumerable().Reverse())
+        foreach (var slot in _unit.Overlays)
         {
             if (pos.X >= slot.X * WireCanvas.Width
                 && pos.X <= (slot.X + slot.Width) * WireCanvas.Width
@@ -288,7 +563,7 @@ public partial class OverlayWindow : Window
             }
         }
         _selected = hit;
-        _dragging = hit is not null;
+        _dragging = hit is not null && hit is { Locked: false };
         _last = pos;
         if (_dragging)
             WireCanvas.CaptureMouse();
@@ -305,10 +580,16 @@ public partial class OverlayWindow : Window
         var dx = (float)((pos.X - _last.X) / WireCanvas.Width);
         var dy = (float)((pos.Y - _last.Y) / WireCanvas.Height);
         _last = pos;
+        if (_selected.Locked)
+            return;
         if (_resizing)
         {
-            _selected.Width = Math.Max(0.02f, _selected.Width + dx);
-            _selected.Height = Math.Max(0.02f, _selected.Height + dy);
+            var width = Math.Max(0.02f, _selected.Width + dx);
+            if (_selected.SizeLinked && _selected.Width > 0)
+                _selected.Height = Math.Max(0.02f, width * (_selected.Height / _selected.Width));
+            else
+                _selected.Height = Math.Max(0.02f, _selected.Height + dy);
+            _selected.Width = width;
         }
         else
         {
@@ -317,6 +598,11 @@ public partial class OverlayWindow : Window
         }
         DrawWireframe();
         FillFields();
+        if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+        {
+            _lastGpuPush = DateTime.UtcNow;
+            Push();
+        }
     }
 
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

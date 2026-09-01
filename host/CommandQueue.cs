@@ -2,6 +2,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using System.Windows;
+using Eiviz.Host.Dialogs;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Rect = Eiviz.Host.Interop.Rect;
@@ -113,7 +114,9 @@ internal sealed class CommandQueue : IAsyncDisposable
                     Rect = new Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
                     Opacity = slot.Opacity,
                     Z = slot.Z,
-                    AudioFollow = slot.AudioFollow ? 1u : 0u
+                    AudioFollow = slot.AudioFollow ? 1u : 0u,
+                    Hidden = slot.Hidden ? 1u : 0u,
+                    Crop = new Rect { X = slot.CropX, Y = slot.CropY, Width = slot.CropWidth, Height = slot.CropHeight }
                 };
             SetOverlay(ref state, i, desc);
         }
@@ -153,6 +156,7 @@ internal sealed class CommandQueue : IAsyncDisposable
             Opacity = layer.Opacity,
             Z = layer.Z,
             AudioFollow = layer.AudioFollow ? 1u : 0u,
+            Hidden = layer.Hidden ? 1u : 0u,
             Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight }
         }).ToArray());
     }
@@ -261,7 +265,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                         ApplyMix(setMix.UnitId, setMix.Value, setMix.Preset);
                         break;
                     case CutCommand cut:
-                        MixerNative.ThrowIfFailed(MixerNative.Cut(cut.UnitId, cut.Swap ? 1u : 0u), "CUT");
+                        MixerNative.ThrowIfFailed(MixerNative.Cut(cut.UnitId, cut.Swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT");
                         break;
                     case AutoCommand auto:
                         ApplyAuto(auto);
@@ -401,7 +405,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                 MixerNative.SetUnitState(auto.UnitId, &current);
             }
         }
-        MixerNative.SetCustomWgsl(auto.UnitId, auto.CustomWgsl ?? "");
+        MixerNative.SetCustomWgsl(auto.UnitId, ResolveCustomWgsl(auto.Kind, auto.CustomWgsl));
         MixerNative.ThrowIfFailed(
             MixerNative.Auto(
                 auto.UnitId,
@@ -414,7 +418,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                 auto.DipR,
                 auto.DipG,
                 auto.DipB,
-                auto.DipA <= 0 ? 1 : auto.DipA),
+                auto.DipA <= 0 ? 1 : auto.DipA,
+                MixerNative.IncomingPreview),
             "AUTO");
     }
 
@@ -445,6 +450,7 @@ internal sealed class CommandQueue : IAsyncDisposable
             if (MixerNative.GetUnitState(unitId, &current) != 0)
                 return;
             var state = BuildState(unit, current.ProgramSource, current.PreviewSource, current.Mix, current.TransitionKind);
+            state.IncomingSource = current.IncomingSource;
             MixerNative.SetUnitState(unitId, &state);
         }
     }
@@ -466,11 +472,16 @@ internal sealed class CommandQueue : IAsyncDisposable
                 current.DipG = look.DipG;
                 current.DipB = look.DipB;
                 current.DipA = look.DipA <= 0 ? 1 : look.DipA;
-                MixerNative.SetCustomWgsl(unitId, look.CustomWgsl ?? "");
+                MixerNative.SetCustomWgsl(unitId, ResolveCustomWgsl(look.Kind, look.CustomWgsl));
             }
             MixerNative.SetUnitState(unitId, &current);
         }
     }
+
+    private static string ResolveCustomWgsl(uint kind, string? wgsl) =>
+        kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(wgsl)
+            ? CustomWgslWindow.WgslTemplate
+            : wgsl ?? "";
 
     private static void ReportUserError(string message, string title)
     {

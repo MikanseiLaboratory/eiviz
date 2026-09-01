@@ -12,7 +12,8 @@ public partial class CustomWgslWindow : Window
         fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
             let a = textureSample(pgm_tex, src_samp, uv);
             let b = textureSample(pvw_tex, src_samp, uv);
-            return mix(a, b, t);
+            let w = smoothstep(t - 0.02, t + 0.02, uv.x);
+            return mix(b, a, w);
         }
         """;
 

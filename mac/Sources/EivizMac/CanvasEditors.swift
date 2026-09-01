@@ -21,8 +21,22 @@ struct SceneEditorView: View {
                 Text("Layers").fontWeight(.bold)
                 List(selection: $selectedLayer) {
                     ForEach(layers) { layer in
-                        Text(label(layer)).tag(Optional(layer.id))
+                        HStack {
+                            Text(label(layer))
+                                .foregroundStyle(layer.hidden ? EivizTheme.dim : EivizTheme.text)
+                            Spacer()
+                            Button(layer.hidden ? "–" : "👁") {
+                                toggleLayer(layer.id, \.hidden)
+                            }
+                            .buttonStyle(.plain)
+                            Button(layer.locked ? "🔒" : "🔓") {
+                                toggleLayer(layer.id, \.locked)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .tag(Optional(layer.id))
                     }
+                    .onMove(perform: moveLayers)
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
@@ -63,8 +77,8 @@ struct SceneEditorView: View {
                 }
                 Button("Add layer") { addLayer() }
                 HStack {
-                    Button("Z up") { shiftZ(1) }
-                    Button("Z down") { shiftZ(-1) }
+                Button("Z up") { shiftZ(-1) }
+                Button("Z down") { shiftZ(1) }
                     Button("Delete") { deleteLayer() }
                 }
             }
@@ -81,6 +95,7 @@ struct SceneEditorView: View {
                             y: $0.y,
                             width: $0.width,
                             height: $0.height,
+                            enabled: !$0.hidden,
                             locked: $0.locked,
                             sizeLinked: $0.sizeLinked,
                             cropX: $0.cropX,
@@ -141,6 +156,9 @@ struct SceneEditorView: View {
             original = current?.layers ?? []
             name = current?.name ?? ""
             selectedLayer = current?.layers.first?.id
+            mutate { scene in
+                scene.layers.sort { $0.z > $1.z }
+            }
         }
     }
 
@@ -158,14 +176,17 @@ struct SceneEditorView: View {
 
     private func label(_ layer: SceneLayer) -> String {
         let input = mixer.session.inputs.first { $0.id == layer.inputId }
-        return "\(layer.locked ? "🔒 " : "")\(layer.z): \(input?.name ?? "\(layer.inputId)")"
+        let order = (layers.firstIndex { $0.id == layer.id } ?? 0) + 1
+        return "\(order). \(input?.name ?? "\(layer.inputId)")"
     }
 
     private func mutate(_ body: (inout SceneEntry) -> Void) {
         guard let i = sceneIndex else { return }
         var scene = mixer.session.scenes[i]
         body(&scene)
-        scene.layers.sort { $0.z < $1.z }
+        for index in scene.layers.indices {
+            scene.layers[index].z = Int32(scene.layers.count - 1 - index)
+        }
         mixer.session.scenes[i] = scene
     }
 
@@ -194,10 +215,13 @@ struct SceneEditorView: View {
             else { return }
             let target = index + delta
             guard scene.layers.indices.contains(target) else { return }
-            let a = scene.layers[index].z
-            scene.layers[index].z = scene.layers[target].z
-            scene.layers[target].z = a
+            scene.layers.swapAt(index, target)
         }
+        push()
+    }
+
+    private func moveLayers(from offsets: IndexSet, to dest: Int) {
+        mutate { $0.layers.move(fromOffsets: offsets, toOffset: dest) }
         push()
     }
 
@@ -222,7 +246,8 @@ struct SceneEditorView: View {
 
     private func layerFields(_ index: Int) -> some View {
         let locked = layer(index)?.locked == true
-        return Grid(alignment: .leading) {
+        return VStack(alignment: .leading, spacing: 8) {
+        Grid(alignment: .leading) {
             GridRow {
                 dragLabel("Pos X", index: index, axis: .x)
                 pixelField(index, axis: .x).disabled(locked)
@@ -232,6 +257,7 @@ struct SceneEditorView: View {
             GridRow {
                 dragLabel("Size X", index: index, axis: .w)
                 pixelField(index, axis: .w).disabled(locked)
+                Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
                 dragLabel("Size Y", index: index, axis: .h)
                 pixelField(index, axis: .h).disabled(locked)
             }
@@ -248,7 +274,6 @@ struct SceneEditorView: View {
                 pixelField(index, axis: .ch).disabled(locked)
             }
             GridRow {
-                Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
                 DragAdjustLabel(title: "Opacity") { delta, ended in
                     guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
                     var layer = mixer.session.scenes[i].layers[index]
@@ -262,11 +287,29 @@ struct SceneEditorView: View {
                 }
                 field(index, get: \.opacity, set: { $0.opacity = min(1, max(0, $1)) }).disabled(locked)
             }
-            GridRow {
-                Toggle("Lock", isOn: boolBinding(index, \.locked))
+        }
+            Picker("Input", selection: Binding(
+                get: { layer(index)?.inputId ?? 0 },
+                set: { value in
+                    mutate { scene in
+                        if scene.layers.indices.contains(index) {
+                            scene.layers[index].inputId = value
+                        }
+                    }
+                    push()
+                }
+            )) {
+                ForEach(mixer.session.inputs) { input in
+                    Text(input.name).tag(input.id)
+                }
             }
-            GridRow {
-                Toggle("Audio Follow", isOn: boolBinding(index, \.audioFollow))
+            Toggle("Audio Follow", isOn: boolBinding(index, \.audioFollow))
+            Button("Reset") {
+                mutate { scene in
+                    guard scene.layers.indices.contains(index), !scene.layers[index].locked else { return }
+                    scene.layers[index].resetLayout()
+                }
+                push()
             }
         }
     }
@@ -357,6 +400,15 @@ struct SceneEditorView: View {
         .frame(width: 72)
     }
 
+    private func toggleLayer(_ id: UUID, _ key: WritableKeyPath<SceneLayer, Bool>) {
+        mutate { scene in
+            if let i = scene.layers.firstIndex(where: { $0.id == id }) {
+                scene.layers[i][keyPath: key].toggle()
+            }
+        }
+        push()
+    }
+
     private func boolBinding(_ index: Int, _ key: WritableKeyPath<SceneLayer, Bool>) -> Binding<Bool> {
         Binding(
             get: { layer(index)?[keyPath: key] ?? false },
@@ -397,7 +449,11 @@ struct SceneEditorView: View {
                     scene.layers[i].cropY = user.layers[i].cropY
                     scene.layers[i].cropWidth = user.layers[i].cropWidth
                     scene.layers[i].cropHeight = user.layers[i].cropHeight
+                    scene.layers[i].sizeLinked = user.layers[i].sizeLinked
+                    scene.layers[i].audioFollow = user.layers[i].audioFollow
+                    scene.layers[i].clampCrop()
                 }
+                scene.layers.sort { $0.z > $1.z }
                 return
             }
             if name == "Full" {
@@ -406,6 +462,7 @@ struct SceneEditorView: View {
                     scene.layers[i].y = 0
                     scene.layers[i].width = 1
                     scene.layers[i].height = 1
+                    scene.layers[i].resetLayoutExtras()
                 }
                 return
             }
@@ -426,6 +483,7 @@ struct SceneEditorView: View {
                 scene.layers[i].y = box.1
                 scene.layers[i].width = box.2
                 scene.layers[i].height = box.3
+                scene.layers[i].resetLayoutExtras()
             }
         }
         push()
@@ -458,6 +516,9 @@ struct OverlayView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selected: UUID?
     @State private var previewMonitor: UInt64 = 0
+    @State private var lastGpuPush = Date.distantPast
+    @State private var addKind: OverlaySourceKind = .scene
+    @State private var addSourceId: UInt64 = 0
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -468,26 +529,65 @@ struct OverlayView: View {
                     Button("+") { add() }
                 }
                 List(selection: $selected) {
-                    ForEach(unit.overlays) { slot in
-                        Text("\(slot.enabled ? "ON" : "off")  \(sceneName(slot))")
-                            .tag(Optional(slot.id))
+                    ForEach(Array(unit.overlays.enumerated()), id: \.element.id) { index, slot in
+                        HStack {
+                            Text("\(index + 1). \(sourceName(slot))")
+                                .foregroundStyle(slot.enabled ? EivizTheme.text : EivizTheme.dim)
+                            Spacer()
+                            Button(slot.enabled ? "ON" : "OFF") {
+                                mixer.setOverlayEnabled(slot.id, enabled: !slot.enabled)
+                            }
+                            .buttonStyle(.plain)
+                            Button(slot.locked ? "🔒" : "🔓") { toggleOverlay(slot.id, \.locked) }
+                                .buttonStyle(.plain)
+                        }
+                        .tag(Optional(slot.id))
                     }
+                    .onMove(perform: moveOverlays)
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
+                Picker("", selection: $addKind) {
+                    Text("Scene").tag(OverlaySourceKind.scene)
+                    Text("Input").tag(OverlaySourceKind.input)
+                }
+                Picker("", selection: $addSourceId) {
+                    if addKind == .scene {
+                        ForEach(mixer.session.scenes) { scene in
+                            Text(scene.name).tag(scene.gpuId)
+                        }
+                    } else {
+                        ForEach(mixer.session.inputs) { input in
+                            Text(input.name).tag(input.id)
+                        }
+                    }
+                }
                 Spacer()
-                Button("Z up") { shift(1) }
-                Button("Z down") { shift(-1) }
+                Button("Z up") { shift(-1) }
+                Button("Z down") { shift(1) }
                 Button("Delete") { delete() }
             }
             .frame(width: 260, maxHeight: .infinity, alignment: .top)
             .buttonStyle(MixerButtonStyle())
 
             VStack {
-                Text("Layout (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height) Program)").fontWeight(.bold)
+                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
                 WireCanvasView(
                     items: unit.overlays.map {
-                        WireRect(id: $0.id, x: $0.x, y: $0.y, width: $0.width, height: $0.height, enabled: $0.enabled)
+                        WireRect(
+                            id: $0.id,
+                            x: $0.x,
+                            y: $0.y,
+                            width: $0.width,
+                            height: $0.height,
+                            enabled: $0.enabled,
+                            locked: $0.locked,
+                            sizeLinked: $0.sizeLinked,
+                            cropX: $0.cropX,
+                            cropY: $0.cropY,
+                            cropWidth: $0.cropWidth,
+                            cropHeight: $0.cropHeight
+                        )
                     },
                     aspect: CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
                     selected: $selected,
@@ -498,7 +598,7 @@ struct OverlayView: View {
             .clipped()
 
             VStack(alignment: .leading) {
-                Text("Scene preview").fontWeight(.bold)
+                Text("Live preview").fontWeight(.bold)
                 MetalPreviewRepresentable(role: .monitor(
                     monitorId: previewMonitor,
                     sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
@@ -510,21 +610,36 @@ struct OverlayView: View {
                 .frame(maxWidth: .infinity)
                 .background(Color.black)
                 if let slot = current {
-                    Toggle("ON", isOn: Binding(
-                        get: { slot.enabled },
+                    Picker("Source", selection: Binding(
+                        get: { slot.sourceKind },
                         set: { value in
-                            mixer.setOverlayEnabled(slot.id, enabled: value)
+                            mutate { current in
+                                current.sourceKind = value
+                                current.sceneGpuId = value == .input
+                                    ? mixer.session.inputs.first?.id ?? 0
+                                    : mixer.session.scenes.first?.gpuId ?? 0
+                            }
+                            mixer.pushOverlays()
                         }
-                    ))
-                    Picker("Scene", selection: Binding(
+                    )) {
+                        Text("Scene").tag(OverlaySourceKind.scene)
+                        Text("Input").tag(OverlaySourceKind.input)
+                    }
+                    Picker("", selection: Binding(
                         get: { slot.sceneGpuId },
                         set: { value in
                             mutate { $0.sceneGpuId = value }
                             mixer.pushOverlays()
                         }
                     )) {
-                        ForEach(mixer.session.scenes) { scene in
-                            Text(scene.name).tag(scene.gpuId)
+                        if slot.sourceKind == .input {
+                            ForEach(mixer.session.inputs) { input in
+                                Text(input.name).tag(input.id)
+                            }
+                        } else {
+                            ForEach(mixer.session.scenes) { scene in
+                                Text(scene.name).tag(scene.gpuId)
+                            }
                         }
                     }
                     Toggle("Audio Follow", isOn: Binding(
@@ -534,6 +649,12 @@ struct OverlayView: View {
                             mixer.pushOverlays()
                         }
                     ))
+                    Button("Reset") {
+                        guard slot.locked == false else { return }
+                        mutate { $0.resetLayout() }
+                        mixer.pushOverlays()
+                    }
+                    overlayTransform
                     overlayFields
                 }
                 Spacer()
@@ -553,14 +674,33 @@ struct OverlayView: View {
             previewMonitor = mixer.session.nextMonitorId
             mixer.session.nextMonitorId += 1
             selected = unit.overlays.first?.id
+            addSourceId = mixer.session.scenes.first?.gpuId ?? 0
+            reindexOverlays()
+        }
+        .onChange(of: addKind) { _, kind in
+            addSourceId = kind == .input
+                ? mixer.session.inputs.first?.id ?? 0
+                : mixer.session.scenes.first?.gpuId ?? 0
         }
     }
 
     private var unit: MixingUnitEntry { mixer.selectedUnit }
     private var current: OverlaySlot? { unit.overlays.first { $0.id == selected } }
 
-    private func sceneName(_ slot: OverlaySlot) -> String {
-        mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "(none)"
+    private func sourceName(_ slot: OverlaySlot) -> String {
+        if slot.sourceKind == .input {
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+        }
+        return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
+    }
+
+    private func toggleOverlay(_ id: UUID, _ key: WritableKeyPath<OverlaySlot, Bool>) {
+        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
+              let si = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == id })
+        else { return }
+        mixer.session.units[ui].overlays[si][keyPath: key].toggle()
+        selected = id
+        mixer.pushOverlays()
     }
 
     private func mutate(_ body: (inout OverlaySlot) -> Void) {
@@ -573,17 +713,21 @@ struct OverlayView: View {
     private func add() {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
         guard mixer.session.units[ui].overlays.count < 8 else { return }
-        var slot = OverlaySlot(sceneGpuId: mixer.session.scenes.first?.gpuId ?? 0)
-        slot.z = Int32(mixer.session.units[ui].overlays.count)
-        mixer.session.units[ui].overlays.append(slot)
+        let source = addSourceId != 0
+            ? addSourceId
+            : (addKind == .input ? mixer.session.inputs.first?.id : mixer.session.scenes.first?.gpuId) ?? 0
+        var slot = OverlaySlot(sourceKind: addKind, sceneGpuId: source)
+        mixer.session.units[ui].overlays.insert(slot, at: 0)
         selected = slot.id
+        reindexOverlays()
         mixer.pushOverlays()
     }
 
     private func delete() {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
         mixer.session.units[ui].overlays.removeAll { $0.id == selected }
-        selected = mixer.session.units[ui].overlays.last?.id
+        selected = mixer.session.units[ui].overlays.first?.id
+        reindexOverlays()
         mixer.pushOverlays()
     }
 
@@ -594,7 +738,22 @@ struct OverlayView: View {
         let target = index + delta
         guard mixer.session.units[ui].overlays.indices.contains(target) else { return }
         mixer.session.units[ui].overlays.swapAt(index, target)
+        reindexOverlays()
         mixer.pushOverlays()
+    }
+
+    private func moveOverlays(from offsets: IndexSet, to dest: Int) {
+        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
+        mixer.session.units[ui].overlays.move(fromOffsets: offsets, toOffset: dest)
+        reindexOverlays()
+        mixer.pushOverlays()
+    }
+
+    private func reindexOverlays() {
+        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
+        for index in mixer.session.units[ui].overlays.indices {
+            mixer.session.units[ui].overlays[index].z = Int32(mixer.session.units[ui].overlays.count - 1 - index)
+        }
     }
 
     private func applyWire(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
@@ -602,33 +761,123 @@ struct OverlayView: View {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
               let si = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == id })
         else { return }
+        guard !mixer.session.units[ui].overlays[si].locked else { return }
         mixer.session.units[ui].overlays[si].x = x
         mixer.session.units[ui].overlays[si].y = y
         mixer.session.units[ui].overlays[si].width = w
         mixer.session.units[ui].overlays[si].height = h
-        if ended { mixer.pushOverlays() }
+        if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+            lastGpuPush = Date()
+            mixer.pushOverlays()
+        }
+    }
+
+    private var overlayTransform: some View {
+        let pw = Float(mixer.selectedUnit.width)
+        let ph = Float(mixer.selectedUnit.height)
+        return Grid(alignment: .leading) {
+            GridRow {
+                overlayDrag("Pos X") { $0.x = ($0.x * pw + $1) / pw }
+                overlayPixel(\.x, scale: pw)
+                overlayDrag("Pos Y") { $0.y = ($0.y * ph + $1) / ph }
+                overlayPixel(\.y, scale: ph)
+            }
+            GridRow {
+                overlayDrag("Size X") { slot, delta in
+                    let width = max(1, slot.width * pw + delta) / pw
+                    if slot.sizeLinked && slot.width > 0 {
+                        slot.height = width * (slot.height / slot.width)
+                    }
+                    slot.width = width
+                }
+                overlayPixel(\.width, scale: pw, linked: .width)
+                Toggle("Link", isOn: Binding(
+                    get: { current?.sizeLinked ?? true },
+                    set: { value in mutate { $0.sizeLinked = value } }
+                ))
+                overlayDrag("Size Y") { slot, delta in
+                    let height = max(1, slot.height * ph + delta) / ph
+                    if slot.sizeLinked && slot.height > 0 {
+                        slot.width = height * (slot.width / slot.height)
+                    }
+                    slot.height = height
+                }
+                overlayPixel(\.height, scale: ph, linked: .height)
+            }
+            GridRow {
+                overlayDrag("Crop X") { $0.cropX = ($0.cropX * pw + $1) / pw; $0.clampCrop() }
+                overlayPixel(\.cropX, scale: pw, crop: true)
+                overlayDrag("Crop Y") { $0.cropY = ($0.cropY * ph + $1) / ph; $0.clampCrop() }
+                overlayPixel(\.cropY, scale: ph, crop: true)
+            }
+            GridRow {
+                overlayDrag("Crop W") { $0.cropWidth = ($0.cropWidth * pw + $1) / pw; $0.clampCrop() }
+                overlayPixel(\.cropWidth, scale: pw, crop: true)
+                overlayDrag("Crop H") { $0.cropHeight = ($0.cropHeight * ph + $1) / ph; $0.clampCrop() }
+                overlayPixel(\.cropHeight, scale: ph, crop: true)
+            }
+            GridRow {
+                DragAdjustLabel(title: "Opacity") { delta, ended in
+                    mutate { $0.opacity = min(1, max(0, $0.opacity + delta / 80)) }
+                    if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+                        lastGpuPush = Date()
+                        mixer.pushOverlays()
+                    }
+                }
+                mixerFloatField(Binding(
+                    get: { current?.opacity ?? 1 },
+                    set: { value in mutate { $0.opacity = min(1, max(0, value)) } }
+                ), onSubmit: { mixer.pushOverlays() })
+                .frame(width: 72)
+            }
+        }
+    }
+
+    private func overlayDrag(_ title: String, _ apply: @escaping (inout OverlaySlot, Float) -> Void) -> some View {
+        DragAdjustLabel(title: title) { delta, ended in
+            guard current?.locked != true else { return }
+            mutate { apply(&$0, delta) }
+            if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+                lastGpuPush = Date()
+                mixer.pushOverlays()
+            }
+        }
+    }
+
+    private enum OverlayLink { case width, height }
+
+    private func overlayPixel(
+        _ key: WritableKeyPath<OverlaySlot, Float>,
+        scale: Float,
+        linked: OverlayLink? = nil,
+        crop: Bool = false
+    ) -> some View {
+        mixerFloatField(Binding(
+            get: { (current?[keyPath: key] ?? 0) * scale },
+            set: { value in
+                guard current?.locked != true else { return }
+                mutate { slot in
+                    if linked == .width, slot.sizeLinked, slot.width > 0 {
+                        let width = max(1, value) / scale
+                        slot.height = width * (slot.height / slot.width)
+                        slot.width = width
+                    } else if linked == .height, slot.sizeLinked, slot.height > 0 {
+                        let height = max(1, value) / scale
+                        slot.width = height * (slot.width / slot.height)
+                        slot.height = height
+                    } else {
+                        slot[keyPath: key] = value / scale
+                    }
+                    if crop { slot.clampCrop() }
+                }
+            }
+        ), onSubmit: { mixer.pushOverlays() })
+        .frame(width: 72)
+        .disabled(current?.locked == true)
     }
 
     private var overlayFields: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Grid {
-                GridRow {
-                    Text("X")
-                    num(\.x)
-                    Text("Y")
-                    num(\.y)
-                }
-                GridRow {
-                    Text("W")
-                    num(\.width)
-                    Text("H")
-                    num(\.height)
-                }
-                GridRow {
-                    Text("Op")
-                    num(\.opacity)
-                }
-            }
             Picker("On/Off", selection: Binding(
                 get: { current?.transitionKind ?? EIVIZ_TRANSITION_FADE },
                 set: { value in
@@ -659,13 +908,6 @@ struct OverlayView: View {
         }
     }
 
-    private func num(_ key: WritableKeyPath<OverlaySlot, Float>) -> some View {
-        mixerFloatField(Binding(
-            get: { current?[keyPath: key] ?? 0 },
-            set: { value in mutate { $0[keyPath: key] = value } }
-        ), onSubmit: { mixer.pushOverlays() })
-        .frame(width: 72)
-    }
 }
 
 private struct DragAdjustLabel: View {

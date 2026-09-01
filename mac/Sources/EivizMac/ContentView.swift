@@ -16,17 +16,20 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
-                    transitions
-                    bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+            VSplitView {
+                VSplitView {
+                    HSplitView {
+                        bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                        transitions
+                            .frame(minWidth: 220, idealWidth: 260)
+                        bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                    }
+                    lower
                 }
-                .frame(maxHeight: .infinity)
-                lower
+                .padding(8)
+                audioBar
+                    .frame(minHeight: 80)
             }
-            .padding(8)
-            audioBar
             statusBar
         }
         .background(EivizTheme.background)
@@ -86,15 +89,6 @@ struct ContentView: View {
             }
             Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
             Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
-            Menu {
-                ForEach(mixer.session.multiviews) { layout in
-                    Button(layout.name) { mixer.openMultiviewWindow(layout) }
-                }
-                Divider()
-                Button(L10n.t("chrome.newMultiview")) { mixer.openNewMultiview() }
-            } label: {
-                Text(L10n.t("chrome.multiview"))
-            }
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
@@ -136,14 +130,17 @@ struct ContentView: View {
                 ),
                 in: 0 ... 1,
                 onEditingChanged: { editing in
+                    mixer.tbarDragging = editing
                     if !editing { mixer.finishTBar() }
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
             .frame(width: 220)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
         }
-        .frame(width: 260)
+        .padding(.horizontal, 12)
+        .frame(minWidth: 220, idealWidth: 260)
     }
 
     private var previewTitle: String {
@@ -208,7 +205,19 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("", selection: Binding(
                         get: { mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind },
-                        set: { value in updateTransition(index) { $0.kind = value } }
+                            set: { value in
+                                updateTransition(index) {
+                                    $0.kind = value
+                                    if value == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
+                                        $0.customWgsl = CustomWgslEditor.template
+                                    }
+                                }
+                                if value == EIVIZ_TRANSITION_CUSTOM {
+                                    let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
+                                        ?? CustomWgslEditor.template
+                                    wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
+                                }
+                            }
                     )) {
                         Text("Cut").tag(EIVIZ_TRANSITION_CUT)
                         Text("Fade").tag(EIVIZ_TRANSITION_FADE)
@@ -318,7 +327,7 @@ struct ContentView: View {
             if mixer.selectedVideoId != nil {
                 videoBar
             }
-            HStack(alignment: .top, spacing: 8) {
+            HSplitView {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
                     List(mixer.session.inputs, selection: $mixer.selectedInputId) { input in
@@ -347,7 +356,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(MixerButtonStyle())
                 }
-                .frame(width: 240)
+                .frame(minWidth: 160)
                 VStack(alignment: .leading) {
                     HStack {
                         Text("Scenes").fontWeight(.bold)
@@ -462,22 +471,40 @@ struct ContentView: View {
     private var audioBar: some View {
         HStack(alignment: .bottom, spacing: 12) {
             Text("Audio").fontWeight(.bold)
-            ForEach(mixer.session.buses) { bus in
-                meter(title: bus.name, id: bus.role == .master ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
-            }
-            ForEach(mixer.selectedUnit.overlays) { slot in
-                Toggle(isOn: Binding(
-                    get: {
-                        mixer.session.units.first { $0.id == mixer.selectedUnitId }?
-                            .overlays.first { $0.id == slot.id }?.enabled ?? slot.enabled
-                    },
-                    set: { mixer.setOverlayEnabled(slot.id, enabled: $0) }
-                )) {
-                    Text(overlayName(slot))
+            HSplitView {
+                HStack(alignment: .bottom, spacing: 12) {
+                    ForEach(mixer.session.buses) { bus in
+                        meter(title: bus.name, id: bus.role == .master ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
+                    }
+                    Spacer(minLength: 0)
                 }
-                .toggleStyle(.checkbox)
+                HStack(alignment: .bottom, spacing: 12) {
+                    Spacer(minLength: 0)
+                    ForEach(mixer.selectedUnit.overlays) { slot in
+                        Toggle(isOn: Binding(
+                            get: {
+                                mixer.session.units.first { $0.id == mixer.selectedUnitId }?
+                                    .overlays.first { $0.id == slot.id }?.enabled ?? slot.enabled
+                            },
+                            set: { mixer.setOverlayEnabled(slot.id, enabled: $0) }
+                        )) {
+                            Text(overlayName(slot))
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+                .frame(minWidth: 80)
             }
-            Spacer()
+            Menu {
+                ForEach(mixer.session.multiviews) { layout in
+                    Button(layout.name) { mixer.openMultiviewWindow(layout) }
+                }
+                Divider()
+                Button(L10n.t("chrome.newMultiview")) { mixer.openNewMultiview() }
+            } label: {
+                Text(L10n.t("chrome.multiview"))
+            }
+            .buttonStyle(MixerButtonStyle())
             Button(L10n.t("chrome.overlay")) { mixer.showOverlay = true }
                 .buttonStyle(MixerButtonStyle())
         }
@@ -486,7 +513,10 @@ struct ContentView: View {
     }
 
     private func overlayName(_ slot: OverlaySlot) -> String {
-        mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "DSK"
+        if slot.sourceKind == .input {
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+        }
+        return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }
 
     private func meter(title: String, id: UInt64) -> some View {

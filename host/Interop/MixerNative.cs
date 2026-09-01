@@ -12,6 +12,8 @@ internal static partial class MixerNative
     internal const ulong Bars = 2;
     internal const ulong Black = 3;
     internal const ulong Blue = 4;
+    internal const ulong IncomingPreview = 0;
+    internal const ulong IncomingProgram = unchecked((ulong)-1);
     internal const ulong SceneBase = 0x0001_0000;
     internal const ulong MultiviewBase = 0x0002_0000;
     internal const ulong LabelBase = 0x0003_0000;
@@ -129,7 +131,7 @@ internal static partial class MixerNative
     internal static unsafe partial int GetUnitState(ulong unitId, UnitState* state);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_cut")]
-    internal static partial int Cut(ulong unitId, uint swap);
+    internal static partial int Cut(ulong unitId, uint swap, ulong incomingSource);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_auto")]
     internal static partial int Auto(
@@ -143,7 +145,8 @@ internal static partial class MixerNative
         float dipR,
         float dipG,
         float dipB,
-        float dipA);
+        float dipA,
+        ulong incomingSource);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_overlay_auto")]
     internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationMs, OverlayDesc* desc);
@@ -488,7 +491,7 @@ internal struct OverlayDesc
     public float Opacity;
     public int Z;
     public uint AudioFollow;
-    public uint Pad;
+    public uint Hidden;
     public nint Label;
 }
 
@@ -570,6 +573,7 @@ internal struct UnitState
     public float DipG;
     public float DipB;
     public float DipA;
+    public ulong IncomingSource;
 }
 
 [StructLayout(LayoutKind.Sequential)]

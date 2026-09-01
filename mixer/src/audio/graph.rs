@@ -437,7 +437,7 @@ impl AudioGraph {
                     &mut gains,
                 );
                 add_source(
-                    state.preview_source,
+                    state.mix_incoming(),
                     prv_gain,
                     spec_map,
                     &self.inputs,
@@ -445,6 +445,9 @@ impl AudioGraph {
                     &mut gains,
                 );
                 for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+                    if overlay.audio_follow == 0 {
+                        continue;
+                    }
                     add_source(
                         overlay.source_id,
                         overlay.opacity.max(0.0),
@@ -515,7 +518,11 @@ fn add_source(
     if mute || !routed {
         return;
     }
-    *gains.entry(id).or_insert(0.0) += gain * level;
+    let level = gain * level;
+    gains
+        .entry(id)
+        .and_modify(|current| *current = (*current).max(level))
+        .or_insert(level);
 }
 
 fn peak_interleaved(samples: &[f32]) -> (f32, f32) {

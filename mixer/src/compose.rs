@@ -49,14 +49,17 @@ impl Default for Generator {
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 fn crop_uv(crop: Rect) -> [f32; 4] {
+    const MIN: f32 = 0.001;
     if crop.width <= 0.0 || crop.height <= 0.0 {
         FULL_UV
     } else {
+        let x = crop.x.clamp(0.0, 1.0 - MIN);
+        let y = crop.y.clamp(0.0, 1.0 - MIN);
         [
-            crop.x.clamp(0.0, 1.0),
-            crop.y.clamp(0.0, 1.0),
-            crop.width.clamp(0.0, 1.0),
-            crop.height.clamp(0.0, 1.0),
+            x,
+            y,
+            crop.width.clamp(MIN, 1.0 - x),
+            crop.height.clamp(MIN, 1.0 - y),
         ]
     }
 }
@@ -155,6 +158,7 @@ pub struct Composer {
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
     mix_groups: HashMap<u64, wgpu::BindGroup>,
     custom_mix: HashMap<u64, wgpu::RenderPipeline>,
+    custom_mix_src: HashMap<u64, String>,
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
@@ -237,6 +241,7 @@ impl Composer {
             uyvy_groups: HashMap::new(),
             mix_groups: HashMap::new(),
             custom_mix: HashMap::new(),
+            custom_mix_src: HashMap::new(),
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
@@ -674,6 +679,9 @@ impl Composer {
                 self.blit_builtin_pass(device, &mut pass, SRC_BLACK, [0.0, 0.0, 1.0, 1.0], 1.0);
             } else {
                 for layer in &layers {
+                    if layer.hidden != 0 {
+                        continue;
+                    }
                     self.draw_source_pass(
                         device,
                         &mut pass,
@@ -834,8 +842,13 @@ impl Composer {
         unit_id: u64,
         user_wgsl: &str,
     ) -> Result<(), String> {
-        if user_wgsl.trim().is_empty() {
+        let trimmed = user_wgsl.trim();
+        if trimmed.is_empty() {
             self.custom_mix.remove(&unit_id);
+            self.custom_mix_src.remove(&unit_id);
+            return Ok(());
+        }
+        if self.custom_mix_src.get(&unit_id).map(String::as_str) == Some(trimmed) {
             return Ok(());
         }
         let source = format!(
@@ -850,6 +863,7 @@ impl Composer {
             wgpu::TextureFormat::Rgba8Unorm,
             false,
         )?;
+        self.custom_mix_src.insert(unit_id, trimmed.to_string());
         self.custom_mix.insert(unit_id, pipeline);
         Ok(())
     }
@@ -973,6 +987,9 @@ impl Composer {
         {
             let mut pass = begin(encoder, &dest);
             for overlay in &overlays {
+                if overlay.hidden != 0 {
+                    continue;
+                }
                 self.draw_source_pass(
                     device,
                     &mut pass,

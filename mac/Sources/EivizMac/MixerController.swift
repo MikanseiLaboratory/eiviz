@@ -13,7 +13,9 @@ final class MixerController: ObservableObject {
     @Published var selectedSceneId: UInt64?
     @Published var selectedInputId: UInt64?
     @Published var mix: Float = 0
+    @Published var mixByUnit: [UInt64: Float] = [:]
     @Published var tbarLocked = false
+    var tbarDragging = false
     @Published var tbarPresetIndex = 0
     @Published var status = ""
     @Published var errorText = ""
@@ -258,10 +260,11 @@ final class MixerController: ObservableObject {
     }
 
     private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
-        if let wgsl = preset.customWgsl, !wgsl.isEmpty {
-            wgsl.withCString { fail(mixer_unit_set_custom_wgsl(unit.id, $0), "custom wgsl") }
-        } else {
+        let wgsl = resolvedCustomWgsl(preset)
+        if wgsl.isEmpty {
             fail(mixer_unit_set_custom_wgsl(unit.id, nil), "custom wgsl")
+        } else {
+            wgsl.withCString { fail(mixer_unit_set_custom_wgsl(unit.id, $0), "custom wgsl") }
         }
         fail(
             mixer_unit_auto(
@@ -275,7 +278,8 @@ final class MixerController: ObservableObject {
                 preset.dipR,
                 preset.dipG,
                 preset.dipB,
-                preset.dipA
+                preset.dipA,
+                EIVIZ_INCOMING_PREVIEW
             ),
             reason
         )
@@ -284,7 +288,7 @@ final class MixerController: ObservableObject {
     func takeCut(unitId: UInt64? = nil) {
         let unit = unit(for: unitId)
         let preset = tbarPreset(for: unit)
-        fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "CUT")
+        fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "CUT")
         syncUnitBuses(unit.id)
     }
 
@@ -295,7 +299,6 @@ final class MixerController: ObservableObject {
             return
         }
         fireAuto(preset, unit: selectedUnit, reason: "AUTO")
-        mix = 0
         tbarLocked = false
         syncUnitBuses(selectedUnit.id)
     }
@@ -303,14 +306,13 @@ final class MixerController: ObservableObject {
     func firePreset(_ preset: TransitionPreset, index: Int) {
         tbarPresetIndex = index
         firePreset(preset, unitId: selectedUnit.id)
-        mix = 0
         tbarLocked = false
     }
 
     func firePreset(_ preset: TransitionPreset, unitId: UInt64) {
         let unit = unit(for: unitId)
         if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationValue <= 1 {
-            fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "TAKE")
+            fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "TAKE")
         } else {
             fireAuto(preset, unit: unit, reason: "TAKE")
         }
@@ -373,10 +375,11 @@ final class MixerController: ObservableObject {
         state.dip_g = preset.dipG
         state.dip_b = preset.dipB
         state.dip_a = preset.dipA <= 0 ? 1 : preset.dipA
-        if let wgsl = preset.customWgsl, !wgsl.isEmpty {
-            wgsl.withCString { _ = mixer_unit_set_custom_wgsl(unitId, $0) }
-        } else {
+        let wgsl = resolvedCustomWgsl(preset)
+        if wgsl.isEmpty {
             _ = mixer_unit_set_custom_wgsl(unitId, nil)
+        } else {
+            wgsl.withCString { _ = mixer_unit_set_custom_wgsl(unitId, $0) }
         }
         _ = mixer_unit_set_state(unitId, &state)
     }
@@ -425,7 +428,11 @@ final class MixerController: ObservableObject {
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
+        for unitIndex in session.units.indices {
+            session.units[unitIndex].overlays.removeAll { $0.sourceKind == .input && $0.sceneGpuId == id }
+        }
         selectedInputId = nil
+        pushOverlays()
     }
 
     func addScene() {
@@ -446,6 +453,10 @@ final class MixerController: ObservableObject {
         closeInputPreview(scene.gpuId)
         _ = mixer_destroy_scene(scene.gpuId)
         session.scenes.removeAll { $0.id == scene.id }
+        for unitIndex in session.units.indices {
+            session.units[unitIndex].overlays.removeAll { $0.sourceKind == .scene && $0.sceneGpuId == scene.gpuId }
+        }
+        pushOverlays()
         if let next = session.scenes.first {
             previewScene(next)
         }
@@ -784,9 +795,11 @@ final class MixerController: ObservableObject {
         var desc = MixerFFI.emptyOverlay()
         desc.source_id = slot.sceneGpuId
         desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
+        desc.crop = EivizRect(x: slot.cropX, y: slot.cropY, width: slot.cropWidth, height: slot.cropHeight)
         desc.opacity = slot.opacity
         desc.z = slot.z
         desc.audio_follow = slot.audioFollow ? 1 : 0
+        desc.hidden = slot.hidden ? 1 : 0
         let ms = slot.durationUnit == EIVIZ_DURATION_MS
             ? max(1, slot.durationValue)
             : unit.durationMs(slot.durationValue)
@@ -1093,6 +1106,7 @@ final class MixerController: ObservableObject {
             desc.opacity = layer.opacity
             desc.z = layer.z
             desc.audio_follow = layer.audioFollow ? 1 : 0
+            desc.hidden = layer.hidden ? 1 : 0
             return desc
         }
         let count = UInt32(layers.count)
@@ -1129,15 +1143,17 @@ final class MixerController: ObservableObject {
     }
 
     private func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry) {
-        let enabled = unit.overlays.filter { $0.enabled && $0.sceneGpuId != 0 }.prefix(8)
+        let enabled = unit.overlays.filter { $0.enabled }.prefix(8)
         state.overlay_count = UInt32(enabled.count)
         for (index, slot) in enabled.enumerated() {
             var desc = MixerFFI.emptyOverlay()
             desc.source_id = slot.sceneGpuId
             desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
+            desc.crop = EivizRect(x: slot.cropX, y: slot.cropY, width: slot.cropWidth, height: slot.cropHeight)
             desc.opacity = slot.opacity
             desc.z = slot.z
             desc.audio_follow = slot.audioFollow ? 1 : 0
+            desc.hidden = slot.hidden ? 1 : 0
             MixerFFI.setOverlay(&state, index: index, desc)
         }
     }
@@ -1145,6 +1161,16 @@ final class MixerController: ObservableObject {
     private func unit(for id: UInt64?) -> MixingUnitEntry {
         guard let id else { return selectedUnit }
         return session.units.first { $0.id == id } ?? selectedUnit
+    }
+
+    private func resolvedCustomWgsl(_ preset: TransitionPreset) -> String {
+        if preset.kind != EIVIZ_TRANSITION_CUSTOM {
+            return ""
+        }
+        if let wgsl = preset.customWgsl, !wgsl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return wgsl
+        }
+        return CustomWgslEditor.template
     }
 
     private func tbarPreset() -> TransitionPreset {
@@ -1200,6 +1226,20 @@ final class MixerController: ObservableObject {
         var state = MixerFFI.emptyState()
         guard mixer_unit_get_state(unitId, &state) == EIVIZ_OK else { return }
         applyBusSources(unitId: unitId, preview: state.preview_source, program: state.program_source)
+        applyMixerMix(unitId: unitId, mix: state.mix)
+    }
+
+    private func applyMixerMix(unitId: UInt64, mix value: Float) {
+        if mixByUnit[unitId] != value {
+            var next = mixByUnit
+            next[unitId] = value
+            mixByUnit = next
+        }
+        guard unitId == selectedUnitId, !tbarLocked, !tbarDragging, !tbarLatching else { return }
+        guard abs(mix - value) > 0.002 else { return }
+        tbarLatching = true
+        mix = value
+        tbarLatching = false
     }
 
     private func applyBusSources(unitId: UInt64, preview: UInt64, program: UInt64) {
@@ -1221,7 +1261,8 @@ final class MixerController: ObservableObject {
             markVideoRole(&roles, state.program_source, program: true, preview: false)
             markVideoRole(&roles, state.preview_source, program: false, preview: true)
             if state.mix > 0.001 {
-                markVideoRole(&roles, state.preview_source, program: true, preview: false)
+                let incoming = state.incoming_source != 0 ? state.incoming_source : state.preview_source
+                markVideoRole(&roles, incoming, program: true, preview: false)
             }
             for slot in unit.overlays where slot.enabled && slot.sceneGpuId != 0 {
                 markVideoRole(&roles, slot.sceneGpuId, program: true, preview: false)

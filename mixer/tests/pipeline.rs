@@ -3,7 +3,8 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT,
+    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo, OK, OUT_DECKLINK,
+    OUT_OMT,
     OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
     VideoCaptureInfo, mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
@@ -103,9 +104,9 @@ fn dx12_compose_omt_and_program_out() {
     unsafe {
         try_acquire(1);
     }
-    assert_eq!(mixer_unit_cut(1, 1), OK);
+    assert_eq!(mixer_unit_cut(1, 1, 0), OK);
     assert_eq!(
-        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0),
+        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0),
         OK
     );
 
@@ -334,7 +335,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
     unsafe {
         state.mix = 1.0;
         assert_eq!(mixer_unit_set_state(1, &state), OK);
-        assert_eq!(mixer_unit_cut(1, 1), OK);
+        assert_eq!(mixer_unit_cut(1, 1, 0), OK);
         let mut after = UnitState::default();
         assert_eq!(mixer_unit_get_state(1, &mut after), OK);
         assert_eq!(after.program_source, scene_id(1));
@@ -412,7 +413,7 @@ fn keep_preview_freezes_incoming_source() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0),
+            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0),
             OK
         );
         state.preview_source = SRC_BARS;
@@ -443,7 +444,7 @@ fn easing_completes_with_cut() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0),
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0, 0),
             OK
         );
     }
@@ -496,7 +497,7 @@ fn dip_uses_preset_color() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0),
+            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0, 0),
             OK
         );
         let mut out = UnitState::default();
@@ -506,6 +507,107 @@ fn dip_uses_preset_color() {
         assert!((out.dip_b - 0.8).abs() < 0.001);
         thread::sleep(Duration::from_millis(80));
         try_acquire(1);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn auto_uses_incoming_source_instead_of_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_FADE,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 0, 0, 0, 0.0, 0.0, 0.0, 1.0, SRC_BARS),
+            OK
+        );
+    }
+    thread::sleep(Duration::from_millis(350));
+    unsafe {
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BARS);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
+        assert_eq!(out.mix, 0.0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn cut_uses_incoming_source_instead_of_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, SRC_BARS), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BARS);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn leftover_incoming_source_does_not_override_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        incoming_source: SRC_BARS,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, 0), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BLUE);
+        assert_eq!(out.preview_source, SRC_COLOR);
+        assert_eq!(out.incoming_source, 0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn cut_program_sentinel_keeps_program() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, INCOMING_PROGRAM), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_COLOR);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
     }
     mixer_destroy();
 }

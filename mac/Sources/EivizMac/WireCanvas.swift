@@ -39,7 +39,7 @@ struct WireCanvasView: View {
             let origin = CGPoint(x: (geo.size.width - size.width) / 2, y: (geo.size.height - size.height) / 2)
             ZStack(alignment: .topLeading) {
                 Rectangle().fill(Color(red: 0.04, green: 0.04, blue: 0.04))
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(items.enumerated().reversed()), id: \.element.id) { index, item in
                     let color = item.enabled ? hues[index % hues.count] : Color(white: 0.33)
                     let frame = CGRect(
                         x: origin.x + CGFloat(item.x) * size.width,
@@ -135,7 +135,7 @@ struct WireCanvasView: View {
             }
         }
         var hit: UUID?
-        for item in items.reversed() {
+        for item in items {
             let rect = CGRect(
                 x: CGFloat(item.x) * canvas.width,
                 y: CGFloat(item.y) * canvas.height,

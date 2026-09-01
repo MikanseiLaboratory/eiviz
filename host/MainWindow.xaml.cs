@@ -345,7 +345,14 @@ public partial class MainWindow : Window
             kind.SelectionChanged += (_, _) =>
             {
                 if (kind.SelectedItem is ComboBoxItem item && item.Tag is uint value)
+                {
                     preset.Kind = value;
+                    if (value == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
+                    {
+                        preset.CustomWgsl = CustomWgslWindow.WgslTemplate;
+                        MixerNative.SetCustomWgsl(unit.Id, preset.CustomWgsl);
+                    }
+                }
                 RebuildTransitions();
             };
             var duration = new TextBox { Text = preset.DurationValue.ToString(), Margin = new Thickness(0, 0, 0, 4) };
@@ -469,16 +476,10 @@ public partial class MainWindow : Window
         var unit = SelectedUnit;
         if (unit.Overlays.Count == 0)
             return;
-        OverlayTogglePanel.Children.Add(new Border
-        {
-            Width = 1,
-            Margin = new Thickness(4, 4, 12, 4),
-            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x33, 0x33))
-        });
         for (var i = 0; i < unit.Overlays.Count; i++)
         {
             var slot = unit.Overlays[i];
-            var name = _session.Scenes.FirstOrDefault(item => item.GpuId == slot.SceneGpuId)?.Name ?? $"{i + 1}";
+            var name = slot.DisplayName(_session);
             OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
             {
                 ToggleOverlay(unit, slot, enabled);
@@ -489,15 +490,17 @@ public partial class MainWindow : Window
     internal void PushAuxFor(MixingUnitEntry unit) =>
         Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
 
-    private void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
+    internal void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
     {
         var desc = new OverlayDesc
         {
             SourceId = slot.SceneGpuId,
             Rect = new Interop.Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
+            Crop = new Interop.Rect { X = slot.CropX, Y = slot.CropY, Width = slot.CropWidth, Height = slot.CropHeight },
             Opacity = slot.Opacity,
             Z = slot.Z,
-            AudioFollow = slot.AudioFollow ? 1u : 0u
+            AudioFollow = slot.AudioFollow ? 1u : 0u,
+            Hidden = slot.Hidden ? 1u : 0u
         };
         var ms = slot.DurationUnit == MixerNative.DurationMs
             ? Math.Max(1, slot.DurationValue)
@@ -715,6 +718,31 @@ public partial class MainWindow : Window
         TickVideo();
         RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
+        SyncTBarsFromMixer();
+    }
+
+    private void SyncTBarsFromMixer()
+    {
+        ApplyTBarFromMixer(SelectedUnit.Id, TBar, ref _tbarLatching, ref _tbarLocked);
+        foreach (var window in _switchers.Values)
+            window.ApplyMixerMix();
+    }
+
+    internal static void ApplyTBarFromMixer(ulong unitId, Slider tbar, ref bool latching, ref bool locked)
+    {
+        if (tbar.IsMouseCaptureWithin || locked || latching)
+            return;
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(unitId, &state) != 0)
+                return;
+            if (Math.Abs(tbar.Value - state.Mix) < 0.002)
+                return;
+            latching = true;
+            tbar.Value = state.Mix;
+            latching = false;
+        }
     }
 
     private void TickVideo()
@@ -1131,7 +1159,10 @@ public partial class MainWindow : Window
             Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
         foreach (var unit in _session.Units)
+        {
+            unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id);
             Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+        }
         foreach (var scene in _session.Scenes)
             Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
         _session.Inputs.Remove(input);
@@ -1186,7 +1217,7 @@ public partial class MainWindow : Window
         }
         foreach (var unit in _session.Units)
         {
-            unit.Overlays.RemoveAll(slot => slot.SceneGpuId == removed.GpuId);
+            unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Scene && slot.SceneGpuId == removed.GpuId);
             Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
         }
         var fallback = _session.Scenes[0];

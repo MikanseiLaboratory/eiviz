@@ -84,7 +84,7 @@ pub fn collect_source_roles(
         add(state.program_source, Role::Program, &spec_map, &mut roles);
         add(state.preview_source, Role::Preview, &spec_map, &mut roles);
         if state.mix > 0.001 {
-            add(state.preview_source, Role::Program, &spec_map, &mut roles);
+            add(state.mix_incoming(), Role::Program, &spec_map, &mut roles);
         }
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
             add(overlay.source_id, Role::Program, &spec_map, &mut roles);

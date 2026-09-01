@@ -354,11 +354,39 @@ public sealed class SceneLayer
     public int Z { get; set; }
     public bool AudioFollow { get; set; } = true;
     public bool Locked { get; set; }
+    public bool Hidden { get; set; }
     public bool SizeLinked { get; set; } = true;
     public float CropX { get; set; }
     public float CropY { get; set; }
     public float CropWidth { get; set; } = 1;
     public float CropHeight { get; set; } = 1;
+
+    public void ClampCrop(float minX = 0.001f, float minY = 0.001f)
+    {
+        CropX = Math.Clamp(CropX, 0, 1 - minX);
+        CropY = Math.Clamp(CropY, 0, 1 - minY);
+        CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
+        CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
+    }
+
+    public void ResetLayout()
+    {
+        X = 0;
+        Y = 0;
+        Width = 1;
+        Height = 1;
+        SizeLinked = true;
+        ResetLayoutExtras();
+    }
+
+    public void ResetLayoutExtras()
+    {
+        Opacity = 1;
+        CropX = 0;
+        CropY = 0;
+        CropWidth = 1;
+        CropHeight = 1;
+    }
 }
 
 public sealed class SceneEntry
@@ -417,8 +445,15 @@ public sealed class TransitionPreset
             CustomWgsl);
 }
 
+public enum OverlaySourceKind
+{
+    Scene,
+    Input
+}
+
 public sealed class OverlaySlot
 {
+    public OverlaySourceKind SourceKind { get; set; }
     public ulong SceneGpuId { get; set; }
     public float X { get; set; } = 0.62f;
     public float Y { get; set; } = 0.08f;
@@ -426,11 +461,45 @@ public sealed class OverlaySlot
     public float Height { get; set; } = 0.32f;
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; }
     public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
     public uint DurationValue { get; set; } = 15;
     public uint DurationUnit { get; set; }
     public bool AudioFollow { get; set; } = true;
+    public bool Locked { get; set; }
+    public bool Hidden { get; set; }
+    public bool SizeLinked { get; set; } = true;
+    public float CropX { get; set; }
+    public float CropY { get; set; }
+    public float CropWidth { get; set; } = 1;
+    public float CropHeight { get; set; } = 1;
+
+    public string DisplayName(Session session) =>
+        SourceKind == OverlaySourceKind.Input
+            ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.Name ?? "Input"
+            : session.Scenes.FirstOrDefault(item => item.GpuId == SceneGpuId)?.Name ?? "Scene";
+
+    public void ClampCrop(float minX = 0.001f, float minY = 0.001f)
+    {
+        CropX = Math.Clamp(CropX, 0, 1 - minX);
+        CropY = Math.Clamp(CropY, 0, 1 - minY);
+        CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
+        CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
+    }
+
+    public void ResetLayout()
+    {
+        X = 0.62f;
+        Y = 0.08f;
+        Width = 0.32f;
+        Height = 0.32f;
+        SizeLinked = true;
+        Opacity = 1;
+        CropX = 0;
+        CropY = 0;
+        CropWidth = 1;
+        CropHeight = 1;
+    }
 }
 
 public sealed class SceneLayoutPreset
