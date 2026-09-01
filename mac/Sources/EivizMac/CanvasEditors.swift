@@ -7,7 +7,6 @@ struct SceneEditorView: View {
     @State private var original: [SceneLayer] = []
     @State private var selectedLayer: UUID?
     @State private var name: String = ""
-    @State private var presetName = ""
     @State private var copyFromId: UInt64 = 0
     @State private var lastGpuPush = Date.distantPast
 
@@ -41,20 +40,19 @@ struct SceneEditorView: View {
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
                 Text("Preset (all layers)").padding(.top, 8)
-                Picker("", selection: $presetName) {
-                    Text("Apply…").tag("")
-                    ForEach(["Full", "Split H", "Split V", "Quad", "PiP TR", "PiP TL", "PiP BR", "PiP BL"], id: \.self) {
-                        Text($0).tag($0)
-                    }
-                    ForEach(mixer.session.scenePresets) { preset in
-                        Text(preset.name).tag(preset.name)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], spacing: 8) {
+                        ForEach(SceneLayoutPresets.builtIn, id: \.self) { name in
+                            presetCard(name, SceneLayoutPresets.boxes(name))
+                        }
+                        ForEach(mixer.session.scenePresets) { preset in
+                            presetCard(preset.name, preset.layers.map {
+                                (CGFloat($0.x), CGFloat($0.y), CGFloat($0.width), CGFloat($0.height))
+                            })
+                        }
                     }
                 }
-                .onChange(of: presetName) { _, name in
-                    guard !name.isEmpty else { return }
-                    applyPreset(name)
-                    presetName = ""
-                }
+                .frame(maxHeight: 240)
                 Picker("Copy from", selection: $copyFromId) {
                     Text("Copy from…").tag(UInt64(0))
                     ForEach(mixer.session.scenes.filter { $0.id != current?.id }) { scene in
@@ -82,7 +80,7 @@ struct SceneEditorView: View {
                     Button("Delete") { deleteLayer() }
                 }
             }
-            .frame(width: 240)
+            .frame(width: 300)
             .buttonStyle(MixerButtonStyle())
 
             VStack {
@@ -278,7 +276,7 @@ struct SceneEditorView: View {
                     guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
                     var layer = mixer.session.scenes[i].layers[index]
                     guard !layer.locked else { return }
-                    layer.opacity = min(1, max(0, layer.opacity + delta / 80))
+                    layer.opacity = min(1, max(0, layer.opacity + delta / 400))
                     mixer.session.scenes[i].layers[index] = layer
                     if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
                         lastGpuPush = Date()
@@ -291,6 +289,7 @@ struct SceneEditorView: View {
             Picker("Input", selection: Binding(
                 get: { layer(index)?.inputId ?? 0 },
                 set: { value in
+                    guard locked == false else { return }
                     mutate { scene in
                         if scene.layers.indices.contains(index) {
                             scene.layers[index].inputId = value
@@ -303,6 +302,7 @@ struct SceneEditorView: View {
                     Text(input.name).tag(input.id)
                 }
             }
+            .disabled(locked)
             Toggle("Audio Follow", isOn: boolBinding(index, \.audioFollow))
             Button("Reset") {
                 mutate { scene in
@@ -435,6 +435,22 @@ struct SceneEditorView: View {
         .frame(width: 72)
     }
 
+    private func presetCard(_ name: String, _ boxes: [(CGFloat, CGFloat, CGFloat, CGFloat)]) -> some View {
+        Button {
+            applyPreset(name)
+        } label: {
+            VStack(spacing: 2) {
+                LayoutPresetMosaic(boxes: boxes)
+                    .frame(height: 58)
+                    .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+                Text(name)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     private func applyPreset(_ name: String) {
         mutate { scene in
             if let user = mixer.session.scenePresets.first(where: { $0.name == name }) {
@@ -466,16 +482,7 @@ struct SceneEditorView: View {
                 }
                 return
             }
-            let boxes: [(Float, Float, Float, Float)] = switch name {
-            case "Split H": [(0, 0, 0.5, 1), (0.5, 0, 0.5, 1)]
-            case "Split V": [(0, 0, 1, 0.5), (0, 0.5, 1, 0.5)]
-            case "Quad": [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)]
-            case "PiP TR": [(0, 0, 1, 1), (0.62, 0.08, 0.32, 0.32)]
-            case "PiP TL": [(0, 0, 1, 1), (0.06, 0.08, 0.32, 0.32)]
-            case "PiP BR": [(0, 0, 1, 1), (0.62, 0.60, 0.32, 0.32)]
-            case "PiP BL": [(0, 0, 1, 1), (0.06, 0.60, 0.32, 0.32)]
-            default: []
-            }
+            let boxes = SceneLayoutPresets.boxes(name).map { (Float($0.0), Float($0.1), Float($0.2), Float($0.3)) }
             let unlocked = scene.layers.indices.filter { !scene.layers[$0].locked }
             for (slot, i) in unlocked.prefix(boxes.count).enumerated() {
                 let box = boxes[slot]

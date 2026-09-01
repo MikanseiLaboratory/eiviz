@@ -81,6 +81,8 @@ struct SwitcherView: View {
                     }
                 }
             }
+            .frame(minHeight: 80)
+            .frame(maxHeight: .infinity)
             Slider(
                 value: Binding(
                     get: { Double(displayedMix) },
@@ -96,6 +98,8 @@ struct SwitcherView: View {
             .frame(width: 220)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            Color.clear.frame(maxHeight: .infinity)
         }
         .padding(.horizontal, 12)
         .frame(width: 260)

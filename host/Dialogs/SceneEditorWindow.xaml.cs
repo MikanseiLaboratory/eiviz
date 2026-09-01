@@ -57,12 +57,12 @@ public partial class SceneEditorWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit);
-            NumericDrag.AttachBox(box, scale, Preview, Commit);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
+            NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
         Bind(PosXLabel, XBox, 2);
         Bind(PosYLabel, YBox, 2);
@@ -72,7 +72,7 @@ public partial class SceneEditorWindow : Window
         Bind(CropYLabel, CropYBox, 2);
         Bind(CropWLabel, CropWBox, 2);
         Bind(CropHLabel, CropHBox, 2);
-        Bind(OpLabel, OpBox, 80);
+        Bind(OpLabel, OpBox, 400, "0.###");
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -227,7 +227,18 @@ public partial class SceneEditorWindow : Window
                 Canvas.SetTop(crop, Canvas.GetTop(rect) + rect.Height * cropY);
                 WireCanvas.Children.Add(crop);
             }
-            if (ReferenceEquals(layer, _selected))
+            var label = new TextBlock
+            {
+                Text = (i + 1).ToString(),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                FontSize = 28,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, Canvas.GetLeft(rect) + 8);
+            Canvas.SetTop(label, Canvas.GetTop(rect) + 4);
+            WireCanvas.Children.Add(label);
+            if (ReferenceEquals(layer, _selected) && !layer.Locked)
             {
                 var handle = new Rectangle
                 {
@@ -273,6 +284,7 @@ public partial class SceneEditorWindow : Window
         CropHBox.IsEnabled = edit;
         LinkBox.IsEnabled = edit;
         OpBox.IsEnabled = edit;
+        LayerInputBox.IsEnabled = edit;
     }
 
     private void PushGpu() => _commands.DefineSceneNow(_scene, _width, _height);
@@ -413,25 +425,28 @@ public partial class SceneEditorWindow : Window
             WireCanvas.CaptureMouse();
             return;
         }
-        SceneLayer? hit = null;
-        foreach (var layer in _scene.Layers.OrderByDescending(item => item.Z))
-        {
-            if (pos.X >= layer.X * WireCanvas.Width
-                && pos.X <= (layer.X + layer.Width) * WireCanvas.Width
-                && pos.Y >= layer.Y * WireCanvas.Height
-                && pos.Y <= (layer.Y + layer.Height) * WireCanvas.Height)
-            {
-                hit = layer;
-                break;
-            }
-        }
+        var hit = HitLayer(pos);
         _selected = hit;
-        _dragging = hit is not null && hit is { Locked: false };
+        _dragging = hit is { Locked: false };
         _resizing = false;
         _last = pos;
         if (_dragging)
             WireCanvas.CaptureMouse();
         RefreshLayers();
+    }
+
+    private SceneLayer? HitLayer(Point pos)
+    {
+        var hits = _scene.Layers.Where(layer =>
+            pos.X >= layer.X * WireCanvas.Width
+            && pos.X <= (layer.X + layer.Width) * WireCanvas.Width
+            && pos.Y >= layer.Y * WireCanvas.Height
+            && pos.Y <= (layer.Y + layer.Height) * WireCanvas.Height).ToList();
+        if (hits.Count == 0)
+            return null;
+        if (_selected is not null && hits.Contains(_selected))
+            return _selected;
+        return hits.OrderByDescending(item => item.Z).First();
     }
 
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)
@@ -506,7 +521,7 @@ public partial class SceneEditorWindow : Window
 
     private void LayerInput_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppress || _selected is null || LayerInputBox.SelectedItem is not InputEntry input)
+        if (_suppress || _selected is null || _selected.Locked || LayerInputBox.SelectedItem is not InputEntry input)
             return;
         _selected.InputId = input.Id;
         RefreshLayers();
@@ -524,26 +539,40 @@ public partial class SceneEditorWindow : Window
 
     private void FillPresets()
     {
-        PresetBox.Items.Clear();
-        PresetBox.Items.Add("Full");
-        PresetBox.Items.Add("Split H");
-        PresetBox.Items.Add("Split V");
-        PresetBox.Items.Add("Quad");
-        PresetBox.Items.Add("PiP TR");
-        PresetBox.Items.Add("PiP TL");
-        PresetBox.Items.Add("PiP BR");
-        PresetBox.Items.Add("PiP BL");
+        PresetCards.Children.Clear();
+        foreach (var name in SceneLayoutPresets.BuiltIn)
+            PresetCards.Children.Add(PresetCard(name, SceneLayoutPresets.Boxes(name)));
         foreach (var preset in _session.ScenePresets)
-            PresetBox.Items.Add(preset.Name);
+        {
+            var boxes = preset.Layers
+                .Select(layer => (layer.X, layer.Y, layer.Width, layer.Height))
+                .ToArray();
+            PresetCards.Children.Add(PresetCard(preset.Name, boxes));
+        }
         CopyFromBox.ItemsSource = _session.Scenes.Where(item => item.Id != _scene.Id).Select(item => item.Name).ToArray();
     }
 
-    private void Preset_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private UIElement PresetCard(string name, IReadOnlyList<(float X, float Y, float W, float H)> boxes)
     {
-        if (PresetBox.SelectedItem is not string name)
-            return;
-        ApplyPreset(name);
-        PresetBox.SelectedIndex = -1;
+        const double width = 112;
+        const double height = 63;
+        var card = new StackPanel { Width = width, Margin = new Thickness(0, 0, 8, 8), Cursor = Cursors.Hand };
+        card.Children.Add(new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(1),
+            Child = SceneLayoutPresets.Mosaic(boxes, width, height)
+        });
+        card.Children.Add(new TextBlock
+        {
+            Text = name,
+            FontSize = 10,
+            Margin = new Thickness(0, 2, 0, 0),
+            TextAlignment = TextAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        card.MouseLeftButtonUp += (_, _) => ApplyPreset(name);
+        return card;
     }
 
     private void CopyFrom_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -617,19 +646,9 @@ public partial class SceneEditorWindow : Window
             PushGpu();
             return;
         }
-        var boxes = name switch
-        {
-            "Split H" => new[] { (0f, 0f, 0.5f, 1f), (0.5f, 0f, 0.5f, 1f) },
-            "Split V" => new[] { (0f, 0f, 1f, 0.5f), (0f, 0.5f, 1f, 0.5f) },
-            "Quad" => new[] { (0f, 0f, 0.5f, 0.5f), (0.5f, 0f, 0.5f, 0.5f), (0f, 0.5f, 0.5f, 0.5f), (0.5f, 0.5f, 0.5f, 0.5f) },
-            "PiP TR" => new[] { (0f, 0f, 1f, 1f), (0.62f, 0.08f, 0.32f, 0.32f) },
-            "PiP TL" => new[] { (0f, 0f, 1f, 1f), (0.06f, 0.08f, 0.32f, 0.32f) },
-            "PiP BR" => new[] { (0f, 0f, 1f, 1f), (0.62f, 0.60f, 0.32f, 0.32f) },
-            "PiP BL" => new[] { (0f, 0f, 1f, 1f), (0.06f, 0.60f, 0.32f, 0.32f) },
-            _ => Array.Empty<(float, float, float, float)>()
-        };
+        var boxes = SceneLayoutPresets.Boxes(name);
         var unlocked = _scene.Layers.Where(item => !item.Locked).ToList();
-        for (var i = 0; i < unlocked.Count && i < boxes.Length; i++)
+        for (var i = 0; i < unlocked.Count && i < boxes.Count; i++)
         {
             var (x, y, w, h) = boxes[i];
             unlocked[i].X = x;

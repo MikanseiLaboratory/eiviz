@@ -6,7 +6,7 @@ namespace Eiviz.Host;
 
 internal static class NumericDrag
 {
-    public static void Attach(FrameworkElement handle, TextBox box, float pixelsPerUnit, Action apply, Action? commit = null)
+    public static void Attach(FrameworkElement handle, TextBox box, float pixelsPerUnit, Action apply, Action? commit = null, string format = "0.#")
     {
         Point? start = null;
         var origin = 0f;
@@ -24,7 +24,7 @@ internal static class NumericDrag
             if (start is not { } originPoint || e.LeftButton != MouseButtonState.Pressed)
                 return;
             var dy = (float)(originPoint.Y - e.GetPosition(handle).Y);
-            box.Text = (origin + dy / pixelsPerUnit).ToString("0.#");
+            box.Text = (origin + dy / pixelsPerUnit).ToString(format);
             apply();
         };
         handle.PreviewMouseLeftButtonUp += (_, _) =>
@@ -37,7 +37,7 @@ internal static class NumericDrag
         };
     }
 
-    public static void AttachBox(TextBox box, float pixelsPerUnit, Action apply, Action? commit = null)
+    public static void AttachBox(TextBox box, float pixelsPerUnit, Action apply, Action? commit = null, string format = "0.#")
     {
         Point? start = null;
         var origin = 0f;
@@ -61,7 +61,7 @@ internal static class NumericDrag
                 dragging = true;
                 box.CaptureMouse();
             }
-            box.Text = (origin + (float)(-delta.Y) / pixelsPerUnit).ToString("0.#");
+            box.Text = (origin + (float)(-delta.Y) / pixelsPerUnit).ToString(format);
             apply();
             e.Handled = true;
         };

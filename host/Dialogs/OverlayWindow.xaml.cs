@@ -62,12 +62,12 @@ public partial class OverlayWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit);
-            NumericDrag.AttachBox(box, scale, Preview, Commit);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
+            NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
         Bind(PosXLabel, XBox, 2);
         Bind(PosYLabel, YBox, 2);
@@ -77,7 +77,7 @@ public partial class OverlayWindow : Window
         Bind(CropYLabel, CropYBox, 2);
         Bind(CropWLabel, CropWBox, 2);
         Bind(CropHLabel, CropHBox, 2);
-        Bind(OpLabel, OpBox, 80);
+        Bind(OpLabel, OpBox, 400, "0.###");
     }
 
     private void Push()
@@ -271,6 +271,8 @@ public partial class OverlayWindow : Window
         CropHBox.IsEnabled = edit;
         LinkBox.IsEnabled = edit;
         OpBox.IsEnabled = edit;
+        SourceKindBox.IsEnabled = edit;
+        SourceBox.IsEnabled = edit;
         _suppress = false;
     }
 
@@ -390,7 +392,7 @@ public partial class OverlayWindow : Window
 
     private void SourceKind_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppress || _selected is null)
+        if (_suppress || _selected is null || _selected.Locked)
             return;
         var kind = SourceKindBox.SelectedIndex == 1 ? OverlaySourceKind.Input : OverlaySourceKind.Scene;
         if (_selected.SourceKind == kind)
@@ -406,7 +408,7 @@ public partial class OverlayWindow : Window
 
     private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_suppress || _selected is null)
+        if (_suppress || _selected is null || _selected.Locked)
             return;
         if (_selected.SourceKind == OverlaySourceKind.Input && SourceBox.SelectedItem is InputEntry input)
             _selected.SceneGpuId = input.Id;
@@ -550,26 +552,29 @@ public partial class OverlayWindow : Window
             WireCanvas.CaptureMouse();
             return;
         }
-        OverlaySlot? hit = null;
-        foreach (var slot in _unit.Overlays)
-        {
-            if (pos.X >= slot.X * WireCanvas.Width
-                && pos.X <= (slot.X + slot.Width) * WireCanvas.Width
-                && pos.Y >= slot.Y * WireCanvas.Height
-                && pos.Y <= (slot.Y + slot.Height) * WireCanvas.Height)
-            {
-                hit = slot;
-                break;
-            }
-        }
+        var hit = HitSlot(pos);
         _selected = hit;
-        _dragging = hit is not null && hit is { Locked: false };
+        _dragging = hit is { Locked: false };
         _last = pos;
         if (_dragging)
             WireCanvas.CaptureMouse();
         DrawWireframe();
         FillFields();
         UpdatePreview();
+    }
+
+    private OverlaySlot? HitSlot(Point pos)
+    {
+        var hits = _unit.Overlays.Where(slot =>
+            pos.X >= slot.X * WireCanvas.Width
+            && pos.X <= (slot.X + slot.Width) * WireCanvas.Width
+            && pos.Y >= slot.Y * WireCanvas.Height
+            && pos.Y <= (slot.Y + slot.Height) * WireCanvas.Height).ToList();
+        if (hits.Count == 0)
+            return null;
+        if (_selected is not null && hits.Contains(_selected))
+            return _selected;
+        return hits[0];
     }
 
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)

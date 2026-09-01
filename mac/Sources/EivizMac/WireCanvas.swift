@@ -64,6 +64,10 @@ struct WireCanvasView: View {
                             .frame(width: crop.width, height: crop.height)
                             .position(x: crop.midX, y: crop.midY)
                     }
+                    Text("\(index + 1)")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .position(x: frame.minX + 14, y: frame.minY + 12)
                     if selected == item.id && !item.locked {
                         Rectangle()
                             .fill(color)
@@ -134,19 +138,20 @@ struct WireCanvasView: View {
                 return
             }
         }
-        var hit: UUID?
-        for item in items {
-            let rect = CGRect(
+        let hits = items.filter { item in
+            CGRect(
                 x: CGFloat(item.x) * canvas.width,
                 y: CGFloat(item.y) * canvas.height,
                 width: CGFloat(item.width) * canvas.width,
                 height: CGFloat(item.height) * canvas.height
-            )
-            if rect.contains(pos) {
-                hit = item.id
-                break
-            }
+            ).contains(pos)
         }
+        if let current = selected, hits.contains(where: { $0.id == current }) {
+            dragging = items.first(where: { $0.id == current })?.locked != true
+            resizing = false
+            return
+        }
+        let hit = hits.first?.id
         selected = hit
         let locked = items.first(where: { $0.id == hit })?.locked == true
         dragging = hit != nil && !locked

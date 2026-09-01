@@ -45,6 +45,7 @@ final class MixerController: ObservableObject {
     private var booted = false
     private var tbarLatching = false
     private var meterTimer: Timer?
+    private var mixTimer: Timer?
     @Published private(set) var previewByUnit: [UInt64: UInt64] = [:]
     @Published private(set) var programByUnit: [UInt64: UInt64] = [:]
     private var inputPreviewWindows: [UInt64: NSWindow] = [:]
@@ -78,11 +79,16 @@ final class MixerController: ObservableObject {
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        mixTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncAllUnitBuses() }
+        }
         booted = true
         updateStatus()
     }
 
     func shutdown() {
+        mixTimer?.invalidate()
+        mixTimer = nil
         meterTimer?.invalidate()
         meterTimer = nil
         closeAllInputPreviews()

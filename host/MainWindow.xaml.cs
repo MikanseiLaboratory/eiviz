@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private readonly DispatcherTimer _tbarTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
     private readonly ResourceMonitor _resources = new();
     private bool _videoSeeking;
@@ -52,8 +53,11 @@ public partial class MainWindow : Window
         UpdateStatus();
         _meterTimer.Tick += (_, _) => TickMeters();
         _meterTimer.Start();
+        _tbarTimer.Tick += (_, _) => SyncTBarsFromMixer();
+        _tbarTimer.Start();
         Closed += (_, _) =>
         {
+            _tbarTimer.Stop();
             _meterTimer.Stop();
             _resources.Dispose();
         };
@@ -718,7 +722,6 @@ public partial class MainWindow : Window
         TickVideo();
         RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
-        SyncTBarsFromMixer();
     }
 
     private void SyncTBarsFromMixer()

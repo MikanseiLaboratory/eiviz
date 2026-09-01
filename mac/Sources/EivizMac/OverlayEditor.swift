@@ -134,6 +134,7 @@ struct OverlayView: View {
             overlayLivePreview
             if let slot = current {
                 overlaySourcePickers(slot)
+                    .disabled(slot.locked)
                 overlayFollowAndReset(slot)
                 overlayTransform
                 overlayFields
@@ -376,7 +377,7 @@ struct OverlayView: View {
     private var overlayOpacityRow: some View {
         GridRow {
             DragAdjustLabel(title: "Opacity") { delta, ended in
-                mutate { $0.opacity = min(1, max(0, $0.opacity + delta / 80)) }
+                mutate { $0.opacity = min(1, max(0, $0.opacity + delta / 400)) }
                 if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
                     lastGpuPush = Date()
                     mixer.pushOverlays()

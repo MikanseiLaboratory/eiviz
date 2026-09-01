@@ -72,21 +72,28 @@
                 <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                               ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
                               Background="{DynamicResource ButtonBorder}"/>
-                <DockPanel Grid.Column="1" Margin="16,0">
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                <Grid Grid.Column="1" Margin="16,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*" MinHeight="80"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTransition_Click"/>
                         <TextBlock Text="{Binding [chrome.transitions], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                     </DockPanel>
-                    <Slider x:Name="TBar" DockPanel.Dock="Bottom" Orientation="Horizontal" Minimum="0" Maximum="1"
-                            Width="220" HorizontalAlignment="Center" Margin="8,10,8,0" Height="18"
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="TransitionPanel"/>
+                    </ScrollViewer>
+                    <Slider x:Name="TBar" Grid.Row="2" Orientation="Horizontal" Minimum="0" Maximum="1"
+                            Width="220" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Margin="8,8" Height="18"
                             IsMoveToPointEnabled="True"
                             ValueChanged="TBar_ValueChanged"
                             PreviewMouseLeftButtonUp="TBar_MouseUp"
                             LostMouseCapture="TBar_LostMouseCapture"/>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="TransitionPanel"/>
-                    </ScrollViewer>
-                </DockPanel>
+                </Grid>
                 <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                               ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
                               Background="{DynamicResource ButtonBorder}"/>
