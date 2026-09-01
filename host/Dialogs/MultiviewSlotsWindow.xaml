@@ -10,7 +10,7 @@
             <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
         </StackPanel>
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
-                   Text="Click a mosaic. Every pane matches the canvas aspect and fills the frame with no gaps, crop, or zoom."/>
+                   Text="Click a mosaic. Every window is an Input, Scene, or Mixing Unit preview/program, and fills the frame with no gaps, crop, or zoom."/>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="SlotRows"/>
         </ScrollViewer>

@@ -484,33 +484,12 @@ enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
 
     var tileCount: Int {
         switch self {
-        case .previewProgram2: return 2
+        case .previewProgram2, .grid2x2: return 4
         case .quad4TopLeft, .quad4TopRight, .quad4BottomLeft, .quad4BottomRight: return 7
         case .large5TopLeft, .large5TopRight, .large5BottomLeft, .large5BottomRight: return 6
-        case .grid2x2: return 4
         case .grid3x3: return 9
         case .grid4x4: return 16
-        default: return 8
-        }
-    }
-
-    var hasBusPanes: Bool {
-        switch self {
-        case .previewProgram8, .previewProgram8Bottom, .previewProgram8Left, .previewProgram8Right, .previewProgram2:
-            return true
-        default:
-            return false
-        }
-    }
-
-    var busTitles: (preview: String, program: String) {
-        switch self {
-        case .previewProgram8: return ("PRV (top left)", "PGM (top right)")
-        case .previewProgram8Bottom: return ("PRV (bottom left)", "PGM (bottom right)")
-        case .previewProgram8Left: return ("PRV (bottom left)", "PGM (top left)")
-        case .previewProgram8Right: return ("PRV (bottom right)", "PGM (top right)")
-        case .previewProgram2: return ("PRV (top left)", "PGM (top right)")
-        default: return ("Preview tally unit", "Program tally unit")
+        default: return 10
         }
     }
 
@@ -518,28 +497,28 @@ enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .previewProgram2:
             return [
-                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .preview),
-                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
             ] + MultiviewPane.grid(cols: 2, rows: 1, x: 0, y: 0.5, width: 1, height: 0.5)
         case .previewProgram8:
             return [
-                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .preview),
-                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
             ] + MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0.5, width: 1, height: 0.5)
         case .previewProgram8Bottom:
             return MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0, width: 1, height: 0.5) + [
-                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
-                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5, kind: .program)
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5)
             ]
         case .previewProgram8Left:
             return [
-                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
-                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .program)
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5)
             ] + MultiviewPane.grid(cols: 2, rows: 4, x: 0.5, y: 0, width: 0.5, height: 1)
         case .previewProgram8Right:
             return MultiviewPane.grid(cols: 2, rows: 4, x: 0, y: 0, width: 0.5, height: 1) + [
-                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
-                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5)
             ]
         case .quad4TopLeft: return MultiviewPane.quad4(smallQuad: 0)
         case .quad4TopRight: return MultiviewPane.quad4(smallQuad: 1)
@@ -559,16 +538,11 @@ enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum MultiviewPaneKind {
-    case preview, program, tile
-}
-
 struct MultiviewPane {
     var x: Float
     var y: Float
     var width: Float
     var height: Float
-    var kind: MultiviewPaneKind
 
     static func grid(cols: Int, rows: Int, x: Float, y: Float, width: Float, height: Float) -> [MultiviewPane] {
         return (0..<(cols * rows)).map { i in
@@ -578,7 +552,7 @@ struct MultiviewPane {
             let y0 = y + height * Float(row) / Float(rows)
             let x1 = x + width * Float(col + 1) / Float(cols)
             let y1 = y + height * Float(row + 1) / Float(rows)
-            return MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0, kind: .tile)
+            return MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
         }
     }
 
@@ -589,7 +563,7 @@ struct MultiviewPane {
             if quad == smallQuad {
                 return grid(cols: 2, rows: 2, x: x, y: y, width: 0.5, height: 0.5)
             }
-            return [MultiviewPane(x: x, y: y, width: 0.5, height: 0.5, kind: .tile)]
+            return [MultiviewPane(x: x, y: y, width: 0.5, height: 0.5)]
         }
     }
 
@@ -598,7 +572,7 @@ struct MultiviewPane {
         let y0 = Float(largeRow) / 3
         let x1 = Float(largeCol + 2) / 3
         let y1 = Float(largeRow + 2) / 3
-        var panes = [MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0, kind: .tile)]
+        var panes = [MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0)]
         for row in 0..<3 {
             for col in 0..<3 {
                 if col >= largeCol && col < largeCol + 2 && row >= largeRow && row < largeRow + 2 {
@@ -608,7 +582,7 @@ struct MultiviewPane {
                 let sy0 = Float(row) / 3
                 let sx1 = Float(col + 1) / 3
                 let sy1 = Float(row + 1) / 3
-                panes.append(MultiviewPane(x: sx0, y: sy0, width: sx1 - sx0, height: sy1 - sy0, kind: .tile))
+                panes.append(MultiviewPane(x: sx0, y: sy0, width: sx1 - sx0, height: sy1 - sy0))
             }
         }
         return panes
@@ -623,7 +597,7 @@ struct MultiviewLayout: Identifiable, Codable {
     var programUnitId: UInt64 = 1
     var presentInterval: UInt32 = 0
     var template: MultiviewTemplate = .previewProgram8
-    var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
+    var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10)
     var previewLabelFollow: Bool = true
     var previewLabel: String = ""
     var programLabelFollow: Bool = true
@@ -643,7 +617,7 @@ struct MultiviewLayout: Identifiable, Codable {
         programUnitId: UInt64 = 1,
         presentInterval: UInt32 = 0,
         template: MultiviewTemplate = .previewProgram8,
-        tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8),
+        tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10),
         previewLabelFollow: Bool = true,
         previewLabel: String = "",
         programLabelFollow: Bool = true,
@@ -681,6 +655,7 @@ struct MultiviewLayout: Identifiable, Codable {
     }
 
     mutating func ensureTiles() {
+        absorbFixedBusPanes()
         let want = template.tileCount
         if tiles.count < want {
             tiles.append(contentsOf: Array(repeating: MvSlot(), count: want - tiles.count))
@@ -688,11 +663,38 @@ struct MultiviewLayout: Identifiable, Codable {
         if tiles.count > want {
             tiles.removeLast(tiles.count - want)
         }
-        for i in tiles.indices {
-            if tiles[i].kind == .muPreview || tiles[i].kind == .muProgram {
-                tiles[i].kind = .none
-                tiles[i].sourceId = 0
-            }
+    }
+
+    mutating func seedDefaultBuses(_ unitId: UInt64) {
+        guard unitId != 0, tiles.count >= 2, tiles.allSatisfy({ $0.kind == .none }) else { return }
+        tiles[0].kind = .muPreview
+        tiles[0].sourceId = unitId
+        tiles[1].kind = .muProgram
+        tiles[1].sourceId = unitId
+    }
+
+    private mutating func absorbFixedBusPanes() {
+        let buses = [
+            MvSlot(
+                kind: .muPreview,
+                sourceId: max(1, previewUnitId),
+                labelFollow: previewLabelFollow,
+                label: previewLabel
+            ),
+            MvSlot(
+                kind: .muProgram,
+                sourceId: max(1, programUnitId),
+                labelFollow: programLabelFollow,
+                label: programLabel
+            )
+        ]
+        switch (template, tiles.count) {
+        case (.previewProgram2, 2), (.previewProgram8, 8), (.previewProgram8Left, 8):
+            tiles.insert(contentsOf: buses, at: 0)
+        case (.previewProgram8Bottom, 8), (.previewProgram8Right, 8):
+            tiles.append(contentsOf: buses)
+        default:
+            break
         }
     }
 }
@@ -721,6 +723,16 @@ struct RgbColor: Codable, Equatable, Hashable {
     static let inactiveDefault = RgbColor(r: 64, g: 64, b: 64)
 }
 
+enum MvLabelUnit: String, Codable {
+    case px = "Px"
+    case percent = "Percent"
+}
+
+enum MvLabelAnchor: String, Codable {
+    case top = "Top"
+    case bottom = "Bottom"
+}
+
 struct SessionSettings: Codable {
     var masterFpsNum: UInt32 = 60_000
     var masterFpsDen: UInt32 = 1_001
@@ -737,6 +749,9 @@ struct SessionSettings: Codable {
     var previewColor: RgbColor = .previewDefault
     var programColor: RgbColor = .programDefault
     var inactiveColor: RgbColor = .inactiveDefault
+    var multiviewLabelSize: Float = 18
+    var multiviewLabelUnit: MvLabelUnit = .px
+    var multiviewLabelAnchor: MvLabelAnchor = .bottom
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
@@ -766,6 +781,9 @@ struct SessionSettings: Codable {
         previewColor = try container.decodeIfPresent(RgbColor.self, forKey: .previewColor) ?? .previewDefault
         programColor = try container.decodeIfPresent(RgbColor.self, forKey: .programColor) ?? .programDefault
         inactiveColor = try container.decodeIfPresent(RgbColor.self, forKey: .inactiveColor) ?? .inactiveDefault
+        multiviewLabelSize = try container.decodeIfPresent(Float.self, forKey: .multiviewLabelSize) ?? 18
+        multiviewLabelUnit = try container.decodeIfPresent(MvLabelUnit.self, forKey: .multiviewLabelUnit) ?? .px
+        multiviewLabelAnchor = try container.decodeIfPresent(MvLabelAnchor.self, forKey: .multiviewLabelAnchor) ?? .bottom
         lastSessionPath = try container.decodeIfPresent(String.self, forKey: .lastSessionPath)
     }
 }
@@ -838,13 +856,14 @@ struct MixerSessionData: Codable {
 
     @discardableResult
     mutating func addMultiview(unitId: UInt64) -> MultiviewLayout {
-        let layout = MultiviewLayout(
+        var layout = MultiviewLayout(
             id: nextMultiviewId,
             name: "Multiview \(nextMultiviewId)",
             monitorId: nextMonitorId,
             previewUnitId: unitId,
             programUnitId: unitId
         )
+        layout.seedDefaultBuses(unitId)
         nextMultiviewId += 1
         nextMonitorId += 1
         multiviews.append(layout)

@@ -119,23 +119,15 @@ internal static class MultiviewGeometry
 
     public static int TileCount(MultiviewTemplate template) => template switch
     {
-        MultiviewTemplate.PreviewProgram2 => 2,
+        MultiviewTemplate.PreviewProgram2 or MultiviewTemplate.Grid2x2 => 4,
         MultiviewTemplate.Quad4TopLeft or MultiviewTemplate.Quad4TopRight
             or MultiviewTemplate.Quad4BottomLeft or MultiviewTemplate.Quad4BottomRight => 7,
         MultiviewTemplate.Large5TopLeft or MultiviewTemplate.Large5TopRight
             or MultiviewTemplate.Large5BottomLeft or MultiviewTemplate.Large5BottomRight => 6,
-        MultiviewTemplate.Grid2x2 => 4,
         MultiviewTemplate.Grid3x3 => 9,
         MultiviewTemplate.Grid4x4 => 16,
-        _ => 8
+        _ => 10
     };
-
-    public static bool HasBusPanes(MultiviewTemplate template) => template
-        is MultiviewTemplate.PreviewProgram8
-        or MultiviewTemplate.PreviewProgram8Bottom
-        or MultiviewTemplate.PreviewProgram8Left
-        or MultiviewTemplate.PreviewProgram8Right
-        or MultiviewTemplate.PreviewProgram2;
 
     public static string Title(MultiviewTemplate template) => template switch
     {
@@ -158,45 +150,35 @@ internal static class MultiviewGeometry
         _ => template.ToString()
     };
 
-    public static (string Preview, string Program) BusTitles(MultiviewTemplate template) => template switch
-    {
-        MultiviewTemplate.PreviewProgram8 => ("PRV (top left)", "PGM (top right)"),
-        MultiviewTemplate.PreviewProgram8Bottom => ("PRV (bottom left)", "PGM (bottom right)"),
-        MultiviewTemplate.PreviewProgram8Left => ("PRV (bottom left)", "PGM (top left)"),
-        MultiviewTemplate.PreviewProgram8Right => ("PRV (bottom right)", "PGM (top right)"),
-        MultiviewTemplate.PreviewProgram2 => ("PRV (top left)", "PGM (top right)"),
-        _ => ("Preview tally unit", "Program tally unit")
-    };
-
     public static IReadOnlyList<MultiviewPane> Panes(MultiviewTemplate template)
     {
         var panes = new List<MultiviewPane>();
         switch (template)
         {
             case MultiviewTemplate.PreviewProgram2:
-                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f));
                 AddGrid(panes, 2, 1, 0f, 0.5f, 1f, 0.5f);
                 break;
             case MultiviewTemplate.PreviewProgram8:
-                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f));
                 AddGrid(panes, 4, 2, 0f, 0.5f, 1f, 0.5f);
                 break;
             case MultiviewTemplate.PreviewProgram8Bottom:
                 AddGrid(panes, 4, 2, 0f, 0f, 1f, 0.5f);
-                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f));
+                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f));
                 break;
             case MultiviewTemplate.PreviewProgram8Left:
-                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f));
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f));
                 AddGrid(panes, 2, 4, 0.5f, 0f, 0.5f, 1f);
                 break;
             case MultiviewTemplate.PreviewProgram8Right:
                 AddGrid(panes, 2, 4, 0f, 0f, 0.5f, 1f);
-                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f));
                 break;
             case MultiviewTemplate.Quad4TopLeft:
                 AddQuad4(panes, 0);
@@ -245,7 +227,7 @@ internal static class MultiviewGeometry
             var y0 = y + h * row / rows;
             var x1 = x + w * (col + 1) / cols;
             var y1 = y + h * (row + 1) / rows;
-            panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0, MultiviewPaneKind.Tile));
+            panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0));
         }
     }
 
@@ -258,7 +240,7 @@ internal static class MultiviewGeometry
             if (quad == smallQuad)
                 AddGrid(panes, 2, 2, x, y, 0.5f, 0.5f);
             else
-                panes.Add(new MultiviewPane(x, y, 0.5f, 0.5f, MultiviewPaneKind.Tile));
+                panes.Add(new MultiviewPane(x, y, 0.5f, 0.5f));
         }
     }
 
@@ -268,7 +250,7 @@ internal static class MultiviewGeometry
         var y0 = largeRow / 3f;
         var x1 = (largeCol + 2) / 3f;
         var y1 = (largeRow + 2) / 3f;
-        panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0, MultiviewPaneKind.Tile));
+        panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0));
         for (var row = 0; row < 3; row++)
         {
             for (var col = 0; col < 3; col++)
@@ -279,20 +261,13 @@ internal static class MultiviewGeometry
                 var sy0 = row / 3f;
                 var sx1 = (col + 1) / 3f;
                 var sy1 = (row + 1) / 3f;
-                panes.Add(new MultiviewPane(sx0, sy0, sx1 - sx0, sy1 - sy0, MultiviewPaneKind.Tile));
+                panes.Add(new MultiviewPane(sx0, sy0, sx1 - sx0, sy1 - sy0));
             }
         }
     }
 }
 
-internal enum MultiviewPaneKind
-{
-    Preview,
-    Program,
-    Tile
-}
-
-internal readonly record struct MultiviewPane(float X, float Y, float Width, float Height, MultiviewPaneKind Kind);
+internal readonly record struct MultiviewPane(float X, float Y, float Width, float Height);
 
 public enum VideoPlayWhen
 {
@@ -441,19 +416,55 @@ public sealed class MultiviewLayout
 
     public void EnsureTiles()
     {
+        AbsorbFixedBusPanes();
         var want = MultiviewGeometry.TileCount(Template);
         while (Tiles.Count < want)
             Tiles.Add(new MvSlot());
         while (Tiles.Count > want)
             Tiles.RemoveAt(Tiles.Count - 1);
-        foreach (var tile in Tiles)
+    }
+
+    private void AbsorbFixedBusPanes()
+    {
+        var buses = new[]
         {
-            if (tile.Kind is MvSlotKind.MuPreview or MvSlotKind.MuProgram)
+            new MvSlot
             {
-                tile.Kind = MvSlotKind.None;
-                tile.SourceId = 0;
+                Kind = MvSlotKind.MuPreview,
+                SourceId = PreviewUnitId == 0 ? 1 : PreviewUnitId,
+                LabelFollow = PreviewLabelFollow,
+                Label = PreviewLabel ?? ""
+            },
+            new MvSlot
+            {
+                Kind = MvSlotKind.MuProgram,
+                SourceId = ProgramUnitId == 0 ? 1 : ProgramUnitId,
+                LabelFollow = ProgramLabelFollow,
+                Label = ProgramLabel ?? ""
             }
+        };
+        switch (Template)
+        {
+            case MultiviewTemplate.PreviewProgram2 when Tiles.Count == 2:
+            case MultiviewTemplate.PreviewProgram8 or MultiviewTemplate.PreviewProgram8Left when Tiles.Count == 8:
+                Tiles.InsertRange(0, buses);
+                break;
+            case MultiviewTemplate.PreviewProgram8Bottom or MultiviewTemplate.PreviewProgram8Right when Tiles.Count == 8:
+                Tiles.AddRange(buses);
+                break;
         }
+    }
+
+    public void SeedDefaultBuses(ulong unitId)
+    {
+        if (unitId == 0 || Tiles.Count < 2)
+            return;
+        if (Tiles.Any(tile => tile.Kind != MvSlotKind.None))
+            return;
+        Tiles[0].Kind = MvSlotKind.MuPreview;
+        Tiles[0].SourceId = unitId;
+        Tiles[1].Kind = MvSlotKind.MuProgram;
+        Tiles[1].SourceId = unitId;
     }
 }
 
@@ -503,6 +514,18 @@ public sealed class OutputEntry
     public ulong UnitId { get; set; } = 1;
     public bool UseGpu { get; set; }
     public bool Enabled { get; set; } = true;
+}
+
+public enum MvLabelUnit
+{
+    Px,
+    Percent
+}
+
+public enum MvLabelAnchor
+{
+    Bottom,
+    Top
 }
 
 public enum InternalColorFormat
@@ -565,6 +588,9 @@ public sealed class SessionSettings
     public RgbColor PreviewColor { get; set; } = RgbColor.PreviewDefault;
     public RgbColor ProgramColor { get; set; } = RgbColor.ProgramDefault;
     public RgbColor InactiveColor { get; set; } = RgbColor.InactiveDefault;
+    public float MultiviewLabelSize { get; set; } = 18;
+    public MvLabelUnit MultiviewLabelUnit { get; set; } = MvLabelUnit.Px;
+    public MvLabelAnchor MultiviewLabelAnchor { get; set; } = MvLabelAnchor.Bottom;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
@@ -575,6 +601,9 @@ public sealed class SessionSettings
         PreviewColor = RgbColor.PreviewDefault;
         ProgramColor = RgbColor.ProgramDefault;
         InactiveColor = RgbColor.InactiveDefault;
+        MultiviewLabelSize = 18;
+        MultiviewLabelUnit = MvLabelUnit.Px;
+        MultiviewLabelAnchor = MvLabelAnchor.Bottom;
     }
 
     public uint ResolvedPresentInterval() =>
@@ -666,17 +695,19 @@ public sealed class Session
         return scene;
     }
 
-    public MultiviewLayout AddMultiview(string? name = null)
+    public MultiviewLayout AddMultiview(string? name = null, ulong? unitId = null)
     {
+        var unit = unitId is > 0 ? unitId.Value : Settings.DefaultMultiviewUnitId;
         var layout = new MultiviewLayout
         {
             Id = NextMultiviewId++,
             Name = name ?? $"Multiview {NextMultiviewId - 1}",
             MonitorId = NextMonitorId++,
-            PreviewUnitId = Settings.DefaultMultiviewUnitId,
-            ProgramUnitId = Settings.DefaultMultiviewUnitId
+            PreviewUnitId = unit,
+            ProgramUnitId = unit
         };
         layout.EnsureTiles();
+        layout.SeedDefaultBuses(unit);
         Multiviews.Add(layout);
         return layout;
     }

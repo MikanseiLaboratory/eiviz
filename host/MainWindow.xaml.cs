@@ -388,10 +388,7 @@ public partial class MainWindow : Window
     internal void OpenNewMultiview(ulong unitId)
     {
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
-        var layout = _session.AddMultiview();
-        layout.PreviewUnitId = unit.Id;
-        layout.ProgramUnitId = unit.Id;
-        layout.EnsureTiles();
+        var layout = _session.AddMultiview(unitId: unit.Id);
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         OpenMultiviewWindow(layout);
     }
@@ -1190,6 +1187,9 @@ public partial class MainWindow : Window
         _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
         _session.Settings.ProgramColor = RgbColor.FromOrDefault(dialog.Settings.ProgramColor, RgbColor.ProgramDefault);
         _session.Settings.InactiveColor = RgbColor.FromOrDefault(dialog.Settings.InactiveColor, RgbColor.InactiveDefault);
+        _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
+        _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
+        _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
         BusTheme.PushMixer(_session.Settings);
         ApplyBusColors();
         foreach (SceneTile tile in ScenePanel.Children)

@@ -77,6 +77,12 @@ pub struct SessionSettings {
     pub program_color: RgbColor,
     #[serde(default = "inactive_color", deserialize_with = "de_inactive_color")]
     pub inactive_color: RgbColor,
+    #[serde(default = "mv_label_size")]
+    pub multiview_label_size: f32,
+    #[serde(default)]
+    pub multiview_label_unit: MvLabelUnit,
+    #[serde(default)]
+    pub multiview_label_anchor: MvLabelAnchor,
     pub last_session_path: Option<String>,
 }
 
@@ -98,6 +104,9 @@ impl Default for SessionSettings {
             preview_color: preview_color(),
             program_color: program_color(),
             inactive_color: inactive_color(),
+            multiview_label_size: mv_label_size(),
+            multiview_label_unit: MvLabelUnit::Px,
+            multiview_label_anchor: MvLabelAnchor::Bottom,
             last_session_path: None,
         }
     }
@@ -135,6 +144,24 @@ fn inactive_color() -> RgbColor {
 
 fn de_inactive_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
     Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(inactive_color))
+}
+
+fn mv_label_size() -> f32 {
+    18.0
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MvLabelUnit {
+    #[default]
+    Px,
+    Percent,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MvLabelAnchor {
+    Top,
+    #[default]
+    Bottom,
 }
 
 fn fps_num() -> u32 {
@@ -262,7 +289,7 @@ pub enum MultiviewTemplate {
 impl MultiviewTemplate {
     pub fn tile_count(self) -> usize {
         match self {
-            Self::PreviewProgram2 => 2,
+            Self::PreviewProgram2 | Self::Grid2x2 => 4,
             Self::Quad4TopLeft
             | Self::Quad4TopRight
             | Self::Quad4BottomLeft
@@ -271,22 +298,10 @@ impl MultiviewTemplate {
             | Self::Large5TopRight
             | Self::Large5BottomLeft
             | Self::Large5BottomRight => 6,
-            Self::Grid2x2 => 4,
             Self::Grid3x3 => 9,
             Self::Grid4x4 => 16,
-            _ => 8,
+            _ => 10,
         }
-    }
-
-    pub fn has_bus_panes(self) -> bool {
-        matches!(
-            self,
-            Self::PreviewProgram8
-                | Self::PreviewProgram8Bottom
-                | Self::PreviewProgram8Left
-                | Self::PreviewProgram8Right
-                | Self::PreviewProgram2
-        )
     }
 }
 
@@ -615,6 +630,7 @@ impl Document {
         if doc.settings.theme.is_empty() {
             doc.settings.theme = theme_charcoal();
         }
+        doc.settings.multiview_label_size = crate::labels::clamp_size(doc.settings.multiview_label_size);
         for input in &mut doc.inputs {
             if input.bus_mask == 0 {
                 input.bus_mask = 1;
@@ -675,6 +691,7 @@ impl Document {
             if layout.present_interval > 0 {
                 layout.present_interval = layout.present_interval.clamp(1, 8);
             }
+            absorb_fixed_bus_panes(layout);
             let want = layout.template.tile_count();
             while layout.tiles.len() < want {
                 layout.tiles.push(MvSlot {
@@ -685,12 +702,6 @@ impl Document {
                 });
             }
             layout.tiles.truncate(want);
-            for tile in &mut layout.tiles {
-                if matches!(tile.kind, MvSlotKind::MuPreview | MvSlotKind::MuProgram) {
-                    tile.kind = MvSlotKind::None;
-                    tile.source_id = 0;
-                }
-            }
         }
         for bus in &mut doc.buses {
             if bus.gain < 0.0 {
@@ -731,6 +742,41 @@ pub fn parse(bytes: &[u8]) -> Result<Document, String> {
 pub fn to_vec(doc: &Document) -> Result<Vec<u8>, String> {
     let text = serde_json::to_string_pretty(doc).map_err(|error| error.to_string())?;
     Ok(text.into_bytes())
+}
+
+fn absorb_fixed_bus_panes(layout: &mut MultiviewDto) {
+    let prv = layout.preview_unit_id.max(1);
+    let pgm = layout.program_unit_id.max(1);
+    let buses = [
+        MvSlot {
+            kind: MvSlotKind::MuPreview,
+            source_id: prv,
+            label_follow: layout.preview_label_follow,
+            label: layout.preview_label.clone(),
+        },
+        MvSlot {
+            kind: MvSlotKind::MuProgram,
+            source_id: pgm,
+            label_follow: layout.program_label_follow,
+            label: layout.program_label.clone(),
+        },
+    ];
+    match layout.template {
+        MultiviewTemplate::PreviewProgram2 if layout.tiles.len() == 2 => {
+            layout.tiles.splice(0..0, buses);
+        }
+        MultiviewTemplate::PreviewProgram8 | MultiviewTemplate::PreviewProgram8Left
+            if layout.tiles.len() == 8 =>
+        {
+            layout.tiles.splice(0..0, buses);
+        }
+        MultiviewTemplate::PreviewProgram8Bottom | MultiviewTemplate::PreviewProgram8Right
+            if layout.tiles.len() == 8 =>
+        {
+            layout.tiles.extend(buses);
+        }
+        _ => {}
+    }
 }
 
 pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -807,6 +853,21 @@ mod tests {
         assert_eq!(again.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
         assert_eq!(again.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
         assert_eq!(again.settings.inactive_color, RgbColor { r: 64, g: 64, b: 64 });
+        assert_eq!(again.settings.multiview_label_size, 18.0);
+        assert_eq!(again.settings.multiview_label_unit, MvLabelUnit::Px);
+        assert_eq!(again.settings.multiview_label_anchor, MvLabelAnchor::Bottom);
+    }
+
+    #[test]
+    fn mv_label_size_roundtrip() {
+        let src = r#"{
+  "version": 1,
+  "settings": { "multiviewLabelSize": 4, "multiviewLabelUnit": "Percent", "multiviewLabelAnchor": "Top" }
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.settings.multiview_label_size, 4.0);
+        assert_eq!(doc.settings.multiview_label_unit, MvLabelUnit::Percent);
+        assert_eq!(doc.settings.multiview_label_anchor, MvLabelAnchor::Top);
     }
 
     #[test]
@@ -844,18 +905,47 @@ mod tests {
         let text = String::from_utf8(canonicalize_bytes(src.as_bytes()).unwrap()).unwrap();
         let doc = parse(text.as_bytes()).unwrap();
         assert_eq!(doc.multiviews[0].template, MultiviewTemplate::Grid4x4);
-        assert!(!doc.multiviews[0].template.has_bus_panes());
         assert_eq!(doc.multiviews[0].tiles.len(), 16);
     }
 
     #[test]
     fn multiview_aspect_templates_tile_counts() {
-        assert_eq!(MultiviewTemplate::PreviewProgram8Left.tile_count(), 8);
-        assert!(MultiviewTemplate::PreviewProgram8Left.has_bus_panes());
+        assert_eq!(MultiviewTemplate::PreviewProgram8Left.tile_count(), 10);
+        assert_eq!(MultiviewTemplate::PreviewProgram2.tile_count(), 4);
         assert_eq!(MultiviewTemplate::Quad4TopLeft.tile_count(), 7);
-        assert!(!MultiviewTemplate::Quad4TopLeft.has_bus_panes());
         assert_eq!(MultiviewTemplate::Large5TopLeft.tile_count(), 6);
-        assert!(!MultiviewTemplate::Large5TopLeft.has_bus_panes());
+    }
+
+    #[test]
+    fn multiview_absorbs_fixed_bus_panes() {
+        let src = r#"{
+  "version": 1,
+  "multiviews": [{
+    "id": 1,
+    "name": "MV",
+    "template": "PreviewProgram8",
+    "previewUnitId": 2,
+    "programUnitId": 3,
+    "tiles": [
+      { "kind": "Input", "sourceId": 2 },
+      { "kind": "Input", "sourceId": 3 },
+      { "kind": "None" },
+      { "kind": "None" },
+      { "kind": "None" },
+      { "kind": "None" },
+      { "kind": "None" },
+      { "kind": "None" }
+    ]
+  }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.multiviews[0].tiles.len(), 10);
+        assert_eq!(doc.multiviews[0].tiles[0].kind, MvSlotKind::MuPreview);
+        assert_eq!(doc.multiviews[0].tiles[0].source_id, 2);
+        assert_eq!(doc.multiviews[0].tiles[1].kind, MvSlotKind::MuProgram);
+        assert_eq!(doc.multiviews[0].tiles[1].source_id, 3);
+        assert_eq!(doc.multiviews[0].tiles[2].kind, MvSlotKind::Input);
+        assert_eq!(doc.multiviews[0].tiles[2].source_id, 2);
     }
 
     #[test]

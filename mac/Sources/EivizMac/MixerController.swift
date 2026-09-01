@@ -613,19 +613,10 @@ final class MixerController: ObservableObject {
             desc.z = z
             layers.append(desc)
         }
-        var tile = 0
         for (z, pane) in item.template.panes.enumerated() {
-            let source: UInt64
-            switch pane.kind {
-            case .preview:
-                source = MvSlotKind.muPreview.encoded(item.previewUnitId)
-            case .program:
-                source = MvSlotKind.muProgram.encoded(item.programUnitId)
-            case .tile:
-                let slot = item.tiles[tile]
-                tile += 1
-                source = slot.kind.encoded(slot.sourceId)
-            }
+            let source = z < item.tiles.count
+                ? item.tiles[z].kind.encoded(item.tiles[z].sourceId)
+                : 0
             layer(source, pane.x, pane.y, pane.width, pane.height, Int32(z))
         }
         let names = slotNames(item)
@@ -648,7 +639,9 @@ final class MixerController: ObservableObject {
                 "Define Multiview"
             )
         }
-        fail(mixer_bind_multiview(item.gpuId, item.previewUnitId, item.programUnitId), "Bind Multiview")
+        let previewUnit = item.tiles.first(where: { $0.kind == .muPreview })?.sourceId ?? item.previewUnitId
+        let programUnit = item.tiles.first(where: { $0.kind == .muProgram })?.sourceId ?? item.programUnitId
+        fail(mixer_bind_multiview(item.gpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit), "Bind Multiview")
         let interval = item.presentInterval == 0 ? session.settings.defaultPresentInterval : item.presentInterval
         _ = mixer_set_monitor_present_interval(item.monitorId, max(1, interval))
     }
@@ -662,41 +655,19 @@ final class MixerController: ObservableObject {
             program.r, program.g, program.b,
             inactive.r, inactive.g, inactive.b
         )
+        let size = min(200, max(1, session.settings.multiviewLabelSize))
+        session.settings.multiviewLabelSize = size
+        _ = mixer_set_mv_label(
+            size,
+            session.settings.multiviewLabelUnit == .percent ? 1 : 0,
+            session.settings.multiviewLabelAnchor == .top ? 1 : 0
+        )
     }
 
     private func slotNames(_ layout: MultiviewLayout) -> [String] {
-        var names: [String] = []
-        var tile = 0
-        for pane in layout.template.panes {
-            switch pane.kind {
-            case .preview:
-                names.append(busLabel(
-                    follow: layout.previewLabelFollow,
-                    custom: layout.previewLabel,
-                    prefix: "PRV",
-                    unitId: layout.previewUnitId
-                ))
-            case .program:
-                names.append(busLabel(
-                    follow: layout.programLabelFollow,
-                    custom: layout.programLabel,
-                    prefix: "PGM",
-                    unitId: layout.programUnitId
-                ))
-            case .tile:
-                names.append(tileLabel(layout.tiles[tile]))
-                tile += 1
-            }
+        layout.template.panes.indices.map { index in
+            index < layout.tiles.count ? tileLabel(layout.tiles[index]) : ""
         }
-        return names
-    }
-
-    private func busLabel(follow: Bool, custom: String, prefix: String, unitId: UInt64) -> String {
-        if !follow {
-            return custom
-        }
-        let name = session.units.first(where: { $0.id == unitId })?.name ?? String(unitId)
-        return "\(prefix)  \(name)"
     }
 
     private func tileLabel(_ tile: MvSlot) -> String {
@@ -708,6 +679,12 @@ final class MixerController: ObservableObject {
             return session.inputs.first(where: { $0.id == tile.sourceId })?.name ?? ""
         case .scene:
             return session.scenes.first(where: { $0.gpuId == tile.sourceId })?.name ?? ""
+        case .muPreview:
+            let name = session.units.first(where: { $0.id == tile.sourceId })?.name ?? String(tile.sourceId)
+            return "PRV  \(name)"
+        case .muProgram:
+            let name = session.units.first(where: { $0.id == tile.sourceId })?.name ?? String(tile.sourceId)
+            return "PGM  \(name)"
         default:
             return ""
         }

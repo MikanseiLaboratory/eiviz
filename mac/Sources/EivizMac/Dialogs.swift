@@ -77,6 +77,25 @@ struct SettingsView: View {
             ), supportsOpacity: false)
             .labelsHidden()
             .frame(width: 220, alignment: .leading)
+            Text("Multiview label size")
+            HStack(spacing: 8) {
+                TextField("", value: $mixer.session.settings.multiviewLabelSize, format: .number)
+                    .frame(width: 72)
+                Picker("", selection: $mixer.session.settings.multiviewLabelUnit) {
+                    Text("px").tag(MvLabelUnit.px)
+                    Text("%").tag(MvLabelUnit.percent)
+                }
+                .frame(width: 88)
+            }
+            Text("Multiview label position")
+            Picker("", selection: $mixer.session.settings.multiviewLabelAnchor) {
+                Text("Bottom").tag(MvLabelAnchor.bottom)
+                Text("Top").tag(MvLabelAnchor.top)
+            }
+            .frame(width: 168)
+            Text("px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Text("Master Frame Rate")
             Picker("", selection: Binding(
                 get: { "\(mixer.session.settings.masterFpsNum)/\(mixer.session.settings.masterFpsDen)" },
@@ -788,20 +807,14 @@ struct MultiviewView: View {
 struct MultiviewSlotsView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
-    @State private var previewUnit: UInt64 = 1
-    @State private var programUnit: UInt64 = 1
-    @State private var previewFollow = true
-    @State private var previewLabel = ""
-    @State private var programFollow = true
-    @State private var programLabel = ""
     @State private var template: MultiviewTemplate = .previewProgram8
-    @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
+    @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10)
 
     private var layoutId: UInt64? { mixer.openMultiview?.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Click a mosaic. Every pane matches the canvas aspect and fills the frame with no gaps, crop, or zoom.")
+            Text("Click a mosaic. Every window is an Input, Scene, or Mixing Unit preview/program, and fills the frame with no gaps, crop, or zoom.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 8) {
@@ -827,18 +840,6 @@ struct MultiviewSlotsView: View {
             }
             .padding(8)
             .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
-            unitRow(
-                template.busTitles.preview,
-                $previewUnit,
-                follow: $previewFollow,
-                custom: $previewLabel
-            )
-            unitRow(
-                template.busTitles.program,
-                $programUnit,
-                follow: $programFollow,
-                custom: $programLabel
-            )
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(tiles.indices, id: \.self) { index in
@@ -858,12 +859,6 @@ struct MultiviewSlotsView: View {
         .foregroundStyle(EivizTheme.text)
         .onAppear {
             if let id = layoutId, let layout = mixer.session.multiviews.first(where: { $0.id == id }) {
-                previewUnit = layout.previewUnitId
-                programUnit = layout.programUnitId
-                previewFollow = layout.previewLabelFollow
-                previewLabel = layout.previewLabel
-                programFollow = layout.programLabelFollow
-                programLabel = layout.programLabel
                 template = layout.template
                 tiles = layout.tiles
                 resizeTiles()
@@ -884,20 +879,6 @@ struct MultiviewSlotsView: View {
         }
     }
 
-    private func unitRow(_ title: String, _ unit: Binding<UInt64>, follow: Binding<Bool>, custom: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).fontWeight(.bold)
-            Picker("", selection: unit) {
-                ForEach(mixer.session.units) { item in
-                    Text(item.name).tag(item.id)
-                }
-            }
-            labelEditor(follow: follow, custom: custom)
-        }
-        .padding(8)
-        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
-    }
-
     private func labelEditor(follow: Binding<Bool>, custom: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Picker("", selection: follow) {
@@ -916,11 +897,19 @@ struct MultiviewSlotsView: View {
             Text("Window \(index + 1)").fontWeight(.bold)
             Picker("", selection: Binding(
                 get: { tiles[index].kind },
-                set: { tiles[index].kind = $0; tiles[index].sourceId = 0 }
+                set: {
+                    tiles[index].kind = $0
+                    tiles[index].sourceId = 0
+                    if $0 == .muPreview || $0 == .muProgram {
+                        tiles[index].sourceId = mixer.session.units.first?.id ?? 0
+                    }
+                }
             )) {
                 Text("None").tag(MvSlotKind.none)
                 Text("Input").tag(MvSlotKind.input)
                 Text("Scene").tag(MvSlotKind.scene)
+                Text("MU PRV").tag(MvSlotKind.muPreview)
+                Text("MU PGM").tag(MvSlotKind.muProgram)
             }
             .pickerStyle(.segmented)
             if tiles[index].kind == .input {
@@ -939,6 +928,15 @@ struct MultiviewSlotsView: View {
                 )) {
                     ForEach(mixer.session.scenes) { scene in
                         Text(scene.name).tag(scene.gpuId)
+                    }
+                }
+            } else if tiles[index].kind == .muPreview || tiles[index].kind == .muProgram {
+                Picker("", selection: Binding(
+                    get: { tiles[index].sourceId },
+                    set: { tiles[index].sourceId = $0 }
+                )) {
+                    ForEach(mixer.session.units) { unit in
+                        Text(unit.name).tag(unit.id)
                     }
                 }
             }
@@ -962,14 +960,14 @@ struct MultiviewSlotsView: View {
               let index = mixer.session.multiviews.firstIndex(where: { $0.id == id })
         else { return }
         mixer.session.multiviews[index].template = template
-        mixer.session.multiviews[index].previewUnitId = previewUnit
-        mixer.session.multiviews[index].programUnitId = programUnit
-        mixer.session.multiviews[index].previewLabelFollow = previewFollow
-        mixer.session.multiviews[index].previewLabel = previewLabel
-        mixer.session.multiviews[index].programLabelFollow = programFollow
-        mixer.session.multiviews[index].programLabel = programLabel
         mixer.session.multiviews[index].tiles = tiles
         mixer.session.multiviews[index].ensureTiles()
+        if let preview = tiles.first(where: { $0.kind == .muPreview }) {
+            mixer.session.multiviews[index].previewUnitId = preview.sourceId
+        }
+        if let program = tiles.first(where: { $0.kind == .muProgram }) {
+            mixer.session.multiviews[index].programUnitId = program.sourceId
+        }
         mixer.openMultiview = mixer.session.multiviews[index]
         mixer.pushMultiview(mixer.session.multiviews[index])
     }
@@ -991,12 +989,6 @@ private struct MosaicThumb: View {
                         .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
                         .frame(width: max(1, CGFloat(pane.width) * w - 1), height: max(1, CGFloat(pane.height) * h - 1))
                         .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
-                    if pane.kind != .tile {
-                        Text(pane.kind == .preview ? "PRV" : "PGM")
-                            .font(.system(size: 8))
-                            .foregroundStyle(EivizTheme.text.opacity(0.8))
-                            .offset(x: CGFloat(pane.x) * w + 3, y: CGFloat(pane.y) * h + 2)
-                    }
                 }
             }
         }

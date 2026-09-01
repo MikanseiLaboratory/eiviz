@@ -125,6 +125,23 @@ struct BusColors {
     inactive: [u8; 3],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MvLabelStyle {
+    size: f32,
+    percent: bool,
+    top: bool,
+}
+
+impl Default for MvLabelStyle {
+    fn default() -> Self {
+        Self {
+            size: 18.0,
+            percent: false,
+            top: false,
+        }
+    }
+}
+
 impl Default for BusColors {
     fn default() -> Self {
         Self {
@@ -148,6 +165,7 @@ struct Shared {
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, SceneSpec>,
     bus_colors: BusColors,
+    mv_label: MvLabelStyle,
     uploads: Arc<Mutex<UploadStore>>,
     gpu_ingest: GpuIngest,
     #[cfg(windows)]
@@ -494,6 +512,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         units: HashMap::new(),
         scenes: HashMap::new(),
         bus_colors: BusColors::default(),
+        mv_label: MvLabelStyle::default(),
         uploads: Arc::clone(&uploads),
         gpu_ingest,
         #[cfg(windows)]
@@ -2247,6 +2266,19 @@ pub extern "C" fn mixer_set_bus_colors(
     .unwrap_or_else(|code| code)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_mv_label(size: f32, percent: u32, top: u32) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").mv_label = MvLabelStyle {
+            size: crate::labels::clamp_size(size),
+            percent: percent != 0,
+            top: top != 0,
+        };
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
 fn copy_c_label(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -2539,6 +2571,7 @@ fn render_loop(
                 .map(|(id, spec)| (*id, Arc::clone(&spec.labels)))
                 .collect();
             let bus_colors = guard.bus_colors;
+            let mv_label = guard.mv_label;
             let generators: Vec<(u64, Generator)> = guard
                 .generators
                 .iter()
@@ -2566,7 +2599,6 @@ fn render_loop(
                     use_gpu: output.use_gpu,
                 })
                 .collect();
-            let binds: HashMap<u64, (u64, u64)> = guard.multiview_binds.clone();
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -2583,20 +2615,10 @@ fn render_loop(
                 skip_compose = false;
                 frame_delay.discard(changed_units);
             }
-            let mut tallies = HashMap::new();
-            for (scene_id, (preview_unit, program_unit)) in &binds {
-                let preview_source = snapshot
-                    .iter()
-                    .find(|(id, ..)| *id == *preview_unit)
-                    .map(|item| item.5.preview_source)
-                    .unwrap_or(0);
-                let program_source = snapshot
-                    .iter()
-                    .find(|(id, ..)| *id == *program_unit)
-                    .map(|item| item.5.program_source)
-                    .unwrap_or(0);
-                tallies.insert(*scene_id, (preview_source, program_source));
-            }
+            let tallies: Vec<(u64, u64)> = snapshot
+                .iter()
+                .map(|item| (item.5.preview_source, item.5.program_source))
+                .collect();
             frame_i = frame_i.wrapping_add(1);
             let monitor_sources = presenters.attached_monitor_sources();
             let (used_scenes, used_uploads) =
@@ -2729,6 +2751,7 @@ fn render_loop(
             frame_delay.consume_display(skip_compose);
             if !skip_compose {
                 composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
+                composer.set_mv_label(mv_label.size, mv_label.percent, mv_label.top);
                 composer.sync_scenes(&device, &scene_specs, &scene_labels);
                 let mut encoder =
                     device

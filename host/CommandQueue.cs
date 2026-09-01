@@ -149,21 +149,17 @@ internal sealed class CommandQueue : IAsyncDisposable
         var panes = MultiviewGeometry.Panes(layout.Template);
         var layers = new List<OverlayDesc>(panes.Count);
         var names = session is null ? new string[panes.Count] : SlotNames(layout, session, panes);
-        var tile = 0;
         for (var i = 0; i < panes.Count; i++)
         {
             var pane = panes[i];
-            var source = pane.Kind switch
-            {
-                MultiviewPaneKind.Preview => MixerNative.MuPreview(layout.PreviewUnitId),
-                MultiviewPaneKind.Program => MixerNative.MuProgram(layout.ProgramUnitId),
-                _ => EncodeSlot(layout.Tiles[tile++])
-            };
+            var source = i < layout.Tiles.Count ? EncodeSlot(layout.Tiles[i]) : 0;
             layers.Add(BusLayer(source, pane.X, pane.Y, pane.Width, pane.Height, i));
         }
         PushLayers(layout.GpuId, width, height, layers.ToArray(), names);
+        var previewUnit = layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuPreview)?.SourceId ?? layout.PreviewUnitId;
+        var programUnit = layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuProgram)?.SourceId ?? layout.ProgramUnitId;
         MixerNative.ThrowIfFailed(
-            MixerNative.BindMultiview(layout.GpuId, layout.PreviewUnitId, layout.ProgramUnitId),
+            MixerNative.BindMultiview(layout.GpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit),
             "Bind multiview");
     }
 
@@ -178,24 +174,11 @@ internal sealed class CommandQueue : IAsyncDisposable
 
     private static string[] SlotNames(MultiviewLayout layout, Session session, IReadOnlyList<MultiviewPane> panes)
     {
-        var prv = session.Units.FirstOrDefault(item => item.Id == layout.PreviewUnitId);
-        var pgm = session.Units.FirstOrDefault(item => item.Id == layout.ProgramUnitId);
         var names = new string[panes.Count];
-        var tile = 0;
         for (var i = 0; i < panes.Count; i++)
-        {
-            names[i] = panes[i].Kind switch
-            {
-                MultiviewPaneKind.Preview => BusLabel(layout.PreviewLabelFollow, layout.PreviewLabel, "PRV", prv?.Name ?? layout.PreviewUnitId.ToString()),
-                MultiviewPaneKind.Program => BusLabel(layout.ProgramLabelFollow, layout.ProgramLabel, "PGM", pgm?.Name ?? layout.ProgramUnitId.ToString()),
-                _ => TileLabel(layout.Tiles[tile++], session)
-            };
-        }
+            names[i] = i < layout.Tiles.Count ? TileLabel(layout.Tiles[i], session) : "";
         return names;
     }
-
-    private static string BusLabel(bool follow, string? custom, string prefix, string unitName) =>
-        follow ? $"{prefix}  {unitName}" : custom ?? "";
 
     private static string TileLabel(MvSlot tile, Session session) =>
         tile.LabelFollow ? TileName(tile, session) : tile.Label ?? "";
@@ -204,6 +187,8 @@ internal sealed class CommandQueue : IAsyncDisposable
     {
         MvSlotKind.Input => session.Inputs.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? "",
         MvSlotKind.Scene => session.Scenes.FirstOrDefault(item => item.GpuId == tile.SourceId)?.Name ?? "",
+        MvSlotKind.MuPreview => $"PRV  {session.Units.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? tile.SourceId.ToString()}",
+        MvSlotKind.MuProgram => $"PGM  {session.Units.FirstOrDefault(item => item.Id == tile.SourceId)?.Name ?? tile.SourceId.ToString()}",
         _ => ""
     };
 

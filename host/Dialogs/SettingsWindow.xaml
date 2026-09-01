@@ -50,6 +50,21 @@
                     <Border x:Name="InactiveColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
                     <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
                 </StackPanel>
+                <TextBlock Text="Multiview label size"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24"/>
+                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0">
+                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
+                        <ComboBoxItem Content="%" Tag="Percent"/>
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock Text="Multiview label position"/>
+                <ComboBox x:Name="MvLabelAnchorBox" Margin="0,4,0,4" Width="168" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="Bottom" Tag="Bottom" IsSelected="True"/>
+                    <ComboBoxItem Content="Top" Tag="Top"/>
+                </ComboBox>
+                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,12"
+                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window."/>
                 <TextBlock Text="Master Frame Rate"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>

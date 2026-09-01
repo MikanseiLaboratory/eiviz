@@ -1,8 +1,11 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const LABEL_WIDTH: u32 = 512;
-pub const LABEL_HEIGHT: u32 = 32;
+const BAND_ALPHA: u8 = 168;
+const TEXT_ALPHA: u8 = 220;
+const AA: f32 = 2.0;
+const MIN_PX: f32 = 8.0;
+const MAX_PX: f32 = 128.0;
 
 pub fn contrast_rgb(rgb: [u8; 3]) -> [u8; 3] {
     let luma = 0.299 * f32::from(rgb[0]) + 0.587 * f32::from(rgb[1]) + 0.114 * f32::from(rgb[2]);
@@ -13,30 +16,67 @@ pub fn contrast_rgb(rgb: [u8; 3]) -> [u8; 3] {
     }
 }
 
-pub fn raster(text: &str, background: [u8; 3]) -> Vec<u8> {
-    let width = LABEL_WIDTH as usize;
-    let height = LABEL_HEIGHT as usize;
+pub fn clamp_size(size: f32) -> f32 {
+    if !size.is_finite() {
+        return 18.0;
+    }
+    size.clamp(1.0, 200.0)
+}
+
+pub fn font_px(size: f32, percent: bool, tile_height_px: f32) -> f32 {
+    let px = if percent {
+        tile_height_px.max(1.0) * (clamp_size(size) / 100.0)
+    } else {
+        clamp_size(size)
+    };
+    let snapped = (px * 2.0).round() / 2.0;
+    snapped.clamp(MIN_PX, MAX_PX)
+}
+
+pub fn band_height(font_px: f32) -> u32 {
+    let (ascent, descent, pad) = line_box(font_px);
+    (ascent + descent + pad * 2.0).ceil().max(1.0) as u32
+}
+
+pub struct Raster {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub fn raster(text: &str, background: [u8; 3], font_px: f32, dest_w: u32, dest_h: u32) -> Raster {
+    let width = ((dest_w.max(1) as f32) * AA).round().max(1.0) as usize;
+    let height = ((dest_h.max(1) as f32) * AA).round().max(1.0) as usize;
     let mut pixels = vec![0u8; width * height * 4];
     for pixel in pixels.chunks_exact_mut(4) {
         pixel[0] = background[0];
         pixel[1] = background[1];
         pixel[2] = background[2];
-        pixel[3] = 255;
+        pixel[3] = BAND_ALPHA;
     }
     let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return pixels;
-    }
     let Some(font) = font() else {
-        return pixels;
+        return Raster {
+            pixels,
+            width: width as u32,
+            height: height as u32,
+        };
     };
+    if trimmed.is_empty() {
+        return Raster {
+            pixels,
+            width: width as u32,
+            height: height as u32,
+        };
+    }
     let fg = contrast_rgb(background);
-    let px = 18.0;
-    let mut pen_x = 8.0f32;
-    let baseline = 23.0f32;
+    let px = font_px * AA;
+    let (ascent, _, pad) = line_box(font_px);
+    let mut pen_x = (6.0 * AA).max(2.0);
+    let baseline = (pad + ascent) * AA;
     for ch in trimmed.chars() {
         let (metrics, coverage) = font.rasterize(ch, px);
-        if pen_x + metrics.advance_width > width as f32 - 4.0 {
+        if pen_x + metrics.advance_width > width as f32 - 2.0 * AA {
             break;
         }
         blit_glyph(
@@ -53,7 +93,21 @@ pub fn raster(text: &str, background: [u8; 3]) -> Vec<u8> {
         );
         pen_x += metrics.advance_width;
     }
-    pixels
+    Raster {
+        pixels,
+        width: width as u32,
+        height: height as u32,
+    }
+}
+
+fn line_box(font_px: f32) -> (f32, f32, f32) {
+    let pad = (font_px * 0.1).clamp(1.0, 4.0);
+    if let Some(font) = font() {
+        if let Some(metrics) = font.horizontal_line_metrics(font_px) {
+            return (metrics.ascent.max(0.0), metrics.descent.abs(), pad);
+        }
+    }
+    (font_px * 0.8, font_px * 0.22, pad)
 }
 
 fn blit_glyph(
@@ -85,7 +139,7 @@ fn blit_glyph(
             pixels[i] = mix(bg[0], fg[0], cover);
             pixels[i + 1] = mix(bg[1], fg[1], cover);
             pixels[i + 2] = mix(bg[2], fg[2], cover);
-            pixels[i + 3] = 255;
+            pixels[i + 3] = mix(BAND_ALPHA, TEXT_ALPHA, cover);
         }
     }
 }
@@ -115,7 +169,7 @@ fn load_path(path: &Path) -> Option<fontdue::Font> {
             bytes.as_slice(),
             fontdue::FontSettings {
                 collection_index: index,
-                scale: 40.0,
+                scale: 160.0,
                 ..Default::default()
             },
         ) {
@@ -158,4 +212,25 @@ fn font_paths() -> Vec<std::path::PathBuf> {
         }
     }
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_px_units() {
+        assert_eq!(font_px(18.0, false, 540.0), 18.0);
+        assert_eq!(font_px(4.0, true, 500.0), 20.0);
+        assert_eq!(font_px(1.0, false, 100.0), MIN_PX);
+    }
+
+    #[test]
+    fn band_tracks_font() {
+        let small = band_height(12.0);
+        let large = band_height(36.0);
+        assert!(small >= 8 && small <= 28);
+        assert!(large > small);
+        assert!(large <= 64);
+    }
 }

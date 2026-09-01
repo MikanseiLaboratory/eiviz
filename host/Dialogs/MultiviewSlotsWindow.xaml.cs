@@ -12,12 +12,6 @@ public partial class MultiviewSlotsWindow : Window
     private readonly Session _session;
     private readonly List<MvSlot> _tiles;
     private MultiviewTemplate _template;
-    private ulong _previewUnit;
-    private ulong _programUnit;
-    private bool _previewFollow;
-    private string _previewLabel = "";
-    private bool _programFollow;
-    private string _programLabel = "";
     private bool _suppress;
 
     public MultiviewSlotsWindow(Session session, MultiviewLayout layout)
@@ -28,12 +22,6 @@ public partial class MultiviewSlotsWindow : Window
         _template = layout.Template;
         layout.Template = _template;
         layout.EnsureTiles();
-        _previewUnit = layout.PreviewUnitId;
-        _programUnit = layout.ProgramUnitId;
-        _previewFollow = layout.PreviewLabelFollow;
-        _previewLabel = layout.PreviewLabel ?? "";
-        _programFollow = layout.ProgramLabelFollow;
-        _programLabel = layout.ProgramLabel ?? "";
         _tiles = layout.Tiles.Select(Clone).ToList();
         Rebuild();
     }
@@ -44,9 +32,6 @@ public partial class MultiviewSlotsWindow : Window
         _suppress = true;
         EnsureTileCount();
         SlotRows.Children.Add(TemplateRow());
-        var titles = MultiviewGeometry.BusTitles(_template);
-        SlotRows.Children.Add(UnitRow(titles.Preview, true));
-        SlotRows.Children.Add(UnitRow(titles.Program, false));
         for (var i = 0; i < _tiles.Count; i++)
             SlotRows.Children.Add(TileRow(i, _tiles[i]));
         _suppress = false;
@@ -106,18 +91,6 @@ public partial class MultiviewSlotsWindow : Window
             });
             Canvas.SetLeft(canvas.Children[^1], pane.X * width);
             Canvas.SetTop(canvas.Children[^1], pane.Y * height);
-            if (pane.Kind == MultiviewPaneKind.Tile)
-                continue;
-            var tag = new TextBlock
-            {
-                Text = pane.Kind == MultiviewPaneKind.Preview ? "PRV" : "PGM",
-                FontSize = 8,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xEE, 0xEE, 0xEE)),
-                Opacity = 0.8
-            };
-            Canvas.SetLeft(tag, pane.X * width + 3);
-            Canvas.SetTop(tag, pane.Y * height + 2);
-            canvas.Children.Add(tag);
         }
         var card = new StackPanel { Width = width, Margin = new Thickness(0, 0, 8, 8), Cursor = Cursors.Hand };
         card.Children.Add(new Border
@@ -145,57 +118,6 @@ public partial class MultiviewSlotsWindow : Window
         return card;
     }
 
-    private Border UnitRow(string title, bool preview)
-    {
-        var box = Frame();
-        var stack = new StackPanel();
-        stack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
-        var pick = new ComboBox();
-        pick.ItemsSource = _session.Units;
-        pick.DisplayMemberPath = "Name";
-        pick.SelectedValuePath = "Id";
-        pick.SelectedValue = preview ? _previewUnit : _programUnit;
-        if (pick.SelectedItem is MixingUnitEntry selected)
-        {
-            if (preview)
-                _previewUnit = selected.Id;
-            else
-                _programUnit = selected.Id;
-        }
-        pick.SelectionChanged += (_, _) =>
-        {
-            if (pick.SelectedItem is MixingUnitEntry unit)
-            {
-                if (preview)
-                    _previewUnit = unit.Id;
-                else
-                    _programUnit = unit.Id;
-            }
-        };
-        stack.Children.Add(pick);
-        stack.Children.Add(LabelEditor(
-            preview ? "label-prv" : "label-pgm",
-            preview ? _previewFollow : _programFollow,
-            preview ? _previewLabel : _programLabel,
-            follow =>
-            {
-                if (preview)
-                    _previewFollow = follow;
-                else
-                    _programFollow = follow;
-                Rebuild();
-            },
-            text =>
-            {
-                if (preview)
-                    _previewLabel = text;
-                else
-                    _programLabel = text;
-            }));
-        box.Child = stack;
-        return box;
-    }
-
     private Border TileRow(int index, MvSlot tile)
     {
         var box = Frame();
@@ -205,6 +127,8 @@ public partial class MultiviewSlotsWindow : Window
         AddRadio(kinds, tile, MvSlotKind.None, "None", index);
         AddRadio(kinds, tile, MvSlotKind.Input, "Input", index);
         AddRadio(kinds, tile, MvSlotKind.Scene, "Scene", index);
+        AddRadio(kinds, tile, MvSlotKind.MuPreview, "MU PRV", index);
+        AddRadio(kinds, tile, MvSlotKind.MuProgram, "MU PGM", index);
         stack.Children.Add(kinds);
         var pick = new ComboBox { Margin = new Thickness(0, 8, 0, 0) };
         FillPick(pick, tile);
@@ -309,6 +233,8 @@ public partial class MultiviewSlotsWindow : Window
             choices.AddRange(_session.Scenes.Select(item => new SlotChoice(item.Name, item.GpuId)));
         else if (tile.Kind == MvSlotKind.Input)
             choices.AddRange(_session.Inputs.Select(item => new SlotChoice(item.Name, item.Id)));
+        else if (tile.Kind is MvSlotKind.MuPreview or MvSlotKind.MuProgram)
+            choices.AddRange(_session.Units.Select(item => new SlotChoice(item.Name, item.Id)));
         box.ItemsSource = choices;
         box.DisplayMemberPath = "Label";
         box.IsEnabled = choices.Count > 0;
@@ -320,16 +246,14 @@ public partial class MultiviewSlotsWindow : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         _layout.Template = _template;
-        _layout.PreviewUnitId = _previewUnit;
-        _layout.ProgramUnitId = _programUnit;
-        _layout.PreviewLabelFollow = _previewFollow;
-        _layout.PreviewLabel = _previewLabel ?? "";
-        _layout.ProgramLabelFollow = _programFollow;
-        _layout.ProgramLabel = _programLabel ?? "";
         _layout.Tiles.Clear();
         foreach (var tile in _tiles)
             _layout.Tiles.Add(tile);
         _layout.EnsureTiles();
+        _layout.PreviewUnitId = _layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuPreview)?.SourceId
+            ?? _layout.PreviewUnitId;
+        _layout.ProgramUnitId = _layout.Tiles.FirstOrDefault(tile => tile.Kind == MvSlotKind.MuProgram)?.SourceId
+            ?? _layout.ProgramUnitId;
         DialogResult = true;
     }
 

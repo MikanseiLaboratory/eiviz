@@ -126,7 +126,10 @@ pub struct Composer {
     preview_rgb: [u8; 3],
     program_rgb: [u8; 3],
     inactive_rgb: [u8; 3],
-    label_cache: HashMap<(String, [u8; 3]), (wgpu::Texture, wgpu::TextureView)>,
+    label_cache: HashMap<LabelTexKey, (wgpu::Texture, wgpu::TextureView)>,
+    label_size: f32,
+    label_percent: bool,
+    label_top: bool,
     pool: UniformPool,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
@@ -205,6 +208,9 @@ impl Composer {
             program_rgb: [255, 0, 0],
             inactive_rgb: [64, 64, 64],
             label_cache: HashMap::new(),
+            label_size: 18.0,
+            label_percent: false,
+            label_top: false,
             pool,
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
@@ -475,8 +481,26 @@ impl Composer {
         self.inactive_rgb = inactive;
         self.tally_red = None;
         self.tally_green = None;
-        for (text, rgb) in self.label_cache.keys() {
-            self.blit_groups.remove(&label_cache_key(text, *rgb));
+        self.clear_labels();
+    }
+
+    pub fn set_mv_label(&mut self, size: f32, percent: bool, top: bool) {
+        let size = crate::labels::clamp_size(size);
+        let same = (self.label_size - size).abs() < f32::EPSILON && self.label_percent == percent;
+        if same && self.label_top == top {
+            return;
+        }
+        self.label_size = size;
+        self.label_percent = percent;
+        self.label_top = top;
+        if !same {
+            self.clear_labels();
+        }
+    }
+
+    fn clear_labels(&mut self) {
+        for key in self.label_cache.keys() {
+            self.blit_groups.remove(&label_cache_key(key));
         }
         self.label_cache.clear();
     }
@@ -552,7 +576,7 @@ impl Composer {
         device: &GpuDevice,
         used: &HashSet<u64>,
         encoder: &mut wgpu::CommandEncoder,
-        tallies: &HashMap<u64, (u64, u64)>,
+        tallies: &[(u64, u64)],
     ) -> Result<(), String> {
         let mut order = Vec::new();
         let mut visited = HashSet::new();
@@ -591,7 +615,7 @@ impl Composer {
         device: &GpuDevice,
         encoder: &mut wgpu::CommandEncoder,
         scene_id: u64,
-        tallies: &HashMap<u64, (u64, u64)>,
+        tallies: &[(u64, u64)],
     ) -> Result<(), String> {
         let (width, height, mut layers, labels, view) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
@@ -620,18 +644,8 @@ impl Composer {
                 }
             }
             if is_multiview(scene_id) {
-                self.draw_mv_label_pass(device, &mut pass, &layers, &labels);
-                if let Some(&(preview_source, program_source)) = tallies.get(&scene_id) {
-                    self.draw_mv_tally_pass(
-                        device,
-                        &mut pass,
-                        &layers,
-                        preview_source,
-                        program_source,
-                        width,
-                        height,
-                    );
-                }
+                self.draw_mv_label_pass(device, &mut pass, &layers, &labels, width, height);
+                self.draw_mv_tally_pass(device, &mut pass, &layers, tallies, width, height);
             }
         }
         Ok(())
@@ -643,17 +657,29 @@ impl Composer {
         pass: &mut wgpu::RenderPass,
         layers: &[OverlayDesc],
         labels: &[String],
+        canvas_w: u32,
+        canvas_h: u32,
     ) {
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
         for (index, layer) in video.iter().enumerate() {
             let rgb = mv_label_rgb(layer.source_id, self.preview_rgb, self.program_rgb, self.inactive_rgb);
             let text = labels.get(index).map(String::as_str).unwrap_or("");
-            let Some(view) = self.ensure_label_texture(device, text, rgb) else {
+            let tile_h = layer.rect.height * canvas_h.max(1) as f32;
+            let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
+            let font_px = crate::labels::font_px(self.label_size, self.label_percent, tile_h);
+            let dest_h = crate::labels::band_height(font_px);
+            let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h) else {
                 continue;
             };
-            let key = label_cache_key(text, rgb);
-            let dst = mv_label_rect(layer.rect);
-            self.blit_pass(device, pass, key, &view, dst, 1.0, false);
+            let key = LabelTexKey::new(text, rgb, font_px, dest_w);
+            let nh = dest_h as f32 / canvas_h.max(1) as f32;
+            let y = if self.label_top {
+                layer.rect.y
+            } else {
+                layer.rect.y + layer.rect.height - nh
+            };
+            let dst = [layer.rect.x, y, layer.rect.width, nh];
+            self.blit_pass(device, pass, label_cache_key(&key), &view, dst, 1.0, false);
         }
     }
 
@@ -662,31 +688,34 @@ impl Composer {
         device: &GpuDevice,
         text: &str,
         rgb: [u8; 3],
+        font_px: f32,
+        dest_w: u32,
+        dest_h: u32,
     ) -> Option<wgpu::TextureView> {
-        let key = (text.to_string(), rgb);
+        let key = LabelTexKey::new(text, rgb, font_px, dest_w);
         if let Some((_, view)) = self.label_cache.get(&key) {
             return Some(view.clone());
         }
-        let pixels = crate::labels::raster(text, rgb);
+        let raster = crate::labels::raster(text, rgb, font_px, dest_w, dest_h);
         let texture = make_texture(
             device,
-            crate::labels::LABEL_WIDTH,
-            crate::labels::LABEL_HEIGHT,
+            raster.width,
+            raster.height,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
         write_aligned_texture(
             device,
             &texture,
-            &pixels,
-            crate::labels::LABEL_WIDTH * 4,
-            crate::labels::LABEL_HEIGHT,
-            crate::labels::LABEL_WIDTH,
+            &raster.pixels,
+            raster.width * 4,
+            raster.height,
+            raster.width,
             wgpu::TextureFormat::Rgba8Unorm,
             #[cfg(windows)]
             self.rebar.as_mut(),
         );
         let view = texture.create_view(&Default::default());
-        self.blit_groups.remove(&label_cache_key(text, rgb));
+        self.blit_groups.remove(&label_cache_key(&key));
         self.label_cache.insert(key, (texture, view.clone()));
         Some(view)
     }
@@ -696,8 +725,7 @@ impl Composer {
         device: &GpuDevice,
         pass: &mut wgpu::RenderPass,
         layers: &[OverlayDesc],
-        preview_source: u64,
-        program_source: u64,
+        tallies: &[(u64, u64)],
         width: u32,
         height: u32,
     ) {
@@ -706,7 +734,7 @@ impl Composer {
         let ty = 3.0 / height.max(1) as f32;
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
         for layer in video {
-            let Some(use_red) = mv_tally_program(layer.source_id, preview_source, program_source) else {
+            let Some(use_red) = mv_tally_program(layer.source_id, tallies) else {
                 continue;
             };
             let (key, swatch) = if use_red {
@@ -1746,18 +1774,30 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn label_cache_key(text: &str, rgb: [u8; 3]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    rgb.hash(&mut hasher);
-    LABEL_BASE.wrapping_add(0xF000) ^ hasher.finish()
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct LabelTexKey {
+    text: String,
+    rgb: [u8; 3],
+    font_q: u16,
+    dest_w: u32,
 }
 
-fn mv_label_rect(rect: crate::abi::Rect) -> [f32; 4] {
-    let frac = if rect.height >= 0.4 { 0.16 } else { 0.28 };
-    let height = rect.height * frac;
-    [rect.x, rect.y + rect.height - height, rect.width, height]
+impl LabelTexKey {
+    fn new(text: &str, rgb: [u8; 3], font_px: f32, dest_w: u32) -> Self {
+        Self {
+            text: text.to_string(),
+            rgb,
+            font_q: (font_px * 2.0).round() as u16,
+            dest_w,
+        }
+    }
+}
+
+fn label_cache_key(key: &LabelTexKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    LABEL_BASE.wrapping_add(0xF000) ^ hasher.finish()
 }
 
 fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) -> [u8; 3] {
@@ -1771,7 +1811,7 @@ fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u
     }
 }
 
-fn mv_tally_program(source_id: u64, preview_source: u64, program_source: u64) -> Option<bool> {
+fn mv_tally_program(source_id: u64, tallies: &[(u64, u64)]) -> Option<bool> {
     if mixing_unit_from_source(source_id).is_some() {
         return match mixing_unit_bus(source_id) {
             OUTPUT_PREVIEW => Some(false),
@@ -1779,10 +1819,10 @@ fn mv_tally_program(source_id: u64, preview_source: u64, program_source: u64) ->
             _ => None,
         };
     }
-    if source_id != 0 && source_id == program_source {
+    if source_id != 0 && tallies.iter().any(|(_, program)| *program == source_id) {
         return Some(true);
     }
-    if source_id != 0 && source_id == preview_source {
+    if source_id != 0 && tallies.iter().any(|(preview, _)| *preview == source_id) {
         return Some(false);
     }
     None

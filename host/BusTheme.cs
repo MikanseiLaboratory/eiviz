@@ -52,5 +52,11 @@ internal static class BusTheme
                 program.R, program.G, program.B,
                 inactive.R, inactive.G, inactive.B),
             "Set bus colors");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetMvLabel(
+                settings.MultiviewLabelSize,
+                settings.MultiviewLabelUnit == MvLabelUnit.Percent ? 1u : 0u,
+                settings.MultiviewLabelAnchor == MvLabelAnchor.Top ? 1u : 0u),
+            "Set Multiview label");
     }
 }

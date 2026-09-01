@@ -242,6 +242,9 @@ internal static partial class MixerNative
         byte pgmR, byte pgmG, byte pgmB,
         byte inR, byte inG, byte inB);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_mv_label")]
+    internal static partial int SetMvLabel(float size, uint percent, uint top);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 
