@@ -64,9 +64,18 @@ public enum MvSlotKind
 public enum MultiviewTemplate
 {
     PreviewProgram8,
-    PreviewProgram4,
-    PreviewProgram12,
-    PreviewProgram16,
+    PreviewProgram8Bottom,
+    PreviewProgram8Left,
+    PreviewProgram8Right,
+    PreviewProgram2,
+    Quad4TopLeft,
+    Quad4TopRight,
+    Quad4BottomLeft,
+    Quad4BottomRight,
+    Large5TopLeft,
+    Large5TopRight,
+    Large5BottomLeft,
+    Large5BottomRight,
     Grid2x2,
     Grid3x3,
     Grid4x4
@@ -74,11 +83,47 @@ public enum MultiviewTemplate
 
 internal static class MultiviewGeometry
 {
+    public static readonly (string Title, MultiviewTemplate[] Items)[] Groups =
+    [
+        ("Preview + Program + 8",
+        [
+            MultiviewTemplate.PreviewProgram8,
+            MultiviewTemplate.PreviewProgram8Bottom,
+            MultiviewTemplate.PreviewProgram8Left,
+            MultiviewTemplate.PreviewProgram8Right
+        ]),
+        ("Preview + Program + 2", [MultiviewTemplate.PreviewProgram2]),
+        ("1 + 5",
+        [
+            MultiviewTemplate.Large5TopLeft,
+            MultiviewTemplate.Large5TopRight,
+            MultiviewTemplate.Large5BottomLeft,
+            MultiviewTemplate.Large5BottomRight
+        ]),
+        ("3 + 4",
+        [
+            MultiviewTemplate.Quad4TopLeft,
+            MultiviewTemplate.Quad4TopRight,
+            MultiviewTemplate.Quad4BottomLeft,
+            MultiviewTemplate.Quad4BottomRight
+        ]),
+        ("Grid",
+        [
+            MultiviewTemplate.Grid2x2,
+            MultiviewTemplate.Grid3x3,
+            MultiviewTemplate.Grid4x4
+        ])
+    ];
+
+    public static IEnumerable<MultiviewTemplate> Choices => Groups.SelectMany(group => group.Items);
+
     public static int TileCount(MultiviewTemplate template) => template switch
     {
-        MultiviewTemplate.PreviewProgram4 => 4,
-        MultiviewTemplate.PreviewProgram12 => 12,
-        MultiviewTemplate.PreviewProgram16 => 16,
+        MultiviewTemplate.PreviewProgram2 => 2,
+        MultiviewTemplate.Quad4TopLeft or MultiviewTemplate.Quad4TopRight
+            or MultiviewTemplate.Quad4BottomLeft or MultiviewTemplate.Quad4BottomRight => 7,
+        MultiviewTemplate.Large5TopLeft or MultiviewTemplate.Large5TopRight
+            or MultiviewTemplate.Large5BottomLeft or MultiviewTemplate.Large5BottomRight => 6,
         MultiviewTemplate.Grid2x2 => 4,
         MultiviewTemplate.Grid3x3 => 9,
         MultiviewTemplate.Grid4x4 => 16,
@@ -87,56 +132,156 @@ internal static class MultiviewGeometry
 
     public static bool HasBusPanes(MultiviewTemplate template) => template
         is MultiviewTemplate.PreviewProgram8
-        or MultiviewTemplate.PreviewProgram4
-        or MultiviewTemplate.PreviewProgram12
-        or MultiviewTemplate.PreviewProgram16;
+        or MultiviewTemplate.PreviewProgram8Bottom
+        or MultiviewTemplate.PreviewProgram8Left
+        or MultiviewTemplate.PreviewProgram8Right
+        or MultiviewTemplate.PreviewProgram2;
 
     public static string Title(MultiviewTemplate template) => template switch
     {
-        MultiviewTemplate.PreviewProgram4 => "Preview + Program + 4",
-        MultiviewTemplate.PreviewProgram12 => "Preview + Program + 12",
-        MultiviewTemplate.PreviewProgram16 => "Preview + Program + 16",
+        MultiviewTemplate.PreviewProgram8 => "Buses on top",
+        MultiviewTemplate.PreviewProgram8Bottom => "Buses on bottom",
+        MultiviewTemplate.PreviewProgram8Left => "Buses on left",
+        MultiviewTemplate.PreviewProgram8Right => "Buses on right",
+        MultiviewTemplate.PreviewProgram2 => "Buses on top",
+        MultiviewTemplate.Large5TopLeft => "Large top-left",
+        MultiviewTemplate.Large5TopRight => "Large top-right",
+        MultiviewTemplate.Large5BottomLeft => "Large bottom-left",
+        MultiviewTemplate.Large5BottomRight => "Large bottom-right",
+        MultiviewTemplate.Quad4TopLeft => "Four top-left",
+        MultiviewTemplate.Quad4TopRight => "Four top-right",
+        MultiviewTemplate.Quad4BottomLeft => "Four bottom-left",
+        MultiviewTemplate.Quad4BottomRight => "Four bottom-right",
         MultiviewTemplate.Grid2x2 => "2×2",
         MultiviewTemplate.Grid3x3 => "3×3",
         MultiviewTemplate.Grid4x4 => "4×4",
-        _ => "Preview + Program + 8"
+        _ => template.ToString()
+    };
+
+    public static (string Preview, string Program) BusTitles(MultiviewTemplate template) => template switch
+    {
+        MultiviewTemplate.PreviewProgram8 => ("PRV (top left)", "PGM (top right)"),
+        MultiviewTemplate.PreviewProgram8Bottom => ("PRV (bottom left)", "PGM (bottom right)"),
+        MultiviewTemplate.PreviewProgram8Left => ("PRV (bottom left)", "PGM (top left)"),
+        MultiviewTemplate.PreviewProgram8Right => ("PRV (bottom right)", "PGM (top right)"),
+        MultiviewTemplate.PreviewProgram2 => ("PRV (top left)", "PGM (top right)"),
+        _ => ("Preview tally unit", "Program tally unit")
     };
 
     public static IReadOnlyList<MultiviewPane> Panes(MultiviewTemplate template)
     {
         var panes = new List<MultiviewPane>();
-        if (HasBusPanes(template))
+        switch (template)
         {
-            panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
-            panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
-            var (cols, rows) = template switch
-            {
-                MultiviewTemplate.PreviewProgram4 => (2, 2),
-                MultiviewTemplate.PreviewProgram12 => (4, 3),
-                MultiviewTemplate.PreviewProgram16 => (4, 4),
-                _ => (4, 2)
-            };
-            AddGrid(panes, cols, rows, 0f, 0.5f, 1f, 0.5f);
-        }
-        else
-        {
-            var (cols, rows) = template switch
-            {
-                MultiviewTemplate.Grid3x3 => (3, 3),
-                MultiviewTemplate.Grid4x4 => (4, 4),
-                _ => (2, 2)
-            };
-            AddGrid(panes, cols, rows, 0f, 0f, 1f, 1f);
+            case MultiviewTemplate.PreviewProgram2:
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                AddGrid(panes, 2, 1, 0f, 0.5f, 1f, 0.5f);
+                break;
+            case MultiviewTemplate.PreviewProgram8:
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                AddGrid(panes, 4, 2, 0f, 0.5f, 1f, 0.5f);
+                break;
+            case MultiviewTemplate.PreviewProgram8Bottom:
+                AddGrid(panes, 4, 2, 0f, 0f, 1f, 0.5f);
+                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                break;
+            case MultiviewTemplate.PreviewProgram8Left:
+                panes.Add(new MultiviewPane(0f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+                panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                AddGrid(panes, 2, 4, 0.5f, 0f, 0.5f, 1f);
+                break;
+            case MultiviewTemplate.PreviewProgram8Right:
+                AddGrid(panes, 2, 4, 0f, 0f, 0.5f, 1f);
+                panes.Add(new MultiviewPane(0.5f, 0.5f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+                panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+                break;
+            case MultiviewTemplate.Quad4TopLeft:
+                AddQuad4(panes, 0);
+                break;
+            case MultiviewTemplate.Quad4TopRight:
+                AddQuad4(panes, 1);
+                break;
+            case MultiviewTemplate.Quad4BottomLeft:
+                AddQuad4(panes, 2);
+                break;
+            case MultiviewTemplate.Quad4BottomRight:
+                AddQuad4(panes, 3);
+                break;
+            case MultiviewTemplate.Large5TopLeft:
+                AddLarge5(panes, 0, 0);
+                break;
+            case MultiviewTemplate.Large5TopRight:
+                AddLarge5(panes, 1, 0);
+                break;
+            case MultiviewTemplate.Large5BottomLeft:
+                AddLarge5(panes, 0, 1);
+                break;
+            case MultiviewTemplate.Large5BottomRight:
+                AddLarge5(panes, 1, 1);
+                break;
+            case MultiviewTemplate.Grid3x3:
+                AddGrid(panes, 3, 3, 0f, 0f, 1f, 1f);
+                break;
+            case MultiviewTemplate.Grid4x4:
+                AddGrid(panes, 4, 4, 0f, 0f, 1f, 1f);
+                break;
+            default:
+                AddGrid(panes, 2, 2, 0f, 0f, 1f, 1f);
+                break;
         }
         return panes;
     }
 
     private static void AddGrid(List<MultiviewPane> panes, int cols, int rows, float x, float y, float w, float h)
     {
-        var cw = w / cols;
-        var ch = h / rows;
         for (var i = 0; i < cols * rows; i++)
-            panes.Add(new MultiviewPane(x + i % cols * cw, y + i / cols * ch, cw, ch, MultiviewPaneKind.Tile));
+        {
+            var col = i % cols;
+            var row = i / cols;
+            var x0 = x + w * col / cols;
+            var y0 = y + h * row / rows;
+            var x1 = x + w * (col + 1) / cols;
+            var y1 = y + h * (row + 1) / rows;
+            panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0, MultiviewPaneKind.Tile));
+        }
+    }
+
+    private static void AddQuad4(List<MultiviewPane> panes, int smallQuad)
+    {
+        for (var quad = 0; quad < 4; quad++)
+        {
+            var x = quad % 2 * 0.5f;
+            var y = quad / 2 * 0.5f;
+            if (quad == smallQuad)
+                AddGrid(panes, 2, 2, x, y, 0.5f, 0.5f);
+            else
+                panes.Add(new MultiviewPane(x, y, 0.5f, 0.5f, MultiviewPaneKind.Tile));
+        }
+    }
+
+    private static void AddLarge5(List<MultiviewPane> panes, int largeCol, int largeRow)
+    {
+        var x0 = largeCol / 3f;
+        var y0 = largeRow / 3f;
+        var x1 = (largeCol + 2) / 3f;
+        var y1 = (largeRow + 2) / 3f;
+        panes.Add(new MultiviewPane(x0, y0, x1 - x0, y1 - y0, MultiviewPaneKind.Tile));
+        for (var row = 0; row < 3; row++)
+        {
+            for (var col = 0; col < 3; col++)
+            {
+                if (col >= largeCol && col < largeCol + 2 && row >= largeRow && row < largeRow + 2)
+                    continue;
+                var sx0 = col / 3f;
+                var sy0 = row / 3f;
+                var sx1 = (col + 1) / 3f;
+                var sy1 = (row + 1) / 3f;
+                panes.Add(new MultiviewPane(sx0, sy0, sx1 - sx0, sy1 - sy0, MultiviewPaneKind.Tile));
+            }
+        }
     }
 }
 

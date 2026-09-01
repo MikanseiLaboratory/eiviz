@@ -1,5 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -41,9 +44,9 @@ public partial class MultiviewSlotsWindow : Window
         _suppress = true;
         EnsureTileCount();
         SlotRows.Children.Add(TemplateRow());
-        var bus = MultiviewGeometry.HasBusPanes(_template);
-        SlotRows.Children.Add(UnitRow(bus ? "PRV (top left)" : "Preview tally unit", true));
-        SlotRows.Children.Add(UnitRow(bus ? "PGM (top right)" : "Program tally unit", false));
+        var titles = MultiviewGeometry.BusTitles(_template);
+        SlotRows.Children.Add(UnitRow(titles.Preview, true));
+        SlotRows.Children.Add(UnitRow(titles.Program, false));
         for (var i = 0; i < _tiles.Count; i++)
             SlotRows.Children.Add(TileRow(i, _tiles[i]));
         _suppress = false;
@@ -63,29 +66,83 @@ public partial class MultiviewSlotsWindow : Window
         var box = Frame();
         var stack = new StackPanel();
         stack.Children.Add(new TextBlock { Text = "Template", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
-        var pick = new ComboBox();
-        foreach (MultiviewTemplate item in Enum.GetValues<MultiviewTemplate>())
-            pick.Items.Add(new ComboBoxItem { Content = MultiviewGeometry.Title(item), Tag = item });
-        foreach (ComboBoxItem item in pick.Items)
+        foreach (var (title, items) in MultiviewGeometry.Groups)
         {
-            if (Equals(item.Tag, _template))
+            stack.Children.Add(new TextBlock
             {
-                pick.SelectedItem = item;
-                break;
-            }
+                Text = title,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+                Margin = new Thickness(0, 8, 0, 4)
+            });
+            var row = new WrapPanel();
+            foreach (var item in items)
+                row.Children.Add(TemplateCard(item));
+            stack.Children.Add(row);
         }
-        if (pick.SelectedItem is null && pick.Items.Count > 0)
-            pick.SelectedIndex = 0;
-        pick.SelectionChanged += (_, _) =>
-        {
-            if (_suppress || pick.SelectedItem is not ComboBoxItem item || item.Tag is not MultiviewTemplate value)
-                return;
-            _template = value;
-            Rebuild();
-        };
-        stack.Children.Add(pick);
         box.Child = stack;
         return box;
+    }
+
+    private UIElement TemplateCard(MultiviewTemplate template)
+    {
+        var selected = template == _template;
+        const double width = 148;
+        const double height = 83;
+        var canvas = new Canvas
+        {
+            Width = width,
+            Height = height,
+            Background = Brushes.Black
+        };
+        foreach (var pane in MultiviewGeometry.Panes(template))
+        {
+            canvas.Children.Add(new Rectangle
+            {
+                Width = Math.Max(1, pane.Width * width - 1),
+                Height = Math.Max(1, pane.Height * height - 1),
+                Fill = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x4A)),
+                Stroke = Brushes.Black,
+                StrokeThickness = 1
+            });
+            Canvas.SetLeft(canvas.Children[^1], pane.X * width);
+            Canvas.SetTop(canvas.Children[^1], pane.Y * height);
+            if (pane.Kind == MultiviewPaneKind.Tile)
+                continue;
+            var tag = new TextBlock
+            {
+                Text = pane.Kind == MultiviewPaneKind.Preview ? "PRV" : "PGM",
+                FontSize = 8,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xEE, 0xEE, 0xEE)),
+                Opacity = 0.8
+            };
+            Canvas.SetLeft(tag, pane.X * width + 3);
+            Canvas.SetTop(tag, pane.Y * height + 2);
+            canvas.Children.Add(tag);
+        }
+        var card = new StackPanel { Width = width, Margin = new Thickness(0, 0, 8, 8), Cursor = Cursors.Hand };
+        card.Children.Add(new Border
+        {
+            BorderBrush = selected
+                ? Brushes.White
+                : new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(selected ? 2 : 1),
+            Child = canvas
+        });
+        card.Children.Add(new TextBlock
+        {
+            Text = MultiviewGeometry.Title(template),
+            FontSize = 11,
+            Margin = new Thickness(0, 4, 0, 0),
+            TextAlignment = TextAlignment.Center
+        });
+        card.MouseLeftButtonUp += (_, _) =>
+        {
+            if (_suppress || template == _template)
+                return;
+            _template = template;
+            Rebuild();
+        };
+        return card;
     }
 
     private Border UnitRow(string title, bool preview)

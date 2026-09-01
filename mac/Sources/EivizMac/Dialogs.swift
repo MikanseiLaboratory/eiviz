@@ -282,7 +282,7 @@ struct SettingsView: View {
                 Text("Every 8 frames").tag(UInt32(8))
             }
             .frame(width: 280)
-            Text("Each Multiview window picks its own mosaic template (Preview + Program plus a lower grid, or a full 2×2 / 3×3 / 4×4).")
+            Text("Each Multiview window picks its own mosaic template (Preview + Program plus matching tiles, or a full 2×2 / 3×3 / 4×4).")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -801,27 +801,40 @@ struct MultiviewSlotsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Choose a mosaic template for this Multiview. Preview + Program templates keep those buses on top. Grid templates fill the frame with Input or Scene windows.")
+            Text("Click a mosaic. Every pane matches the canvas aspect and fills the frame with no gaps, crop, or zoom.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Template").fontWeight(.bold)
-                Picker("", selection: $template) {
-                    ForEach(MultiviewTemplate.allCases) { item in
-                        Text(item.title).tag(item)
+                ForEach(MultiviewTemplate.groups, id: \.title) { group in
+                    Text(group.title)
+                        .foregroundStyle(EivizTheme.dim)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 8)], alignment: .leading, spacing: 8) {
+                        ForEach(group.items) { item in
+                            Button {
+                                template = item
+                            } label: {
+                                VStack(spacing: 4) {
+                                    MosaicThumb(template: item, selected: template == item)
+                                    Text(item.title)
+                                        .font(.system(size: 11))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
             .padding(8)
             .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
             unitRow(
-                template.hasBusPanes ? "PRV (top left)" : "Preview tally unit",
+                template.busTitles.preview,
                 $previewUnit,
                 follow: $previewFollow,
                 custom: $previewLabel
             )
             unitRow(
-                template.hasBusPanes ? "PGM (top right)" : "Program tally unit",
+                template.busTitles.program,
                 $programUnit,
                 follow: $programFollow,
                 custom: $programLabel
@@ -840,7 +853,7 @@ struct MultiviewSlotsView: View {
             }
         }
         .padding(16)
-        .frame(width: 640, height: 560)
+        .frame(width: 760, height: 720)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -959,6 +972,37 @@ struct MultiviewSlotsView: View {
         mixer.session.multiviews[index].ensureTiles()
         mixer.openMultiview = mixer.session.multiviews[index]
         mixer.pushMultiview(mixer.session.multiviews[index])
+    }
+}
+
+private struct MosaicThumb: View {
+    var template: MultiviewTemplate
+    var selected: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ZStack(alignment: .topLeading) {
+                Rectangle().fill(Color.black)
+                ForEach(Array(template.panes.enumerated()), id: \.offset) { _, pane in
+                    Rectangle()
+                        .fill(Color(white: 0.29))
+                        .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+                        .frame(width: max(1, CGFloat(pane.width) * w - 1), height: max(1, CGFloat(pane.height) * h - 1))
+                        .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
+                    if pane.kind != .tile {
+                        Text(pane.kind == .preview ? "PRV" : "PGM")
+                            .font(.system(size: 8))
+                            .foregroundStyle(EivizTheme.text.opacity(0.8))
+                            .offset(x: CGFloat(pane.x) * w + 3, y: CGFloat(pane.y) * h + 2)
+                    }
+                }
+            }
+        }
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .frame(height: 83)
+        .overlay(Rectangle().stroke(selected ? Color.white : EivizTheme.stroke, lineWidth: selected ? 2 : 1))
     }
 }
 

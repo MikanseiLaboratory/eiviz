@@ -433,67 +433,130 @@ struct OutputEntry: Identifiable, Codable {
 
 enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
     case previewProgram8 = "PreviewProgram8"
-    case previewProgram4 = "PreviewProgram4"
-    case previewProgram12 = "PreviewProgram12"
-    case previewProgram16 = "PreviewProgram16"
+    case previewProgram8Bottom = "PreviewProgram8Bottom"
+    case previewProgram8Left = "PreviewProgram8Left"
+    case previewProgram8Right = "PreviewProgram8Right"
+    case previewProgram2 = "PreviewProgram2"
+    case quad4TopLeft = "Quad4TopLeft"
+    case quad4TopRight = "Quad4TopRight"
+    case quad4BottomLeft = "Quad4BottomLeft"
+    case quad4BottomRight = "Quad4BottomRight"
+    case large5TopLeft = "Large5TopLeft"
+    case large5TopRight = "Large5TopRight"
+    case large5BottomLeft = "Large5BottomLeft"
+    case large5BottomRight = "Large5BottomRight"
     case grid2x2 = "Grid2x2"
     case grid3x3 = "Grid3x3"
     case grid4x4 = "Grid4x4"
 
     var id: String { rawValue }
 
+    static let groups: [(title: String, items: [MultiviewTemplate])] = [
+        ("Preview + Program + 8", [.previewProgram8, .previewProgram8Bottom, .previewProgram8Left, .previewProgram8Right]),
+        ("Preview + Program + 2", [.previewProgram2]),
+        ("1 + 5", [.large5TopLeft, .large5TopRight, .large5BottomLeft, .large5BottomRight]),
+        ("3 + 4", [.quad4TopLeft, .quad4TopRight, .quad4BottomLeft, .quad4BottomRight]),
+        ("Grid", [.grid2x2, .grid3x3, .grid4x4])
+    ]
+
+    static var choices: [MultiviewTemplate] { groups.flatMap(\.items) }
+
     var title: String {
         switch self {
-        case .previewProgram8: return "Preview + Program + 8"
-        case .previewProgram4: return "Preview + Program + 4"
-        case .previewProgram12: return "Preview + Program + 12"
-        case .previewProgram16: return "Preview + Program + 16"
+        case .previewProgram8: return "Buses on top"
+        case .previewProgram8Bottom: return "Buses on bottom"
+        case .previewProgram8Left: return "Buses on left"
+        case .previewProgram8Right: return "Buses on right"
+        case .previewProgram2: return "Buses on top"
+        case .large5TopLeft: return "Large top-left"
+        case .large5TopRight: return "Large top-right"
+        case .large5BottomLeft: return "Large bottom-left"
+        case .large5BottomRight: return "Large bottom-right"
+        case .quad4TopLeft: return "Four top-left"
+        case .quad4TopRight: return "Four top-right"
+        case .quad4BottomLeft: return "Four bottom-left"
+        case .quad4BottomRight: return "Four bottom-right"
         case .grid2x2: return "2×2"
         case .grid3x3: return "3×3"
         case .grid4x4: return "4×4"
+        default: return rawValue
         }
     }
 
     var tileCount: Int {
         switch self {
-        case .previewProgram8: return 8
-        case .previewProgram4: return 4
-        case .previewProgram12: return 12
-        case .previewProgram16: return 16
+        case .previewProgram2: return 2
+        case .quad4TopLeft, .quad4TopRight, .quad4BottomLeft, .quad4BottomRight: return 7
+        case .large5TopLeft, .large5TopRight, .large5BottomLeft, .large5BottomRight: return 6
         case .grid2x2: return 4
         case .grid3x3: return 9
         case .grid4x4: return 16
+        default: return 8
         }
     }
 
     var hasBusPanes: Bool {
         switch self {
-        case .previewProgram8, .previewProgram4, .previewProgram12, .previewProgram16: return true
-        default: return false
+        case .previewProgram8, .previewProgram8Bottom, .previewProgram8Left, .previewProgram8Right, .previewProgram2:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var busTitles: (preview: String, program: String) {
+        switch self {
+        case .previewProgram8: return ("PRV (top left)", "PGM (top right)")
+        case .previewProgram8Bottom: return ("PRV (bottom left)", "PGM (bottom right)")
+        case .previewProgram8Left: return ("PRV (bottom left)", "PGM (top left)")
+        case .previewProgram8Right: return ("PRV (bottom right)", "PGM (top right)")
+        case .previewProgram2: return ("PRV (top left)", "PGM (top right)")
+        default: return ("Preview tally unit", "Program tally unit")
         }
     }
 
     var panes: [MultiviewPane] {
-        if hasBusPanes {
-            var panes = [
+        switch self {
+        case .previewProgram2:
+            return [
                 MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .preview),
                 MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+            ] + MultiviewPane.grid(cols: 2, rows: 1, x: 0, y: 0.5, width: 1, height: 0.5)
+        case .previewProgram8:
+            return [
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .preview),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+            ] + MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0.5, width: 1, height: 0.5)
+        case .previewProgram8Bottom:
+            return MultiviewPane.grid(cols: 4, rows: 2, x: 0, y: 0, width: 1, height: 0.5) + [
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5, kind: .program)
             ]
-            let colsRows: (Int, Int) = switch self {
-            case .previewProgram4: (2, 2)
-            case .previewProgram12: (4, 3)
-            case .previewProgram16: (4, 4)
-            default: (4, 2)
-            }
-            panes.append(contentsOf: MultiviewPane.grid(cols: colsRows.0, rows: colsRows.1, x: 0, y: 0.5, width: 1, height: 0.5))
-            return panes
+        case .previewProgram8Left:
+            return [
+                MultiviewPane(x: 0, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .program)
+            ] + MultiviewPane.grid(cols: 2, rows: 4, x: 0.5, y: 0, width: 0.5, height: 1)
+        case .previewProgram8Right:
+            return MultiviewPane.grid(cols: 2, rows: 4, x: 0, y: 0, width: 0.5, height: 1) + [
+                MultiviewPane(x: 0.5, y: 0.5, width: 0.5, height: 0.5, kind: .preview),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+            ]
+        case .quad4TopLeft: return MultiviewPane.quad4(smallQuad: 0)
+        case .quad4TopRight: return MultiviewPane.quad4(smallQuad: 1)
+        case .quad4BottomLeft: return MultiviewPane.quad4(smallQuad: 2)
+        case .quad4BottomRight: return MultiviewPane.quad4(smallQuad: 3)
+        case .large5TopLeft: return MultiviewPane.large5(largeCol: 0, largeRow: 0)
+        case .large5TopRight: return MultiviewPane.large5(largeCol: 1, largeRow: 0)
+        case .large5BottomLeft: return MultiviewPane.large5(largeCol: 0, largeRow: 1)
+        case .large5BottomRight: return MultiviewPane.large5(largeCol: 1, largeRow: 1)
+        case .grid3x3:
+            return MultiviewPane.grid(cols: 3, rows: 3, x: 0, y: 0, width: 1, height: 1)
+        case .grid4x4:
+            return MultiviewPane.grid(cols: 4, rows: 4, x: 0, y: 0, width: 1, height: 1)
+        default:
+            return MultiviewPane.grid(cols: 2, rows: 2, x: 0, y: 0, width: 1, height: 1)
         }
-        let colsRows: (Int, Int) = switch self {
-        case .grid3x3: (3, 3)
-        case .grid4x4: (4, 4)
-        default: (2, 2)
-        }
-        return MultiviewPane.grid(cols: colsRows.0, rows: colsRows.1, x: 0, y: 0, width: 1, height: 1)
     }
 }
 
@@ -509,17 +572,47 @@ struct MultiviewPane {
     var kind: MultiviewPaneKind
 
     static func grid(cols: Int, rows: Int, x: Float, y: Float, width: Float, height: Float) -> [MultiviewPane] {
-        let cw = width / Float(cols)
-        let ch = height / Float(rows)
         return (0..<(cols * rows)).map { i in
-            MultiviewPane(
-                x: x + Float(i % cols) * cw,
-                y: y + Float(i / cols) * ch,
-                width: cw,
-                height: ch,
-                kind: .tile
-            )
+            let col = i % cols
+            let row = i / cols
+            let x0 = x + width * Float(col) / Float(cols)
+            let y0 = y + height * Float(row) / Float(rows)
+            let x1 = x + width * Float(col + 1) / Float(cols)
+            let y1 = y + height * Float(row + 1) / Float(rows)
+            return MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0, kind: .tile)
         }
+    }
+
+    static func quad4(smallQuad: Int) -> [MultiviewPane] {
+        (0..<4).flatMap { quad -> [MultiviewPane] in
+            let x = Float(quad % 2) * 0.5
+            let y = Float(quad / 2) * 0.5
+            if quad == smallQuad {
+                return grid(cols: 2, rows: 2, x: x, y: y, width: 0.5, height: 0.5)
+            }
+            return [MultiviewPane(x: x, y: y, width: 0.5, height: 0.5, kind: .tile)]
+        }
+    }
+
+    static func large5(largeCol: Int, largeRow: Int) -> [MultiviewPane] {
+        let x0 = Float(largeCol) / 3
+        let y0 = Float(largeRow) / 3
+        let x1 = Float(largeCol + 2) / 3
+        let y1 = Float(largeRow + 2) / 3
+        var panes = [MultiviewPane(x: x0, y: y0, width: x1 - x0, height: y1 - y0, kind: .tile)]
+        for row in 0..<3 {
+            for col in 0..<3 {
+                if col >= largeCol && col < largeCol + 2 && row >= largeRow && row < largeRow + 2 {
+                    continue
+                }
+                let sx0 = Float(col) / 3
+                let sy0 = Float(row) / 3
+                let sx1 = Float(col + 1) / 3
+                let sy1 = Float(row + 1) / 3
+                panes.append(MultiviewPane(x: sx0, y: sy0, width: sx1 - sx0, height: sy1 - sy0, kind: .tile))
+            }
+        }
+        return panes
     }
 }
 

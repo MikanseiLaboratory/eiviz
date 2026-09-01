@@ -242,9 +242,18 @@ pub enum MvSlotKind {
 pub enum MultiviewTemplate {
     #[default]
     PreviewProgram8,
-    PreviewProgram4,
-    PreviewProgram12,
-    PreviewProgram16,
+    PreviewProgram8Bottom,
+    PreviewProgram8Left,
+    PreviewProgram8Right,
+    PreviewProgram2,
+    Quad4TopLeft,
+    Quad4TopRight,
+    Quad4BottomLeft,
+    Quad4BottomRight,
+    Large5TopLeft,
+    Large5TopRight,
+    Large5BottomLeft,
+    Large5BottomRight,
     Grid2x2,
     Grid3x3,
     Grid4x4,
@@ -253,20 +262,30 @@ pub enum MultiviewTemplate {
 impl MultiviewTemplate {
     pub fn tile_count(self) -> usize {
         match self {
-            Self::PreviewProgram8 => 8,
-            Self::PreviewProgram4 => 4,
-            Self::PreviewProgram12 => 12,
-            Self::PreviewProgram16 => 16,
+            Self::PreviewProgram2 => 2,
+            Self::Quad4TopLeft
+            | Self::Quad4TopRight
+            | Self::Quad4BottomLeft
+            | Self::Quad4BottomRight => 7,
+            Self::Large5TopLeft
+            | Self::Large5TopRight
+            | Self::Large5BottomLeft
+            | Self::Large5BottomRight => 6,
             Self::Grid2x2 => 4,
             Self::Grid3x3 => 9,
             Self::Grid4x4 => 16,
+            _ => 8,
         }
     }
 
     pub fn has_bus_panes(self) -> bool {
         matches!(
             self,
-            Self::PreviewProgram8 | Self::PreviewProgram4 | Self::PreviewProgram12 | Self::PreviewProgram16
+            Self::PreviewProgram8
+                | Self::PreviewProgram8Bottom
+                | Self::PreviewProgram8Left
+                | Self::PreviewProgram8Right
+                | Self::PreviewProgram2
         )
     }
 }
@@ -839,6 +858,16 @@ mod tests {
         assert_eq!(doc.multiviews[0].template, MultiviewTemplate::Grid4x4);
         assert!(!doc.multiviews[0].template.has_bus_panes());
         assert_eq!(doc.multiviews[0].tiles.len(), 16);
+    }
+
+    #[test]
+    fn multiview_aspect_templates_tile_counts() {
+        assert_eq!(MultiviewTemplate::PreviewProgram8Left.tile_count(), 8);
+        assert!(MultiviewTemplate::PreviewProgram8Left.has_bus_panes());
+        assert_eq!(MultiviewTemplate::Quad4TopLeft.tile_count(), 7);
+        assert!(!MultiviewTemplate::Quad4TopLeft.has_bus_panes());
+        assert_eq!(MultiviewTemplate::Large5TopLeft.tile_count(), 6);
+        assert!(!MultiviewTemplate::Large5TopLeft.has_bus_panes());
     }
 
     #[test]

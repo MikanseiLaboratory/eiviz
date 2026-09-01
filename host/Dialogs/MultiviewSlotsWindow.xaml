@@ -1,7 +1,7 @@
 <Window x:Class="Eiviz.Host.Dialogs.MultiviewSlotsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Multiview tiles" Height="560" Width="640"
+        Title="Multiview tiles" Height="720" Width="760"
         WindowStartupLocation="CenterOwner"
         Background="#2B2B2B" Foreground="#EEEEEE">
     <DockPanel Margin="16">
@@ -10,7 +10,7 @@
             <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
         </StackPanel>
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
-                   Text="Choose a mosaic template for this Multiview. Preview + Program templates keep those buses on top. Grid templates fill the frame with Input or Scene windows."/>
+                   Text="Click a mosaic. Every pane matches the canvas aspect and fills the frame with no gaps, crop, or zoom."/>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="SlotRows"/>
         </ScrollViewer>
