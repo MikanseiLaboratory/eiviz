@@ -136,7 +136,6 @@ struct Shared {
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     frame_buffer_frames: u32,
-    compose_needed: bool,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
     ndi_gpu_upload: bool,
@@ -481,7 +480,6 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         tone_phase: HashMap::new(),
         live_save: HashMap::new(),
         frame_buffer_frames: 3,
-        compose_needed: true,
         rebar,
         rebar_optimization: true,
         ndi_gpu_upload: true,
@@ -613,9 +611,12 @@ pub unsafe extern "C" fn mixer_define_scene(
         Arc::from(unsafe { std::slice::from_raw_parts(layers, count as usize) })
     };
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
-        shared.scenes.insert(scene_id, (width, height, copied));
-        shared.compose_needed = true;
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .scenes
+            .insert(scene_id, (width, height, copied));
         OK
     })
     .unwrap_or_else(|code| code)
@@ -636,11 +637,6 @@ pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
             .expect("shared")
             .multiview_binds
             .remove(&scene_id);
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -802,7 +798,6 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
         };
         unit.state = state;
         unit.auto = None;
-        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -829,7 +824,6 @@ pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32) -> i32 {
             return ERR_INVALID_ARGUMENT;
         };
         take_cut(unit, swap != 0);
-        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -849,7 +843,6 @@ pub extern "C" fn mixer_unit_auto(unit_id: u64, duration_ms: u32, swap: u32) -> 
             duration: Duration::from_millis(u64::from(duration_ms.max(1))),
             swap: swap != 0,
         });
-        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2437,12 +2430,6 @@ fn render_loop(
         let mut skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
         {
             let mut guard = shared.lock().expect("shared");
-            if guard.compose_needed || guard.units.values().any(|unit| unit.auto.is_some()) {
-                skip_compose = false;
-            }
-            if !skip_compose {
-                guard.compose_needed = false;
-            }
             for unit in guard.units.values_mut() {
                 if let Some(auto) = unit.auto.take() {
                     let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();

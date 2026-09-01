@@ -472,33 +472,6 @@ fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMo
         .unwrap_or(wgpu::CompositeAlphaMode::Auto)
 }
 
-fn acquire_surface(presenter: &mut Presenter) -> Option<wgpu::SurfaceTexture> {
-    match presenter.surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-            presenter.occluded_streak = 0;
-            Some(texture)
-        }
-        wgpu::CurrentSurfaceTexture::Outdated
-        | wgpu::CurrentSurfaceTexture::Lost
-        | wgpu::CurrentSurfaceTexture::Validation => {
-            presenter.ready = false;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-            None
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => None,
-        wgpu::CurrentSurfaceTexture::Occluded => {
-            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
-            if presenter.occluded_streak >= 8 {
-                presenter.ready = false;
-                presenter.pending = Some((presenter.config.width, presenter.config.height));
-                presenter.occluded_streak = 0;
-            }
-            None
-        }
-    }
-}
-
 fn draw_presenter(
     device: &GpuDevice,
     presenter: &mut Presenter,
@@ -510,7 +483,30 @@ fn draw_presenter(
     if !presenter.ready {
         return None;
     }
-    let texture = acquire_surface(presenter)?;
+    let texture = match presenter.surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            presenter.occluded_streak = 0;
+            texture
+        }
+        wgpu::CurrentSurfaceTexture::Outdated
+        | wgpu::CurrentSurfaceTexture::Lost
+        | wgpu::CurrentSurfaceTexture::Validation => {
+            presenter.ready = false;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+            return None;
+        }
+        wgpu::CurrentSurfaceTexture::Timeout => return None,
+        wgpu::CurrentSurfaceTexture::Occluded => {
+            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
+            if presenter.occluded_streak >= 8 {
+                presenter.ready = false;
+                presenter.pending = Some((presenter.config.width, presenter.config.height));
+                presenter.occluded_streak = 0;
+            }
+            return None;
+        }
+    };
     let dest = texture.texture.create_view(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

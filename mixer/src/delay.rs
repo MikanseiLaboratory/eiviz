@@ -109,7 +109,6 @@ impl FrameDelay {
     }
 
     pub fn consume_display(&mut self, drain: bool) {
-        let mut moved = false;
         for ring in self.units.values_mut() {
             if ring.queued == 0 {
                 continue;
@@ -118,11 +117,7 @@ impl FrameDelay {
             if ring.queued >= ring.depth || catch_up {
                 ring.read = (ring.read + 1) % ring.slots.len();
                 ring.queued = ring.queued.saturating_sub(1);
-                moved = true;
             }
-        }
-        if moved {
-            self.epoch = self.epoch.wrapping_add(1);
         }
     }
 
