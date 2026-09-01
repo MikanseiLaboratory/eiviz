@@ -96,11 +96,17 @@ static void release_sample(CMSampleBufferRef *slot) {
     if (!pixels) {
         return NO;
     }
-    CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+    if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        return NO;
+    }
     size_t width = CVPixelBufferGetWidth(pixels);
     size_t height = CVPixelBufferGetHeight(pixels);
     size_t stride = CVPixelBufferGetBytesPerRow(pixels);
     const void *base = CVPixelBufferGetBaseAddress(pixels);
+    if ((!base || stride == 0) && CVPixelBufferIsPlanar(pixels) && CVPixelBufferGetPlaneCount(pixels) > 0) {
+        base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+    }
     if (!base || width == 0 || height == 0 || stride == 0) {
         CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
         return NO;
@@ -454,69 +460,131 @@ int eiviz_av_enum_capture_modes(const char *device_id, EivizAvCaptureMode *out, 
     return (int)count;
 }
 
-EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den) {
-    NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
-    AVCaptureDevice *device = nil;
-    if (uid.length > 0) {
-        device = [AVCaptureDevice deviceWithUniqueID:uid];
+static BOOL format_supports_fps(AVCaptureDeviceFormat *format, double fps) {
+    if (fps <= 0) {
+        return YES;
     }
-    if (!device) {
-        device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    }
-    if (!device) {
-        return NULL;
-    }
-    NSError *error = nil;
-    AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&error];
-    if (!input) {
-        return NULL;
-    }
-    if (width > 0 && height > 0) {
-        AVCaptureDeviceFormat *chosen = nil;
-        for (AVCaptureDeviceFormat *format in device.formats) {
-            CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-            if ((uint32_t)dim.width == width && (uint32_t)dim.height == height) {
-                chosen = format;
-                break;
-            }
+    for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+        if (fps + 0.08 >= range.minFrameRate && fps - 0.08 <= range.maxFrameRate) {
+            return YES;
         }
-        if (chosen && [device lockForConfiguration:nil]) {
-            device.activeFormat = chosen;
-            if (fps_num > 0 && fps_den > 0) {
-                CMTime duration = CMTimeMake((int64_t)fps_den, (int32_t)fps_num);
+    }
+    return NO;
+}
+
+static AVCaptureDeviceFormat *pick_capture_format(AVCaptureDevice *device, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den) {
+    double fps = (fps_num > 0 && fps_den > 0) ? ((double)fps_num / (double)fps_den) : 0;
+    AVCaptureDeviceFormat *size_only = nil;
+    for (AVCaptureDeviceFormat *format in device.formats) {
+        CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+        if (width > 0 && height > 0 && ((uint32_t)dim.width != width || (uint32_t)dim.height != height)) {
+            continue;
+        }
+        if (format_supports_fps(format, fps)) {
+            return format;
+        }
+        if (!size_only) {
+            size_only = format;
+        }
+    }
+    return size_only;
+}
+
+static void apply_capture_format(AVCaptureDevice *device, AVCaptureDeviceFormat *format, uint32_t fps_num, uint32_t fps_den) {
+    if (!device || !format) {
+        return;
+    }
+    NSError *lock_error = nil;
+    if (![device lockForConfiguration:&lock_error]) {
+        NSLog(@"eiviz av: lockForConfiguration failed: %@", lock_error);
+        return;
+    }
+    @try {
+        if (device.activeFormat != format) {
+            device.activeFormat = format;
+        }
+        if (fps_num > 0 && fps_den > 0) {
+            CMTime duration = CMTimeMake((int64_t)fps_den, (int32_t)fps_num);
+            BOOL in_range = NO;
+            for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+                if (CMTIME_COMPARE_INLINE(duration, >=, range.minFrameDuration) &&
+                    CMTIME_COMPARE_INLINE(duration, <=, range.maxFrameDuration)) {
+                    in_range = YES;
+                    break;
+                }
+            }
+            if (in_range) {
                 device.activeVideoMinFrameDuration = duration;
                 device.activeVideoMaxFrameDuration = duration;
             }
-            [device unlockForConfiguration];
         }
+    } @catch (NSException *ex) {
+        NSLog(@"eiviz av: activeFormat/frameDuration rejected: %@", ex);
     }
-    AVCaptureSession *session = [[AVCaptureSession alloc] init];
-    if (width == 0 && [session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
-        session.sessionPreset = AVCaptureSessionPresetHigh;
-    }
-    if (![session canAddInput:input]) {
+    [device unlockForConfiguration];
+}
+
+EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den) {
+    @try {
+        NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
+        AVCaptureDevice *device = nil;
+        if (uid.length > 0) {
+            device = [AVCaptureDevice deviceWithUniqueID:uid];
+        }
+        if (!device) {
+            device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+        }
+        if (!device) {
+            return NULL;
+        }
+        AVCaptureDeviceFormat *chosen = pick_capture_format(device, width, height, fps_num, fps_den);
+        apply_capture_format(device, chosen, fps_num, fps_den);
+        NSError *error = nil;
+        AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&error];
+        if (!input) {
+            NSLog(@"eiviz av: deviceInput failed: %@", error);
+            return NULL;
+        }
+        AVCaptureSession *session = [[AVCaptureSession alloc] init];
+        if ((width == 0 || !chosen) && [session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
+            session.sessionPreset = AVCaptureSessionPresetHigh;
+        }
+        if (![session canAddInput:input]) {
+            return NULL;
+        }
+        [session addInput:input];
+        EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
+        pump.capture = YES;
+        pump.capQueue = dispatch_queue_create("eiviz.av.capture", DISPATCH_QUEUE_SERIAL);
+        AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
+        video.alwaysDiscardsLateVideoFrames = YES;
+        @try {
+            video.videoSettings = video_attrs();
+        } @catch (NSException *ex) {
+            NSLog(@"eiviz av: BGRA videoSettings rejected: %@", ex);
+        }
+        [video setSampleBufferDelegate:pump queue:pump.capQueue];
+        if ([session canAddOutput:video]) {
+            [session addOutput:video];
+            pump.capVideo = video;
+        }
+        if (!pump.capVideo) {
+            [pump shutdown];
+            return NULL;
+        }
+        pump.session = session;
+        @try {
+            [session startRunning];
+        } @catch (NSException *ex) {
+            NSLog(@"eiviz av: startRunning failed: %@", ex);
+            [pump shutdown];
+            return NULL;
+        }
+        return (__bridge_retained EivizAvPump *)pump;
+    } @catch (NSException *ex) {
+        NSLog(@"eiviz av: open_capture aborted: %@", ex);
         return NULL;
     }
-    [session addInput:input];
-    EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
-    pump.capture = YES;
-    pump.capQueue = dispatch_queue_create("eiviz.av.capture", DISPATCH_QUEUE_SERIAL);
-    AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
-    video.videoSettings = video_attrs();
-    video.alwaysDiscardsLateVideoFrames = YES;
-    [video setSampleBufferDelegate:pump queue:pump.capQueue];
-    if ([session canAddOutput:video]) {
-        [session addOutput:video];
-        pump.capVideo = video;
-    }
-    if (!pump.capVideo) {
-        return NULL;
-    }
-    pump.session = session;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        [session startRunning];
-    });
-    return (__bridge_retained EivizAvPump *)pump;
 }
 
 void eiviz_av_close(EivizAvPump *pump) {
@@ -580,5 +648,10 @@ int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out) {
     if (owned.stopped) {
         return EIVIZ_AV_EOF;
     }
-    return owned.capture ? [owned nextCapture:out] : [owned nextFile:out];
+    @try {
+        return owned.capture ? [owned nextCapture:out] : [owned nextFile:out];
+    } @catch (NSException *ex) {
+        NSLog(@"eiviz av: next aborted: %@", ex);
+        return EIVIZ_AV_ERR;
+    }
 }

@@ -21,6 +21,8 @@ public partial class SceneEditorWindow : Window
     private bool _suppress;
     private Point _last;
     private DateTime _lastGpuPush;
+    private TextBox? _meterBox;
+    private string _meterFormat = "0.#";
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
@@ -57,22 +59,56 @@ public partial class SceneEditorWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096)
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, max, format));
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
-        Bind(PosXLabel, XBox, 2);
-        Bind(PosYLabel, YBox, 2);
-        Bind(SizeXLabel, WBox, 2);
-        Bind(SizeYLabel, HBox, 2);
-        Bind(CropXLabel, CropXBox, 2);
-        Bind(CropYLabel, CropYBox, 2);
-        Bind(CropWLabel, CropWBox, 2);
-        Bind(CropHLabel, CropHBox, 2);
-        Bind(OpLabel, OpBox, 400, "0.###");
+        Bind(PosXLabel, XBox, 2, min: -_width, max: _width * 2);
+        Bind(PosYLabel, YBox, 2, min: -_height, max: _height * 2);
+        Bind(SizeXLabel, WBox, 2, min: 1, max: _width * 2);
+        Bind(SizeYLabel, HBox, 2, min: 1, max: _height * 2);
+        Bind(CropXLabel, CropXBox, 2, min: 0, max: _width);
+        Bind(CropYLabel, CropYBox, 2, min: 0, max: _height);
+        Bind(CropWLabel, CropWBox, 2, min: 1, max: _width);
+        Bind(CropHLabel, CropHBox, 2, min: 1, max: _height);
+        Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
+    }
+
+    private void ToggleMeter(string title, TextBox box, double min, double max, string format)
+    {
+        if (ReferenceEquals(_meterBox, box) && MeterHost.Visibility == Visibility.Visible)
+        {
+            MeterHost.Visibility = Visibility.Collapsed;
+            _meterBox = null;
+            return;
+        }
+        _meterBox = box;
+        _meterFormat = format;
+        MeterTitle.Text = title;
+        MeterSlider.Minimum = min;
+        MeterSlider.Maximum = Math.Max(max, min + 1);
+        _suppress = true;
+        if (float.TryParse(box.Text, out var value))
+            MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
+        _suppress = false;
+        MeterHost.Visibility = Visibility.Visible;
+    }
+
+    private void MeterSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress || _meterBox is null)
+            return;
+        _meterBox.Text = e.NewValue.ToString(_meterFormat);
+        ApplyNumeric(false, _meterBox);
+    }
+
+    private void MeterSlider_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_meterBox is not null)
+            ApplyNumeric(true, _meterBox);
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -285,6 +321,12 @@ public partial class SceneEditorWindow : Window
         LinkBox.IsEnabled = edit;
         OpBox.IsEnabled = edit;
         LayerInputBox.IsEnabled = edit;
+        if (_meterBox is not null && float.TryParse(_meterBox.Text, out var meter))
+        {
+            _suppress = true;
+            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
+            _suppress = false;
+        }
     }
 
     private void PushGpu() => _commands.DefineSceneNow(_scene, _width, _height);
@@ -380,11 +422,36 @@ public partial class SceneEditorWindow : Window
             if (float.TryParse(HBox.Text, out var bothH))
                 _selected.Height = Math.Max(1f, bothH) / _height;
         }
-        if (float.TryParse(CropXBox.Text, out var cx)) _selected.CropX = cx / _width;
-        if (float.TryParse(CropYBox.Text, out var cy)) _selected.CropY = cy / _height;
-        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = cw / _width;
-        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = ch / _height;
-        _selected.ClampCrop(1f / Math.Max(1, _width), 1f / Math.Max(1, _height));
+        var minX = 1f / Math.Max(1, _width);
+        var minY = 1f / Math.Max(1, _height);
+        if (ReferenceEquals(sender, CropXBox) && float.TryParse(CropXBox.Text, out var cx))
+        {
+            _selected.CropX = cx / _width;
+            _selected.ClampCrop(minX, minY, CropEdit.X);
+        }
+        else if (ReferenceEquals(sender, CropYBox) && float.TryParse(CropYBox.Text, out var cy))
+        {
+            _selected.CropY = cy / _height;
+            _selected.ClampCrop(minX, minY, CropEdit.Y);
+        }
+        else if (ReferenceEquals(sender, CropWBox) && float.TryParse(CropWBox.Text, out var cw))
+        {
+            _selected.CropWidth = cw / _width;
+            _selected.ClampCrop(minX, minY, CropEdit.W);
+        }
+        else if (ReferenceEquals(sender, CropHBox) && float.TryParse(CropHBox.Text, out var ch))
+        {
+            _selected.CropHeight = ch / _height;
+            _selected.ClampCrop(minX, minY, CropEdit.H);
+        }
+        else
+        {
+            if (float.TryParse(CropXBox.Text, out var allCx)) _selected.CropX = allCx / _width;
+            if (float.TryParse(CropYBox.Text, out var allCy)) _selected.CropY = allCy / _height;
+            if (float.TryParse(CropWBox.Text, out var allCw)) _selected.CropWidth = allCw / _width;
+            if (float.TryParse(CropHBox.Text, out var allCh)) _selected.CropHeight = allCh / _height;
+            _selected.ClampCrop(minX, minY);
+        }
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
         if (push)
@@ -547,12 +614,12 @@ public partial class SceneEditorWindow : Window
             var boxes = preset.Layers
                 .Select(layer => (layer.X, layer.Y, layer.Width, layer.Height))
                 .ToArray();
-            PresetCards.Children.Add(PresetCard(preset.Name, boxes));
+            PresetCards.Children.Add(PresetCard(preset.Name, boxes, canDelete: true));
         }
         CopyFromBox.ItemsSource = _session.Scenes.Where(item => item.Id != _scene.Id).Select(item => item.Name).ToArray();
     }
 
-    private UIElement PresetCard(string name, IReadOnlyList<(float X, float Y, float W, float H)> boxes)
+    private UIElement PresetCard(string name, IReadOnlyList<(float X, float Y, float W, float H)> boxes, bool canDelete = false)
     {
         const double width = 112;
         const double height = 63;
@@ -563,16 +630,42 @@ public partial class SceneEditorWindow : Window
             BorderThickness = new Thickness(1),
             Child = SceneLayoutPresets.Mosaic(boxes, width, height)
         });
-        card.Children.Add(new TextBlock
+        var caption = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };
+        if (canDelete)
+        {
+            var del = new Button
+            {
+                Content = "×",
+                Width = 18,
+                Height = 18,
+                Padding = new Thickness(0),
+                FontSize = 11,
+                ToolTip = "Delete saved preset"
+            };
+            del.Click += (_, e) =>
+            {
+                e.Handled = true;
+                DeletePreset(name);
+            };
+            DockPanel.SetDock(del, Dock.Right);
+            caption.Children.Add(del);
+        }
+        caption.Children.Add(new TextBlock
         {
             Text = name,
             FontSize = 10,
-            Margin = new Thickness(0, 2, 0, 0),
-            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis
         });
+        card.Children.Add(caption);
         card.MouseLeftButtonUp += (_, _) => ApplyPreset(name);
         return card;
+    }
+
+    private void DeletePreset(string name)
+    {
+        _session.ScenePresets.RemoveAll(item => item.Name == name);
+        FillPresets();
     }
 
     private void CopyFrom_SelectionChanged(object sender, SelectionChangedEventArgs e)

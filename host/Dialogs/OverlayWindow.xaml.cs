@@ -19,6 +19,8 @@ public partial class OverlayWindow : Window
     private Point _last;
     private bool _suppress;
     private DateTime _lastGpuPush;
+    private TextBox? _meterBox;
+    private string _meterFormat = "0.#";
 
     public OverlayWindow(Session session, MixingUnitEntry unit)
     {
@@ -62,22 +64,56 @@ public partial class OverlayWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096)
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, max, format));
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
-        Bind(PosXLabel, XBox, 2);
-        Bind(PosYLabel, YBox, 2);
-        Bind(SizeXLabel, WBox, 2);
-        Bind(SizeYLabel, HBox, 2);
-        Bind(CropXLabel, CropXBox, 2);
-        Bind(CropYLabel, CropYBox, 2);
-        Bind(CropWLabel, CropWBox, 2);
-        Bind(CropHLabel, CropHBox, 2);
-        Bind(OpLabel, OpBox, 400, "0.###");
+        Bind(PosXLabel, XBox, 2, min: -WidthPx, max: WidthPx * 2);
+        Bind(PosYLabel, YBox, 2, min: -HeightPx, max: HeightPx * 2);
+        Bind(SizeXLabel, WBox, 2, min: 1, max: WidthPx * 2);
+        Bind(SizeYLabel, HBox, 2, min: 1, max: HeightPx * 2);
+        Bind(CropXLabel, CropXBox, 2, min: 0, max: WidthPx);
+        Bind(CropYLabel, CropYBox, 2, min: 0, max: HeightPx);
+        Bind(CropWLabel, CropWBox, 2, min: 1, max: WidthPx);
+        Bind(CropHLabel, CropHBox, 2, min: 1, max: HeightPx);
+        Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
+    }
+
+    private void ToggleMeter(string title, TextBox box, double min, double max, string format)
+    {
+        if (ReferenceEquals(_meterBox, box) && MeterHost.Visibility == Visibility.Visible)
+        {
+            MeterHost.Visibility = Visibility.Collapsed;
+            _meterBox = null;
+            return;
+        }
+        _meterBox = box;
+        _meterFormat = format;
+        MeterTitle.Text = title;
+        MeterSlider.Minimum = min;
+        MeterSlider.Maximum = Math.Max(max, min + 1);
+        _suppress = true;
+        if (float.TryParse(box.Text, out var value))
+            MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
+        _suppress = false;
+        MeterHost.Visibility = Visibility.Visible;
+    }
+
+    private void MeterSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppress || _meterBox is null)
+            return;
+        _meterBox.Text = e.NewValue.ToString(_meterFormat);
+        ApplyNumeric(false, _meterBox);
+    }
+
+    private void MeterSlider_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_meterBox is not null)
+            ApplyNumeric(true, _meterBox);
     }
 
     private void Push()
@@ -273,6 +309,8 @@ public partial class OverlayWindow : Window
         OpBox.IsEnabled = edit;
         SourceKindBox.IsEnabled = edit;
         SourceBox.IsEnabled = edit;
+        if (_meterBox is not null && float.TryParse(_meterBox.Text, out var meter))
+            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
         _suppress = false;
     }
 
@@ -516,11 +554,36 @@ public partial class OverlayWindow : Window
             if (float.TryParse(HBox.Text, out var bothH))
                 _selected.Height = Math.Max(1f, bothH) / HeightPx;
         }
-        if (float.TryParse(CropXBox.Text, out var cx)) _selected.CropX = cx / WidthPx;
-        if (float.TryParse(CropYBox.Text, out var cy)) _selected.CropY = cy / HeightPx;
-        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = cw / WidthPx;
-        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = ch / HeightPx;
-        _selected.ClampCrop(1f / Math.Max(1, WidthPx), 1f / Math.Max(1, HeightPx));
+        var minX = 1f / Math.Max(1, WidthPx);
+        var minY = 1f / Math.Max(1, HeightPx);
+        if (ReferenceEquals(sender, CropXBox) && float.TryParse(CropXBox.Text, out var cx))
+        {
+            _selected.CropX = cx / WidthPx;
+            _selected.ClampCrop(minX, minY, CropEdit.X);
+        }
+        else if (ReferenceEquals(sender, CropYBox) && float.TryParse(CropYBox.Text, out var cy))
+        {
+            _selected.CropY = cy / HeightPx;
+            _selected.ClampCrop(minX, minY, CropEdit.Y);
+        }
+        else if (ReferenceEquals(sender, CropWBox) && float.TryParse(CropWBox.Text, out var cw))
+        {
+            _selected.CropWidth = cw / WidthPx;
+            _selected.ClampCrop(minX, minY, CropEdit.W);
+        }
+        else if (ReferenceEquals(sender, CropHBox) && float.TryParse(CropHBox.Text, out var ch))
+        {
+            _selected.CropHeight = ch / HeightPx;
+            _selected.ClampCrop(minX, minY, CropEdit.H);
+        }
+        else
+        {
+            if (float.TryParse(CropXBox.Text, out var allCx)) _selected.CropX = allCx / WidthPx;
+            if (float.TryParse(CropYBox.Text, out var allCy)) _selected.CropY = allCy / HeightPx;
+            if (float.TryParse(CropWBox.Text, out var allCw)) _selected.CropWidth = allCw / WidthPx;
+            if (float.TryParse(CropHBox.Text, out var allCh)) _selected.CropHeight = allCh / HeightPx;
+            _selected.ClampCrop(minX, minY);
+        }
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
         if (push)

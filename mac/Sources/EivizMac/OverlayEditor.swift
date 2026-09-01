@@ -312,126 +312,72 @@ struct OverlayView: View {
     }
 
     private var overlayTransform: some View {
-        let size = overlayCanvasSize
-        return Grid(alignment: .leading) {
-            overlayPosRow(pw: size.0, ph: size.1)
-            overlaySizeRow(pw: size.0, ph: size.1)
-            overlayCropOriginRow(pw: size.0, ph: size.1)
-            overlayCropSizeRow(pw: size.0, ph: size.1)
-            overlayOpacityRow
-        }
-    }
-
-    private func overlayPosRow(pw: Float, ph: Float) -> some View {
-        GridRow {
-            overlayDrag("Pos X") { $0.x = ($0.x * pw + $1) / pw }
-            overlayPixel(\.x, scale: pw)
-            overlayDrag("Pos Y") { $0.y = ($0.y * ph + $1) / ph }
-            overlayPixel(\.y, scale: ph)
-        }
-    }
-
-    private func overlaySizeRow(pw: Float, ph: Float) -> some View {
-        GridRow {
-            overlayDrag("Size X") { slot, delta in
-                let width = max(1, slot.width * pw + delta) / pw
-                if slot.sizeLinked && slot.width > 0 {
-                    slot.height = width * (slot.height / slot.width)
-                }
-                slot.width = width
+        let pw = overlayCanvasSize.0
+        let ph = overlayCanvasSize.1
+        let locked = current?.locked == true
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                overlayMeter("Pos X", range: -pw ... pw * 2) { $0.x * pw } set: { $0.x = $1 / pw }
+                overlayMeter("Pos Y", range: -ph ... ph * 2) { $0.y * ph } set: { $0.y = $1 / ph }
             }
-            overlayPixel(\.width, scale: pw, linked: .width)
-            Toggle("Link", isOn: Binding(
-                get: { current?.sizeLinked ?? true },
-                set: { value in mutate { $0.sizeLinked = value } }
-            ))
-            overlayDrag("Size Y") { slot, delta in
-                let height = max(1, slot.height * ph + delta) / ph
-                if slot.sizeLinked && slot.height > 0 {
-                    slot.width = height * (slot.width / slot.height)
+            HStack(alignment: .top, spacing: 8) {
+                overlayMeter("Size X", range: 1 ... pw * 2) { $0.width * pw } set: { slot, value in
+                    let width = max(1, value) / pw
+                    if slot.sizeLinked && slot.width > 0 {
+                        slot.height = width * (slot.height / slot.width)
+                    }
+                    slot.width = width
                 }
-                slot.height = height
-            }
-            overlayPixel(\.height, scale: ph, linked: .height)
-        }
-    }
-
-    private func overlayCropOriginRow(pw: Float, ph: Float) -> some View {
-        GridRow {
-            overlayDrag("Crop X") { $0.cropX = ($0.cropX * pw + $1) / pw; $0.clampCrop() }
-            overlayPixel(\.cropX, scale: pw, crop: true)
-            overlayDrag("Crop Y") { $0.cropY = ($0.cropY * ph + $1) / ph; $0.clampCrop() }
-            overlayPixel(\.cropY, scale: ph, crop: true)
-        }
-    }
-
-    private func overlayCropSizeRow(pw: Float, ph: Float) -> some View {
-        GridRow {
-            overlayDrag("Crop W") { $0.cropWidth = ($0.cropWidth * pw + $1) / pw; $0.clampCrop() }
-            overlayPixel(\.cropWidth, scale: pw, crop: true)
-            overlayDrag("Crop H") { $0.cropHeight = ($0.cropHeight * ph + $1) / ph; $0.clampCrop() }
-            overlayPixel(\.cropHeight, scale: ph, crop: true)
-        }
-    }
-
-    private var overlayOpacityRow: some View {
-        GridRow {
-            DragAdjustLabel(title: "Opacity") { delta, ended in
-                mutate { $0.opacity = min(1, max(0, $0.opacity + delta / 400)) }
-                if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
-                    lastGpuPush = Date()
-                    mixer.pushOverlays()
+                Toggle("Link", isOn: Binding(
+                    get: { current?.sizeLinked ?? true },
+                    set: { value in mutate { $0.sizeLinked = value } }
+                ))
+                .disabled(locked)
+                overlayMeter("Size Y", range: 1 ... ph * 2) { $0.height * ph } set: { slot, value in
+                    let height = max(1, value) / ph
+                    if slot.sizeLinked && slot.height > 0 {
+                        slot.width = height * (slot.width / slot.height)
+                    }
+                    slot.height = height
                 }
             }
-            mixerFloatField(Binding(
-                get: { current?.opacity ?? 1 },
-                set: { value in mutate { $0.opacity = min(1, max(0, value)) } }
-            ), onSubmit: { mixer.pushOverlays() })
-            .frame(width: 72)
+            HStack(alignment: .top, spacing: 8) {
+                overlayMeter("Crop X", range: 0 ... pw) { $0.cropX * pw } set: { $0.cropX = $1 / pw; $0.clampCrop(edit: .x) }
+                overlayMeter("Crop Y", range: 0 ... ph) { $0.cropY * ph } set: { $0.cropY = $1 / ph; $0.clampCrop(edit: .y) }
+            }
+            HStack(alignment: .top, spacing: 8) {
+                overlayMeter("Crop W", range: 1 ... pw) { $0.cropWidth * pw } set: { $0.cropWidth = max(1, $1) / pw; $0.clampCrop(edit: .w) }
+                overlayMeter("Crop H", range: 1 ... ph) { $0.cropHeight * ph } set: { $0.cropHeight = max(1, $1) / ph; $0.clampCrop(edit: .h) }
+            }
+            overlayMeter("Opacity", range: 0 ... 1, pixelsPerUnit: 400) { $0.opacity } set: { $0.opacity = min(1, max(0, $1)) }
         }
     }
 
-    private func overlayDrag(_ title: String, _ apply: @escaping (inout OverlaySlot, Float) -> Void) -> some View {
-        DragAdjustLabel(title: title) { delta, ended in
-            guard current?.locked != true else { return }
-            mutate { apply(&$0, delta) }
+    private func overlayMeter(
+        _ title: String,
+        range: ClosedRange<Float>,
+        pixelsPerUnit: Float = 2,
+        get: @escaping (OverlaySlot) -> Float,
+        set: @escaping (inout OverlaySlot, Float) -> Void
+    ) -> some View {
+        ExpandableMeter(
+            title: title,
+            value: Binding(
+                get: { current.map(get) ?? 0 },
+                set: { value in
+                    guard current?.locked != true else { return }
+                    mutate { set(&$0, value) }
+                }
+            ),
+            range: range,
+            disabled: current?.locked == true,
+            pixelsPerUnit: pixelsPerUnit
+        ) { ended in
             if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
                 lastGpuPush = Date()
                 mixer.pushOverlays()
             }
         }
-    }
-
-    private enum OverlayLink { case width, height }
-
-    private func overlayPixel(
-        _ key: WritableKeyPath<OverlaySlot, Float>,
-        scale: Float,
-        linked: OverlayLink? = nil,
-        crop: Bool = false
-    ) -> some View {
-        mixerFloatField(Binding(
-            get: { (current?[keyPath: key] ?? 0) * scale },
-            set: { value in
-                guard current?.locked != true else { return }
-                mutate { slot in
-                    if linked == .width, slot.sizeLinked, slot.width > 0 {
-                        let width = max(1, value) / scale
-                        slot.height = width * (slot.height / slot.width)
-                        slot.width = width
-                    } else if linked == .height, slot.sizeLinked, slot.height > 0 {
-                        let height = max(1, value) / scale
-                        slot.width = height * (slot.width / slot.height)
-                        slot.height = height
-                    } else {
-                        slot[keyPath: key] = value / scale
-                    }
-                    if crop { slot.clampCrop() }
-                }
-            }
-        ), onSubmit: { mixer.pushOverlays() })
-        .frame(width: 72)
-        .disabled(current?.locked == true)
     }
 
     private var overlayFields: some View {

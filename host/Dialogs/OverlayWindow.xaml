@@ -95,6 +95,12 @@
                     <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
                     <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                 </Grid>
+                <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,8">
+                    <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>
+                    <Slider x:Name="MeterSlider" Height="18"
+                            ValueChanged="MeterSlider_ValueChanged"
+                            PreviewMouseLeftButtonUp="MeterSlider_MouseUp"/>
+                </StackPanel>
                 <CheckBox x:Name="AudioFollowBox" Content="Audio Follow" Foreground="#EEE" Margin="0,8,0,8"
                           Checked="AudioFollow_Changed" Unchecked="AudioFollow_Changed"/>
                 <Button Content="Reset" Height="26" Margin="0,0,0,8" Click="Reset_Click"/>

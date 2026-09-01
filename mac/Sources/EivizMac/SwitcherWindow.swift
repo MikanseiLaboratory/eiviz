@@ -98,8 +98,8 @@ struct SwitcherView: View {
             .frame(width: 220)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-            Color.clear.frame(maxHeight: .infinity)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
         }
         .padding(.horizontal, 12)
         .frame(width: 260)

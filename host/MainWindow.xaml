@@ -77,7 +77,6 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*" MinHeight="80"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <DockPanel Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTransition_Click"/>
@@ -87,8 +86,8 @@
                         <StackPanel x:Name="TransitionPanel"/>
                     </ScrollViewer>
                     <Slider x:Name="TBar" Grid.Row="2" Orientation="Horizontal" Minimum="0" Maximum="1"
-                            Width="220" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Margin="8,8" Height="18"
+                            Width="220" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                            Margin="8,12,8,16" Height="18"
                             IsMoveToPointEnabled="True"
                             ValueChanged="TBar_ValueChanged"
                             PreviewMouseLeftButtonUp="TBar_MouseUp"

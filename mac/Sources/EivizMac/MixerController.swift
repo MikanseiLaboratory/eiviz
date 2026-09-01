@@ -1236,7 +1236,7 @@ final class MixerController: ObservableObject {
     }
 
     private func applyMixerMix(unitId: UInt64, mix value: Float) {
-        if mixByUnit[unitId] != value {
+        if mixByUnit[unitId].map({ abs($0 - value) > 0.002 }) ?? true {
             var next = mixByUnit
             next[unitId] = value
             mixByUnit = next

@@ -105,6 +105,12 @@
                     <Button Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
                             Height="26" Margin="0,8,0,0" Click="ResetLayer_Click"/>
                 </Grid>
+                <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,0">
+                    <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>
+                    <Slider x:Name="MeterSlider" Height="18"
+                            ValueChanged="MeterSlider_ValueChanged"
+                            PreviewMouseLeftButtonUp="MeterSlider_MouseUp"/>
+                </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
                     <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
