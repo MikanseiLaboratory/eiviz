@@ -41,13 +41,19 @@ public partial class SceneTile : UserControl
         Monitor.ApplyPresentInterval();
     }
 
-    public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null)
+    public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null) =>
+        SetBusRoles(selected, false, previewColor, null, inactiveColor);
+
+    public void SetBusRoles(bool preview, bool program, Color? previewColor = null, Color? programColor = null, Color? inactiveColor = null)
     {
-        var accent = previewColor ?? Color.FromRgb(0, 255, 0);
         var idle = inactiveColor ?? Color.FromRgb(64, 64, 64);
-        Chrome.BorderBrush = selected
-            ? new SolidColorBrush(accent)
-            : new SolidColorBrush(idle);
+        var color = program
+            ? programColor ?? Color.FromRgb(255, 0, 0)
+            : preview
+                ? previewColor ?? Color.FromRgb(0, 255, 0)
+                : idle;
+        Chrome.BorderBrush = new SolidColorBrush(color);
+        Chrome.BorderThickness = program || preview ? new Thickness(3) : new Thickness(1);
     }
 
     public void SetTransport(bool hasVideo, bool loop, bool playing, bool muted)

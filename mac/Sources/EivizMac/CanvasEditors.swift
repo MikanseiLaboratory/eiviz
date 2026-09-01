@@ -7,6 +7,8 @@ struct SceneEditorView: View {
     @State private var original: [SceneLayer] = []
     @State private var selectedLayer: UUID?
     @State private var name: String = ""
+    @State private var presetName = ""
+    @State private var copyFromId: UInt64 = 0
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -42,11 +44,20 @@ struct SceneEditorView: View {
             .buttonStyle(MixerButtonStyle())
 
             VStack {
-                Text("Wireframe (16:9)").fontWeight(.bold)
+                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
                 WireCanvasView(
                     items: layers.map {
-                        WireRect(id: $0.id, x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                        WireRect(
+                            id: $0.id,
+                            x: $0.x,
+                            y: $0.y,
+                            width: $0.width,
+                            height: $0.height,
+                            locked: $0.locked,
+                            sizeLinked: $0.sizeLinked
+                        )
                     },
+                    aspect: projectAspect,
                     selected: $selectedLayer,
                     onChange: applyWire
                 )
@@ -66,6 +77,33 @@ struct SceneEditorView: View {
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
                 }
+                Text("Preset").padding(.top, 8)
+                Picker("", selection: $presetName) {
+                    Text("Apply…").tag("")
+                    ForEach(["Full", "Split H", "Split V", "Quad", "PiP TR", "PiP TL", "PiP BR", "PiP BL"], id: \.self) {
+                        Text($0).tag($0)
+                    }
+                    ForEach(mixer.session.scenePresets) { preset in
+                        Text(preset.name).tag(preset.name)
+                    }
+                }
+                .onChange(of: presetName) { _, name in
+                    guard !name.isEmpty else { return }
+                    applyPreset(name)
+                    presetName = ""
+                }
+                Picker("Copy from", selection: $copyFromId) {
+                    Text("Copy from…").tag(UInt64(0))
+                    ForEach(mixer.session.scenes.filter { $0.id != current?.id }) { scene in
+                        Text(scene.name).tag(scene.id)
+                    }
+                }
+                .onChange(of: copyFromId) { _, id in
+                    guard id != 0 else { return }
+                    copyFrom(id)
+                    copyFromId = 0
+                }
+                Button("Save preset") { savePreset() }
                 Spacer()
                 HStack {
                     Spacer()
@@ -106,10 +144,15 @@ struct SceneEditorView: View {
     }
 
     private var layers: [SceneLayer] { current?.layers ?? [] }
+    private var projectAspect: CGFloat {
+        CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height))
+    }
+    private var projectW: Float { Float(mixer.selectedUnit.width) }
+    private var projectH: Float { Float(mixer.selectedUnit.height) }
 
     private func label(_ layer: SceneLayer) -> String {
         let input = mixer.session.inputs.first { $0.id == layer.inputId }
-        return "\(layer.z): \(input?.name ?? "\(layer.inputId)")"
+        return "\(layer.locked ? "🔒 " : "")\(layer.z): \(input?.name ?? "\(layer.inputId)")"
     }
 
     private func mutate(_ body: (inout SceneEntry) -> Void) {
@@ -154,7 +197,7 @@ struct SceneEditorView: View {
 
     private func applyWire(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
         mutate { scene in
-            if let i = scene.layers.firstIndex(where: { $0.id == id }) {
+            if let i = scene.layers.firstIndex(where: { $0.id == id }), !scene.layers[i].locked {
                 scene.layers[i].x = x
                 scene.layers[i].y = y
                 scene.layers[i].width = w
@@ -169,33 +212,100 @@ struct SceneEditorView: View {
     }
 
     private func layerFields(_ index: Int) -> some View {
-        Grid(alignment: .leading) {
+        let locked = layer(index)?.locked == true
+        return Grid(alignment: .leading) {
             GridRow {
                 Text("X")
-                field(index, get: \.x, set: { $0.x = $1 })
+                pixelField(index, axis: .x).disabled(locked)
                 Text("Y")
-                field(index, get: \.y, set: { $0.y = $1 })
+                pixelField(index, axis: .y).disabled(locked)
             }
             GridRow {
-                Text("W")
-                field(index, get: \.width, set: { $0.width = max(0.01, $1) })
-                Text("H")
-                field(index, get: \.height, set: { $0.height = max(0.01, $1) })
+                Text("SX")
+                pixelField(index, axis: .w).disabled(locked)
+                Text("SY")
+                pixelField(index, axis: .h).disabled(locked)
+            }
+            GridRow {
+                Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
+                Text("Z")
+                zField(index)
             }
             GridRow {
                 Text("Op")
-                field(index, get: \.opacity, set: { $0.opacity = min(1, max(0, $1)) })
-                if let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) {
-                    Toggle("Audio Follow", isOn: Binding(
-                        get: { mixer.session.scenes[i].layers[index].audioFollow },
-                        set: { value in
-                            mixer.session.scenes[i].layers[index].audioFollow = value
-                            push()
-                        }
-                    ))
-                }
+                field(index, get: \.opacity, set: { $0.opacity = min(1, max(0, $1)) }).disabled(locked)
+                Toggle("Lock", isOn: boolBinding(index, \.locked))
+            }
+            GridRow {
+                Toggle("Audio Follow", isOn: boolBinding(index, \.audioFollow))
             }
         }
+    }
+
+    private enum PixelAxis { case x, y, w, h }
+
+    private func layer(_ index: Int) -> SceneLayer? {
+        guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return nil }
+        return mixer.session.scenes[i].layers[index]
+    }
+
+    private func pixelField(_ index: Int, axis: PixelAxis) -> some View {
+        mixerFloatField(Binding(
+            get: {
+                guard let layer = layer(index) else { return 0 }
+                switch axis {
+                case .x: return layer.x * projectW
+                case .y: return layer.y * projectH
+                case .w: return layer.width * projectW
+                case .h: return layer.height * projectH
+                }
+            },
+            set: { value in
+                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+                var layer = mixer.session.scenes[i].layers[index]
+                switch axis {
+                case .x: layer.x = value / projectW
+                case .y: layer.y = value / projectH
+                case .w:
+                    let width = max(1, value) / projectW
+                    if layer.sizeLinked && layer.width > 0 {
+                        layer.height = width * (layer.height / layer.width)
+                    }
+                    layer.width = width
+                case .h:
+                    let height = max(1, value) / projectH
+                    if layer.sizeLinked && layer.height > 0 {
+                        layer.width = height * (layer.width / layer.height)
+                    }
+                    layer.height = height
+                }
+                mixer.session.scenes[i].layers[index] = layer
+            }
+        ), onSubmit: { push() })
+        .frame(width: 72)
+    }
+
+    private func zField(_ index: Int) -> some View {
+        mixerInt32Field(Binding(
+            get: { layer(index)?.z ?? 0 },
+            set: { value in
+                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+                mixer.session.scenes[i].layers[index].z = value
+                push()
+            }
+        ))
+        .frame(width: 72)
+    }
+
+    private func boolBinding(_ index: Int, _ key: WritableKeyPath<SceneLayer, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { layer(index)?[keyPath: key] ?? false },
+            set: { value in
+                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+                mixer.session.scenes[i].layers[index][keyPath: key] = value
+                push()
+            }
+        )
     }
 
     private func field(
@@ -204,16 +314,69 @@ struct SceneEditorView: View {
         set: @escaping (inout SceneLayer, Float) -> Void
     ) -> some View {
         mixerFloatField(Binding(
-            get: {
-                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return 0 }
-                return mixer.session.scenes[i].layers[index][keyPath: get]
-            },
+            get: { layer(index)?[keyPath: get] ?? 0 },
             set: { value in
                 guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
                 set(&mixer.session.scenes[i].layers[index], value)
             }
         ), onSubmit: { push() })
         .frame(width: 72)
+    }
+
+    private func applyPreset(_ name: String) {
+        mutate { scene in
+            if let user = mixer.session.scenePresets.first(where: { $0.name == name }) {
+                for i in 0..<min(scene.layers.count, user.layers.count) where !scene.layers[i].locked {
+                    scene.layers[i].x = user.layers[i].x
+                    scene.layers[i].y = user.layers[i].y
+                    scene.layers[i].width = user.layers[i].width
+                    scene.layers[i].height = user.layers[i].height
+                    scene.layers[i].opacity = user.layers[i].opacity
+                    scene.layers[i].z = user.layers[i].z
+                }
+                return
+            }
+            let boxes: [(Float, Float, Float, Float)] = switch name {
+            case "Full": [(0, 0, 1, 1)]
+            case "Split H": [(0, 0, 0.5, 1), (0.5, 0, 0.5, 1)]
+            case "Split V": [(0, 0, 1, 0.5), (0, 0.5, 1, 0.5)]
+            case "Quad": [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)]
+            case "PiP TR": [(0, 0, 1, 1), (0.62, 0.08, 0.32, 0.32)]
+            case "PiP TL": [(0, 0, 1, 1), (0.06, 0.08, 0.32, 0.32)]
+            case "PiP BR": [(0, 0, 1, 1), (0.62, 0.60, 0.32, 0.32)]
+            case "PiP BL": [(0, 0, 1, 1), (0.06, 0.60, 0.32, 0.32)]
+            default: []
+            }
+            for i in 0..<min(scene.layers.count, boxes.count) where !scene.layers[i].locked {
+                let box = boxes[i]
+                scene.layers[i].x = box.0
+                scene.layers[i].y = box.1
+                scene.layers[i].width = box.2
+                scene.layers[i].height = box.3
+            }
+        }
+        push()
+    }
+
+    private func copyFrom(_ id: UInt64) {
+        guard let source = mixer.session.scenes.first(where: { $0.id == id }) else { return }
+        mutate { scene in
+            scene.layers = source.layers.map { layer in
+                var copy = layer
+                copy.id = UUID()
+                return copy
+            }
+            selectedLayer = scene.layers.first?.id
+        }
+        push()
+    }
+
+    private func savePreset() {
+        guard let scene = current else { return }
+        mixer.session.scenePresets.append(SceneLayoutPreset(
+            name: "Preset \(mixer.session.scenePresets.count + 1)",
+            layers: scene.layers
+        ))
     }
 }
 
@@ -247,11 +410,12 @@ struct OverlayView: View {
             .buttonStyle(MixerButtonStyle())
 
             VStack {
-                Text("Layout (16:9 Program)").fontWeight(.bold)
+                Text("Layout (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height) Program)").fontWeight(.bold)
                 WireCanvasView(
                     items: unit.overlays.map {
                         WireRect(id: $0.id, x: $0.x, y: $0.y, width: $0.width, height: $0.height, enabled: $0.enabled)
                     },
+                    aspect: CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
                     selected: $selected,
                     onChange: applyWire
                 )
@@ -361,22 +525,51 @@ struct OverlayView: View {
     }
 
     private var overlayFields: some View {
-        Grid {
-            GridRow {
-                Text("X")
-                num(\.x)
-                Text("Y")
-                num(\.y)
+        VStack(alignment: .leading, spacing: 6) {
+            Grid {
+                GridRow {
+                    Text("X")
+                    num(\.x)
+                    Text("Y")
+                    num(\.y)
+                }
+                GridRow {
+                    Text("W")
+                    num(\.width)
+                    Text("H")
+                    num(\.height)
+                }
+                GridRow {
+                    Text("Op")
+                    num(\.opacity)
+                }
             }
-            GridRow {
-                Text("W")
-                num(\.width)
-                Text("H")
-                num(\.height)
+            Picker("On/Off", selection: Binding(
+                get: { current?.transitionKind ?? EIVIZ_TRANSITION_FADE },
+                set: { value in
+                    mutate { $0.transitionKind = value }
+                    mixer.pushOverlays()
+                }
+            )) {
+                Text("Cut").tag(EIVIZ_TRANSITION_CUT)
+                Text("Fade").tag(EIVIZ_TRANSITION_FADE)
             }
-            GridRow {
-                Text("Op")
-                num(\.opacity)
+            Text("Duration")
+            HStack {
+                mixerUintField(Binding(
+                    get: { current?.durationValue ?? 15 },
+                    set: { value in mutate { $0.durationValue = max(1, value) } }
+                ))
+                Picker("", selection: Binding(
+                    get: { current?.durationUnit ?? 0 },
+                    set: { value in
+                        mutate { $0.durationUnit = value }
+                        mixer.pushOverlays()
+                    }
+                )) {
+                    Text("Frames").tag(EIVIZ_DURATION_FRAMES)
+                    Text("Milliseconds").tag(EIVIZ_DURATION_MS)
+                }
             }
         }
     }

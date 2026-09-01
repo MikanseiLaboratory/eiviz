@@ -488,6 +488,8 @@ struct AddInputView: View {
     @State private var ndiList: [String] = []
     @State private var uvcList: [VideoCaptureDevice] = []
     @State private var selectedUvc: String = ""
+    @State private var uvcModes: [CaptureMode] = []
+    @State private var selectedMode: CaptureMode?
     @State private var r: Double = 220
     @State private var g: Double = 32
     @State private var b: Double = 32
@@ -512,6 +514,11 @@ struct AddInputView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Name")
                 mixerTextField($name, placeholder: defaultName())
+                if let editing {
+                    Text("ID \(editing.id)   GUID \(editing.guid)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(EivizTheme.dim)
+                }
                 form
                 Spacer()
                 HStack {
@@ -595,6 +602,14 @@ struct AddInputView: View {
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
             }
+            .onChange(of: selectedUvc) { _, _ in refreshUvcModes() }
+            Text("Mode")
+            Picker("", selection: $selectedMode) {
+                Text("Select mode").tag(Optional<CaptureMode>.none)
+                ForEach(uvcModes) { mode in
+                    Text(mode.label).tag(Optional(mode))
+                }
+            }
         }
     }
 
@@ -643,6 +658,20 @@ struct AddInputView: View {
 
     private func refreshUvc() {
         uvcList = MixerFFI.videoCaptures()
+        refreshUvcModes()
+    }
+
+    private func refreshUvcModes() {
+        guard !selectedUvc.isEmpty else {
+            uvcModes = []
+            selectedMode = nil
+            return
+        }
+        uvcModes = MixerFFI.videoCaptureModes(deviceId: selectedUvc)
+        if let current = selectedMode, uvcModes.contains(current) {
+            return
+        }
+        selectedMode = uvcModes.first
     }
 
     private func loadEditing() {
@@ -657,6 +686,15 @@ struct AddInputView: View {
         omtAddress = editing.kind == .omt ? (editing.pathOrAddress ?? "") : omtAddress
         ndiAddress = editing.kind == .ndi ? (editing.pathOrAddress ?? "") : ndiAddress
         selectedUvc = editing.kind == .uvc ? (editing.pathOrAddress ?? "") : selectedUvc
+        if editing.kind == .uvc, editing.captureWidth > 0, editing.captureHeight > 0 {
+            selectedMode = CaptureMode(
+                width: editing.captureWidth,
+                height: editing.captureHeight,
+                fpsNum: editing.captureFpsNum,
+                fpsDen: max(1, editing.captureFpsDen)
+            )
+        }
+        refreshUvcModes()
         r = Double(editing.colorR) * 255
         g = Double(editing.colorG) * 255
         b = Double(editing.colorB) * 255
@@ -747,9 +785,17 @@ struct AddInputView: View {
             input.frameBufferFrames = buffer
             input.useGpu = false
         default:
-            guard !selectedUvc.isEmpty else { return false }
+            guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
             input.kind = .uvc
             input.pathOrAddress = selectedUvc
+            input.captureWidth = mode.width
+            input.captureHeight = mode.height
+            input.captureFpsNum = mode.fpsNum
+            input.captureFpsDen = mode.fpsDen
+        }
+        if let editing {
+            input.guid = editing.guid
+            input.id = editing.id
         }
         mixer.upsertInput(input, replacing: editing?.id)
         return true

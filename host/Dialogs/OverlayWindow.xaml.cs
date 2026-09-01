@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -125,6 +126,9 @@ public partial class OverlayWindow : Window
         WBox.Text = _selected.Width.ToString("0.####");
         HBox.Text = _selected.Height.ToString("0.####");
         OpBox.Text = _selected.Opacity.ToString("0.###");
+        KindBox.SelectedIndex = _selected.TransitionKind == MixerNative.TransitionCut ? 0 : 1;
+        DurationBox.Text = _selected.DurationValue.ToString();
+        DurationUnitBox.SelectedIndex = _selected.DurationUnit == MixerNative.DurationMs ? 1 : 0;
         _suppress = false;
     }
 
@@ -205,6 +209,35 @@ public partial class OverlayWindow : Window
             return;
         _selected.SceneGpuId = scene.GpuId;
         Commit();
+    }
+
+    private void KindBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _selected is null || KindBox.SelectedItem is not ComboBoxItem item)
+            return;
+        _selected.TransitionKind = item.Tag is string text && uint.TryParse(text, out var value)
+            ? value
+            : MixerNative.TransitionFade;
+        Push();
+    }
+
+    private void DurationUnit_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _selected is null || DurationUnitBox.SelectedItem is not ComboBoxItem item)
+            return;
+        _selected.DurationUnit = item.Tag is string text && uint.TryParse(text, out var value)
+            ? value
+            : MixerNative.DurationFrames;
+        Push();
+    }
+
+    private void Duration_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null)
+            return;
+        if (uint.TryParse(DurationBox.Text, out var value) && value > 0)
+            _selected.DurationValue = value;
+        Push();
     }
 
     private void Numeric_LostFocus(object sender, RoutedEventArgs e)

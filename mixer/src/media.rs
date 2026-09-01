@@ -10,7 +10,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
-    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
+    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
     MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READER_D3D_MANAGER,
     MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
@@ -28,7 +28,7 @@ use windows::core::{GUID, PCWSTR};
 use crate::abi::{FMT_BGRA, MixerVideoInfo};
 use crate::dxgi::GpuVideoContext;
 use crate::upload::{
-    AUDIO_LIVE_FRAMES, AUDIO_RATE, AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked,
+    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked,
     ingest_audio_throttled,
 };
 
@@ -51,6 +51,10 @@ impl VideoPump {
         path: String,
         capture: bool,
         format: u32,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
         gpu: GpuVideoContext,
     ) -> Result<Self, String> {
@@ -71,7 +75,7 @@ impl VideoPump {
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, format, uploads, gpu, stop_t, playing_t, looping_t,
+                    source_id, path, capture, format, width, height, fps_num, fps_den, uploads, gpu, stop_t, playing_t, looping_t,
                     seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
@@ -144,6 +148,10 @@ fn run_loop(
     path: String,
     capture: bool,
     format: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
     gpu: GpuVideoContext,
     stop: Arc<AtomicBool>,
@@ -163,7 +171,7 @@ fn run_loop(
             return Ok(());
         }
         let opened = match open_reader(&path, capture, Some(&gpu), prefer_packed) {
-            Ok(reader) => match configure_video(&reader, true, prefer_packed) {
+            Ok(reader) => match configure_video(&reader, true, prefer_packed, width, height, fps_num, fps_den) {
                 Ok(layout) => Ok((reader, layout)),
                 Err(error) => Err(error),
             },
@@ -172,7 +180,7 @@ fn run_loop(
         let (reader, layout) = match opened {
             Ok(pair) => pair,
             Err(gpu_error) => match open_reader(&path, capture, None, prefer_packed) {
-                Ok(reader) => match configure_video(&reader, false, prefer_packed) {
+                Ok(reader) => match configure_video(&reader, false, prefer_packed, width, height, fps_num, fps_den) {
                     Ok(layout) => (reader, layout),
                     Err(error) => {
                         let message = format!("{gpu_error}; cpu fallback: {error}");
@@ -490,6 +498,10 @@ fn configure_video(
     reader: &IMFSourceReader,
     gpu: bool,
     prefer_packed: bool,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
 ) -> Result<VideoLayout, String> {
     unsafe {
         let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_ANY_STREAM), false);
@@ -516,7 +528,7 @@ fn configure_video(
         };
         let mut last = "no subtype".to_string();
         for subtype in subtypes {
-            match set_video_subtype(reader, *subtype) {
+            match set_video_subtype(reader, *subtype, width, height, fps_num, fps_den) {
                 Ok(()) => return read_video_layout(reader, gpu, prefer_packed),
                 Err(error) => last = error,
             }
@@ -525,17 +537,82 @@ fn configure_video(
     }
 }
 
-fn set_video_subtype(reader: &IMFSourceReader, subtype: GUID) -> Result<(), String> {
+fn set_video_subtype(
+    reader: &IMFSourceReader,
+    subtype: GUID,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> Result<(), String> {
     unsafe {
         let ty = MFCreateMediaType().map_err(|e| e.to_string())?;
         ty.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
             .map_err(|e| e.to_string())?;
         ty.SetGUID(&MF_MT_SUBTYPE, &subtype)
             .map_err(|e| e.to_string())?;
+        if width > 0 && height > 0 {
+            let size = ((width as u64) << 32) | height as u64;
+            ty.SetUINT64(&MF_MT_FRAME_SIZE, size)
+                .map_err(|e| e.to_string())?;
+        }
+        if fps_num > 0 && fps_den > 0 {
+            let rate = ((fps_num as u64) << 32) | fps_den as u64;
+            ty.SetUINT64(&MF_MT_FRAME_RATE, rate)
+                .map_err(|e| e.to_string())?;
+        }
         reader
             .SetCurrentMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), None, &ty)
             .map_err(|e| e.to_string())
     }
+}
+
+pub fn enumerate_capture_modes(device_id: &str) -> Vec<crate::abi::VideoCaptureMode> {
+    if startup().is_err() {
+        return Vec::new();
+    }
+    let Ok(reader) = open_reader(device_id, true, None, true) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    unsafe {
+        let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_ANY_STREAM), false);
+        let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true);
+        for index in 0..64u32 {
+            let Ok(ty) = reader.GetNativeMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), index)
+            else {
+                break;
+            };
+            let Ok(frame_size) = ty.GetUINT64(&MF_MT_FRAME_SIZE) else {
+                continue;
+            };
+            let width = (frame_size >> 32) as u32;
+            let height = frame_size as u32;
+            if width == 0 || height == 0 {
+                continue;
+            }
+            let (fps_num, fps_den) = ty
+                .GetUINT64(&MF_MT_FRAME_RATE)
+                .map(|rate| ((rate >> 32) as u32, rate as u32))
+                .unwrap_or((60, 1));
+            let mode = crate::abi::VideoCaptureMode {
+                width,
+                height,
+                fps_num: fps_num.max(1),
+                fps_den: fps_den.max(1),
+                format: FMT_BGRA,
+            };
+            if !out.iter().any(|item: &crate::abi::VideoCaptureMode| {
+                item.width == mode.width
+                    && item.height == mode.height
+                    && item.fps_num == mode.fps_num
+                    && item.fps_den == mode.fps_den
+            }) {
+                out.push(mode);
+            }
+        }
+    }
+    out
 }
 
 fn read_video_layout(

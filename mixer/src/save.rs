@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::abi::{
-    is_scene, mixing_unit_from_source, OverlayDesc, UnitState, SAVE_ALWAYS_FULL, SAVE_ALWAYS_LOW,
+    is_scene, mixing_unit_from_source, OverlayDesc, SAVE_ALWAYS_FULL, SAVE_ALWAYS_LOW,
     SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SAVE_NOT_ON_PROGRAM, SRC_KIND_INPUT,
     SRC_KIND_MU_MULTIVIEW, SRC_KIND_SCENE,
 };
@@ -73,14 +73,14 @@ pub fn want_full(save: LiveSave, roles: SourceRoles) -> bool {
 
 pub fn collect_source_roles(
     scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
-    snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+    snapshot: &[crate::abi::UnitSnap],
     monitor_sources: &[u64],
     outputs: &[(u32, u64)],
 ) -> HashMap<u64, SourceRoles> {
     let spec_map: HashMap<u64, &[OverlayDesc]> =
         scene_specs.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
     let mut roles = HashMap::<u64, SourceRoles>::new();
-    for (_, _, _, _, _, state) in snapshot {
+    for (_, _, _, _, _, state, _, _) in snapshot {
         add(state.program_source, Role::Program, &spec_map, &mut roles);
         add(state.preview_source, Role::Preview, &spec_map, &mut roles);
         if state.mix > 0.001 {
@@ -149,7 +149,7 @@ fn add(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{SCENE_BASE, SRC_BLUE, SRC_COLOR};
+    use crate::abi::{SCENE_BASE, SRC_BLUE, SRC_COLOR, UnitState};
 
     fn scene(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle) {
         let overlays: Arc<[OverlayDesc]> = layers
@@ -163,7 +163,7 @@ mod tests {
         (SCENE_BASE | id, 1920, 1080, overlays, crate::MvLabelStyle::default())
     }
 
-    fn unit(program: u64, preview: u64, mix: f32) -> (u64, u32, u32, u32, u32, UnitState) {
+    fn unit(program: u64, preview: u64, mix: f32) -> crate::abi::UnitSnap {
         (
             1,
             1920,
@@ -176,6 +176,8 @@ mod tests {
                 mix,
                 ..UnitState::default()
             },
+            0,
+            None,
         )
     }
 

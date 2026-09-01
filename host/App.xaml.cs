@@ -153,7 +153,7 @@ public partial class App : Application
                             input.NdiBandwidth));
                         break;
                     case InputKind.Uvc when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
+                        Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
                         break;
                 }
             }

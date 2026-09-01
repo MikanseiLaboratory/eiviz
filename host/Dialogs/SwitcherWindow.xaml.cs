@@ -101,7 +101,7 @@ public partial class SwitcherWindow : Window
                 Padding = new Thickness(6, 4, 6, 4),
                 Child = new TextBlock
                 {
-                    Text = $"{preset.Label}  {preset.DurationFrames}f",
+                    Text = $"{preset.Label}  {preset.DurationValue}{(preset.DurationUnit == MixerNative.DurationMs ? "ms" : "f")}",
                     Foreground = System.Windows.Media.Brushes.White
                 }
             };
@@ -117,10 +117,10 @@ public partial class SwitcherWindow : Window
 
     private void FirePreset(TransitionPreset preset)
     {
-        if (preset.Kind == MixerNative.TransitionCut || preset.DurationFrames <= 1)
+        if (preset.Kind == MixerNative.TransitionCut || preset.DurationValue <= 1)
             Commands.TryEnqueue(new CutCommand(_unit.Id, preset.Swap));
         else
-            Commands.TryEnqueue(new AutoCommand(_unit.Id, preset.Kind, _unit.DurationMs(preset.DurationFrames), preset.Swap));
+            Commands.TryEnqueue(preset.ToAuto(_unit.Id, _unit));
     }
 
     private TransitionPreset TbarPreset()

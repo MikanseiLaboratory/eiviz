@@ -104,6 +104,9 @@ public partial class MainWindow : Window
 
     private void RefreshSceneTiles()
     {
+        var programId = CurrentProgramSceneId();
+        var programName = _session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
+        ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? Loc.T("chrome.program") : $"{Loc.T("chrome.program")} — {programName}";
         foreach (SceneTile tile in ScenePanel.Children)
         {
             if (tile.Scene is not { } scene)
@@ -117,7 +120,24 @@ public partial class MainWindow : Window
                 video?.VideoLoop == true,
                 playing,
                 SceneInputs(scene).All(item => item.Mute));
+            tile.SetBusRoles(
+                _selectedScene?.Id == scene.Id,
+                scene.GpuId == programId,
+                BusTheme.Preview(_session.Settings),
+                BusTheme.Program(_session.Settings),
+                BusTheme.Inactive(_session.Settings));
         }
+    }
+
+    private ulong CurrentProgramSceneId()
+    {
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
+                return state.ProgramSource;
+        }
+        return 0;
     }
 
     private InputEntry? SceneVideo(SceneEntry scene) =>
@@ -131,7 +151,7 @@ public partial class MainWindow : Window
     private void CutScene(SceneEntry scene)
     {
         SelectScene(scene);
-        FirePreset(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
+        FirePreset(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
     }
 
     private void ToggleSceneLoop(SceneEntry scene)
@@ -181,10 +201,10 @@ public partial class MainWindow : Window
     private void FirePreset(TransitionPreset preset)
     {
         var unit = SelectedUnit;
-        if (preset.Kind == MixerNative.TransitionCut || preset.DurationFrames <= 1)
+        if (preset.Kind == MixerNative.TransitionCut || preset.DurationValue <= 1)
             Commands.TryEnqueue(new CutCommand(unit.Id, preset.Swap));
         else
-            Commands.TryEnqueue(new AutoCommand(unit.Id, preset.Kind, unit.DurationMs(preset.DurationFrames), preset.Swap));
+            Commands.TryEnqueue(preset.ToAuto(unit.Id, unit));
     }
 
     private TransitionPreset TbarPreset()
@@ -249,9 +269,9 @@ public partial class MainWindow : Window
     {
         TransitionPanel.Children.Clear();
         var unit = SelectedUnit;
-        var keep = _transitionExpanded.Where(i => i < unit.Transitions.Count).ToHashSet();
+        var expanded = _transitionExpanded.Where(i => i < unit.Transitions.Count).ToHashSet();
         _transitionExpanded.Clear();
-        foreach (var i in keep)
+        foreach (var i in expanded)
             _transitionExpanded.Add(i);
         for (var i = 0; i < unit.Transitions.Count; i++)
         {
@@ -280,7 +300,7 @@ public partial class MainWindow : Window
                     : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(2),
-                Header = $"{preset.Label}  {preset.DurationFrames}f"
+                Header = $"{preset.Label}  {preset.DurationValue}{(preset.DurationUnit == MixerNative.DurationMs ? "ms" : "f")}"
             };
 
             expander.Expanded += (_, _) => _transitionExpanded.Add(index);
@@ -288,26 +308,93 @@ public partial class MainWindow : Window
 
             var stack = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
             var kind = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
-            kind.Items.Add(new ComboBoxItem { Content = "Cut", Tag = MixerNative.TransitionCut });
-            kind.Items.Add(new ComboBoxItem { Content = "Fade", Tag = MixerNative.TransitionFade });
-            kind.Items.Add(new ComboBoxItem { Content = "Dip", Tag = MixerNative.TransitionDip });
-            kind.SelectedIndex = preset.Kind switch { 0 => 0, 2 => 2, _ => 1 };
+            foreach (var (label, value) in new (string, uint)[]
+            {
+                ("Cut", MixerNative.TransitionCut),
+                ("Fade", MixerNative.TransitionFade),
+                ("Dip", MixerNative.TransitionDip),
+                ("Wipe", MixerNative.TransitionWipe),
+                ("Slide", MixerNative.TransitionSlide),
+                ("Push", MixerNative.TransitionPush),
+                ("Iris", MixerNative.TransitionIris),
+                ("Blinds", MixerNative.TransitionBlinds),
+                ("Zoom", MixerNative.TransitionZoom),
+                ("Additive", MixerNative.TransitionAdditive),
+                ("Custom WGSL", MixerNative.TransitionCustom),
+                ("Stinger", MixerNative.TransitionStinger)
+            })
+                kind.Items.Add(new ComboBoxItem { Content = label, Tag = value });
+            kind.SelectedIndex = Math.Max(0, Enumerable.Range(0, kind.Items.Count)
+                .FirstOrDefault(i => kind.Items[i] is ComboBoxItem item && item.Tag is uint value && value == preset.Kind));
             kind.SelectionChanged += (_, _) =>
             {
                 if (kind.SelectedItem is ComboBoxItem item && item.Tag is uint value)
                     preset.Kind = value;
                 RebuildTransitions();
             };
-            var duration = new TextBox { Text = preset.DurationFrames.ToString(), Margin = new Thickness(0, 0, 0, 4) };
+            var duration = new TextBox { Text = preset.DurationValue.ToString(), Margin = new Thickness(0, 0, 0, 4) };
             duration.TextChanged += (_, _) =>
             {
-                if (uint.TryParse(duration.Text, out var frames) && frames > 0)
-                    preset.DurationFrames = frames;
+                if (uint.TryParse(duration.Text, out var value) && value > 0)
+                    preset.DurationValue = value;
             };
             duration.LostFocus += (_, _) => RebuildTransitions();
+            var unitBox = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
+            unitBox.Items.Add(new ComboBoxItem { Content = "Frames", Tag = MixerNative.DurationFrames });
+            unitBox.Items.Add(new ComboBoxItem { Content = "Milliseconds", Tag = MixerNative.DurationMs });
+            unitBox.SelectedIndex = preset.DurationUnit == MixerNative.DurationMs ? 1 : 0;
+            unitBox.SelectionChanged += (_, _) =>
+            {
+                if (unitBox.SelectedItem is ComboBoxItem item && item.Tag is uint value)
+                    preset.DurationUnit = value;
+                RebuildTransitions();
+            };
+            var easing = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
+            easing.Items.Add(new ComboBoxItem { Content = "Linear", Tag = MixerNative.EasingLinear });
+            easing.Items.Add(new ComboBoxItem { Content = "EaseIn", Tag = MixerNative.EasingIn });
+            easing.Items.Add(new ComboBoxItem { Content = "EaseOut", Tag = MixerNative.EasingOut });
+            easing.Items.Add(new ComboBoxItem { Content = "EaseInOut", Tag = MixerNative.EasingInOut });
+            easing.Items.Add(new ComboBoxItem { Content = "Smoothstep", Tag = MixerNative.EasingSmoothstep });
+            easing.SelectedIndex = (int)Math.Min(preset.Easing, 4u);
+            easing.SelectionChanged += (_, _) =>
+            {
+                if (easing.SelectedItem is ComboBoxItem item && item.Tag is uint value)
+                    preset.Easing = value;
+            };
+            var direction = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
+            direction.Items.Add(new ComboBoxItem { Content = "Left", Tag = 0u });
+            direction.Items.Add(new ComboBoxItem { Content = "Right", Tag = 1u });
+            direction.Items.Add(new ComboBoxItem { Content = "Up", Tag = 2u });
+            direction.Items.Add(new ComboBoxItem { Content = "Down", Tag = 3u });
+            direction.SelectedIndex = (int)Math.Min(preset.Direction, 3u);
+            direction.SelectionChanged += (_, _) =>
+            {
+                if (direction.SelectedItem is ComboBoxItem item && item.Tag is uint value)
+                    preset.Direction = value;
+            };
             var swap = new CheckBox { Content = "Swap", IsChecked = preset.Swap, Foreground = System.Windows.Media.Brushes.White, Margin = new Thickness(0, 0, 0, 4) };
             swap.Checked += (_, _) => preset.Swap = true;
             swap.Unchecked += (_, _) => preset.Swap = false;
+            var keep = new CheckBox { Content = "Keep Preview Scene", IsChecked = preset.KeepPreview, Foreground = System.Windows.Media.Brushes.White, Margin = new Thickness(0, 0, 0, 4) };
+            keep.Checked += (_, _) => preset.KeepPreview = true;
+            keep.Unchecked += (_, _) => preset.KeepPreview = false;
+            var dip = new TextBox { Text = $"{preset.DipR:0.##},{preset.DipG:0.##},{preset.DipB:0.##}", Margin = new Thickness(0, 0, 0, 4) };
+            dip.LostFocus += (_, _) =>
+            {
+                var parts = dip.Text.Split(',');
+                if (parts.Length >= 3
+                    && float.TryParse(parts[0], out var r)
+                    && float.TryParse(parts[1], out var g)
+                    && float.TryParse(parts[2], out var b))
+                {
+                    preset.DipR = r;
+                    preset.DipG = g;
+                    preset.DipB = b;
+                    preset.DipA = 1;
+                }
+            };
+            var custom = new TextBox { Text = preset.CustomWgsl ?? "", AcceptsReturn = true, Height = 64, Margin = new Thickness(0, 0, 0, 4), FontFamily = new System.Windows.Media.FontFamily("Consolas") };
+            custom.LostFocus += (_, _) => preset.CustomWgsl = custom.Text;
             var tbar = new Button { Content = "Use for T-bar", Height = 24 };
             tbar.Click += (_, _) =>
             {
@@ -323,9 +410,19 @@ public partial class MainWindow : Window
                 RebuildTransitions();
             };
             stack.Children.Add(kind);
-            stack.Children.Add(new TextBlock { Text = "Duration (frames)", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+            stack.Children.Add(new TextBlock { Text = "Duration", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
             stack.Children.Add(duration);
+            stack.Children.Add(unitBox);
+            stack.Children.Add(new TextBlock { Text = "Easing", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+            stack.Children.Add(easing);
+            stack.Children.Add(new TextBlock { Text = "Direction", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+            stack.Children.Add(direction);
             stack.Children.Add(swap);
+            stack.Children.Add(keep);
+            stack.Children.Add(new TextBlock { Text = "Dip color R,G,B", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+            stack.Children.Add(dip);
+            stack.Children.Add(new TextBlock { Text = "Custom WGSL", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+            stack.Children.Add(custom);
             stack.Children.Add(tbar);
             stack.Children.Add(remove);
             expander.Content = stack;
@@ -359,14 +456,50 @@ public partial class MainWindow : Window
             var name = _session.Scenes.FirstOrDefault(item => item.GpuId == slot.SceneGpuId)?.Name ?? $"{i + 1}";
             OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
             {
-                slot.Enabled = enabled;
-                PushAuxFor(unit);
+                ToggleOverlay(unit, slot, enabled);
             }));
         }
     }
 
     internal void PushAuxFor(MixingUnitEntry unit) =>
         Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+
+    private void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
+    {
+        var desc = new OverlayDesc
+        {
+            SourceId = slot.SceneGpuId,
+            Rect = new Interop.Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
+            Opacity = slot.Opacity,
+            Z = slot.Z,
+            AudioFollow = 1
+        };
+        var ms = slot.DurationUnit == MixerNative.DurationMs
+            ? Math.Max(1, slot.DurationValue)
+            : unit.DurationMs(slot.DurationValue);
+        if (slot.TransitionKind == MixerNative.TransitionCut || ms <= 1)
+        {
+            slot.Enabled = enabled;
+            PushAuxFor(unit);
+            return;
+        }
+        slot.Enabled = true;
+        PushAuxFor(unit);
+        unsafe
+        {
+            MixerNative.OverlayAuto(unit.Id, enabled ? 1u : 0u, ms, &desc);
+        }
+        if (!enabled)
+        {
+            var delay = TimeSpan.FromMilliseconds(ms);
+            _ = Dispatcher.InvokeAsync(async () =>
+            {
+                await Task.Delay(delay);
+                slot.Enabled = false;
+                PushAuxFor(unit);
+            });
+        }
+    }
 
     private void OpenOverlay_Click(object sender, RoutedEventArgs e)
     {
@@ -931,7 +1064,11 @@ public partial class MainWindow : Window
                     input.NdiBandwidth));
                 break;
             case InputKind.Uvc:
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!));
+                input.CaptureWidth = dialog.ResultCaptureWidth;
+                input.CaptureHeight = dialog.ResultCaptureHeight;
+                input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
+                input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen));
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
@@ -1338,7 +1475,7 @@ public partial class MainWindow : Window
                     input.VideoLoop,
                     input.VideoStartsPlaying));
             else if (input.Kind == InputKind.Uvc)
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress));
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
         }
     }
 

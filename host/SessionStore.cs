@@ -42,7 +42,7 @@ internal static class SessionStore
 
     private sealed class Document
     {
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = 2;
         public SessionSettings Settings { get; set; } = new();
         public List<InputDto> Inputs { get; set; } = [];
         public List<SceneDto> Scenes { get; set; } = [];
@@ -50,6 +50,7 @@ internal static class SessionStore
         public List<OutputEntry> Outputs { get; set; } = [];
         public List<MultiviewDto> Multiviews { get; set; } = [];
         public List<AudioBusEntry> Buses { get; set; } = [];
+        public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
         public ulong NextInputId { get; set; }
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
@@ -61,6 +62,7 @@ internal static class SessionStore
 
         public static Document From(Session session) => new()
         {
+            Version = 2,
             Settings = session.Settings,
             Inputs = session.Inputs.Select(InputDto.From).ToList(),
             Scenes = session.Scenes.Select(SceneDto.From).ToList(),
@@ -78,6 +80,11 @@ internal static class SessionStore
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),
+            ScenePresets = session.ScenePresets.Select(preset => new SceneLayoutPreset
+            {
+                Name = preset.Name,
+                Layers = [.. preset.Layers]
+            }).ToList(),
             NextInputId = session.NextInputId,
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
@@ -120,6 +127,8 @@ internal static class SessionStore
                 session.Multiviews.Add(layout.ToEntry(session));
             foreach (var bus in Buses)
                 session.Buses.Add(CloneBus(bus));
+            foreach (var preset in ScenePresets)
+                session.ScenePresets.Add(preset);
             session.EnsureDefaultBuses();
             session.NextInputId = Math.Max(NextInputId, session.Inputs.Count == 0 ? 10 : session.Inputs.Max(item => item.Id) + 1);
             session.NextSceneId = Math.Max(NextSceneId, session.Scenes.Count == 0 ? 1 : session.Scenes.Max(item => item.Id) + 1);
@@ -143,6 +152,7 @@ internal static class SessionStore
     private sealed class InputDto
     {
         public ulong Id { get; set; }
+        public string Guid { get; set; } = "";
         public string Name { get; set; } = "";
         public InputKind Kind { get; set; }
         public string? PathOrAddress { get; set; }
@@ -165,10 +175,15 @@ internal static class SessionStore
         public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
         public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
         public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+        public uint CaptureWidth { get; set; }
+        public uint CaptureHeight { get; set; }
+        public uint CaptureFpsNum { get; set; }
+        public uint CaptureFpsDen { get; set; }
 
         public static InputDto From(InputEntry input) => new()
         {
             Id = input.Id,
+            Guid = input.Guid,
             Name = input.Name,
             Kind = input.Kind,
             PathOrAddress = input.PathOrAddress,
@@ -190,12 +205,17 @@ internal static class SessionStore
             VideoLoop = input.VideoLoop,
             VideoPlayWhen = input.VideoPlayWhen,
             VideoRestartWhen = input.VideoRestartWhen,
-            VideoPauseWhen = input.VideoPauseWhen
+            VideoPauseWhen = input.VideoPauseWhen,
+            CaptureWidth = input.CaptureWidth,
+            CaptureHeight = input.CaptureHeight,
+            CaptureFpsNum = input.CaptureFpsNum,
+            CaptureFpsDen = input.CaptureFpsDen
         };
 
         public InputEntry ToEntry() => new()
         {
             Id = Id,
+            Guid = string.IsNullOrWhiteSpace(Guid) ? System.Guid.NewGuid().ToString() : Guid,
             Name = Name,
             Kind = Kind,
             PathOrAddress = PathOrAddress,
@@ -217,19 +237,25 @@ internal static class SessionStore
             VideoLoop = VideoLoop,
             VideoPlayWhen = VideoPlayWhen,
             VideoRestartWhen = VideoRestartWhen,
-            VideoPauseWhen = VideoPauseWhen
+            VideoPauseWhen = VideoPauseWhen,
+            CaptureWidth = CaptureWidth,
+            CaptureHeight = CaptureHeight,
+            CaptureFpsNum = CaptureFpsNum,
+            CaptureFpsDen = CaptureFpsDen
         };
     }
 
     private sealed class SceneDto
     {
         public ulong Id { get; set; }
+        public string Guid { get; set; } = "";
         public string Name { get; set; } = "";
         public List<SceneLayer> Layers { get; set; } = [];
 
         public static SceneDto From(SceneEntry scene) => new()
         {
             Id = scene.Id,
+            Guid = scene.Guid,
             Name = scene.Name,
             Layers = [.. scene.Layers]
         };
@@ -239,6 +265,7 @@ internal static class SessionStore
             var scene = new SceneEntry
             {
                 Id = Id,
+                Guid = string.IsNullOrWhiteSpace(Guid) ? System.Guid.NewGuid().ToString() : Guid,
                 Name = Name,
                 MonitorId = session.NextMonitorId++
             };

@@ -42,6 +42,28 @@ enum MixerFFI {
         }
     }
 
+    static func videoCaptureModes(deviceId: String) -> [CaptureMode] {
+        var buffer = [EivizVideoCaptureMode](repeating: zeroed(), count: 64)
+        let n = withCString(deviceId) { cstr in
+            buffer.withUnsafeMutableBufferPointer { ptr in
+                mixer_video_enum_capture_modes(cstr, ptr.baseAddress, UInt32(ptr.count))
+            }
+        }
+        guard n > 0 else { return [] }
+        var seen = Set<String>()
+        return buffer.prefix(Int(n)).compactMap { mode in
+            guard mode.width > 0, mode.height > 0, mode.fps_den > 0 else { return nil }
+            let item = CaptureMode(
+                width: mode.width,
+                height: mode.height,
+                fpsNum: mode.fps_num,
+                fpsDen: mode.fps_den,
+                format: mode.format
+            )
+            return seen.insert(item.id).inserted ? item : nil
+        }
+    }
+
     static func videoCaptures() -> [VideoCaptureDevice] {
         var buffer = [EivizVideoCaptureInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

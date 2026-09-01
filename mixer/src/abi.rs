@@ -18,6 +18,29 @@ pub const FMT_RGBA: u32 = 3;
 pub const TRANSITION_CUT: u32 = 0;
 pub const TRANSITION_FADE: u32 = 1;
 pub const TRANSITION_DIP: u32 = 2;
+pub const TRANSITION_WIPE: u32 = 3;
+pub const TRANSITION_SLIDE: u32 = 4;
+pub const TRANSITION_PUSH: u32 = 5;
+pub const TRANSITION_IRIS: u32 = 6;
+pub const TRANSITION_BLINDS: u32 = 7;
+pub const TRANSITION_ZOOM: u32 = 8;
+pub const TRANSITION_ADDITIVE: u32 = 9;
+pub const TRANSITION_CUSTOM: u32 = 50;
+pub const TRANSITION_STINGER: u32 = 100;
+
+pub const TRANSITION_DIR_LEFT: u32 = 0;
+pub const TRANSITION_DIR_RIGHT: u32 = 1;
+pub const TRANSITION_DIR_UP: u32 = 2;
+pub const TRANSITION_DIR_DOWN: u32 = 3;
+
+pub const EASING_LINEAR: u32 = 0;
+pub const EASING_IN: u32 = 1;
+pub const EASING_OUT: u32 = 2;
+pub const EASING_IN_OUT: u32 = 3;
+pub const EASING_SMOOTHSTEP: u32 = 4;
+
+pub const DURATION_FRAMES: u32 = 0;
+pub const DURATION_MS: u32 = 1;
 
 pub const OUTPUT_PROGRAM: u32 = 0;
 pub const OUTPUT_PREVIEW: u32 = 1;
@@ -105,6 +128,16 @@ impl Default for VideoCaptureInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct VideoCaptureMode {
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub format: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MixerRebarInfo {
     pub available: u32,
@@ -182,7 +215,17 @@ pub struct UnitState {
     pub mv_slot_count: u32,
     pub overlays: [OverlayDesc; 8],
     pub mv_slots: [u64; 16],
+    pub transition_easing: u32,
+    pub transition_direction: u32,
+    pub keep_preview: u32,
+    pub pad: u32,
+    pub dip_r: f32,
+    pub dip_g: f32,
+    pub dip_b: f32,
+    pub dip_a: f32,
 }
+
+pub type UnitSnap = (u64, u32, u32, u32, u32, UnitState, u64, Option<String>);
 
 pub fn mixing_unit_source(unit_id: u64) -> u64 {
     MU_SOURCE_FLAG | (unit_id & MU_ID_MASK)

@@ -1,13 +1,15 @@
 //! Canonical session JSON shared by every host.
-//! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 1).
+//! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
-    #[serde(default = "version_one")]
+    #[serde(default = "version_two")]
     pub version: i32,
+    #[serde(default)]
+    pub scene_presets: Vec<SceneLayoutPreset>,
     #[serde(default)]
     pub settings: SessionSettings,
     #[serde(default)]
@@ -40,8 +42,8 @@ pub struct Document {
     pub headphone_copy_master: bool,
 }
 
-fn version_one() -> i32 {
-    1
+fn version_two() -> i32 {
+    2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,6 +336,8 @@ pub enum AudioLinkMode {
 pub struct InputDto {
     pub id: u64,
     #[serde(default)]
+    pub guid: String,
+    #[serde(default)]
     pub name: String,
     pub kind: InputKind,
     pub path_or_address: Option<String>,
@@ -375,6 +379,14 @@ pub struct InputDto {
     pub video_restart_when: VideoTriggerWhen,
     #[serde(default)]
     pub video_pause_when: VideoTriggerWhen,
+    #[serde(default)]
+    pub capture_width: u32,
+    #[serde(default)]
+    pub capture_height: u32,
+    #[serde(default)]
+    pub capture_fps_num: u32,
+    #[serde(default)]
+    pub capture_fps_den: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -423,6 +435,10 @@ pub struct SceneLayer {
     pub z: i32,
     #[serde(default = "true_bool")]
     pub audio_follow: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default = "true_bool")]
+    pub size_linked: bool,
 }
 
 fn true_bool() -> bool {
@@ -434,9 +450,37 @@ fn true_bool() -> bool {
 pub struct SceneDto {
     pub id: u64,
     #[serde(default)]
+    pub guid: String,
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub layers: Vec<SceneLayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneLayoutPreset {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub layers: Vec<SceneLayerGeom>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneLayerGeom {
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default = "one_f32")]
+    pub width: f32,
+    #[serde(default = "one_f32")]
+    pub height: f32,
+    #[serde(default = "one_f32")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub z: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,9 +489,27 @@ pub struct TransitionPreset {
     #[serde(default = "fade")]
     pub kind: u32,
     #[serde(default = "thirty")]
-    pub duration_frames: u32,
+    pub duration_value: u32,
+    #[serde(default)]
+    pub duration_unit: u32,
     #[serde(default = "true_bool")]
     pub swap: bool,
+    #[serde(default = "true_bool")]
+    pub keep_preview: bool,
+    #[serde(default)]
+    pub easing: u32,
+    #[serde(default)]
+    pub direction: u32,
+    #[serde(default)]
+    pub dip_r: f32,
+    #[serde(default)]
+    pub dip_g: f32,
+    #[serde(default)]
+    pub dip_b: f32,
+    #[serde(default = "one_f32")]
+    pub dip_a: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_wgsl: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
@@ -457,6 +519,43 @@ fn fade() -> u32 {
 }
 fn thirty() -> u32 {
     30
+}
+
+fn transition_label(kind: u32) -> &'static str {
+    match kind {
+        0 => "Cut",
+        2 => "Dip",
+        3 => "Wipe",
+        4 => "Slide",
+        5 => "Push",
+        6 => "Iris",
+        7 => "Blinds",
+        8 => "Zoom",
+        9 => "Additive",
+        50 => "Custom",
+        100 => "Stinger",
+        _ => "Fade",
+    }
+}
+
+impl Default for TransitionPreset {
+    fn default() -> Self {
+        Self {
+            kind: 1,
+            duration_value: 30,
+            duration_unit: 0,
+            swap: true,
+            keep_preview: true,
+            easing: 0,
+            direction: 0,
+            dip_r: 0.0,
+            dip_g: 0.0,
+            dip_b: 0.0,
+            dip_a: 1.0,
+            custom_wgsl: None,
+            label: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -478,6 +577,16 @@ pub struct OverlaySlot {
     pub z: i32,
     #[serde(default = "true_bool")]
     pub enabled: bool,
+    #[serde(default = "fade")]
+    pub transition_kind: u32,
+    #[serde(default = "fifteen")]
+    pub duration_value: u32,
+    #[serde(default)]
+    pub duration_unit: u32,
+}
+
+fn fifteen() -> u32 {
+    15
 }
 
 fn overlay_x() -> f32 {
@@ -617,7 +726,7 @@ fn one_i32() -> i32 {
 impl Document {
     pub fn canonicalize(self) -> Self {
         let mut doc = self;
-        doc.version = 1;
+        doc.version = 2;
         doc.settings.frame_buffer_frames = doc.settings.frame_buffer_frames.clamp(1, 8);
         if doc.settings.frame_buffer_frames == 0 {
             doc.settings.frame_buffer_frames = 3;
@@ -671,26 +780,22 @@ impl Document {
                 unit.transitions = vec![
                     TransitionPreset {
                         kind: 0,
-                        duration_frames: 1,
-                        swap: true,
+                        duration_value: 1,
                         label: Some("Cut".into()),
+                        ..TransitionPreset::default()
                     },
                     TransitionPreset {
                         kind: 1,
-                        duration_frames: 30,
-                        swap: true,
+                        duration_value: 30,
                         label: Some("Fade".into()),
+                        ..TransitionPreset::default()
                     },
                 ];
             } else {
                 for preset in &mut unit.transitions {
-                    preset.label = Some(match preset.kind {
-                        0 => "Cut".into(),
-                        2 => "Dip".into(),
-                        _ => "Fade".into(),
-                    });
-                    if preset.duration_frames == 0 {
-                        preset.duration_frames = 1;
+                    preset.label = Some(transition_label(preset.kind).into());
+                    if preset.duration_value == 0 {
+                        preset.duration_value = 1;
                     }
                 }
             }
@@ -816,7 +921,7 @@ mod tests {
     #[test]
     fn windows_shaped_json_is_stable() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
   "inputs": [{ "id": 2, "name": "SMPTE Bars", "kind": "Bars" }],
   "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
@@ -850,7 +955,7 @@ mod tests {
     #[test]
     fn preview_program_colors_roundtrip() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "settings": {
     "previewColor": { "r": 10, "g": 20, "b": 30 },
     "programColor": { "r": 40, "g": 50, "b": 60 }
@@ -872,7 +977,7 @@ mod tests {
     #[test]
     fn mv_label_size_roundtrip() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "settings": { "multiviewLabelSize": 4, "multiviewLabelUnit": "Percent", "multiviewLabelAnchor": "Top" }
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
@@ -884,7 +989,7 @@ mod tests {
     #[test]
     fn inactive_color_and_mv_labels_roundtrip() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "settings": {
     "inactiveColor": { "r": 8, "g": 9, "b": 10 }
   },
@@ -914,7 +1019,7 @@ mod tests {
     #[test]
     fn mv_per_layout_fields_roundtrip() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "multiviews": [{
     "id": 1,
     "name": "MV",
@@ -940,7 +1045,7 @@ mod tests {
     #[test]
     fn multiview_template_canonicalize_tile_count() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "multiviews": [{ "id": 1, "name": "MV", "template": "Grid4x4", "tiles": [] }]
 }"#;
         let text = String::from_utf8(canonicalize_bytes(src.as_bytes()).unwrap()).unwrap();
@@ -960,7 +1065,7 @@ mod tests {
     #[test]
     fn multiview_absorbs_fixed_bus_panes() {
         let src = r#"{
-  "version": 1,
+  "version": 2,
   "multiviews": [{
     "id": 1,
     "name": "MV",
@@ -991,10 +1096,42 @@ mod tests {
 
     #[test]
     fn core_audio_enum_roundtrips() {
-        let src = r#"{ "version": 1, "buses": [{ "id": 1, "name": "Master", "role": "Master", "deviceKind": "CoreAudio" }] }"#;
+        let src = r#"{ "version": 2, "buses": [{ "id": 1, "name": "Master", "role": "Master", "deviceKind": "CoreAudio" }] }"#;
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::CoreAudio);
         let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
         assert!(text.contains("\"CoreAudio\""));
+    }
+
+    #[test]
+    fn version_two_transition_roundtrips() {
+        let src = r#"{
+  "version": 2,
+  "units": [{
+    "id": 1,
+    "name": "MU",
+    "transitions": [{
+      "kind": 2,
+      "durationValue": 12,
+      "durationUnit": 1,
+      "swap": true,
+      "keepPreview": true,
+      "easing": 3,
+      "direction": 1,
+      "dipR": 0.1,
+      "dipG": 0.2,
+      "dipB": 0.3,
+      "dipA": 1.0
+    }]
+  }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap().canonicalize();
+        assert_eq!(doc.version, 2);
+        assert_eq!(doc.units[0].transitions[0].kind, 2);
+        assert_eq!(doc.units[0].transitions[0].duration_value, 12);
+        assert_eq!(doc.units[0].transitions[0].duration_unit, 1);
+        assert!(doc.units[0].transitions[0].keep_preview);
+        assert_eq!(doc.units[0].transitions[0].easing, 3);
+        assert!((doc.units[0].transitions[0].dip_g - 0.2).abs() < f32::EPSILON);
     }
 }

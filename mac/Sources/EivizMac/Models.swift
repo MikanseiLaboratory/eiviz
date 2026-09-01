@@ -211,6 +211,11 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var videoPlayWhen: VideoPlayWhen = .never
     var videoRestartWhen: VideoTriggerWhen = .never
     var videoPauseWhen: VideoTriggerWhen = .never
+    var guid: String = UUID().uuidString
+    var captureWidth: UInt32 = 0
+    var captureHeight: UInt32 = 0
+    var captureFpsNum: UInt32 = 0
+    var captureFpsDen: UInt32 = 0
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -219,6 +224,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
+        case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen
     }
 
     init(
@@ -296,6 +302,11 @@ struct InputEntry: Identifiable, Codable, Hashable {
         videoPlayWhen = try container.decodeIfPresent(VideoPlayWhen.self, forKey: .videoPlayWhen) ?? .never
         videoRestartWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoRestartWhen) ?? .never
         videoPauseWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoPauseWhen) ?? .never
+        guid = try container.decodeIfPresent(String.self, forKey: .guid) ?? UUID().uuidString
+        captureWidth = try container.decodeIfPresent(UInt32.self, forKey: .captureWidth) ?? 0
+        captureHeight = try container.decodeIfPresent(UInt32.self, forKey: .captureHeight) ?? 0
+        captureFpsNum = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsNum) ?? 0
+        captureFpsDen = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsDen) ?? 0
     }
 }
 
@@ -309,39 +320,71 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var opacity: Float = 1
     var z: Int32 = 0
     var audioFollow: Bool = true
+    var locked: Bool = false
+    var sizeLinked: Bool = true
 
     enum CodingKeys: String, CodingKey {
-        case inputId, x, y, width, height, opacity, z, audioFollow
+        case inputId, x, y, width, height, opacity, z, audioFollow, locked, sizeLinked
     }
 }
 
 struct SceneEntry: Identifiable, Codable {
     var id: UInt64
+    var guid: String = UUID().uuidString
     var name: String
     var monitorId: UInt64 = 0
     var layers: [SceneLayer] = []
     var gpuId: UInt64 { EIVIZ_SCENE_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, layers
+        case id, guid, name, layers
+    }
+}
+
+struct SceneLayoutPreset: Identifiable, Codable {
+    var id = UUID()
+    var name: String
+    var layers: [SceneLayer]
+
+    enum CodingKeys: String, CodingKey {
+        case name, layers
     }
 }
 
 struct TransitionPreset: Identifiable, Codable {
     var id = UUID()
     var kind: UInt32 = EIVIZ_TRANSITION_FADE
-    var durationFrames: UInt32 = 30
+    var durationValue: UInt32 = 30
+    var durationUnit: UInt32 = 0
     var swap: Bool = true
+    var keepPreview: Bool = true
+    var easing: UInt32 = 0
+    var direction: UInt32 = 0
+    var dipR: Float = 0
+    var dipG: Float = 0
+    var dipB: Float = 0
+    var dipA: Float = 1
+    var customWgsl: String?
+    var durationLabel: String { "\(durationValue)\(durationUnit == EIVIZ_DURATION_MS ? "ms" : "f")" }
     var label: String {
         switch kind {
         case EIVIZ_TRANSITION_CUT: return "Cut"
         case EIVIZ_TRANSITION_DIP: return "Dip"
+        case EIVIZ_TRANSITION_WIPE: return "Wipe"
+        case EIVIZ_TRANSITION_SLIDE: return "Slide"
+        case EIVIZ_TRANSITION_PUSH: return "Push"
+        case EIVIZ_TRANSITION_IRIS: return "Iris"
+        case EIVIZ_TRANSITION_BLINDS: return "Blinds"
+        case EIVIZ_TRANSITION_ZOOM: return "Zoom"
+        case EIVIZ_TRANSITION_ADDITIVE: return "Additive"
+        case EIVIZ_TRANSITION_CUSTOM: return "Custom"
+        case EIVIZ_TRANSITION_STINGER: return "Stinger"
         default: return "Fade"
         }
     }
 
     enum CodingKeys: String, CodingKey {
-        case kind, durationFrames, swap
+        case kind, durationValue, durationUnit, swap, keepPreview, easing, direction, dipR, dipG, dipB, dipA, customWgsl
     }
 }
 
@@ -355,9 +398,12 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var opacity: Float = 1
     var z: Int32 = 0
     var enabled: Bool = true
+    var transitionKind: UInt32 = EIVIZ_TRANSITION_FADE
+    var durationValue: UInt32 = 15
+    var durationUnit: UInt32 = 0
 
     enum CodingKeys: String, CodingKey {
-        case sceneGpuId, x, y, width, height, opacity, z, enabled
+        case sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit
     }
 }
 
@@ -380,6 +426,10 @@ struct MixingUnitEntry: Identifiable, Codable {
     }
     func durationMs(_ frames: UInt32) -> UInt32 {
         UInt32(max(1, (Double(frames) * 1000.0 * Double(fpsDen) / Double(fpsNum)).rounded()))
+    }
+
+    func durationMs(for preset: TransitionPreset) -> UInt32 {
+        preset.durationUnit == 1 ? max(1, preset.durationValue) : durationMs(preset.durationValue)
     }
 }
 
@@ -819,10 +869,11 @@ struct SessionSettings: Codable {
 }
 
 struct MixerSessionData: Codable {
-    var version: Int = 1
+    var version: Int = 2
     var settings = SessionSettings()
     var inputs: [InputEntry] = []
     var scenes: [SceneEntry] = []
+    var scenePresets: [SceneLayoutPreset] = []
     var units: [MixingUnitEntry] = []
     var outputs: [OutputEntry] = []
     var multiviews: [MultiviewLayout] = []
@@ -838,7 +889,7 @@ struct MixerSessionData: Codable {
     var headphoneCopyMaster: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case version, settings, inputs, scenes, units, outputs, multiviews, buses
+        case version, settings, inputs, scenes, scenePresets, units, outputs, multiviews, buses
         case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId, nextBusId
         case selectedUnitId, headphoneCopyMaster
     }
@@ -853,8 +904,8 @@ struct MixerSessionData: Codable {
         ]
         var unit = MixingUnitEntry(id: 1, name: "Mixing Unit 1")
         unit.transitions = [
-            TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationFrames: 1, swap: true),
-            TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationFrames: 30, swap: true)
+            TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
+            TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
         ]
         session.units = [unit]
         session.buses = [
@@ -943,4 +994,17 @@ struct AudioDevice: Identifiable, Hashable {
 struct VideoCaptureDevice: Identifiable, Hashable {
     var id: String
     var name: String
+}
+
+struct CaptureMode: Identifiable, Hashable {
+    var width: UInt32
+    var height: UInt32
+    var fpsNum: UInt32
+    var fpsDen: UInt32
+    var format: UInt32 = 0
+    var id: String { "\(width)x\(height)@\(fpsNum)/\(fpsDen)/\(format)" }
+    var label: String {
+        let fps = fpsDen == 0 ? 0 : Double(fpsNum) / Double(max(1, fpsDen))
+        return String(format: "%ux%u %.2f fps", width, height, fps)
+    }
 }

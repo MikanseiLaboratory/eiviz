@@ -26,10 +26,10 @@
                      SelectionChanged="LayerList_SelectionChanged"/>
         </DockPanel>
         <DockPanel Grid.Column="1" Margin="12,0">
-            <TextBlock DockPanel.Dock="Top" Text="Wireframe (16:9)" FontWeight="Bold" Margin="0,0,0,6"/>
+            <TextBlock x:Name="WireLabel" DockPanel.Dock="Top" Text="Wireframe" FontWeight="Bold" Margin="0,0,0,6"/>
             <Border Background="#111" BorderBrush="#555" BorderThickness="1">
                 <Viewbox Stretch="Uniform">
-                    <Canvas x:Name="WireCanvas" Width="1600" Height="900" Background="#0A0A0A"
+                    <Canvas x:Name="WireCanvas" Width="1920" Height="1080" Background="#0A0A0A"
                             MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
                             MouseMove="WireCanvas_MouseMove"
                             MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"/>
@@ -52,21 +52,36 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Text="X" VerticalAlignment="Center"/>
                     <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                     <TextBlock Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
                     <TextBox x:Name="YBox" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Text="W" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="1" Text="SX" VerticalAlignment="Center"/>
                     <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="H" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="SY" VerticalAlignment="Center"/>
                     <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="2" Text="Op" VerticalAlignment="Center"/>
-                    <TextBox x:Name="OpBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <CheckBox x:Name="AudioFollowBox" Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2"
+                    <CheckBox x:Name="LinkBox" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                              Content="Link" VerticalAlignment="Center" Foreground="#EEEEEE"
+                              Click="Link_Click"/>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Z" VerticalAlignment="Center"/>
+                    <TextBox x:Name="ZBox" Grid.Row="2" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock Grid.Row="3" Text="Op" VerticalAlignment="Center"/>
+                    <TextBox x:Name="OpBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <CheckBox x:Name="LockBox" Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2"
+                              Content="Lock" VerticalAlignment="Center" Foreground="#EEEEEE"
+                              Click="Lock_Click"/>
+                    <CheckBox x:Name="AudioFollowBox" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
                               Content="Audio Follow" VerticalAlignment="Center" Foreground="#EEEEEE"
                               Click="AudioFollow_Click"/>
                 </Grid>
+                <TextBlock Text="Preset" Margin="0,12,0,4"/>
+                <ComboBox x:Name="PresetBox" Height="28" SelectionChanged="Preset_SelectionChanged"/>
+                <TextBlock Text="Copy from" Margin="0,8,0,4"/>
+                <ComboBox x:Name="CopyFromBox" Height="28" SelectionChanged="CopyFrom_SelectionChanged"/>
+                <Button Content="Save preset" Height="26" Margin="0,8,0,0" Click="SavePreset_Click"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
                     <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>

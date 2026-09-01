@@ -6,7 +6,7 @@ use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    TRANSITION_DIP,
+    TRANSITION_CUSTOM, TRANSITION_STINGER,
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
@@ -59,7 +59,8 @@ struct BlitParams {
 struct MixParams {
     mix: f32,
     kind: u32,
-    pad: [f32; 2],
+    direction: u32,
+    softness: f32,
     dip: [f32; 4],
 }
 
@@ -137,6 +138,7 @@ pub struct Composer {
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
     mix_groups: HashMap<u64, wgpu::BindGroup>,
+    custom_mix: HashMap<u64, wgpu::RenderPipeline>,
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
@@ -218,6 +220,7 @@ impl Composer {
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
             mix_groups: HashMap::new(),
+            custom_mix: HashMap::new(),
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
@@ -313,7 +316,7 @@ impl Composer {
         use_rebar: bool,
         direct_sample: bool,
     ) {
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(windows))]
         let _ = use_rebar;
         let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
         #[cfg(windows)]
@@ -808,11 +811,38 @@ impl Composer {
         }
     }
 
+    pub fn set_custom_mix(
+        &mut self,
+        device: &GpuDevice,
+        unit_id: u64,
+        user_wgsl: &str,
+    ) -> Result<(), String> {
+        if user_wgsl.trim().is_empty() {
+            self.custom_mix.remove(&unit_id);
+            return Ok(());
+        }
+        let source = format!(
+            "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    return user_transition(in.uv, params.mix);\n}}\n",
+            CUSTOM_MIX_PREAMBLE, user_wgsl
+        );
+        let pipeline = pipeline(
+            device,
+            "mix-custom",
+            &source,
+            &self.mix_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )?;
+        self.custom_mix.insert(unit_id, pipeline);
+        Ok(())
+    }
+
     pub fn render_unit(
         &mut self,
         device: &GpuDevice,
         unit_id: u64,
         state: &UnitState,
+        mix_preview: u64,
         encoder: &mut wgpu::CommandEncoder,
         compose_mv: bool,
         pack_pgm: bool,
@@ -822,7 +852,12 @@ impl Composer {
             (unit.width, unit.height)
         };
         self.draw_bus(device, encoder, unit_id, state.program_source, true, width, height)?;
-        if state.preview_source == state.program_source {
+        let mix_source = if mix_preview == 0 {
+            state.preview_source
+        } else {
+            mix_preview
+        };
+        if mix_source == state.program_source {
             let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
             encoder.copy_texture_to_texture(
                 unit.program.as_image_copy(),
@@ -834,7 +869,7 @@ impl Composer {
                 },
             );
         } else {
-            self.draw_bus(device, encoder, unit_id, state.preview_source, false, width, height)?;
+            self.draw_bus(device, encoder, unit_id, mix_source, false, width, height)?;
         }
         if state.mix == 0.0 {
             let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
@@ -849,6 +884,9 @@ impl Composer {
             );
         } else {
             self.draw_mix(device, encoder, unit_id, state)?;
+        }
+        if state.preview_source != mix_source {
+            self.draw_bus(device, encoder, unit_id, state.preview_source, false, width, height)?;
         }
         self.draw_overlays_on_program(device, encoder, unit_id, state)?;
         if compose_mv {
@@ -983,13 +1021,19 @@ impl Composer {
             &device.queue,
             &MixParams {
                 mix: state.mix,
-                kind: state.transition_kind,
-                pad: [0.0; 2],
-                dip: if state.transition_kind == TRANSITION_DIP {
-                    [0.0, 0.0, 0.0, 1.0]
+                kind: if state.transition_kind == TRANSITION_STINGER {
+                    crate::abi::TRANSITION_FADE
                 } else {
-                    [0.0; 4]
+                    state.transition_kind
                 },
+                direction: state.transition_direction,
+                softness: 0.02,
+                dip: [
+                    state.dip_r,
+                    state.dip_g,
+                    state.dip_b,
+                    if state.dip_a <= 0.0 { 1.0 } else { state.dip_a },
+                ],
             },
         );
         let dest = self.units.get(&unit_id).ok_or("unit missing")?.mixed_view.clone();
@@ -998,7 +1042,12 @@ impl Composer {
             .get(&unit_id)
             .ok_or("mix bind group missing")?;
         let mut pass = begin(encoder, &dest);
-        pass.set_pipeline(&self.mix);
+        let use_custom = state.transition_kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
+        if use_custom {
+            pass.set_pipeline(self.custom_mix.get(&unit_id).unwrap());
+        } else {
+            pass.set_pipeline(&self.mix);
+        }
         pass.set_bind_group(0, group, &[offset]);
         pass.draw(0..3, 0..1);
         Ok(())
@@ -1575,6 +1624,37 @@ impl UnitTargets {
         }
     }
 }
+
+const CUSTOM_MIX_PREAMBLE: &str = r#"
+struct VsOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+struct MixParams {
+    mix: f32,
+    kind: u32,
+    direction: u32,
+    softness: f32,
+    dip: vec4<f32>,
+}
+@group(0) @binding(0) var pgm_tex: texture_2d<f32>;
+@group(0) @binding(1) var pvw_tex: texture_2d<f32>;
+@group(0) @binding(2) var src_samp: sampler;
+@group(0) @binding(3) var<uniform> params: MixParams;
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    let pos = positions[index];
+    var out: VsOut;
+    out.clip = vec4<f32>(pos, 0.0, 1.0);
+    out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
+    return out;
+}
+"#;
 
 fn tile_grid(count: u32) -> (u32, u32) {
     match count {

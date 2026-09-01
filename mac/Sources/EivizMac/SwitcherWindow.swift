@@ -14,12 +14,20 @@ struct SwitcherView: View {
         mixer.session.units.first { $0.id == unitId } ?? mixer.selectedUnit
     }
 
+    private var programTitle: String {
+        if let id = mixer.programmingSceneId(for: unitId),
+           let scene = mixer.session.scenes.first(where: { $0.id == id }) {
+            return "PROGRAM — \(scene.name)"
+        }
+        return "PROGRAM"
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                 transitions
-                bus(title: "PROGRAM", color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
             }
             .frame(maxHeight: .infinity)
             scenes
@@ -36,7 +44,7 @@ struct SwitcherView: View {
                 VStack(spacing: 4) {
                     ForEach(Array(unit.transitions.enumerated()), id: \.element.id) { index, preset in
                         HStack {
-                            Text("\(preset.label)  \(preset.durationFrames)f")
+                            Text("\(preset.label)  \(preset.durationLabel)")
                                 .font(.system(size: 12, weight: .semibold))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(4)
@@ -156,7 +164,10 @@ struct SwitcherView: View {
             MetalPreviewRepresentable(role: .unit(unitId: unitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .aspectRatio(
+            CGFloat(unit.width) / max(1, CGFloat(unit.height)),
+            contentMode: .fit
+        )
         .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

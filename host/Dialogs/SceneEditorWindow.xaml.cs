@@ -30,12 +30,16 @@ public partial class SceneEditorWindow : Window
         _height = height;
         _original = scene.Layers.Select(Clone).ToList();
         NameBox.Text = scene.Name;
+        WireCanvas.Width = width;
+        WireCanvas.Height = height;
+        WireLabel.Text = $"Wireframe ({width}x{height})";
         InputPick.ItemsSource = session.Inputs;
         if (session.Inputs.Count > 0)
             InputPick.SelectedIndex = 0;
         PreviewHost.RetargetMonitor(monitorId, scene.GpuId);
         Loaded += (_, _) =>
         {
+            FillPresets();
             RefreshLayers();
             PushGpu();
         };
@@ -50,7 +54,9 @@ public partial class SceneEditorWindow : Window
         Height = layer.Height,
         Opacity = layer.Opacity,
         Z = layer.Z,
-        AudioFollow = layer.AudioFollow
+        AudioFollow = layer.AudioFollow,
+        Locked = layer.Locked,
+        SizeLinked = layer.SizeLinked
     };
 
     private void RefreshLayers()
@@ -71,7 +77,7 @@ public partial class SceneEditorWindow : Window
     private string LayerLabel(SceneLayer layer)
     {
         var input = _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId);
-        return $"{layer.Z}: {input?.Name ?? layer.InputId.ToString()}";
+        return $"{layer.Z}: {input?.Name ?? layer.InputId.ToString()}{(layer.Locked ? " 🔒" : "")}";
     }
 
     private void DrawWireframe()
@@ -121,12 +127,22 @@ public partial class SceneEditorWindow : Window
     {
         if (_selected is null)
             return;
-        XBox.Text = _selected.X.ToString("0.####");
-        YBox.Text = _selected.Y.ToString("0.####");
-        WBox.Text = _selected.Width.ToString("0.####");
-        HBox.Text = _selected.Height.ToString("0.####");
+        XBox.Text = (_selected.X * _width).ToString("0.#");
+        YBox.Text = (_selected.Y * _height).ToString("0.#");
+        WBox.Text = (_selected.Width * _width).ToString("0.#");
+        HBox.Text = (_selected.Height * _height).ToString("0.#");
+        ZBox.Text = _selected.Z.ToString();
         OpBox.Text = _selected.Opacity.ToString("0.###");
         AudioFollowBox.IsChecked = _selected.AudioFollow;
+        LinkBox.IsChecked = _selected.SizeLinked;
+        LockBox.IsChecked = _selected.Locked;
+        var edit = !_selected.Locked;
+        XBox.IsEnabled = edit;
+        YBox.IsEnabled = edit;
+        WBox.IsEnabled = edit;
+        HBox.IsEnabled = edit;
+        LinkBox.IsEnabled = edit;
+        OpBox.IsEnabled = edit;
     }
 
     private void PushGpu() => _commands.DefineSceneNow(_scene, _width, _height);
@@ -142,6 +158,7 @@ public partial class SceneEditorWindow : Window
             Height = 1,
             Opacity = 1,
             AudioFollow = true,
+            SizeLinked = true,
             Z = _scene.Layers.Count == 0 ? 0 : _scene.Layers.Max(item => item.Z) + 1
         };
         _scene.Layers.Add(layer);
@@ -189,14 +206,28 @@ public partial class SceneEditorWindow : Window
 
     private void Numeric_LostFocus(object sender, RoutedEventArgs e)
     {
-        if (_selected is null)
+        if (_selected is null || _selected.Locked)
             return;
-        if (float.TryParse(XBox.Text, out var x)) _selected.X = x;
-        if (float.TryParse(YBox.Text, out var y)) _selected.Y = y;
-        if (float.TryParse(WBox.Text, out var w)) _selected.Width = Math.Max(0.01f, w);
-        if (float.TryParse(HBox.Text, out var h)) _selected.Height = Math.Max(0.01f, h);
+        if (float.TryParse(XBox.Text, out var x)) _selected.X = x / _width;
+        if (float.TryParse(YBox.Text, out var y)) _selected.Y = y / _height;
+        if (float.TryParse(WBox.Text, out var w))
+        {
+            var width = Math.Max(1f, w) / _width;
+            if (_selected.SizeLinked && _selected.Width > 0)
+                _selected.Height = width * (_selected.Height / _selected.Width);
+            _selected.Width = width;
+        }
+        if (float.TryParse(HBox.Text, out var h))
+        {
+            var height = Math.Max(1f, h) / _height;
+            if (_selected.SizeLinked && _selected.Height > 0 && !ReferenceEquals(sender, WBox))
+                _selected.Width = height * (_selected.Width / _selected.Height);
+            _selected.Height = height;
+        }
+        if (int.TryParse(ZBox.Text, out var z)) _selected.Z = z;
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
+        FillNumeric();
         PushGpu();
     }
 
@@ -211,7 +242,7 @@ public partial class SceneEditorWindow : Window
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(WireCanvas);
-        if (e.OriginalSource is Rectangle { Tag: "handle" })
+        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false })
         {
             _resizing = true;
             _dragging = false;
@@ -232,7 +263,7 @@ public partial class SceneEditorWindow : Window
             }
         }
         _selected = hit;
-        _dragging = hit is not null;
+        _dragging = hit is not null && hit is { Locked: false };
         _resizing = false;
         _last = pos;
         if (_dragging)
@@ -248,10 +279,16 @@ public partial class SceneEditorWindow : Window
         var dx = (float)((pos.X - _last.X) / WireCanvas.Width);
         var dy = (float)((pos.Y - _last.Y) / WireCanvas.Height);
         _last = pos;
+        if (_selected.Locked)
+            return;
         if (_resizing)
         {
-            _selected.Width = Math.Max(0.02f, _selected.Width + dx);
-            _selected.Height = Math.Max(0.02f, _selected.Height + dy);
+            var width = Math.Max(0.02f, _selected.Width + dx);
+            if (_selected.SizeLinked && _selected.Width > 0)
+                _selected.Height = Math.Max(0.02f, width * (_selected.Height / _selected.Width));
+            else
+                _selected.Height = Math.Max(0.02f, _selected.Height + dy);
+            _selected.Width = width;
         }
         else
         {
@@ -269,6 +306,119 @@ public partial class SceneEditorWindow : Window
         _dragging = false;
         _resizing = false;
         WireCanvas.ReleaseMouseCapture();
+    }
+
+    private void Link_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null)
+            return;
+        _selected.SizeLinked = LinkBox.IsChecked == true;
+    }
+
+    private void Lock_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selected is null)
+            return;
+        _selected.Locked = LockBox.IsChecked == true;
+        RefreshLayers();
+    }
+
+    private void FillPresets()
+    {
+        PresetBox.Items.Clear();
+        PresetBox.Items.Add("Full");
+        PresetBox.Items.Add("Split H");
+        PresetBox.Items.Add("Split V");
+        PresetBox.Items.Add("Quad");
+        PresetBox.Items.Add("PiP TR");
+        PresetBox.Items.Add("PiP TL");
+        PresetBox.Items.Add("PiP BR");
+        PresetBox.Items.Add("PiP BL");
+        foreach (var preset in _session.ScenePresets)
+            PresetBox.Items.Add(preset.Name);
+        CopyFromBox.ItemsSource = _session.Scenes.Where(item => item.Id != _scene.Id).Select(item => item.Name).ToArray();
+    }
+
+    private void Preset_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (PresetBox.SelectedItem is not string name)
+            return;
+        ApplyPreset(name);
+        PresetBox.SelectedIndex = -1;
+    }
+
+    private void CopyFrom_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (CopyFromBox.SelectedItem is not string name)
+            return;
+        var source = _session.Scenes.FirstOrDefault(item => item.Name == name);
+        if (source is null)
+            return;
+        _scene.Layers.Clear();
+        foreach (var layer in source.Layers)
+            _scene.Layers.Add(Clone(layer));
+        _selected = _scene.Layers.FirstOrDefault();
+        RefreshLayers();
+        PushGpu();
+        CopyFromBox.SelectedIndex = -1;
+    }
+
+    private void SavePreset_Click(object sender, RoutedEventArgs e)
+    {
+        var name = $"Preset {_session.ScenePresets.Count + 1}";
+        _session.ScenePresets.Add(new SceneLayoutPreset
+        {
+            Name = name,
+            Layers = _scene.Layers.Select(Clone).ToList()
+        });
+        FillPresets();
+    }
+
+    private void ApplyPreset(string name)
+    {
+        var user = _session.ScenePresets.FirstOrDefault(item => item.Name == name);
+        if (user is not null)
+        {
+            for (var i = 0; i < _scene.Layers.Count && i < user.Layers.Count; i++)
+            {
+                if (_scene.Layers[i].Locked)
+                    continue;
+                var src = user.Layers[i];
+                _scene.Layers[i].X = src.X;
+                _scene.Layers[i].Y = src.Y;
+                _scene.Layers[i].Width = src.Width;
+                _scene.Layers[i].Height = src.Height;
+                _scene.Layers[i].Opacity = src.Opacity;
+                _scene.Layers[i].Z = src.Z;
+            }
+            RefreshLayers();
+            PushGpu();
+            return;
+        }
+        var boxes = name switch
+        {
+            "Full" => new[] { (0f, 0f, 1f, 1f) },
+            "Split H" => new[] { (0f, 0f, 0.5f, 1f), (0.5f, 0f, 0.5f, 1f) },
+            "Split V" => new[] { (0f, 0f, 1f, 0.5f), (0f, 0.5f, 1f, 0.5f) },
+            "Quad" => new[] { (0f, 0f, 0.5f, 0.5f), (0.5f, 0f, 0.5f, 0.5f), (0f, 0.5f, 0.5f, 0.5f), (0.5f, 0.5f, 0.5f, 0.5f) },
+            "PiP TR" => new[] { (0f, 0f, 1f, 1f), (0.62f, 0.08f, 0.32f, 0.32f) },
+            "PiP TL" => new[] { (0f, 0f, 1f, 1f), (0.06f, 0.08f, 0.32f, 0.32f) },
+            "PiP BR" => new[] { (0f, 0f, 1f, 1f), (0.62f, 0.60f, 0.32f, 0.32f) },
+            "PiP BL" => new[] { (0f, 0f, 1f, 1f), (0.06f, 0.60f, 0.32f, 0.32f) },
+            _ => Array.Empty<(float, float, float, float)>()
+        };
+        for (var i = 0; i < _scene.Layers.Count && i < boxes.Length; i++)
+        {
+            if (_scene.Layers[i].Locked)
+                continue;
+            var (x, y, w, h) = boxes[i];
+            _scene.Layers[i].X = x;
+            _scene.Layers[i].Y = y;
+            _scene.Layers[i].Width = w;
+            _scene.Layers[i].Height = h;
+        }
+        RefreshLayers();
+        PushGpu();
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)

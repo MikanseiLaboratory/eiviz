@@ -257,6 +257,30 @@ final class MixerController: ObservableObject {
         updateStatus()
     }
 
+    private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
+        if let wgsl = preset.customWgsl, !wgsl.isEmpty {
+            wgsl.withCString { fail(mixer_unit_set_custom_wgsl(unit.id, $0), "custom wgsl") }
+        } else {
+            fail(mixer_unit_set_custom_wgsl(unit.id, nil), "custom wgsl")
+        }
+        fail(
+            mixer_unit_auto(
+                unit.id,
+                preset.kind,
+                unit.durationMs(for: preset),
+                preset.swap ? 1 : 0,
+                preset.keepPreview ? 1 : 0,
+                preset.easing,
+                preset.direction,
+                preset.dipR,
+                preset.dipG,
+                preset.dipB,
+                preset.dipA
+            ),
+            reason
+        )
+    }
+
     func takeCut(unitId: UInt64? = nil) {
         let unit = unit(for: unitId)
         let preset = tbarPreset(for: unit)
@@ -266,11 +290,11 @@ final class MixerController: ObservableObject {
 
     func auto() {
         let preset = tbarPreset()
-        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
+        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationValue <= 1 {
             cut()
             return
         }
-        fail(mixer_unit_auto(selectedUnit.id, selectedUnit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "AUTO")
+        fireAuto(preset, unit: selectedUnit, reason: "AUTO")
         mix = 0
         tbarLocked = false
         syncUnitBuses(selectedUnit.id)
@@ -285,10 +309,10 @@ final class MixerController: ObservableObject {
 
     func firePreset(_ preset: TransitionPreset, unitId: UInt64) {
         let unit = unit(for: unitId)
-        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationFrames <= 1 {
+        if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationValue <= 1 {
             fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0), "TAKE")
         } else {
-            fail(mixer_unit_auto(unit.id, unit.durationMs(preset.durationFrames), preset.swap ? 1 : 0), "TAKE")
+            fireAuto(preset, unit: unit, reason: "TAKE")
         }
         syncUnitBuses(unit.id)
     }
@@ -363,6 +387,9 @@ final class MixerController: ObservableObject {
                 _ = mixer_destroy_source(id)
             }
             entry.id = id
+            if entry.guid.isEmpty {
+                entry.guid = session.inputs[index].guid
+            }
             session.inputs[index] = entry
         } else {
             if entry.id == 0 || session.inputs.contains(where: { $0.id == entry.id }) {
@@ -471,8 +498,8 @@ final class MixerController: ObservableObject {
         session.nextUnitId += 1
         var unit = MixingUnitEntry(id: id, name: "Mixing Unit \(id)")
         unit.transitions = [
-            TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationFrames: 1, swap: true),
-            TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationFrames: 30, swap: true)
+            TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
+            TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
         ]
         session.units.append(unit)
         fail(mixer_create_unit(id, unit.width, unit.height), "Create Mixing Unit")
@@ -739,9 +766,38 @@ final class MixerController: ObservableObject {
         guard let unitIndex = session.units.firstIndex(where: { $0.id == selectedUnitId }),
               let slotIndex = session.units[unitIndex].overlays.firstIndex(where: { $0.id == id })
         else { return }
-        session.units[unitIndex].overlays[slotIndex].enabled = enabled
-        overlayOn[id] = enabled
+        let slot = session.units[unitIndex].overlays[slotIndex]
+        let unit = session.units[unitIndex]
+        var desc = MixerFFI.emptyOverlay()
+        desc.source_id = slot.sceneGpuId
+        desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
+        desc.opacity = slot.opacity
+        desc.z = slot.z
+        desc.audio_follow = 1
+        let ms = slot.durationUnit == EIVIZ_DURATION_MS
+            ? max(1, slot.durationValue)
+            : unit.durationMs(slot.durationValue)
+        if slot.transitionKind == EIVIZ_TRANSITION_CUT || ms <= 1 {
+            session.units[unitIndex].overlays[slotIndex].enabled = enabled
+            overlayOn[id] = enabled
+            pushOverlays()
+            return
+        }
+        session.units[unitIndex].overlays[slotIndex].enabled = true
+        overlayOn[id] = true
         pushOverlays()
+        fail(mixer_unit_overlay_auto(unit.id, enabled ? 1 : 0, ms, &desc), "overlay auto")
+        if !enabled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
+                guard let self,
+                      let ui = self.session.units.firstIndex(where: { $0.id == unit.id }),
+                      let si = self.session.units[ui].overlays.firstIndex(where: { $0.id == id })
+                else { return }
+                self.session.units[ui].overlays[si].enabled = false
+                self.overlayOn[id] = false
+                self.pushOverlays()
+            }
+        }
     }
 
     func saveSession() {
@@ -847,14 +903,24 @@ final class MixerController: ObservableObject {
         return info
     }
 
-    private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
+    private func startVideoInput(
+        id: UInt64,
+        path: String,
+        capture: UInt32,
+        width: UInt32 = 0,
+        height: UInt32 = 0,
+        fpsNum: UInt32 = 0,
+        fpsDen: UInt32 = 0,
+        loop: Bool,
+        playing: Bool
+    ) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
             presentInputError(L10n.missingFile("Video start"))
             return
         }
         MixerFFI.withCString(path) { cstr in
             fail(
-                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA),
+                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA, width, height, fpsNum, fpsDen),
                 capture == 0 ? "Video start" : "UVC start"
             )
         }
@@ -968,20 +1034,34 @@ final class MixerController: ObservableObject {
             }
         case .uvc:
             if let deviceId = input.pathOrAddress {
-                startCapture(id: input.id, deviceId: deviceId)
+                startCapture(input)
             }
         }
         _ = mixer_audio_set_input(input.id, input.busMask, input.gain, input.mute ? 1 : 0)
     }
 
-    private func startCapture(id: UInt64, deviceId: String) {
+    private func startCapture(_ input: InputEntry) {
+        guard let deviceId = input.pathOrAddress else { return }
+        let start = {
+            self.startVideoInput(
+                id: input.id,
+                path: deviceId,
+                capture: 1,
+                width: input.captureWidth,
+                height: input.captureHeight,
+                fpsNum: input.captureFpsNum,
+                fpsDen: input.captureFpsDen,
+                loop: false,
+                playing: true
+            )
+        }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
+            start()
         case .notDetermined:
             Task { @MainActor in
                 if await AVCaptureDevice.requestAccess(for: .video) {
-                    startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
+                    start()
                 } else {
                     presentError(L10n.t("error.cameraDenied"), title: L10n.t("action.UVC start"))
                 }
@@ -1060,7 +1140,7 @@ final class MixerController: ObservableObject {
     private func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
         let list = unit.transitions
         guard !list.isEmpty else {
-            return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationFrames: 1, swap: true)
+            return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true)
         }
         return list[min(tbarPresetIndex, list.count - 1)]
     }

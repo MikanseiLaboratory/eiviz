@@ -12,7 +12,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                     transitions
-                    bus(title: "PROGRAM", color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                    bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
                 }
                 .frame(maxHeight: .infinity)
                 lower
@@ -128,6 +128,21 @@ struct ContentView: View {
         .frame(width: 168)
     }
 
+    private var programTitle: String {
+        if let id = mixer.programmingSceneId(for: mixer.selectedUnitId),
+           let scene = mixer.session.scenes.first(where: { $0.id == id }) {
+            return "PROGRAM — \(scene.name)"
+        }
+        return "PROGRAM"
+    }
+
+    private func updateTransition(_ index: Int, _ body: (inout TransitionPreset) -> Void) {
+        var unit = mixer.selectedUnit
+        guard index < unit.transitions.count else { return }
+        body(&unit.transitions[index])
+        mixer.saveUnit(unit)
+    }
+
     private func transitionRow(index: Int, preset: TransitionPreset) -> some View {
         let selected = index == mixer.tbarPresetIndex
         return HStack(alignment: .top, spacing: 4) {
@@ -146,41 +161,88 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("", selection: Binding(
                         get: { mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind },
-                        set: { value in
-                            var unit = mixer.selectedUnit
-                            if index < unit.transitions.count {
-                                unit.transitions[index].kind = value
-                                mixer.saveUnit(unit)
-                            }
-                        }
+                        set: { value in updateTransition(index) { $0.kind = value } }
                     )) {
                         Text("Cut").tag(EIVIZ_TRANSITION_CUT)
                         Text("Fade").tag(EIVIZ_TRANSITION_FADE)
                         Text("Dip").tag(EIVIZ_TRANSITION_DIP)
+                        Text("Wipe").tag(EIVIZ_TRANSITION_WIPE)
+                        Text("Slide").tag(EIVIZ_TRANSITION_SLIDE)
+                        Text("Push").tag(EIVIZ_TRANSITION_PUSH)
+                        Text("Iris").tag(EIVIZ_TRANSITION_IRIS)
+                        Text("Blinds").tag(EIVIZ_TRANSITION_BLINDS)
+                        Text("Zoom").tag(EIVIZ_TRANSITION_ZOOM)
+                        Text("Additive").tag(EIVIZ_TRANSITION_ADDITIVE)
+                        Text("Custom WGSL").tag(EIVIZ_TRANSITION_CUSTOM)
+                        Text("Stinger").tag(EIVIZ_TRANSITION_STINGER)
                     }
-                    Text("Duration (frames)").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                    Text("Duration").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                     mixerUintField(Binding(
-                        get: {
-                            mixer.selectedUnit.transitions[safe: index]?.durationFrames ?? preset.durationFrames
-                        },
-                        set: { frames in
-                            var unit = mixer.selectedUnit
-                            if index < unit.transitions.count {
-                                unit.transitions[index].durationFrames = frames
-                                mixer.saveUnit(unit)
-                            }
-                        }
+                        get: { mixer.selectedUnit.transitions[safe: index]?.durationValue ?? preset.durationValue },
+                        set: { value in updateTransition(index) { $0.durationValue = value } }
                     ))
+                    Picker("", selection: Binding(
+                        get: { mixer.selectedUnit.transitions[safe: index]?.durationUnit ?? preset.durationUnit },
+                        set: { value in updateTransition(index) { $0.durationUnit = value } }
+                    )) {
+                        Text("Frames").tag(EIVIZ_DURATION_FRAMES)
+                        Text("Milliseconds").tag(EIVIZ_DURATION_MS)
+                    }
+                    Text("Easing").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                    Picker("", selection: Binding(
+                        get: { mixer.selectedUnit.transitions[safe: index]?.easing ?? preset.easing },
+                        set: { value in updateTransition(index) { $0.easing = value } }
+                    )) {
+                        Text("Linear").tag(EIVIZ_EASING_LINEAR)
+                        Text("EaseIn").tag(EIVIZ_EASING_IN)
+                        Text("EaseOut").tag(EIVIZ_EASING_OUT)
+                        Text("EaseInOut").tag(EIVIZ_EASING_IN_OUT)
+                        Text("Smoothstep").tag(EIVIZ_EASING_SMOOTHSTEP)
+                    }
+                    Text("Direction").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                    Picker("", selection: Binding(
+                        get: { mixer.selectedUnit.transitions[safe: index]?.direction ?? preset.direction },
+                        set: { value in updateTransition(index) { $0.direction = value } }
+                    )) {
+                        Text("Left").tag(EIVIZ_DIR_LEFT)
+                        Text("Right").tag(EIVIZ_DIR_RIGHT)
+                        Text("Up").tag(EIVIZ_DIR_UP)
+                        Text("Down").tag(EIVIZ_DIR_DOWN)
+                    }
                     Toggle("Swap", isOn: Binding(
                         get: { mixer.selectedUnit.transitions[safe: index]?.swap ?? true },
-                        set: { value in
-                            var unit = mixer.selectedUnit
-                            if index < unit.transitions.count {
-                                unit.transitions[index].swap = value
-                                mixer.saveUnit(unit)
+                        set: { value in updateTransition(index) { $0.swap = value } }
+                    ))
+                    Toggle("Keep Preview Scene", isOn: Binding(
+                        get: { mixer.selectedUnit.transitions[safe: index]?.keepPreview ?? true },
+                        set: { value in updateTransition(index) { $0.keepPreview = value } }
+                    ))
+                    Text("Dip color R,G,B").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                    mixerTextField(Binding(
+                        get: {
+                            let item = mixer.selectedUnit.transitions[safe: index] ?? preset
+                            return String(format: "%.2f,%.2f,%.2f", item.dipR, item.dipG, item.dipB)
+                        },
+                        set: { text in
+                            let parts = text.split(separator: ",")
+                            guard parts.count >= 3,
+                                  let r = Float(parts[0]),
+                                  let g = Float(parts[1]),
+                                  let b = Float(parts[2])
+                            else { return }
+                            updateTransition(index) {
+                                $0.dipR = r
+                                $0.dipG = g
+                                $0.dipB = b
+                                $0.dipA = 1
                             }
                         }
-                    ))
+                    ), placeholder: "0,0,0")
+                    Text("Custom WGSL").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
+                    mixerTextField(Binding(
+                        get: { mixer.selectedUnit.transitions[safe: index]?.customWgsl ?? preset.customWgsl ?? "" },
+                        set: { value in updateTransition(index) { $0.customWgsl = value } }
+                    ), placeholder: "fn user_transition...")
                     Button("Use for T-bar") { mixer.tbarPresetIndex = index }
                     Button("−") {
                         var unit = mixer.selectedUnit
@@ -193,7 +255,7 @@ struct ContentView: View {
                 }
                 .padding(.top, 4)
             } label: {
-                Text("\(preset.label)  \(preset.durationFrames)f")
+                Text("\(preset.label)  \(preset.durationLabel)")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -270,7 +332,8 @@ struct ContentView: View {
     }
 
     private func sceneTile(_ scene: SceneEntry) -> some View {
-        let selected = mixer.selectedSceneId == scene.id
+        let preview = mixer.previewingSceneId(for: mixer.selectedUnitId) == scene.id
+        let program = mixer.programmingSceneId(for: mixer.selectedUnitId) == scene.id
         let number = (mixer.session.scenes.firstIndex(where: { $0.id == scene.id }) ?? 0) + 1
         let video = mixer.sceneVideo(scene)
         let loopOn = video?.videoLoop == true
@@ -317,7 +380,12 @@ struct ContentView: View {
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
-        .background(Rectangle().stroke(selected ? mixer.session.settings.previewColor.color : mixer.session.settings.inactiveColor.color, lineWidth: 2))
+        .background(Rectangle().stroke(
+            program ? mixer.session.settings.programColor.color
+                : preview ? mixer.session.settings.previewColor.color
+                : mixer.session.settings.inactiveColor.color,
+            lineWidth: 2
+        ))
         .contextMenu {
             Button("Edit") {
                 mixer.editingScene = scene
@@ -416,7 +484,10 @@ struct ContentView: View {
             MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .aspectRatio(
+            CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+            contentMode: .fit
+        )
         .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -66,6 +66,20 @@
                     <TextBlock Grid.Row="2" Text="Op" VerticalAlignment="Center"/>
                     <TextBox x:Name="OpBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                 </Grid>
+                <TextBlock Text="On/Off" Margin="0,8,0,4"/>
+                <ComboBox x:Name="KindBox" Margin="0,0,0,8" SelectionChanged="KindBox_SelectionChanged">
+                    <ComboBoxItem Content="Cut" Tag="0"/>
+                    <ComboBoxItem Content="Fade" Tag="1"/>
+                </ComboBox>
+                <TextBlock Text="Duration"/>
+                <DockPanel Margin="0,4,0,8">
+                    <ComboBox x:Name="DurationUnitBox" DockPanel.Dock="Right" Width="110"
+                              SelectionChanged="DurationUnit_Changed">
+                        <ComboBoxItem Content="Frames" Tag="0"/>
+                        <ComboBoxItem Content="Milliseconds" Tag="1"/>
+                    </ComboBox>
+                    <TextBox x:Name="DurationBox" Margin="0,0,8,0" LostFocus="Duration_LostFocus"/>
+                </DockPanel>
             </StackPanel>
             <Border Background="#111" BorderBrush="#555" BorderThickness="1" MinHeight="180" Margin="0,0,0,12">
                 <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True" MinHeight="180"/>

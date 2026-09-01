@@ -277,7 +277,7 @@ impl AudioGraph {
     pub fn mix(
         &mut self,
         uploads: &mut UploadStore,
-        snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+        snapshot: &[crate::abi::UnitSnap],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
         delay: &mut AudioDelay,
@@ -375,7 +375,7 @@ impl AudioGraph {
         bus_id: u64,
         role: u32,
         bit: u32,
-        snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+        snapshot: &[crate::abi::UnitSnap],
         spec_map: &HashMap<u64, &[OverlayDesc]>,
     ) -> Vec<(u64, f32)> {
         let mut gains = HashMap::<u64, f32>::new();
@@ -385,12 +385,12 @@ impl AudioGraph {
             snapshot
                 .iter()
                 .filter(|(id, ..)| *id == self.headphone_cue_unit || self.headphone_cue_unit == 0)
-                .map(|(id, _, _, _, _, state)| (*id, *state, true))
+                .map(|(id, _, _, _, _, state, _, _)| (*id, *state, true))
                 .collect()
         } else {
             snapshot
                 .iter()
-                .filter_map(|(id, _, _, _, _, state)| {
+                .filter_map(|(id, _, _, _, _, state, _, _)| {
                     let link = self.unit_links.get(id).copied().unwrap_or(UnitLink {
                         bus_id: MASTER_BUS,
                         mode: LINK_FOLLOW,

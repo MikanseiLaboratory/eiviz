@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use crate::abi::{OverlayDesc, UnitState};
+use crate::abi::OverlayDesc;
 use crate::upload::{AUDIO_RATE, UploadStore};
 
 #[cfg_attr(not(windows), allow(unused_imports))]
@@ -228,7 +228,7 @@ impl AudioEngine {
     pub fn mix(
         &self,
         uploads: &mut UploadStore,
-        snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+        snapshot: &[crate::abi::UnitSnap],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
         produce: bool,

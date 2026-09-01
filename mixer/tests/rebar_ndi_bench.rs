@@ -184,7 +184,7 @@ fn start_media(id: u64, path: &str, capture: u32) {
     let cpath = CString::new(path).expect("path");
     unsafe {
         assert_eq!(
-            mixer_video_start(id, cpath.as_ptr(), capture, 0),
+            mixer_video_start(id, cpath.as_ptr(), capture, 0, 0, 0, 0, 0),
             OK,
             "{}",
             last_error()

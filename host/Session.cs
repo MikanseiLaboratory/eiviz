@@ -296,6 +296,7 @@ public sealed class MvSlot
 public sealed class InputEntry
 {
     public ulong Id { get; init; }
+    public string Guid { get; set; } = System.Guid.NewGuid().ToString();
     public required string Name { get; set; }
     public InputKind Kind { get; set; }
     public string? PathOrAddress { get; set; }
@@ -318,6 +319,10 @@ public sealed class InputEntry
     public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+    public uint CaptureWidth { get; set; }
+    public uint CaptureHeight { get; set; }
+    public uint CaptureFpsNum { get; set; }
+    public uint CaptureFpsDen { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
@@ -348,11 +353,14 @@ public sealed class SceneLayer
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
     public bool AudioFollow { get; set; } = true;
+    public bool Locked { get; set; }
+    public bool SizeLinked { get; set; } = true;
 }
 
 public sealed class SceneEntry
 {
     public ulong Id { get; set; }
+    public string Guid { get; set; } = System.Guid.NewGuid().ToString();
     public required string Name { get; set; }
     public ulong MonitorId { get; set; }
     public List<SceneLayer> Layers { get; } = [];
@@ -363,14 +371,38 @@ public sealed class SceneEntry
 public sealed class TransitionPreset
 {
     public uint Kind { get; set; } = MixerNative.TransitionFade;
-    public uint DurationFrames { get; set; } = 30;
+    public uint DurationValue { get; set; } = 30;
+    public uint DurationUnit { get; set; }
     public bool Swap { get; set; } = true;
-    public string Label => Kind switch
-    {
-        0 => "Cut",
-        2 => "Dip",
-        _ => "Fade"
-    };
+    public bool KeepPreview { get; set; } = true;
+    public uint Easing { get; set; }
+    public uint Direction { get; set; }
+    public float DipR { get; set; }
+    public float DipG { get; set; }
+    public float DipB { get; set; }
+    public float DipA { get; set; } = 1;
+    public string? CustomWgsl { get; set; }
+    public string Label => MixerNative.TransitionLabel(Kind);
+
+    public uint DurationMsFor(MixingUnitEntry unit) =>
+        DurationUnit == MixerNative.DurationMs
+            ? Math.Max(1, DurationValue)
+            : unit.DurationMs(DurationValue);
+
+    internal AutoCommand ToAuto(ulong unitId, MixingUnitEntry unit) =>
+        new(
+            unitId,
+            Kind,
+            DurationMsFor(unit),
+            Swap,
+            KeepPreview,
+            Easing,
+            Direction,
+            DipR,
+            DipG,
+            DipB,
+            DipA,
+            CustomWgsl);
 }
 
 public sealed class OverlaySlot
@@ -383,6 +415,15 @@ public sealed class OverlaySlot
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
     public bool Enabled { get; set; } = true;
+    public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
+    public uint DurationValue { get; set; } = 15;
+    public uint DurationUnit { get; set; }
+}
+
+public sealed class SceneLayoutPreset
+{
+    public required string Name { get; set; }
+    public List<SceneLayer> Layers { get; set; } = [];
 }
 
 public sealed class MultiviewLayout
@@ -523,8 +564,8 @@ public sealed class MixingUnitEntry
     {
         if (Transitions.Count > 0)
             return;
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true, KeepPreview = true });
     }
 
 }
@@ -661,6 +702,7 @@ public sealed class Session
     public List<OutputEntry> Outputs { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
     public List<AudioBusEntry> Buses { get; } = [];
+    public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
@@ -680,8 +722,8 @@ public sealed class Session
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true });
         session.Units.Add(unit);
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);

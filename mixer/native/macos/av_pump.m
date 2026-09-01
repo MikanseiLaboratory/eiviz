@@ -1,5 +1,6 @@
 #import "av_pump.h"
 
+#import <math.h>
 #import <stdlib.h>
 #import <string.h>
 #import <AVFoundation/AVFoundation.h>
@@ -328,6 +329,26 @@ static BOOL wait_keys(AVAsset *asset, NSArray<NSString *> *keys) {
     return dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)) == 0;
 }
 
+static AVAssetTrack *first_track(AVAsset *asset, AVMediaType mediaType) {
+    if (@available(macOS 15.0, *)) {
+        __block NSArray<AVAssetTrack *> *tracks = nil;
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        [asset loadTracksWithMediaType:mediaType completionHandler:^(NSArray<AVAssetTrack *> *loaded, NSError *error) {
+            (void)error;
+            tracks = loaded;
+            dispatch_semaphore_signal(done);
+        }];
+        if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)) != 0) {
+            return nil;
+        }
+        return tracks.firstObject;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [asset tracksWithMediaType:mediaType].firstObject;
+#pragma clang diagnostic pop
+}
+
 EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if (!path || path[0] == 0) {
         return NULL;
@@ -345,7 +366,7 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if ([asset statusOfValueForKey:@"tracks" error:&error] != AVKeyValueStatusLoaded) {
         return NULL;
     }
-    AVAssetTrack *video = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    AVAssetTrack *video = first_track(asset, AVMediaTypeVideo);
     if (!video) {
         return NULL;
     }
@@ -364,7 +385,7 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     }
     [reader addOutput:video_out];
     AVAssetReaderTrackOutput *audio_out = nil;
-    AVAssetTrack *audio = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+    AVAssetTrack *audio = first_track(asset, AVMediaTypeAudio);
     if (audio) {
         audio_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audio outputSettings:audio_attrs()];
         audio_out.alwaysCopiesSampleData = NO;
@@ -385,7 +406,55 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     return (__bridge_retained EivizAvPump *)pump;
 }
 
-EivizAvPump *eiviz_av_open_capture(const char *device_id) {
+int eiviz_av_enum_capture_modes(const char *device_id, EivizAvCaptureMode *out, uint32_t cap) {
+    if (!out || cap == 0) {
+        return 0;
+    }
+    NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
+    AVCaptureDevice *device = uid.length > 0 ? [AVCaptureDevice deviceWithUniqueID:uid] : [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    if (!device) {
+        return 0;
+    }
+    uint32_t count = 0;
+    for (AVCaptureDeviceFormat *format in device.formats) {
+        CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+        if (dim.width <= 0 || dim.height <= 0) {
+            continue;
+        }
+        for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+            if (count >= cap) {
+                return (int)count;
+            }
+            double fps = range.maxFrameRate;
+            uint32_t num = (uint32_t)llround(fps * 1001.0);
+            uint32_t den = 1001;
+            if (fabs(fps - 60.0) < 0.1) { num = 60; den = 1; }
+            else if (fabs(fps - 30.0) < 0.1) { num = 30; den = 1; }
+            else if (fabs(fps - 59.94) < 0.1) { num = 60000; den = 1001; }
+            else if (fabs(fps - 29.97) < 0.1) { num = 30000; den = 1001; }
+            else { num = (uint32_t)llround(fps); den = 1; }
+            BOOL dup = NO;
+            for (uint32_t i = 0; i < count; i++) {
+                if (out[i].width == (uint32_t)dim.width && out[i].height == (uint32_t)dim.height && out[i].fps_num == num && out[i].fps_den == den) {
+                    dup = YES;
+                    break;
+                }
+            }
+            if (dup) {
+                continue;
+            }
+            out[count].width = (uint32_t)dim.width;
+            out[count].height = (uint32_t)dim.height;
+            out[count].fps_num = num;
+            out[count].fps_den = den == 0 ? 1 : den;
+            out[count].format = 1;
+            count++;
+        }
+    }
+    return (int)count;
+}
+
+EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den) {
     NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
     AVCaptureDevice *device = nil;
     if (uid.length > 0) {
@@ -402,8 +471,27 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id) {
     if (!input) {
         return NULL;
     }
+    if (width > 0 && height > 0) {
+        AVCaptureDeviceFormat *chosen = nil;
+        for (AVCaptureDeviceFormat *format in device.formats) {
+            CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+            if ((uint32_t)dim.width == width && (uint32_t)dim.height == height) {
+                chosen = format;
+                break;
+            }
+        }
+        if (chosen && [device lockForConfiguration:nil]) {
+            device.activeFormat = chosen;
+            if (fps_num > 0 && fps_den > 0) {
+                CMTime duration = CMTimeMake((int64_t)fps_den, (int32_t)fps_num);
+                device.activeVideoMinFrameDuration = duration;
+                device.activeVideoMaxFrameDuration = duration;
+            }
+            [device unlockForConfiguration];
+        }
+    }
     AVCaptureSession *session = [[AVCaptureSession alloc] init];
-    if ([session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
+    if (width == 0 && [session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
         session.sessionPreset = AVCaptureSessionPresetHigh;
     }
     if (![session canAddInput:input]) {

@@ -11,7 +11,19 @@ namespace Eiviz.Host;
 internal abstract record MixerCommand;
 internal sealed record SetMixCommand(ulong UnitId, float Value) : MixerCommand;
 internal sealed record CutCommand(ulong UnitId, bool Swap) : MixerCommand;
-internal sealed record AutoCommand(ulong UnitId, uint Kind, uint DurationMs, bool Swap) : MixerCommand;
+internal sealed record AutoCommand(
+    ulong UnitId,
+    uint Kind,
+    uint DurationMs,
+    bool Swap,
+    bool KeepPreview,
+    uint Easing,
+    uint Direction,
+    float DipR,
+    float DipG,
+    float DipB,
+    float DipA,
+    string? CustomWgsl) : MixerCommand;
 internal sealed record PreviewSceneCommand(ulong UnitId, ulong SceneGpuId) : MixerCommand;
 internal sealed record PushUnitStateCommand(ulong UnitId, UnitState State) : MixerCommand;
 internal sealed record DefineSceneCommand(SceneEntry Scene, uint Width, uint Height) : MixerCommand;
@@ -21,7 +33,7 @@ internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint Fr
 internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality? OmtQuality = null) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
 internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true) : MixerCommand;
-internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink) : MixerCommand;
+internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink, uint Width, uint Height, uint FpsNum, uint FpsDen) : MixerCommand;
 internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : MixerCommand;
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
@@ -316,14 +328,14 @@ internal sealed class CommandQueue : IAsyncDisposable
                         if (!File.Exists(video.Path))
                             throw new InvalidOperationException(Loc.MissingFile("Video start"));
                         MixerNative.ThrowIfFailed(
-                            MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat),
+                            MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat, 0, 0, 0, 0),
                             "Video start");
                         MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
                         MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
                         break;
                     case StartUvcCommand uvc:
                         MixerNative.ThrowIfFailed(
-                            MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat),
+                            MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat, uvc.Width, uvc.Height, uvc.FpsNum, uvc.FpsDen),
                             "UVC start");
                         break;
                     case AddOutputCommand add:
@@ -378,10 +390,31 @@ internal sealed class CommandQueue : IAsyncDisposable
             if (MixerNative.GetUnitState(auto.UnitId, &current) == 0)
             {
                 current.TransitionKind = auto.Kind;
+                current.TransitionEasing = auto.Easing;
+                current.TransitionDirection = auto.Direction;
+                current.KeepPreview = auto.KeepPreview ? 1u : 0u;
+                current.DipR = auto.DipR;
+                current.DipG = auto.DipG;
+                current.DipB = auto.DipB;
+                current.DipA = auto.DipA <= 0 ? 1 : auto.DipA;
                 MixerNative.SetUnitState(auto.UnitId, &current);
             }
         }
-        MixerNative.ThrowIfFailed(MixerNative.Auto(auto.UnitId, auto.DurationMs, auto.Swap ? 1u : 0u), "AUTO");
+        MixerNative.SetCustomWgsl(auto.UnitId, auto.CustomWgsl ?? "");
+        MixerNative.ThrowIfFailed(
+            MixerNative.Auto(
+                auto.UnitId,
+                auto.Kind,
+                auto.DurationMs,
+                auto.Swap ? 1u : 0u,
+                auto.KeepPreview ? 1u : 0u,
+                auto.Easing,
+                auto.Direction,
+                auto.DipR,
+                auto.DipG,
+                auto.DipB,
+                auto.DipA <= 0 ? 1 : auto.DipA),
+            "AUTO");
     }
 
     private static void ApplyPreview(ulong unitId, ulong sceneGpuId)
@@ -391,7 +424,6 @@ internal sealed class CommandQueue : IAsyncDisposable
             UnitState current = default;
             MixerNative.ThrowIfFailed(MixerNative.GetUnitState(unitId, &current), "Get unit");
             current.PreviewSource = sceneGpuId;
-            current.Mix = 0;
             MixerNative.ThrowIfFailed(MixerNative.SetUnitState(unitId, &current), "Preview scene");
         }
     }
