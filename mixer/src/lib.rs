@@ -12,6 +12,8 @@ mod generator_audio;
 mod dxgi;
 #[cfg(windows)]
 mod media;
+#[cfg(windows)]
+pub use media::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod media_macos;
 #[cfg(any(windows, target_os = "macos"))]

@@ -69,50 +69,132 @@ mod macos {
 fn finder() -> Result<&'static Finder, String> {
     match FINDER.get_or_init(|| {
         let ndi = runtime()?;
-        // extra_ips replaces NDI's registry/config list and wants machine IPs
-        // ("12.0.0.8,13.0.12.8"), not a CIDR of our own NIC. Passing
-        // "192.168.3.0/24" hid LAN mDNS sources. Leave it unset.
-        if let Some(ips) = lan_extra_ips() {
-            eprintln!("eiviz ndi finder lan={ips} (mDNS/registry; extra_ips unset)");
+        // p_extra_ips replaces Access Manager / registry extras and must be
+        // machine IPs ("12.0.0.8,13.0.12.8"), not a CIDR of our NIC.
+        let mut builder = FinderOptions::builder().show_local_sources(true);
+        match extra_ips() {
+            Some(ips) => {
+                eprintln!("eiviz ndi finder extra_ips={ips}");
+                builder = builder.extra_ips(ips);
+            }
+            None => eprintln!("eiviz ndi finder extra_ips unset (mDNS/registry only)"),
         }
-        Finder::new(
-            ndi,
-            &FinderOptions::builder().show_local_sources(true).build(),
-        )
-        .map_err(|error| error.to_string())
+        Finder::new(ndi, &builder.build()).map_err(|error| error.to_string())
     }) {
         Ok(finder) => Ok(finder),
         Err(error) => Err(error.clone()),
     }
 }
 
-/// Hint NDI at each LAN NIC /24. A machine often has Wi-Fi as the default
-/// route plus a dedicated LAN NIC; mDNS on the wrong adapter sees nothing.
-/// Only adapter IPv4s are used — subnet masks / gateways / DNS look like
-/// IPv4 in `ipconfig` and would replace NDI's registry extra-IP list.
-fn lan_extra_ips() -> Option<String> {
-    let mut nets = Vec::new();
-    push_slash24(&mut nets, default_route_v4());
-    if let Ok(output) = std::process::Command::new("ipconfig").output() {
-        collect_ipconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut nets);
-    }
-    if nets.is_empty() {
+/// Official NDI extra-IP list: unicast machine addresses, never CIDR / masks.
+fn extra_ips() -> Option<String> {
+    let mut ips = Vec::new();
+    append_unique(&mut ips, ndi_config_extra_ips());
+    append_unique(&mut ips, arp_neighbor_ips());
+    if ips.is_empty() {
         None
     } else {
-        Some(nets.join(","))
+        Some(ips.join(","))
     }
 }
 
-fn default_route_v4() -> Option<std::net::Ipv4Addr> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    match socket.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(v4) if usable_lan_v4(v4) => Some(v4),
-        _ => None,
+fn append_unique(dst: &mut Vec<String>, src: Vec<String>) {
+    for ip in src {
+        if !dst.contains(&ip) {
+            dst.push(ip);
+        }
     }
 }
 
-fn collect_ipconfig_adapter_v4s(text: &str, nets: &mut Vec<String>) {
+fn ndi_config_extra_ips() -> Vec<String> {
+    for path in ndi_config_paths() {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let parsed = parse_ndi_config_ips(&text);
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+    Vec::new()
+}
+
+fn ndi_config_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(root) = std::env::var("PROGRAMDATA") {
+        paths.push(
+            std::path::PathBuf::from(root)
+                .join("NDI")
+                .join("ndi-config.v1.json"),
+        );
+    }
+    paths.push(std::path::PathBuf::from(r"C:\ProgramData\NDI\ndi-config.v1.json"));
+    if let Ok(home) = std::env::var("HOME") {
+        paths.push(
+            std::path::PathBuf::from(home)
+                .join("Library/Application Support/NDI/ndi-config.v1.json"),
+        );
+    }
+    paths
+}
+
+fn parse_ndi_config_ips(text: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let Some(ips) = value
+        .pointer("/ndi/networks/ips")
+        .and_then(|value| value.as_str())
+    else {
+        return Vec::new();
+    };
+    split_machine_ips(ips)
+}
+
+fn split_machine_ips(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in text.split(|ch: char| ch == ',' || ch.is_whitespace()) {
+        let token = token.trim();
+        if token.is_empty() || token.contains('/') {
+            continue;
+        }
+        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
+            push_machine_ip(&mut out, v4);
+        }
+    }
+    out
+}
+
+fn push_machine_ip(out: &mut Vec<String>, v4: std::net::Ipv4Addr) {
+    if !usable_lan_v4(v4) || is_net_or_broadcast(v4) {
+        return;
+    }
+    let ip = v4.to_string();
+    if !out.contains(&ip) {
+        out.push(ip);
+    }
+}
+
+fn is_net_or_broadcast(v4: std::net::Ipv4Addr) -> bool {
+    matches!(v4.octets()[3], 0 | 255)
+}
+
+fn local_adapter_v4s() -> Vec<std::net::Ipv4Addr> {
+    let mut ips = Vec::new();
+    if cfg!(windows)
+        && let Ok(output) = std::process::Command::new("ipconfig").output()
+    {
+        collect_ipconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut ips);
+    }
+    if ips.is_empty()
+        && let Ok(output) = std::process::Command::new("ifconfig").output()
+    {
+        collect_ifconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut ips);
+    }
+    ips
+}
+
+fn collect_ipconfig_adapter_v4s(text: &str, ips: &mut Vec<std::net::Ipv4Addr>) {
     for line in text.lines() {
         if !line.contains("IPv4") {
             continue;
@@ -120,10 +202,80 @@ fn collect_ipconfig_adapter_v4s(text: &str, nets: &mut Vec<String>) {
         let Some(token) = line.split_whitespace().last() else {
             continue;
         };
-        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
-            push_slash24(nets, Some(v4));
+        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>()
+            && usable_lan_v4(v4)
+            && !ips.contains(&v4)
+        {
+            ips.push(v4);
         }
     }
+}
+
+fn collect_ifconfig_adapter_v4s(text: &str, ips: &mut Vec<std::net::Ipv4Addr>) {
+    for line in text.lines() {
+        let mut tokens = line.split_whitespace();
+        if tokens.next() != Some("inet") {
+            continue;
+        }
+        let Some(token) = tokens.next() else {
+            continue;
+        };
+        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>()
+            && usable_lan_v4(v4)
+            && !ips.contains(&v4)
+        {
+            ips.push(v4);
+        }
+    }
+}
+
+fn arp_neighbor_ips() -> Vec<String> {
+    let Ok(output) = std::process::Command::new("arp").arg("-a").output() else {
+        return Vec::new();
+    };
+    collect_arp_neighbors(
+        &String::from_utf8_lossy(&output.stdout),
+        &local_adapter_v4s(),
+    )
+}
+
+fn collect_arp_neighbors(text: &str, locals: &[std::net::Ipv4Addr]) -> Vec<String> {
+    let mut iface = None;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(ip) = parse_arp_interface(line) {
+            iface = Some(ip);
+            continue;
+        }
+        for raw in line.split_whitespace() {
+            let token = raw.trim_matches(|ch: char| matches!(ch, '(' | ')' | ','));
+            let Ok(v4) = token.parse::<std::net::Ipv4Addr>() else {
+                continue;
+            };
+            if locals.contains(&v4) || iface == Some(v4) {
+                continue;
+            }
+            push_machine_ip(&mut out, v4);
+            if out.len() >= 32 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+fn parse_arp_interface(line: &str) -> Option<std::net::Ipv4Addr> {
+    let lower = line.to_ascii_lowercase();
+    if !lower.contains("interface") && !line.contains("インターフェイス") {
+        return None;
+    }
+    for raw in line.split_whitespace() {
+        let token = raw.trim_matches(|ch: char| matches!(ch, '(' | ')' | ',' | ':'));
+        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
+            return Some(v4);
+        }
+    }
+    None
 }
 
 fn usable_lan_v4(v4: std::net::Ipv4Addr) -> bool {
@@ -132,20 +284,6 @@ fn usable_lan_v4(v4: std::net::Ipv4Addr) -> bool {
         return false;
     }
     v4.octets()[0] < 224
-}
-
-fn push_slash24(nets: &mut Vec<String>, ip: Option<std::net::Ipv4Addr>) {
-    let Some(v4) = ip else {
-        return;
-    };
-    if !usable_lan_v4(v4) {
-        return;
-    }
-    let oct = v4.octets();
-    let cidr = format!("{}.{}.{}.0/24", oct[0], oct[1], oct[2]);
-    if !nets.contains(&cidr) {
-        nets.push(cidr);
-    }
 }
 
 fn with_finder<T>(f: impl FnOnce(&Finder) -> Result<T, String>) -> Result<T, String> {
@@ -360,7 +498,9 @@ pub fn discover_sources() -> Result<Vec<String>, String> {
             .find_sources(Duration::from_secs(5))
             .map_err(|error| error.to_string())
     })?;
-    Ok(sources.into_iter().map(|source| source.to_string()).collect())
+    let names: Vec<String> = sources.into_iter().map(|source| source.to_string()).collect();
+    eprintln!("eiviz ndi discover count={}", names.len());
+    Ok(names)
 }
 
 fn resolve_source(query: &str) -> Result<Source, String> {
@@ -609,6 +749,19 @@ mod tests {
     }
 
     #[test]
+    fn extra_ips_are_machine_addresses_not_cidr() {
+        assert_eq!(
+            super::split_machine_ips("12.0.0.8,13.0.12.8,192.168.3.0/24,255.255.255.0"),
+            vec!["12.0.0.8".to_string(), "13.0.12.8".to_string()]
+        );
+        assert!(super::parse_ndi_config_ips(
+            r#"{"ndi":{"networks":{"ips":"192.168.3.3, 10.0.0.8"}}}"#
+        )
+        .contains(&"192.168.3.3".to_string()));
+        assert!(super::parse_ndi_config_ips(r#"{"ndi":{"networks":{"ips":""}}}"#).is_empty());
+    }
+
+    #[test]
     fn extra_ips_ignores_masks_gateways_and_apipa() {
         let text = "\
 Windows IP Configuration
@@ -622,9 +775,32 @@ Ethernet adapter Bluetooth:
    IPv4 Address. . . . . . . . . . . : 169.254.61.129
    Subnet Mask . . . . . . . . . . . : 255.255.0.0
 ";
-        let mut nets = Vec::new();
-        super::collect_ipconfig_adapter_v4s(text, &mut nets);
-        assert_eq!(nets, vec!["192.168.3.0/24".to_string()]);
+        let mut ips = Vec::new();
+        super::collect_ipconfig_adapter_v4s(text, &mut ips);
+        assert_eq!(ips, vec!["192.168.3.34".parse::<std::net::Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn arp_neighbors_are_unicast_hosts() {
+        let text = "\
+Interface: 192.168.3.34 --- 0x15
+  Internet Address      Physical Address      Type
+  192.168.3.1           98-2c-c6-9b-ae-10     dynamic
+  192.168.3.3           4c-ed-fb-cb-fa-75     dynamic
+  192.168.3.255         ff-ff-ff-ff-ff-ff     static
+  224.0.0.251           01-00-5e-00-00-fb     static
+? (10.0.0.9) at aa:bb:cc:dd:ee:ff on en0
+";
+        let locals = vec!["192.168.3.34".parse().unwrap()];
+        let ips = super::collect_arp_neighbors(text, &locals);
+        assert_eq!(
+            ips,
+            vec![
+                "192.168.3.1".to_string(),
+                "192.168.3.3".to_string(),
+                "10.0.0.9".to_string()
+            ]
+        );
     }
 
     #[test]

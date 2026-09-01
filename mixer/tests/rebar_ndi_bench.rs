@@ -5,14 +5,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
-    mixer_copy_rebar_info, mixer_copy_source_usage, mixer_copy_stats, mixer_create,
-    mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error, mixer_ndi_connect,
-    mixer_ndi_discover, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
-    mixer_unit_configure, mixer_unit_set_state, MixerRebarInfo, MixerStats, OK, OverlayDesc, Rect,
-    SCENE_BASE, SourceUsage, UnitState,
+    enumerate_video_captures, mixer_copy_rebar_info, mixer_copy_source_usage, mixer_copy_stats,
+    mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error,
+    mixer_ndi_connect, mixer_ndi_discover, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
+    mixer_unit_configure, mixer_unit_set_state, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_start, MixerRebarInfo, MixerStats, OK, OverlayDesc, Rect, SCENE_BASE, SourceUsage,
+    UnitState,
 };
 
 const SOURCE_BASE: u64 = 40;
+const VIDEO_SRC: u64 = 70;
+const UVC_SRC: u64 = 71;
 const UNIT_ID: u64 = 1;
 const SCENE_ID: u64 = SCENE_BASE | 1;
 const WARMUP: Duration = Duration::from_secs(4);
@@ -34,11 +37,31 @@ fn lan_ndi_rebar_modes() {
     println!("available          : {}", info.available != 0);
     println!("gpu_upload_heaps   : {}", info.gpu_upload_heaps != 0);
 
-    let sources = discover_ndi(Duration::from_secs(10));
+    let sources = discover_ndi(Duration::from_secs(25));
     println!("=== NDI sources ===");
     for source in &sources {
         println!("  {source}");
     }
+
+    if let Some(path) = find_kiju_mp4() {
+        video_file_section(&path);
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK, "{}", last_error());
+    } else {
+        println!("=== video file === SKIPPED (Downloads 機銃.MP4 not found)");
+    }
+
+    if let Some((name, link)) = find_facecam() {
+        uvc_section(&name, &link);
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK, "{}", last_error());
+    } else {
+        println!("=== UVC === SKIPPED (Elgato Facecam not found)");
+        for (name, link) in enumerate_video_captures() {
+            println!("  camera {name} {link}");
+        }
+    }
+
     let picked = pick_lan_sources(&sources, 4);
     assert!(
         picked.len() >= 4,
@@ -120,6 +143,131 @@ fn lan_ndi_rebar_modes() {
         );
     }
     mixer_destroy();
+}
+
+fn find_kiju_mp4() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("USERPROFILE")?;
+    let dir = std::path::PathBuf::from(home).join("Downloads");
+    let entries = std::fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let lossy = name.to_string_lossy();
+        if lossy.contains("機銃") && lossy.to_ascii_lowercase().ends_with(".mp4") {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+fn find_facecam() -> Option<(String, String)> {
+    let cams = enumerate_video_captures();
+    println!("=== UVC devices ===");
+    for (name, link) in &cams {
+        println!("  {name}");
+        let _ = link;
+    }
+    let usb3 = cams.iter().find(|(name, _)| {
+        let lower = name.to_ascii_lowercase();
+        lower.contains("facecam") && !lower.contains("usb2")
+    });
+    if let Some(cam) = usb3 {
+        return Some(cam.clone());
+    }
+    if cams.iter().any(|(name, _)| name.to_ascii_lowercase().contains("usb2")) {
+        println!("=== UVC === SKIPPED (Facecam is still USB2)");
+    }
+    None
+}
+
+fn start_media(id: u64, path: &str, capture: u32) {
+    let cpath = CString::new(path).expect("path");
+    unsafe {
+        assert_eq!(
+            mixer_video_start(id, cpath.as_ptr(), capture, 0),
+            OK,
+            "{}",
+            last_error()
+        );
+    }
+    assert_eq!(mixer_video_set_loop(id, 1), OK, "{}", last_error());
+    assert_eq!(mixer_video_set_playing(id, 1), OK, "{}", last_error());
+}
+
+fn fullscreen(source: u64, width: u32, height: u32) {
+    assert_eq!(mixer_create_unit(UNIT_ID, width, height), OK, "{}", last_error());
+    assert_eq!(
+        mixer_unit_configure(UNIT_ID, width, height, 60_000, 1_001),
+        OK
+    );
+    let state = UnitState {
+        program_source: source,
+        preview_source: source,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(UNIT_ID, &state), OK);
+    }
+}
+
+fn video_file_section(path: &std::path::Path) {
+    println!("=== video file === {}", path.display());
+    let path_str = path.to_string_lossy();
+    start_media(VIDEO_SRC, path_str.as_ref(), 0);
+    let usage = wait_for_ids(&[VIDEO_SRC]);
+    println!("frame              : {}x{}", usage[0].width, usage[0].height);
+    fullscreen(VIDEO_SRC, usage[0].width.max(1280), usage[0].height.max(720));
+    thread::sleep(WARMUP);
+    let stats = sample_render();
+    println!(
+        "=== video_file === n={} mean={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} over={}/{} budget={:.3}",
+        stats.n, stats.mean, stats.p50, stats.p95, stats.min, stats.max, stats.overruns, stats.n, stats.budget
+    );
+}
+
+fn uvc_section(name: &str, link: &str) {
+    println!("=== UVC === {name}");
+    start_media(UVC_SRC, link, 1);
+    let usage = wait_for_ids(&[UVC_SRC]);
+    println!("frame              : {}x{}", usage[0].width, usage[0].height);
+    fullscreen(UVC_SRC, usage[0].width.max(1280), usage[0].height.max(720));
+    thread::sleep(WARMUP);
+    let stats = sample_render();
+    println!(
+        "=== uvc_facecam === n={} mean={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} over={}/{} budget={:.3}",
+        stats.n, stats.mean, stats.p50, stats.p95, stats.min, stats.max, stats.overruns, stats.n, stats.budget
+    );
+}
+
+fn wait_for_ids(ids: &[u64]) -> Vec<SourceUsage> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut items = [SourceUsage::default(); 16];
+        let n = unsafe { mixer_copy_source_usage(items.as_mut_ptr(), items.len() as u32) };
+        let mut found = Vec::new();
+        if n > 0 {
+            for id in ids {
+                if let Some(item) = items[..n as usize]
+                    .iter()
+                    .find(|item| item.source_id == *id && item.width >= 640)
+                {
+                    found.push(*item);
+                }
+            }
+        }
+        if found.len() == ids.len() {
+            return found;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "need {} media frames, got {} ({})",
+                ids.len(),
+                found.len(),
+                last_error()
+            );
+        }
+        thread::sleep(Duration::from_millis(80));
+    }
 }
 
 fn discover_ndi(limit: Duration) -> Vec<String> {
