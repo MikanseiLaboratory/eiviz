@@ -1048,6 +1048,39 @@ fn merge_overlay(state: &mut UnitState, desc: OverlayDesc) {
     }
 }
 
+fn tick_unit_transitions(unit: &mut LiveUnit) {
+    if let Some(auto) = unit.auto.take() {
+        let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
+        if t >= 1.0 {
+            unit.state.mix = auto.to;
+            if auto.to >= 1.0 {
+                take_cut(unit, auto.swap);
+            } else {
+                unit.frozen_preview = None;
+            }
+        } else {
+            let eased = ease_mix(t, auto.easing);
+            unit.state.mix = auto.from + (auto.to - auto.from) * eased;
+            unit.auto = Some(auto);
+        }
+    }
+    let mut still = Vec::new();
+    for mut item in unit.overlay_autos.drain(..) {
+        let t = item.start.elapsed().as_secs_f32() / item.duration.as_secs_f32();
+        if t >= 1.0 {
+            item.desc.opacity = item.to;
+            if item.to > 0.001 {
+                merge_overlay(&mut unit.state, item.desc);
+            }
+        } else {
+            item.desc.opacity = item.from + (item.to - item.from) * t;
+            merge_overlay(&mut unit.state, item.desc);
+            still.push(item);
+        }
+    }
+    unit.overlay_autos = still;
+}
+
 fn live_incoming(unit: &LiveUnit) -> u64 {
     if let Some(auto) = &unit.auto
         && (auto.keep_preview || auto.incoming_locked)
@@ -1284,10 +1317,11 @@ pub unsafe extern "C" fn mixer_unit_get_state(unit_id: u64, out: *mut UnitState)
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let Some(unit) = shared.units.get(&unit_id) else {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
+        tick_unit_transitions(unit);
         let mut state = unit.state;
         state.incoming_source = snapshot_mix_preview(unit);
         unsafe { *out = state };
@@ -2922,36 +2956,7 @@ fn render_loop(
         {
             let mut guard = shared.lock().expect("shared");
             for unit in guard.units.values_mut() {
-                if let Some(auto) = unit.auto.take() {
-                    let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
-                    if t >= 1.0 {
-                        unit.state.mix = auto.to;
-                        if auto.to >= 1.0 {
-                            take_cut(unit, auto.swap);
-                        } else {
-                            unit.frozen_preview = None;
-                        }
-                    } else {
-                        let eased = ease_mix(t, auto.easing);
-                        unit.state.mix = auto.from + (auto.to - auto.from) * eased;
-                        unit.auto = Some(auto);
-                    }
-                }
-                let mut still = Vec::new();
-                for mut item in unit.overlay_autos.drain(..) {
-                    let t = item.start.elapsed().as_secs_f32() / item.duration.as_secs_f32();
-                    if t >= 1.0 {
-                        item.desc.opacity = item.to;
-                        if item.to > 0.001 {
-                            merge_overlay(&mut unit.state, item.desc);
-                        }
-                    } else {
-                        item.desc.opacity = item.from + (item.to - item.from) * t;
-                        merge_overlay(&mut unit.state, item.desc);
-                        still.push(item);
-                    }
-                }
-                unit.overlay_autos = still;
+                tick_unit_transitions(unit);
             }
             let snapshot: Vec<(u64, u32, u32, u32, u32, UnitState, u64, Option<String>)> = guard
                 .units
