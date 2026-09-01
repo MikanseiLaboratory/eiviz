@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host;
@@ -16,18 +17,27 @@ internal static class SessionStore
 
     public static void Save(Session session, string path)
     {
-        session.Settings.LastSessionPath = path;
+        session.Settings.LastSessionPath = null;
         var dto = Document.From(session);
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
     public static Session Load(string path)
     {
-        var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
-            ?? throw new InvalidOperationException("Session file is empty.");
-        var session = dto.ToSession();
-        session.Settings.LastSessionPath = path;
-        return session;
+        try
+        {
+            var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
+                ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
+            return dto.ToSession();
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(Loc.Error("Load session", 3));
+        }
     }
 
     private sealed class Document
@@ -300,6 +310,10 @@ internal static class SessionStore
         public string PreviewLabel { get; set; } = "";
         public bool ProgramLabelFollow { get; set; } = true;
         public string ProgramLabel { get; set; } = "";
+        public MvLabelAnchor? LabelAnchor { get; set; }
+        public float? LabelSize { get; set; }
+        public MvLabelUnit? LabelUnit { get; set; }
+        public bool? AlwaysOnTop { get; set; }
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
         {
@@ -313,7 +327,11 @@ internal static class SessionStore
             PreviewLabelFollow = layout.PreviewLabelFollow,
             PreviewLabel = layout.PreviewLabel ?? "",
             ProgramLabelFollow = layout.ProgramLabelFollow,
-            ProgramLabel = layout.ProgramLabel ?? ""
+            ProgramLabel = layout.ProgramLabel ?? "",
+            LabelAnchor = layout.LabelAnchor,
+            LabelSize = layout.LabelSize,
+            LabelUnit = layout.LabelUnit,
+            AlwaysOnTop = layout.AlwaysOnTop
         };
 
         public MultiviewLayout ToEntry(Session session)
@@ -330,7 +348,11 @@ internal static class SessionStore
                 PreviewLabelFollow = PreviewLabelFollow,
                 PreviewLabel = PreviewLabel ?? "",
                 ProgramLabelFollow = ProgramLabelFollow,
-                ProgramLabel = ProgramLabel ?? ""
+                ProgramLabel = ProgramLabel ?? "",
+                LabelAnchor = LabelAnchor ?? session.Settings.MultiviewLabelAnchor,
+                LabelSize = LabelSize ?? session.Settings.MultiviewLabelSize,
+                LabelUnit = LabelUnit ?? session.Settings.MultiviewLabelUnit,
+                AlwaysOnTop = AlwaysOnTop ?? true
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);

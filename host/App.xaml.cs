@@ -1,8 +1,10 @@
 ﻿using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
+using Microsoft.Win32;
 
 namespace Eiviz.Host;
 
@@ -14,6 +16,13 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
+        Loc.Apply(AppPrefs.Current.Language);
+        ThemeService.Apply(AppPrefs.Current.Theme);
+        SystemEvents.UserPreferenceChanged += (_, args) =>
+        {
+            if (args.Category == UserPreferenceCategory.General)
+                Dispatcher.BeginInvoke(() => ThemeService.Apply(AppPrefs.Current.Theme));
+        };
         base.OnStartup(e);
         try
         {
@@ -58,7 +67,7 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");
-        BusTheme.PushMixer(Session.Settings);
+        BusTheme.PushMultiviewLabels(Session);
         MixerNative.ThrowIfFailed(
             MixerNative.SetRebarOptimization(Session.Settings.RebarOptimizationEnabled ? 1u : 0u),
             "Set ReBAR optimization");

@@ -69,11 +69,14 @@ fn macos_probe(device: &GpuDevice) -> RebarSnapshot {
     }) else {
         return RebarSnapshot::unavailable(&info.name);
     };
+    // Intel iGPUs (Iris Plus, UHD, etc.) also report hasUnifiedMemory, but the
+    // Shared-texture direct-sample path is for Apple Silicon only.
+    let apple = cfg!(target_arch = "aarch64") && uma;
     RebarSnapshot {
-        available: uma,
-        uma,
+        available: apple,
+        uma: apple,
         gpu_upload_heaps: false,
-        bar_bytes: if uma { vram.max(1) } else { 0 },
+        bar_bytes: if apple { vram.max(1) } else { 0 },
         vram_bytes: vram,
         adapter,
     }

@@ -17,7 +17,6 @@ struct SettingsView: View {
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
                 Text("Audio Auxiliary").tag(4)
-                Text("About").tag(5)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -27,13 +26,15 @@ struct SettingsView: View {
                     else if category == 1 { performance }
                     else if category == 2 { outputs }
                     else if category == 3 { multiview }
-                    else if category == 4 { audio }
-                    else { about }
+                    else { audio }
                 }
                 Spacer()
                 HStack {
                     Spacer()
                     Button("OK") {
+                        if !copyUmaInfo().available {
+                            mixer.session.settings.rebarOptimization = false
+                        }
                         mixer.pushAudio()
                         mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
@@ -77,25 +78,6 @@ struct SettingsView: View {
             ), supportsOpacity: false)
             .labelsHidden()
             .frame(width: 220, alignment: .leading)
-            Text("Multiview label size")
-            HStack(spacing: 8) {
-                TextField("", value: $mixer.session.settings.multiviewLabelSize, format: .number)
-                    .frame(width: 72)
-                Picker("", selection: $mixer.session.settings.multiviewLabelUnit) {
-                    Text("px").tag(MvLabelUnit.px)
-                    Text("%").tag(MvLabelUnit.percent)
-                }
-                .frame(width: 88)
-            }
-            Text("Multiview label position")
-            Picker("", selection: $mixer.session.settings.multiviewLabelAnchor) {
-                Text("Bottom").tag(MvLabelAnchor.bottom)
-                Text("Top").tag(MvLabelAnchor.top)
-            }
-            .frame(width: 168)
-            Text("px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
             Text("Master Frame Rate")
             Picker("", selection: Binding(
                 get: { "\(mixer.session.settings.masterFpsNum)/\(mixer.session.settings.masterFpsDen)" },
@@ -130,13 +112,14 @@ struct SettingsView: View {
             let info = copyUmaInfo()
             Text("Graphics Adapter").fontWeight(.bold)
             Text(info.name)
-            Text("Unified Memory")
-            Text(info.uma ? "Enabled" : "Not available")
-            Toggle("Use Unified Memory optimization", isOn: Binding(
-                get: { mixer.session.settings.rebarOptimizationEnabled },
-                set: { mixer.session.settings.rebarOptimization = $0 }
-            ))
-            .disabled(!info.available)
+            if info.available {
+                Text("Unified Memory")
+                Text(info.uma ? "Enabled" : "Not available")
+                Toggle("Use Unified Memory optimization", isOn: Binding(
+                    get: { mixer.session.settings.rebarOptimizationEnabled },
+                    set: { mixer.session.settings.rebarOptimization = $0 }
+                ))
+            }
             Toggle("Upload NDI on the ingest thread", isOn: Binding(
                 get: { mixer.session.settings.ndiGpuUploadEnabled },
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
@@ -420,19 +403,73 @@ struct SettingsView: View {
         }
     }
 
-    private var about: some View {
-        VStack(alignment: .leading, spacing: 8) {
+}
+
+struct PreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var prefs = AppPrefs.shared
+    @State private var originalLanguage = AppPrefs.shared.language
+    @State private var originalTheme = AppPrefs.shared.theme
+    @State private var reverting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("prefs.language"))
+            Picker("", selection: $prefs.language) {
+                Text(L10n.t("prefs.english")).tag(AppLanguage.en)
+                Text(L10n.t("prefs.japanese")).tag(AppLanguage.ja)
+            }
+            .frame(width: 220)
+            Text(L10n.t("prefs.theme"))
+            Picker("", selection: $prefs.theme) {
+                Text(L10n.t("prefs.themeDark")).tag(AppThemeMode.dark)
+                Text(L10n.t("prefs.themeLight")).tag(AppThemeMode.light)
+                Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
+            }
+            .frame(width: 220)
             Text("eiviz").font(.title)
             Text("Version \(HostVersion.display)")
-            Text("eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory.")
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Shugo Kawamura")
+            Text(L10n.t("about.blurb")).fixedSize(horizontal: false, vertical: true)
+            Text(L10n.t("about.author"))
             Link("https://github.com/MikanseiLaboratory/eiviz", destination: URL(string: "https://github.com/MikanseiLaboratory/eiviz")!)
             Link("https://mikanseilaboratory.github.io/", destination: URL(string: "https://mikanseilaboratory.github.io/")!)
-            Text("Open source").fontWeight(.bold)
-            Text("eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB.")
+            Text(L10n.t("about.openSource")).fontWeight(.bold)
+            Text(L10n.t("about.license"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button(L10n.t("dialog.ok")) {
+                    prefs.save()
+                    prefs.localeRevision += 1
+                    dismiss()
+                }
+                Button(L10n.t("dialog.cancel")) {
+                    reverting = true
+                    prefs.language = originalLanguage
+                    prefs.theme = originalTheme
+                    prefs.save()
+                    prefs.localeRevision += 1
+                    dismiss()
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 520, minHeight: 420)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear {
+            originalLanguage = prefs.language
+            originalTheme = prefs.theme
+        }
+        .onChange(of: prefs.language) { _, _ in
+            if !reverting {
+                prefs.save()
+                prefs.localeRevision += 1
+            }
+        }
+        .onChange(of: prefs.theme) { _, _ in
+            if !reverting { prefs.save() }
         }
     }
 }
@@ -479,7 +516,9 @@ struct AddInputView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button("OK") { commit(); dismiss() }
+                    Button("OK") {
+                        if commit() { dismiss() }
+                    }
                     Button("Cancel") { dismiss() }
                 }
             }
@@ -514,8 +553,10 @@ struct AddInputView: View {
                 .fixedSize(horizontal: false, vertical: true)
         case "Still":
             pathRow($stillPath) { pick(["public.image"], $stillPath) }
+            recentList(AppPrefs.shared.recentStills) { stillPath = $0 }
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
+            recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
             Picker("Play when", selection: $videoPlayWhen) {
                 Text("Never (manual)").tag(VideoPlayWhen.never)
@@ -568,6 +609,17 @@ struct AddInputView: View {
         HStack {
             mixerTextField(text, placeholder: "Path")
             Button("Browse", action: browse)
+        }
+    }
+
+    @ViewBuilder
+    private func recentList(_ paths: [String], choose: @escaping (String) -> Void) -> some View {
+        if !paths.isEmpty {
+            Text(L10n.t("chrome.openRecent"))
+            List(paths, id: \.self) { path in
+                Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+            }
+            .frame(height: 120)
         }
     }
 
@@ -641,7 +693,7 @@ struct AddInputView: View {
         }
     }
 
-    private func commit() {
+    private func commit() -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         var input = InputEntry(id: editing?.id ?? 0, name: trimmed.isEmpty ? defaultName() : trimmed, kind: .still)
         switch category {
@@ -654,19 +706,29 @@ struct AddInputView: View {
             input.toneHz = toneHz
             input.toneLevelDbfs = toneHz > 0 ? -20 : 0
         case "Still":
-            guard !stillPath.isEmpty else { return }
+            guard !stillPath.isEmpty else { return false }
+            guard FileManager.default.fileExists(atPath: stillPath) else {
+                mixer.presentInputError(L10n.missingFile("Still load"), editing: editing != nil)
+                return false
+            }
             input.kind = .still
             input.pathOrAddress = stillPath
+            AppPrefs.shared.rememberStill(stillPath)
         case "Video":
-            guard !videoPath.isEmpty else { return }
+            guard !videoPath.isEmpty else { return false }
+            guard FileManager.default.fileExists(atPath: videoPath) else {
+                mixer.presentInputError(L10n.missingFile("Video start"), editing: editing != nil)
+                return false
+            }
             input.kind = .video
             input.pathOrAddress = videoPath
+            AppPrefs.shared.rememberVideo(videoPath)
             input.videoLoop = videoLoop
             input.videoPlayWhen = videoPlayWhen
             input.videoRestartWhen = videoRestartWhen
             input.videoPauseWhen = videoPauseWhen
         case "OMT":
-            guard !omtAddress.isEmpty else { return }
+            guard !omtAddress.isEmpty else { return false }
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
@@ -678,18 +740,19 @@ struct AddInputView: View {
             default: .default
             }
         case "NDI®":
-            guard !ndiAddress.isEmpty else { return }
+            guard !ndiAddress.isEmpty else { return false }
             input.kind = .ndi
             input.pathOrAddress = ndiAddress
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
             input.useGpu = false
         default:
-            guard !selectedUvc.isEmpty else { return }
+            guard !selectedUvc.isEmpty else { return false }
             input.kind = .uvc
             input.pathOrAddress = selectedUvc
         }
         mixer.upsertInput(input, replacing: editing?.id)
+        return true
     }
 }
 
@@ -762,10 +825,13 @@ struct MixingUnitView: View {
 struct MultiviewView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
+    var layoutId: UInt64?
+
+    private var resolvedId: UInt64? { layoutId ?? mixer.openMultiview?.id }
 
     private var layout: MultiviewLayout? {
-        if let open = mixer.openMultiview,
-           let live = mixer.session.multiviews.first(where: { $0.id == open.id })
+        if let id = resolvedId,
+           let live = mixer.session.multiviews.first(where: { $0.id == id })
         {
             return live
         }
@@ -777,6 +843,42 @@ struct MultiviewView: View {
             HStack {
                 Text(layout?.name ?? "Multiview").fontWeight(.bold)
                 Spacer()
+                if let index = mixer.session.multiviews.firstIndex(where: { $0.id == layout?.id }) {
+                    Toggle(L10n.t("settings.alwaysOnTop"), isOn: Binding(
+                        get: { mixer.session.multiviews[index].alwaysOnTop },
+                        set: {
+                            mixer.session.multiviews[index].alwaysOnTop = $0
+                            mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
+                        }
+                    ))
+                    Picker(L10n.t("settings.labelPosition"), selection: Binding(
+                        get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
+                        set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
+                    )) {
+                        Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
+                        Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
+                    }
+                    .frame(width: 120)
+                    TextField("", value: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
+                            mixer.applyBusColors()
+                        }
+                    ), format: .number)
+                    .frame(width: 48)
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelUnit = $0
+                            mixer.applyBusColors()
+                        }
+                    )) {
+                        Text("px").tag(MvLabelUnit.px)
+                        Text("%").tag(MvLabelUnit.percent)
+                    }
+                    .frame(width: 56)
+                }
                 Button("Layout…") {
                     mixer.showMultiviewSlots = true
                 }
@@ -809,41 +911,87 @@ struct MultiviewSlotsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var template: MultiviewTemplate = .previewProgram8
     @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10)
+    @State private var selectedTile = 0
 
     private var layoutId: UInt64? { mixer.openMultiview?.id }
+    private var layoutIndex: Int? {
+        guard let id = layoutId else { return nil }
+        return mixer.session.multiviews.firstIndex(where: { $0.id == id })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Click a mosaic. Every window is an Input, Scene, or Mixing Unit preview/program, and fills the frame with no gaps, crop, or zoom.")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Numbers match Window 1…N. Click a pane to assign that window.")
                 .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Template").fontWeight(.bold)
-                ForEach(MultiviewTemplate.groups, id: \.title) { group in
-                    Text(group.title)
-                        .foregroundStyle(EivizTheme.dim)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 8)], alignment: .leading, spacing: 8) {
-                        ForEach(group.items) { item in
-                            Button {
-                                template = item
-                            } label: {
-                                VStack(spacing: 4) {
-                                    MosaicThumb(template: item, selected: template == item)
-                                    Text(item.title)
-                                        .font(.system(size: 11))
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
+            if let index = layoutIndex {
+                HStack(spacing: 8) {
+                    Text(L10n.t("mv.labelPosition"))
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
+                        set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
+                    )) {
+                        Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
+                        Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
                     }
+                    .frame(width: 88)
+                    Text(L10n.t("settings.mvLabelSize"))
+                    TextField("", value: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
+                            mixer.applyBusColors()
+                        }
+                    ), format: .number)
+                    .frame(width: 48)
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelUnit = $0
+                            mixer.applyBusColors()
+                        }
+                    )) {
+                        Text("px").tag(MvLabelUnit.px)
+                        Text("%").tag(MvLabelUnit.percent)
+                    }
+                    .frame(width: 56)
                 }
             }
-            .padding(8)
-            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Template").fontWeight(.bold)
+                    MosaicThumb(template: template, selected: true, selectedPane: selectedTile) { pane in
+                        selectedTile = pane
+                    }
+                    .frame(width: 320, height: 180)
+                }
+                if tiles.indices.contains(selectedTile) {
+                    tileRow(selectedTile)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(tiles.indices, id: \.self) { index in
-                        tileRow(index)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(MultiviewTemplate.groups, id: \.title) { group in
+                        Text(group.title)
+                            .foregroundStyle(EivizTheme.dim)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 6)], alignment: .leading, spacing: 6) {
+                            ForEach(group.items) { item in
+                                Button {
+                                    template = item
+                                } label: {
+                                    VStack(spacing: 2) {
+                                        MosaicThumb(
+                                            template: item,
+                                            selected: template == item,
+                                            selectedPane: template == item ? selectedTile : -1
+                                        )
+                                        Text(item.title)
+                                            .font(.system(size: 10))
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
             }
@@ -853,8 +1001,8 @@ struct MultiviewSlotsView: View {
                 Button("Cancel") { dismiss() }
             }
         }
-        .padding(16)
-        .frame(width: 760, height: 720)
+        .padding(12)
+        .frame(width: 820, height: 520)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -876,6 +1024,9 @@ struct MultiviewSlotsView: View {
         }
         if tiles.count > want {
             tiles.removeLast(tiles.count - want)
+        }
+        if selectedTile >= tiles.count {
+            selectedTile = max(0, tiles.count - 1)
         }
     }
 
@@ -976,6 +1127,8 @@ struct MultiviewSlotsView: View {
 private struct MosaicThumb: View {
     var template: MultiviewTemplate
     var selected: Bool
+    var selectedPane: Int = -1
+    var onPick: ((Int) -> Void)?
 
     var body: some View {
         GeometryReader { geo in
@@ -983,17 +1136,26 @@ private struct MosaicThumb: View {
             let h = geo.size.height
             ZStack(alignment: .topLeading) {
                 Rectangle().fill(Color.black)
-                ForEach(Array(template.panes.enumerated()), id: \.offset) { _, pane in
-                    Rectangle()
-                        .fill(Color(white: 0.29))
-                        .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-                        .frame(width: max(1, CGFloat(pane.width) * w - 1), height: max(1, CGFloat(pane.height) * h - 1))
-                        .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
+                ForEach(Array(template.panes.enumerated()), id: \.offset) { index, pane in
+                    let pw = max(1, CGFloat(pane.width) * w - 1)
+                    let ph = max(1, CGFloat(pane.height) * h - 1)
+                    ZStack {
+                        Rectangle()
+                            .fill(Color(white: index == selectedPane ? 0.43 : 0.29))
+                            .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+                        Text("\(index + 1)")
+                            .font(.system(size: min(18, max(7, min(pw, ph) * 0.42)), weight: .bold))
+                            .foregroundStyle(Color.white)
+                    }
+                    .frame(width: pw, height: ph)
+                    .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
+                    .onTapGesture {
+                        onPick?(index)
+                    }
                 }
             }
         }
         .aspectRatio(16 / 9, contentMode: .fit)
-        .frame(height: 83)
         .overlay(Rectangle().stroke(selected ? Color.white : EivizTheme.stroke, lineWidth: selected ? 2 : 1))
     }
 }

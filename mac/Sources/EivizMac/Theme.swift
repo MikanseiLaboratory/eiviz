@@ -2,23 +2,36 @@ import AppKit
 import SwiftUI
 
 enum EivizTheme {
-    static let background = Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
-    static let chrome = Color(red: 37 / 255, green: 37 / 255, blue: 37 / 255)
-    static let panel = Color(red: 22 / 255, green: 22 / 255, blue: 22 / 255)
-    static let list = Color(red: 34 / 255, green: 34 / 255, blue: 34 / 255)
-    static let statusBar = Color(red: 17 / 255, green: 17 / 255, blue: 17 / 255)
-    static let videoBar = Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255)
-    static let dialog = Color(red: 43 / 255, green: 43 / 255, blue: 43 / 255)
-    static let dialogSide = Color(red: 30 / 255, green: 30 / 255, blue: 30 / 255)
-    static let text = Color(red: 238 / 255, green: 238 / 255, blue: 238 / 255)
-    static let dim = Color(red: 170 / 255, green: 170 / 255, blue: 170 / 255)
-    static let status = Color(red: 124 / 255, green: 252 / 255, blue: 124 / 255)
-    static let warn = Color(red: 1, green: 183 / 255, blue: 77 / 255)
-    static let hud = Color(red: 156 / 255, green: 204 / 255, blue: 101 / 255)
-    static let preview = Color(red: 0, green: 1, blue: 0)
-    static let program = Color(red: 1, green: 0, blue: 0)
-    static let button = Color(red: 58 / 255, green: 58 / 255, blue: 58 / 255)
-    static let stroke = Color(white: 0.27)
+    static var isDark: Bool {
+        switch AppPrefs.shared.theme {
+        case .dark: return true
+        case .light: return false
+        case .system:
+            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+
+    static var background: Color { isDark ? rgb(26, 26, 26) : rgb(240, 240, 240) }
+    static var chrome: Color { isDark ? rgb(37, 37, 37) : rgb(228, 228, 228) }
+    static var panel: Color { isDark ? rgb(22, 22, 22) : rgb(234, 234, 234) }
+    static var list: Color { isDark ? rgb(34, 34, 34) : rgb(255, 255, 255) }
+    static var statusBar: Color { isDark ? rgb(17, 17, 17) : rgb(224, 224, 224) }
+    static var videoBar: Color { isDark ? rgb(20, 20, 20) : rgb(232, 232, 232) }
+    static var dialog: Color { isDark ? rgb(43, 43, 43) : rgb(245, 245, 245) }
+    static var dialogSide: Color { isDark ? rgb(30, 30, 30) : rgb(232, 232, 232) }
+    static var text: Color { isDark ? rgb(238, 238, 238) : rgb(17, 17, 17) }
+    static var dim: Color { isDark ? rgb(170, 170, 170) : rgb(102, 102, 102) }
+    static var status: Color { isDark ? rgb(124, 252, 124) : rgb(46, 125, 50) }
+    static var warn: Color { isDark ? rgb(255, 183, 77) : rgb(230, 81, 0) }
+    static var hud: Color { isDark ? rgb(156, 204, 101) : rgb(85, 139, 47) }
+    nonisolated(unsafe) static let preview = Color(red: 0, green: 1, blue: 0)
+    nonisolated(unsafe) static let program = Color(red: 1, green: 0, blue: 0)
+    static var button: Color { isDark ? rgb(58, 58, 58) : rgb(221, 221, 221) }
+    static var stroke: Color { isDark ? Color(white: 0.27) : Color(white: 0.73) }
+
+    private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color {
+        Color(red: r / 255, green: g / 255, blue: b / 255)
+    }
 }
 
 extension RgbColor {
@@ -168,14 +181,11 @@ final class MixerFieldView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
-        layer?.borderColor = NSColor(white: 0.27, alpha: 1).cgColor
         layer?.borderWidth = 1
         field.isBezeled = false
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.textColor = NSColor(white: 238 / 255, alpha: 1)
         field.font = .systemFont(ofSize: 13)
         field.lineBreakMode = .byTruncatingTail
         field.cell?.wraps = false
@@ -194,6 +204,14 @@ final class MixerFieldView: NSView {
         ])
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
+        applyChrome()
+    }
+
+    func applyChrome() {
+        let dark = EivizTheme.isDark
+        layer?.backgroundColor = (dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 1, alpha: 1)).cgColor
+        layer?.borderColor = (dark ? NSColor(white: 0.27, alpha: 1) : NSColor(white: 0.73, alpha: 1)).cgColor
+        field.textColor = dark ? NSColor(white: 238 / 255, alpha: 1) : NSColor(white: 17 / 255, alpha: 1)
     }
 
     required init?(coder: NSCoder) {
@@ -238,6 +256,7 @@ struct MixerTextField: NSViewRepresentable {
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
         context.coordinator.parent = self
+        view.applyChrome()
         view.field.placeholderString = placeholder
         if view.field.currentEditor() == nil, view.field.stringValue != text {
             view.field.stringValue = text
@@ -295,6 +314,7 @@ struct MixerUintField: NSViewRepresentable {
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
         context.coordinator.parent = self
+        view.applyChrome()
         if view.field.currentEditor() == nil, view.field.stringValue != String(value) {
             view.field.stringValue = String(value)
         }
@@ -346,6 +366,7 @@ struct MixerInt32Field: NSViewRepresentable {
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
         context.coordinator.parent = self
+        view.applyChrome()
         if view.field.currentEditor() == nil, view.field.stringValue != String(value) {
             view.field.stringValue = String(value)
         }
@@ -400,6 +421,7 @@ struct MixerFloatField: NSViewRepresentable {
 
     func updateNSView(_ view: MixerFieldView, context: Context) {
         context.coordinator.parent = self
+        view.applyChrome()
         if view.field.currentEditor() == nil {
             let shown = formatMixerFloat(value)
             if view.field.stringValue != shown {

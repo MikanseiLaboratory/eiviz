@@ -3,18 +3,11 @@ import Foundation
 
 enum MixerFFI {
     static func lastError(_ action: String) -> String {
-        var buffer = [UInt8](repeating: 0, count: 512)
-        let n = buffer.withUnsafeMutableBufferPointer { ptr in
-            mixer_last_error(ptr.baseAddress, ptr.count)
-        }
-        if n > 0, let detail = String(bytes: buffer.prefix(Int(n)), encoding: .utf8), !detail.isEmpty {
-            return "\(action): \(detail)"
-        }
-        return "\(action) failed."
+        L10n.error(action, -1)
     }
 
     static func check(_ code: Int32, _ action: String) -> String? {
-        code == EIVIZ_OK ? nil : lastError(action)
+        code == EIVIZ_OK ? nil : L10n.error(action, code)
     }
 
     static func discover(_ fn: (UnsafeMutablePointer<UInt8>?, Int) -> Int32) -> [String] {

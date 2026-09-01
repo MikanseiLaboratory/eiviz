@@ -25,6 +25,7 @@ final class MixerController: ObservableObject {
     @Published var videoPlaying = false
     @Published var videoTitle = ""
     @Published var showSettings = false
+    @Published var showPreferences = false
     @Published var showAddInput = false
     @Published var editingInput: InputEntry?
     @Published var showMixingUnit = false
@@ -49,6 +50,8 @@ final class MixerController: ObservableObject {
     private let inputPreviewCloser = InputPreviewCloser()
     private var switcherWindows: [UInt64: NSWindow] = [:]
     private let switcherCloser = SwitcherCloser()
+    private var multiviewWindows: [UInt64: NSWindow] = [:]
+    private let multiviewCloser = SwitcherCloser()
     private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
 
     var selectedUnit: MixingUnitEntry {
@@ -58,10 +61,12 @@ final class MixerController: ObservableObject {
     func boot() {
         guard !booted else { return }
         guard mixer_ping() == 0x4549_5649 else {
-            errorText = "The Rust mixer ABI does not match this host."
+            presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
         }
-        fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
+        guard fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+            return
+        }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
@@ -88,7 +93,6 @@ final class MixerController: ObservableObject {
         guard let id = selectedInputId,
               let input = session.inputs.first(where: { $0.id == id })
         else {
-            errorText = "Select an Input to preview."
             let alert = NSAlert()
             alert.messageText = "Select an Input to preview."
             alert.alertStyle = .informational
@@ -336,7 +340,7 @@ final class MixerController: ObservableObject {
     func setMix(_ value: Float, unitId: UInt64) {
         var state = currentState(unitId)
         state.mix = value
-        fail(mixer_unit_set_state(unitId, &state), "T-bar")
+        _ = mixer_unit_set_state(unitId, &state)
     }
 
     func finishTBar() {
@@ -542,7 +546,37 @@ final class MixerController: ObservableObject {
     func openMultiviewWindow(_ layout: MultiviewLayout) {
         pushMultiview(layout)
         openMultiview = layout
-        showMultiview = true
+        if let existing = multiviewWindows[layout.id] {
+            existing.makeKeyAndOrderFront(nil)
+            existing.level = layout.alwaysOnTop ? .floating : .normal
+            return
+        }
+        let host = NSHostingController(rootView: MultiviewView(layoutId: layout.id).environmentObject(self))
+        let window = SwitcherHostWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 792),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = layout.name
+        window.identifier = NSUserInterfaceItemIdentifier("multiview-\(layout.id)")
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.level = layout.alwaysOnTop ? .floating : .normal
+        window.center()
+        multiviewCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.multiviewWindows.removeValue(forKey: closedId)
+            }
+        }
+        window.delegate = multiviewCloser
+        window.makeKeyAndOrderFront(nil)
+        multiviewWindows[layout.id] = window
+        showMultiview = false
+    }
+
+    func applyMultiviewWindowLevel(_ layout: MultiviewLayout) {
+        multiviewWindows[layout.id]?.level = layout.alwaysOnTop ? .floating : .normal
     }
 
     func openSwitcher(_ unitId: UInt64? = nil) {
@@ -655,13 +689,20 @@ final class MixerController: ObservableObject {
             program.r, program.g, program.b,
             inactive.r, inactive.g, inactive.b
         )
-        let size = min(200, max(1, session.settings.multiviewLabelSize))
-        session.settings.multiviewLabelSize = size
+        let fallback = min(200, max(1, session.settings.multiviewLabelSize))
+        session.settings.multiviewLabelSize = fallback
         _ = mixer_set_mv_label(
-            size,
+            0,
+            fallback,
             session.settings.multiviewLabelUnit == .percent ? 1 : 0,
             session.settings.multiviewLabelAnchor == .top ? 1 : 0
         )
+        for layout in session.multiviews {
+            let size = layout.resolvedLabelSize(session.settings)
+            let percent = layout.resolvedLabelUnit(session.settings) == .percent ? UInt32(1) : 0
+            let top = layout.resolvedLabelAnchor(session.settings) == .top ? UInt32(1) : 0
+            _ = mixer_set_mv_label(layout.gpuId, size, percent, top)
+        }
     }
 
     private func slotNames(_ layout: MultiviewLayout) -> [String] {
@@ -705,10 +746,10 @@ final class MixerController: ObservableObject {
         panel.nameFieldStringValue = "eiviz.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         session.selectedUnitId = selectedUnitId
-        session.settings.lastSessionPath = url.path
+        session.settings.lastSessionPath = nil
         do {
             let json = try SessionFile.encode(session)
-            MixerFFI.withCString(url.path) { path in
+            let saved = MixerFFI.withCString(url.path) { path in
                 json.withUnsafeBytes { ptr in
                     fail(
                         mixer_session_save(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
@@ -716,42 +757,73 @@ final class MixerController: ObservableObject {
                     )
                 }
             }
+            if saved {
+                AppPrefs.shared.rememberSession(url.path)
+            }
         } catch {
-            errorText = error.localizedDescription
+            presentError(L10n.error("Save session", 3), title: L10n.t("action.Save session"))
         }
     }
 
-    func loadSession() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+    func newSession() {
+        replaceSession(MixerSessionData.default())
+    }
+
+    func loadSession(path: String? = nil) {
+        let url: URL
+        if let path {
+            url = URL(fileURLWithPath: path)
+        } else {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.json]
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let picked = panel.url else { return }
+            url = picked
+        }
         var buffer = [UInt8](repeating: 0, count: 1 << 20)
         let n = MixerFFI.withCString(url.path) { path in
             buffer.withUnsafeMutableBufferPointer { ptr in
                 mixer_session_load(path, ptr.baseAddress, ptr.count)
             }
         }
-        guard n >= 0 else {
-            fail(n, "Load session")
+        guard n > 0 else {
+            fail(n == 0 ? 5 : n, "Load session")
             return
         }
         do {
-            let loaded = try SessionFile.decode(Data(buffer.prefix(Int(n))))
-            closeAllSwitchers()
-            mixer_destroy()
-            session = loaded
-            selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
-            mix = 0
-            fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
-            fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
-            fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
-            fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
-            applyBusColors()
-            applySession()
+            replaceSession(try SessionFile.decode(Data(buffer.prefix(Int(n)))))
+            AppPrefs.shared.rememberSession(url.path)
         } catch {
-            errorText = error.localizedDescription
+            presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
         }
+    }
+
+    private func replaceSession(_ loaded: MixerSessionData) {
+        closeAllInputPreviews()
+        closeAllSwitchers()
+        closeAllMultiviews()
+        mixer_destroy()
+        session = loaded
+        selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
+        mix = 0
+        guard fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+            return
+        }
+        fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
+        fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
+        fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        applyBusColors()
+        applySession()
+    }
+
+    private func closeAllMultiviews() {
+        for id in Array(multiviewWindows.keys) {
+            let window = multiviewWindows.removeValue(forKey: id)
+            window?.delegate = nil
+            window?.close()
+        }
+        showMultiview = false
+        openMultiview = nil
     }
 
     var selectedVideoId: UInt64? {
@@ -772,6 +844,10 @@ final class MixerController: ObservableObject {
     }
 
     private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
+        if capture == 0 && !FileManager.default.fileExists(atPath: path) {
+            presentInputError(L10n.missingFile("Video start"))
+            return
+        }
         MixerFFI.withCString(path) { cstr in
             fail(
                 mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA),
@@ -832,6 +908,10 @@ final class MixerController: ObservableObject {
             break
         case .still:
             if let path = input.pathOrAddress {
+                guard FileManager.default.fileExists(atPath: path) else {
+                    presentInputError(L10n.missingFile("Still load"))
+                    return
+                }
                 MixerFFI.withCString(path) { cstr in
                     fail(mixer_load_still(input.id, cstr), "Still load")
                 }
@@ -899,11 +979,11 @@ final class MixerController: ObservableObject {
                 if await AVCaptureDevice.requestAccess(for: .video) {
                     startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
                 } else {
-                    errorText = "Camera access was denied."
+                    presentError(L10n.t("error.cameraDenied"), title: L10n.t("action.UVC start"))
                 }
             }
         default:
-            errorText = "Camera access was denied."
+            presentError(L10n.t("error.cameraDenied"), title: L10n.t("action.UVC start"))
         }
     }
 
@@ -1123,10 +1203,24 @@ final class MixerController: ObservableObject {
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
     }
 
-    private func fail(_ code: Int32, _ action: String) {
-        if let message = MixerFFI.check(code, action) {
-            errorText = message
-        }
+    func presentError(_ message: String, title: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+    }
+
+    func presentInputError(_ message: String, editing: Bool = false) {
+        presentError(message, title: L10n.t(editing ? "msg.editInput" : "msg.addInput"))
+    }
+
+    @discardableResult
+    private func fail(_ code: Int32, _ action: String) -> Bool {
+        guard let message = MixerFFI.check(code, action) else { return true }
+        presentError(message, title: L10n.t("action.\(action)"))
+        return false
     }
 }
 
@@ -1160,10 +1254,12 @@ private final class SwitcherCloser: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              let raw = window.identifier?.rawValue,
-              raw.hasPrefix("switcher-"),
-              let unitId = UInt64(raw.dropFirst("switcher-".count))
+              let raw = window.identifier?.rawValue
         else { return }
-        onClose?(unitId)
+        if raw.hasPrefix("switcher-"), let unitId = UInt64(raw.dropFirst("switcher-".count)) {
+            onClose?(unitId)
+        } else if raw.hasPrefix("multiview-"), let id = UInt64(raw.dropFirst("multiview-".count)) {
+            onClose?(id)
+        }
     }
 }

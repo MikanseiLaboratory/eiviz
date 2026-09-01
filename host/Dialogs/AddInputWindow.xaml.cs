@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Microsoft.Win32;
 
@@ -8,8 +10,8 @@ namespace Eiviz.Host.Dialogs;
 
 public partial class AddInputWindow : Window
 {
-    private static readonly List<string> StillHistory = [];
-    private static readonly List<string> VideoHistory = [];
+    private static List<string> StillHistory => AppPrefs.Current.RecentStills;
+    private static List<string> VideoHistory => AppPrefs.Current.RecentVideos;
     private InputKind _kind = InputKind.Still;
     private bool _lockKind;
 
@@ -250,13 +252,23 @@ public partial class AddInputWindow : Window
                 if (string.IsNullOrWhiteSpace(StillPath.Text))
                     return;
                 ResultPath = StillPath.Text.Trim();
-                ResultName = System.IO.Path.GetFileName(ResultPath);
+                if (!File.Exists(ResultPath))
+                {
+                    MessageBox.Show(this, Loc.MissingFile("Still load"), Loc.T("msg.addInput"));
+                    return;
+                }
+                ResultName = Path.GetFileName(ResultPath);
                 Remember(StillHistory, ResultPath);
                 break;
             case InputKind.Video:
                 if (string.IsNullOrWhiteSpace(VideoPath.Text))
                     return;
                 ResultPath = VideoPath.Text.Trim();
+                if (!File.Exists(ResultPath))
+                {
+                    MessageBox.Show(this, Loc.MissingFile("Video start"), Loc.T("msg.addInput"));
+                    return;
+                }
                 ResultName = System.IO.Path.GetFileName(ResultPath);
                 ResultVideoLoop = VideoLoopBox.IsChecked == true;
                 ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);
@@ -369,12 +381,12 @@ public partial class AddInputWindow : Window
         }
     }
 
-    private static void Remember(List<string> history, string path)
+    private void Remember(List<string> history, string path)
     {
-        history.Remove(path);
-        history.Insert(0, path);
-        if (history.Count > 24)
-            history.RemoveRange(24, history.Count - 24);
+        if (ReferenceEquals(history, AppPrefs.Current.RecentStills))
+            AppPrefs.Current.RememberStill(path);
+        else
+            AppPrefs.Current.RememberVideo(path);
     }
 
     private sealed record CameraItem(string Name, string Link)

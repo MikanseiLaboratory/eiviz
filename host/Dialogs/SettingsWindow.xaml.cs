@@ -1,7 +1,6 @@
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Navigation;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
 
@@ -60,12 +59,8 @@ public partial class SettingsWindow : Window
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
         _devices = AudioGraphSync.EnumerateDevices(0);
         RebuildBuses();
-        AboutVersion.Text = $"Version {HostVersion.Display}";
         FillRebar();
         PaintBusColors();
-        MvLabelSizeBox.Text = Settings.MultiviewLabelSize.ToString("0.##");
-        SelectTag(MvLabelUnitBox, Settings.MultiviewLabelUnit == MvLabelUnit.Percent ? "Percent" : "Px");
-        SelectTag(MvLabelAnchorBox, Settings.MultiviewLabelAnchor == MvLabelAnchor.Top ? "Top" : "Bottom");
     }
 
     public SessionSettings Settings { get; }
@@ -74,11 +69,12 @@ public partial class SettingsWindow : Window
     public bool HeadphoneCopyMaster { get; private set; }
     private ulong _nextBusId;
     private bool _suppressOutputs;
+    private bool _rebarAvailable;
     private List<(uint Kind, uint Channels, string Id, string Name)> _devices = [];
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AboutPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -86,21 +82,6 @@ public partial class SettingsWindow : Window
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
-        AboutPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void AboutLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
-    {
-        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
-        e.Handled = true;
-    }
-
-    private void OpenNotices_Click(object sender, RoutedEventArgs e)
-    {
-        var path = System.IO.Path.Combine(AppContext.BaseDirectory, "THIRD_PARTY_NOTICES.md");
-        if (!System.IO.File.Exists(path))
-            return;
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -110,13 +91,10 @@ public partial class SettingsWindow : Window
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
         SelectTag(MvPresentBox, "3");
-        RebarOptBox.IsChecked = true;
+        RebarOptBox.IsChecked = _rebarAvailable;
         NdiGpuBox.IsChecked = true;
         Settings.ResetBusColors();
         PaintBusColors();
-        MvLabelSizeBox.Text = "18";
-        SelectTag(MvLabelUnitBox, "Px");
-        SelectTag(MvLabelAnchorBox, "Bottom");
     }
 
     private void PickPreviewColor_Click(object sender, RoutedEventArgs e)
@@ -168,27 +146,29 @@ public partial class SettingsWindow : Window
             var info = new MixerRebarInfo();
             if (MixerNative.CopyRebarInfo(&info) != 0)
             {
-                AdapterName.Text = "Mixer is not running.";
-                RebarStatus.Text = "Unknown";
+                AdapterName.Text = Loc.T("rebar.mixerDown");
+                RebarStatus.Text = Loc.T("rebar.unknown");
                 RebarMemory.Text = "—";
+                _rebarAvailable = false;
                 RebarOptBox.IsEnabled = false;
-                RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
+                RebarOptBox.IsChecked = false;
                 NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
                 return;
             }
             AdapterName.Text = ReadZ(info.Adapter, 128);
             if (info.Uma != 0)
-                RebarStatus.Text = "Not applicable (integrated GPU)";
+                RebarStatus.Text = Loc.T("rebar.na");
             else if (info.Available != 0)
-                RebarStatus.Text = "Enabled";
+                RebarStatus.Text = Loc.T("rebar.enabled");
             else
-                RebarStatus.Text = "Disabled";
+                RebarStatus.Text = Loc.T("rebar.disabled");
             var bar = FormatMib(info.BarBytes);
             var vram = FormatMib(info.VramBytes);
             var heaps = info.GpuUploadHeaps != 0 ? "Yes" : "No";
             RebarMemory.Text = $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
-            RebarOptBox.IsEnabled = info.Available != 0;
-            RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
+            _rebarAvailable = info.Available != 0;
+            RebarOptBox.IsEnabled = _rebarAvailable;
+            RebarOptBox.IsChecked = _rebarAvailable && Settings.RebarOptimizationEnabled;
             NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
         }
     }
@@ -594,14 +574,7 @@ public partial class SettingsWindow : Window
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
-        if (float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var labelSize)
-            || float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out labelSize))
-            Settings.MultiviewLabelSize = Math.Clamp(labelSize, 1f, 200f);
-        if (MvLabelUnitBox.SelectedItem is ComboBoxItem unitItem && unitItem.Tag is string unitTag)
-            Settings.MultiviewLabelUnit = unitTag == "Percent" ? MvLabelUnit.Percent : MvLabelUnit.Px;
-        if (MvLabelAnchorBox.SelectedItem is ComboBoxItem anchorItem && anchorItem.Tag is string anchorTag)
-            Settings.MultiviewLabelAnchor = anchorTag == "Top" ? MvLabelAnchor.Top : MvLabelAnchor.Bottom;
-        Settings.RebarOptimization = RebarOptBox.IsChecked == true;
+        Settings.RebarOptimization = _rebarAvailable && RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;

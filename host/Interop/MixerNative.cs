@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Eiviz.Host.I18n;
 
 namespace Eiviz.Host.Interop;
 
@@ -243,7 +244,7 @@ internal static partial class MixerNative
         byte inR, byte inG, byte inB);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_mv_label")]
-    internal static partial int SetMvLabel(float size, uint percent, uint top);
+    internal static partial int SetMvLabel(ulong sceneId, float size, uint percent, uint top);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
@@ -284,7 +285,8 @@ internal static partial class MixerNative
             fixed (byte* ptr = buffer)
             {
                 var n = SessionLoad(path, ptr, (nuint)buffer.Length);
-                ThrowIfFailed(n < 0 ? n : 0, "Load session");
+                if (n <= 0)
+                    ThrowIfFailed(n == 0 ? 5 : n, "Load session");
                 return Encoding.UTF8.GetString(buffer, 0, n);
             }
         }
@@ -377,8 +379,7 @@ internal static partial class MixerNative
     {
         if (code == 0)
             return;
-        var detail = LastErrorText();
-        throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? $"{action} failed ({code})." : $"{action}: {detail}");
+        throw new InvalidOperationException(Loc.Error(action, code));
     }
 }
 

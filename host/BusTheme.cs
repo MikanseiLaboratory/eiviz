@@ -54,9 +54,17 @@ internal static class BusTheme
             "Set bus colors");
         MixerNative.ThrowIfFailed(
             MixerNative.SetMvLabel(
+                0,
                 settings.MultiviewLabelSize,
                 settings.MultiviewLabelUnit == MvLabelUnit.Percent ? 1u : 0u,
                 settings.MultiviewLabelAnchor == MvLabelAnchor.Top ? 1u : 0u),
             "Set Multiview label");
+    }
+
+    public static void PushMultiviewLabels(Session session)
+    {
+        PushMixer(session.Settings);
+        foreach (var layout in session.Multiviews)
+            layout.PushLabelStyle(session.Settings);
     }
 }

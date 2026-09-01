@@ -25,7 +25,10 @@ public partial class MultiviewWindow : Window
         _layout = layout;
         Title = layout.Name;
         TitleText.Text = layout.Name;
+        Topmost = layout.AlwaysOnTop;
+        OnTopBox.IsChecked = layout.AlwaysOnTop;
         SyncPresentInterval();
+        SyncLabelStyle();
         SourceInitialized += (_, _) =>
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
@@ -54,6 +57,75 @@ public partial class MultiviewWindow : Window
             }
         }
         _suppressPresent = false;
+    }
+
+    internal void SyncLabelStyle()
+    {
+        _suppressPresent = true;
+        var tag = _layout.ResolvedLabelAnchor(_session.Settings) == MvLabelAnchor.Top ? "Top" : "Bottom";
+        foreach (ComboBoxItem item in AnchorBox.Items)
+        {
+            if (Equals(item.Tag, tag))
+            {
+                AnchorBox.SelectedItem = item;
+                break;
+            }
+        }
+        SizeBox.Text = _layout.ResolvedLabelSize(_session.Settings).ToString("0.##");
+        var unit = _layout.ResolvedLabelUnit(_session.Settings) == MvLabelUnit.Percent ? "Percent" : "Px";
+        foreach (ComboBoxItem item in UnitBox.Items)
+        {
+            if (Equals(item.Tag, unit))
+            {
+                UnitBox.SelectedItem = item;
+                break;
+            }
+        }
+        _suppressPresent = false;
+    }
+
+    private void OnTop_Click(object sender, RoutedEventArgs e)
+    {
+        _layout.AlwaysOnTop = OnTopBox.IsChecked == true;
+        Topmost = _layout.AlwaysOnTop;
+        Owner = _layout.AlwaysOnTop ? Application.Current.MainWindow : null;
+    }
+
+    private void AnchorBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressPresent)
+            return;
+        if (AnchorBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            _layout.LabelAnchor = tag == "Top" ? MvLabelAnchor.Top : MvLabelAnchor.Bottom;
+            _layout.PushLabelStyle(_session.Settings);
+        }
+    }
+
+    private void SizeBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (float.TryParse(SizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var size)
+            || float.TryParse(SizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out size))
+        {
+            _layout.LabelSize = Math.Clamp(size, 1f, 200f);
+            SizeBox.Text = _layout.LabelSize.Value.ToString("0.##");
+            _layout.PushLabelStyle(_session.Settings);
+        }
+        else
+        {
+            SizeBox.Text = _layout.ResolvedLabelSize(_session.Settings).ToString("0.##");
+        }
+    }
+
+    private void UnitBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressPresent)
+            return;
+        if (UnitBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            _layout.LabelUnit = tag == "Percent" ? MvLabelUnit.Percent : MvLabelUnit.Px;
+            _layout.PushLabelStyle(_session.Settings);
+        }
     }
 
     private void PresentBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

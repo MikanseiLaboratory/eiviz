@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var mixer: MixerController
+    @ObservedObject private var prefs = AppPrefs.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +23,9 @@ struct ContentView: View {
         }
         .background(EivizTheme.background)
         .foregroundStyle(EivizTheme.text)
+        .id("\(prefs.language)-\(prefs.theme)-\(prefs.localeRevision)")
         .sheet(isPresented: $mixer.showSettings) { SettingsView() }
+        .sheet(isPresented: $mixer.showPreferences) { PreferencesView() }
         .sheet(isPresented: $mixer.showAddInput, onDismiss: { mixer.editingInput = nil }) {
             AddInputView(editing: mixer.editingInput)
         }
@@ -38,27 +41,44 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack {
-            Text("Mixing Unit")
+            Button(L10n.t("chrome.new")) { mixer.newSession() }
+            Button(L10n.t("chrome.save")) { mixer.saveSession() }
+            Button(L10n.t("chrome.load")) { mixer.loadSession() }
+            Menu {
+                ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
+                    Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
+                }
+            } label: {
+                Text("▾")
+            }
+            Spacer()
+            Text(L10n.t("chrome.mixingUnit"))
             Picker("", selection: $mixer.selectedUnitId) {
                 ForEach(mixer.session.units) { unit in
                     Text(unit.displayName).tag(unit.id)
                 }
             }
             .frame(width: 280)
-            Button("Add") { mixer.addUnit() }
-            Button("Edit") {
+            Button(L10n.t("chrome.add")) { mixer.addUnit() }
+            Button(L10n.t("chrome.edit")) {
                 mixer.editingUnit = mixer.selectedUnit
                 mixer.showMixingUnit = true
             }
-            Button("Delete") { mixer.deleteUnit() }
-            Button("Open") { mixer.openSwitcher() }
-            Spacer()
-            Button("Save") { mixer.saveSession() }
-            Button("Load") { mixer.loadSession() }
-            Button("Overlay") { mixer.showOverlay = true }
-            Button("Multiview") { mixer.openNewMultiview() }
-            Button("Resources") { mixer.showResources = true }
-            Button("Settings") { mixer.showSettings = true }
+            Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
+            Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
+            Button(L10n.t("chrome.overlay")) { mixer.showOverlay = true }
+            Menu {
+                ForEach(mixer.session.multiviews) { layout in
+                    Button(layout.name) { mixer.openMultiviewWindow(layout) }
+                }
+                Divider()
+                Button(L10n.t("chrome.newMultiview")) { mixer.openNewMultiview() }
+            } label: {
+                Text(L10n.t("chrome.multiview"))
+            }
+            Button(L10n.t("chrome.resources")) { mixer.showResources = true }
+            Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
+            Button(L10n.t("chrome.preferences")) { mixer.showPreferences = true }
         }
         .buttonStyle(MixerButtonStyle())
         .padding(.horizontal, 8)

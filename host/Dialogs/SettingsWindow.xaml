@@ -1,71 +1,52 @@
 <Window x:Class="Eiviz.Host.Dialogs.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Height="560" Width="820"
+        xmlns:i18n="clr-namespace:Eiviz.Host.I18n"
+        Title="{Binding [settings.title], Source={x:Static i18n:Loc.Source}}" Height="560" Width="820"
         WindowStartupLocation="CenterOwner"
-        Background="#2B2B2B" Foreground="#EEEEEE">
+        Background="{DynamicResource DialogBackground}" Foreground="{DynamicResource TextForeground}">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="200"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
-        <Border Background="#1E1E1E">
-            <ListBox x:Name="CategoryList" Background="Transparent" Foreground="#EEE" BorderThickness="0"
+        <Border Background="{DynamicResource DialogSideBackground}">
+            <ListBox x:Name="CategoryList" Background="Transparent" Foreground="{DynamicResource TextForeground}" BorderThickness="0"
                      SelectionChanged="CategoryList_SelectionChanged">
-                <ListBoxItem Content="Display" IsSelected="True"/>
-                <ListBoxItem Content="Performance"/>
-                <ListBoxItem Content="Outputs"/>
-                <ListBoxItem Content="Multiview"/>
-                <ListBoxItem Content="Audio Auxiliary"/>
-                <ListBoxItem Content="About"/>
+                <ListBoxItem Content="{Binding [settings.display], Source={x:Static i18n:Loc.Source}}" IsSelected="True"/>
+                <ListBoxItem Content="{Binding [settings.performance], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.outputs], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.multiview], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.audioAux], Source={x:Static i18n:Loc.Source}}"/>
             </ListBox>
         </Border>
         <DockPanel Grid.Column="1">
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="16">
-                <Button Content="Default" Width="88" Click="Default_Click"/>
-                <CheckBox Content="Show Advanced Settings" Margin="16,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
+                <Button Content="{Binding [dialog.default], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Default_Click"/>
+                <CheckBox Content="{Binding [settings.showAdvanced], Source={x:Static i18n:Loc.Source}}" Margin="16,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Width="280">
-                    <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
-                    <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
+                    <Button Content="{Binding [dialog.ok], Source={x:Static i18n:Loc.Source}}" Width="88" IsDefault="True" Click="Ok_Click"/>
+                    <Button Content="{Binding [dialog.cancel], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" IsCancel="True"/>
                 </StackPanel>
             </StackPanel>
             <ScrollViewer x:Name="DisplayPanel" Margin="20" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <TextBlock Text="Theme"/>
-                <ComboBox x:Name="ThemeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
-                    <ComboBoxItem Content="Charcoal" IsSelected="True"/>
-                </ComboBox>
-                <TextBlock Text="Preview color"/>
+                <TextBlock Text="{Binding [settings.previewColor], Source={x:Static i18n:Loc.Source}}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
                     <Border x:Name="PreviewColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
-                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickPreviewColor_Click"/>
+                    <Button Content="{Binding [settings.change], Source={x:Static i18n:Loc.Source}}" Width="72" Height="24" Margin="8,0,0,0" Click="PickPreviewColor_Click"/>
                 </StackPanel>
-                <TextBlock Text="Program color"/>
+                <TextBlock Text="{Binding [settings.programColor], Source={x:Static i18n:Loc.Source}}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
                     <Border x:Name="ProgramColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
-                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickProgramColor_Click"/>
+                    <Button Content="{Binding [settings.change], Source={x:Static i18n:Loc.Source}}" Width="72" Height="24" Margin="8,0,0,0" Click="PickProgramColor_Click"/>
                 </StackPanel>
-                <TextBlock Text="Inactive color"/>
+                <TextBlock Text="{Binding [settings.inactiveColor], Source={x:Static i18n:Loc.Source}}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
                     <Border x:Name="InactiveColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
-                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
+                    <Button Content="{Binding [settings.change], Source={x:Static i18n:Loc.Source}}" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
                 </StackPanel>
-                <TextBlock Text="Multiview label size"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24"/>
-                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0">
-                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
-                        <ComboBoxItem Content="%" Tag="Percent"/>
-                    </ComboBox>
-                </StackPanel>
-                <TextBlock Text="Multiview label position"/>
-                <ComboBox x:Name="MvLabelAnchorBox" Margin="0,4,0,4" Width="168" HorizontalAlignment="Left">
-                    <ComboBoxItem Content="Bottom" Tag="Bottom" IsSelected="True"/>
-                    <ComboBoxItem Content="Top" Tag="Top"/>
-                </ComboBox>
-                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,12"
-                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window."/>
-                <TextBlock Text="Master Frame Rate"/>
+                <TextBlock Text="{Binding [settings.masterFps], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
                     <ComboBoxItem Content="50p" Tag="50/1"/>
@@ -73,13 +54,13 @@
                     <ComboBoxItem Content="24p" Tag="24/1"/>
                     <ComboBoxItem Content="60p" Tag="60/1"/>
                 </ComboBox>
-                <TextBlock Text="Default Mixing Unit Size"/>
+                <TextBlock Text="{Binding [settings.defaultUnitSize], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="SizeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="1920x1080" Tag="1920x1080" IsSelected="True"/>
                     <ComboBoxItem Content="1280x720" Tag="1280x720"/>
                     <ComboBoxItem Content="3840x2160" Tag="3840x2160"/>
                 </ComboBox>
-                <TextBlock Text="Frame buffer (frames)"/>
+                <TextBlock Text="{Binding [settings.frameBuffer], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="BufferBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="1" Tag="1"/>
                     <ComboBoxItem Content="2" Tag="2"/>
@@ -88,36 +69,36 @@
                     <ComboBoxItem Content="6" Tag="6"/>
                     <ComboBoxItem Content="8" Tag="8"/>
                 </ComboBox>
-                <TextBlock Text="Internal color format"/>
+                <TextBlock Text="{Binding [settings.colorFormat], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="ColorFormatBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="UYVY 4:2:2 (recommended)" Tag="uyvy" IsSelected="True"/>
                     <ComboBoxItem Content="BGRA 8-bit 4:4:4" Tag="bgra"/>
                 </ComboBox>
-                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="Master frame rate clocks the render thread. The frame buffer holds that many completed frames so a compose spike does not hitch the output; audio is delayed by the same amount. If the buffer runs out, compose is skipped until the clock catches up. Internal color format is how video is kept in RAM and uploaded to the GPU. UYVY is half the size of BGRA; the mixer converts to RGB only for frames that are actually composed. Each Mixing Unit can override resolution and output frame rate from the Mixing Unit dialog."/>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.displayHelp], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
             </ScrollViewer>
             <StackPanel x:Name="PerformancePanel" Margin="20" Visibility="Collapsed">
-                <TextBlock Text="Graphics Adapter" FontWeight="Bold"/>
+                <TextBlock Text="{Binding [settings.adapter], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold"/>
                 <TextBlock x:Name="AdapterName" Margin="0,4,0,12" Text="—"/>
-                <TextBlock Text="Resizable BAR"/>
+                <TextBlock Text="{Binding [settings.rebar], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock x:Name="RebarStatus" Margin="0,4,0,12" Text="—"/>
-                <TextBlock Text="BAR window / VRAM"/>
+                <TextBlock Text="{Binding [settings.rebarMemory], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock x:Name="RebarMemory" Margin="0,4,0,12" Text="—"/>
-                <CheckBox x:Name="RebarOptBox" Content="Use ReBAR optimization" Margin="0,0,0,12"
-                          Foreground="#EEEEEE"/>
-                <CheckBox x:Name="NdiGpuBox" Content="Upload NDI on the ingest thread" Margin="0,0,0,12"
-                          Foreground="#EEEEEE"/>
-                <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it, so the mix clock is not blocked by memcpy. Turn it off to go back to CPU frames uploaded on the render thread. ReBAR writes those frames through a D3D12 GPU upload heap (VRAM) instead of wgpu's system-memory staging. Turn ReBAR off if you see flicker or a device reset. ReBAR is disabled when the GPU does not expose GPU upload heaps."/>
+                <CheckBox x:Name="RebarOptBox" Content="{Binding [settings.useRebar], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,12"
+                          Foreground="{DynamicResource TextForeground}"/>
+                <CheckBox x:Name="NdiGpuBox" Content="{Binding [settings.ndiGpu], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,12"
+                          Foreground="{DynamicResource TextForeground}"/>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.perfHelp], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
             <DockPanel x:Name="OutputPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddOutput_Click"/>
-                    <TextBlock Text="Outputs" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding [settings.outputs], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
-                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                           Text="OMT and NDI® are sent from the mixer. DeckLink is listed here but fails immediately until that SDK is linked. For OMT, Encode path chooses GPU encode (frame stays on the GPU) or CPU encode (UYVY pack and readback). NDI always uses CPU encode."/>
+                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}" Margin="0,0,0,8"
+                           Text="{Binding [settings.outputsHelp], Source={x:Static i18n:Loc.Source}}"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="OutputRows"/>
                 </ScrollViewer>
@@ -125,19 +106,19 @@
             <StackPanel x:Name="MultiviewPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel Margin="0,0,0,8">
                     <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddMv_Click"/>
-                    <TextBlock Text="Multiviews" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding [settings.multiviews], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
-                <ListBox x:Name="MvList" Height="140" Background="#222" Foreground="#EEE" BorderBrush="#444"
+                <ListBox x:Name="MvList" Height="140" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                          DisplayMemberPath="Name"/>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,12">
-                    <Button Content="Open" Width="88" Click="OpenMv_Click"/>
-                    <Button Content="Layout…" Width="88" Margin="8,0,0,0" Click="EditLayoutTiles_Click"/>
-                    <Button Content="Delete" Width="88" Margin="8,0,0,0" Click="DeleteMv_Click"/>
+                    <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="88" Click="OpenMv_Click"/>
+                    <Button Content="{Binding [settings.layout], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="EditLayoutTiles_Click"/>
+                    <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="DeleteMv_Click"/>
                 </StackPanel>
-                <TextBlock Text="Default Mixing Unit for new Multiview windows"/>
+                <TextBlock Text="{Binding [settings.defaultMvUnit], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="MvUnitBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left"
                           DisplayMemberPath="Name"/>
-                <TextBlock Text="Project default preview refresh interval"/>
+                <TextBlock Text="{Binding [settings.projectRefresh], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="MvPresentBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left">
                     <ComboBoxItem Content="Every frame" Tag="1"/>
                     <ComboBoxItem Content="Every 2 frames" Tag="2"/>
@@ -146,51 +127,22 @@
                     <ComboBoxItem Content="Every 6 frames" Tag="6"/>
                     <ComboBoxItem Content="Every 8 frames" Tag="8"/>
                 </ComboBox>
-                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                           Text="Each Multiview window picks its own mosaic template (Preview + Program plus a lower grid, or a full 2×2 / 3×3 / 4×4). Outputs can send a Multiview by picking it from the list. Fullscreen: F11. Windows set to Follow project use the interval above. Program, Preview, and outputs stay at the master frame rate. Every 3 frames is about 20 fps at 59.94."/>
+                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.mvHelp], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
             <DockPanel x:Name="AudioBusPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <Button DockPanel.Dock="Right" Content="+" Width="28" Click="AddBus_Click"/>
-                    <TextBlock Text="Audio Auxiliary" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding [settings.audioAux], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
-                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                           Text="Internal mix is 48 kHz stereo. Enabled keeps the bus in the mix with no hardware device. WASAPI and ASIO send that mix to a device; map Left/Right onto device channels. Master and Headphone cannot be removed. A–H are optional aux buses."/>
-                <CheckBox x:Name="HeadphoneCopyBox" DockPanel.Dock="Top" Content="Headphone copies Master"
-                          Margin="0,0,0,8" Foreground="#EEEEEE"/>
+                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}" Margin="0,0,0,8"
+                           Text="{Binding [settings.audioHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <CheckBox x:Name="HeadphoneCopyBox" DockPanel.Dock="Top" Content="{Binding [settings.headphoneCopy], Source={x:Static i18n:Loc.Source}}"
+                          Margin="0,0,0,8" Foreground="{DynamicResource TextForeground}"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel x:Name="BusRows"/>
                 </ScrollViewer>
             </DockPanel>
-            <ScrollViewer x:Name="AboutPanel" Margin="20" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                <StackPanel>
-                    <TextBlock Text="eiviz" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock x:Name="AboutVersion" Margin="0,8,0,0"/>
-                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                               Text="eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory."/>
-                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"
-                               Text="Shugo Kawamura"/>
-                    <TextBlock Margin="0,8,0,0">
-                        <Hyperlink NavigateUri="https://github.com/MikanseiLaboratory/eiviz"
-                                   RequestNavigate="AboutLink_RequestNavigate"
-                                   Foreground="#EEEEEE">
-                            https://github.com/MikanseiLaboratory/eiviz
-                        </Hyperlink>
-                    </TextBlock>
-                    <TextBlock Margin="0,4,0,0">
-                        <Hyperlink NavigateUri="https://mikanseilaboratory.github.io/"
-                                   RequestNavigate="AboutLink_RequestNavigate"
-                                   Foreground="#EEEEEE">
-                            https://mikanseilaboratory.github.io/
-                        </Hyperlink>
-                    </TextBlock>
-                    <TextBlock Margin="0,12,0,0" FontWeight="Bold" Text="Open source"/>
-                    <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB."/>
-                    <Button Content="THIRD_PARTY_NOTICES.md" Width="220" Height="28" Margin="0,12,0,0"
-                            HorizontalAlignment="Left" Click="OpenNotices_Click"/>
-                </StackPanel>
-            </ScrollViewer>
         </DockPanel>
     </Grid>
 </Window>

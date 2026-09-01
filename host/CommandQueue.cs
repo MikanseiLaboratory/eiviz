@@ -2,6 +2,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using System.Windows;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Rect = Eiviz.Host.Interop.Rect;
 
@@ -161,6 +162,8 @@ internal sealed class CommandQueue : IAsyncDisposable
         MixerNative.ThrowIfFailed(
             MixerNative.BindMultiview(layout.GpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit),
             "Bind multiview");
+        if (session is not null)
+            layout.PushLabelStyle(session.Settings);
     }
 
     private static OverlayDesc BusLayer(ulong sourceId, float x, float y, float w, float h, int z) => new()
@@ -305,11 +308,13 @@ internal sealed class CommandQueue : IAsyncDisposable
                         }
                         break;
                     case LoadStillCommand still:
+                        if (!File.Exists(still.Path))
+                            throw new InvalidOperationException(Loc.MissingFile("Still load"));
                         MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");
                         break;
                     case StartVideoCommand video:
                         if (!File.Exists(video.Path))
-                            throw new FileNotFoundException("Video file not found.", video.Path);
+                            throw new InvalidOperationException(Loc.MissingFile("Video start"));
                         MixerNative.ThrowIfFailed(
                             MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat),
                             "Video start");
@@ -359,6 +364,8 @@ internal sealed class CommandQueue : IAsyncDisposable
             catch (Exception ex)
             {
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "host-error.txt"), ex.ToString());
+                if (command is LoadStillCommand or StartVideoCommand)
+                    ReportUserError(ex.Message, Loc.T("msg.addInput"));
             }
         }
     }
@@ -419,6 +426,20 @@ internal sealed class CommandQueue : IAsyncDisposable
             current.Mix = Math.Clamp(mix, 0f, 1f);
             MixerNative.SetUnitState(unitId, &current);
         }
+    }
+
+    private static void ReportUserError(string message, string title)
+    {
+        var app = Application.Current;
+        if (app is null)
+            return;
+        _ = app.Dispatcher.BeginInvoke(() =>
+        {
+            if (app.MainWindow is Window window)
+                MessageBox.Show(window, message, title);
+            else
+                MessageBox.Show(message, title);
+        });
     }
 
     public async ValueTask DisposeAsync()
