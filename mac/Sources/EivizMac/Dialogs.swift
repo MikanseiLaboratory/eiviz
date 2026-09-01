@@ -705,11 +705,19 @@ struct AddInputView: View {
             input.toneLevelDbfs = toneHz > 0 ? -20 : 0
         case "Still":
             guard !stillPath.isEmpty else { return }
+            guard FileManager.default.fileExists(atPath: stillPath) else {
+                mixer.errorText = L10n.missingFile("Still load")
+                return
+            }
             input.kind = .still
             input.pathOrAddress = stillPath
             AppPrefs.shared.rememberStill(stillPath)
         case "Video":
             guard !videoPath.isEmpty else { return }
+            guard FileManager.default.fileExists(atPath: videoPath) else {
+                mixer.errorText = L10n.missingFile("Video start")
+                return
+            }
             input.kind = .video
             input.pathOrAddress = videoPath
             AppPrefs.shared.rememberVideo(videoPath)

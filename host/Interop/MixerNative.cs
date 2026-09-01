@@ -285,7 +285,8 @@ internal static partial class MixerNative
             fixed (byte* ptr = buffer)
             {
                 var n = SessionLoad(path, ptr, (nuint)buffer.Length);
-                ThrowIfFailed(n < 0 ? n : 0, "Load session");
+                if (n <= 0)
+                    ThrowIfFailed(n == 0 ? 5 : n, "Load session");
                 return Encoding.UTF8.GetString(buffer, 0, n);
             }
         }

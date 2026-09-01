@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Microsoft.Win32;
 
@@ -250,13 +252,23 @@ public partial class AddInputWindow : Window
                 if (string.IsNullOrWhiteSpace(StillPath.Text))
                     return;
                 ResultPath = StillPath.Text.Trim();
-                ResultName = System.IO.Path.GetFileName(ResultPath);
+                if (!File.Exists(ResultPath))
+                {
+                    MessageBox.Show(this, Loc.MissingFile("Still load"), Loc.T("msg.addInput"));
+                    return;
+                }
+                ResultName = Path.GetFileName(ResultPath);
                 Remember(StillHistory, ResultPath);
                 break;
             case InputKind.Video:
                 if (string.IsNullOrWhiteSpace(VideoPath.Text))
                     return;
                 ResultPath = VideoPath.Text.Trim();
+                if (!File.Exists(ResultPath))
+                {
+                    MessageBox.Show(this, Loc.MissingFile("Video start"), Loc.T("msg.addInput"));
+                    return;
+                }
                 ResultName = System.IO.Path.GetFileName(ResultPath);
                 ResultVideoLoop = VideoLoopBox.IsChecked == true;
                 ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);

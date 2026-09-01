@@ -1750,13 +1750,19 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
     if path.is_null() || out.is_null() || cap == 0 {
-        return ERR_INVALID_ARGUMENT;
+        return -ERR_INVALID_ARGUMENT;
     }
-    match session::load_file(&read_cstr(path)) {
-        Ok(bytes) => copy_bytes(&bytes, out, cap),
+    match std::fs::read(read_cstr(path)) {
+        Ok(bytes) => match session::canonicalize_bytes(&bytes) {
+            Ok(canonical) => copy_bytes(&canonical, out, cap),
+            Err(error) => {
+                report_session_error(error);
+                -ERR_INVALID_ARGUMENT
+            }
+        },
         Err(error) => {
-            report_session_error(error);
-            -1
+            report_session_error(error.to_string());
+            -ERR_IO
         }
     }
 }
@@ -1788,14 +1794,14 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
     cap: usize,
 ) -> i32 {
     if json.is_null() || out.is_null() || cap == 0 {
-        return ERR_INVALID_ARGUMENT;
+        return -ERR_INVALID_ARGUMENT;
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
     match session::canonicalize_bytes(bytes) {
         Ok(canonical) => copy_bytes(&canonical, out, cap),
         Err(error) => {
             report_session_error(error);
-            -1
+            -ERR_INVALID_ARGUMENT
         }
     }
 }

@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.IO;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -884,9 +885,13 @@ public partial class MainWindow : Window
                     input.ToneLevelDbfs));
                 break;
             case InputKind.Still:
-                Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
+                if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
+                    throw new InvalidOperationException(Loc.MissingFile("Still load"));
+                MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, dialog.ResultPath!), "Still load");
                 break;
             case InputKind.Video:
+                if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
+                    throw new InvalidOperationException(Loc.MissingFile("Video start"));
                 Commands.TryEnqueue(new StartVideoCommand(
                     input.Id,
                     dialog.ResultPath!,
@@ -1370,6 +1375,6 @@ public partial class MainWindow : Window
     private void UpdateStatus()
     {
         var unit = SelectedUnit;
-        StatusText.Text = $"{unit.Width}x{unit.Height} {unit.FormatFps()}   Mixing Unit {unit.Id}   Inputs are a list only — TAKE/Preview uses Scenes.";
+        StatusText.Text = $"{unit.Width}x{unit.Height} {unit.FormatFps()}   Mixing Unit {unit.Id}";
     }
 }

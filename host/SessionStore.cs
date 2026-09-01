@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host;
@@ -23,10 +24,20 @@ internal static class SessionStore
 
     public static Session Load(string path)
     {
-        var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
-            ?? throw new InvalidOperationException("Session file is empty.");
-        var session = dto.ToSession();
-        return session;
+        try
+        {
+            var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
+                ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
+            return dto.ToSession();
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(Loc.Error("Load session", 3));
+        }
     }
 
     private sealed class Document

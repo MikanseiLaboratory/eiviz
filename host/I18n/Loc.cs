@@ -23,17 +23,28 @@ public static class Loc
 
     public static string Error(string actionKey, int code)
     {
-        var action = T(actionKey.StartsWith("action.", StringComparison.Ordinal) ? actionKey : $"action.{actionKey}");
-        var reason = code switch
+        var key = actionKey.StartsWith("action.", StringComparison.Ordinal) ? actionKey : $"action.{actionKey}";
+        var action = T(key);
+        var bare = key["action.".Length..];
+        var reason = (bare, code) switch
         {
-            1 => T("error.alreadyCreated"),
-            2 => T("error.notCreated"),
-            3 => T("error.invalidArgument"),
-            4 => T("error.device"),
-            5 => T("error.io"),
+            ("Load session" or "Save session", 3 or -1 or -3) => T("error.badSession"),
+            ("Load session", 5 or -5) => T("error.io"),
+            (_, 1) => T("error.alreadyCreated"),
+            (_, 2) => T("error.notCreated"),
+            (_, 3) => T("error.invalidArgument"),
+            (_, 4) => T("error.device"),
+            (_, 5) => T("error.io"),
+            (_, -1) => T("error.badSession"),
             _ => Format("error.unknown", code)
         };
         return Format("error.format", action, reason);
+    }
+
+    public static string MissingFile(string actionKey)
+    {
+        var key = actionKey.StartsWith("action.", StringComparison.Ordinal) ? actionKey : $"action.{actionKey}";
+        return Format("error.format", T(key), T("error.missingFile"));
     }
 
     internal static void Apply(AppLanguage language)
@@ -156,6 +167,8 @@ public static class Loc
         ["error.device"] = "Device error",
         ["error.io"] = "I/O error",
         ["error.unknown"] = "Error ({0})",
+        ["error.badSession"] = "This file is not a valid session.",
+        ["error.missingFile"] = "The file does not exist.",
         ["action.DX12 mixer initialization"] = "DX12 mixer initialization",
         ["action.Metal mixer initialization"] = "Metal mixer initialization",
         ["action.Create Mixing Unit"] = "Create Mixing Unit",
@@ -170,6 +183,8 @@ public static class Loc
         ["action.Load session"] = "Load session",
         ["action.Save session"] = "Save session",
         ["action.Still load"] = "Still load",
+        ["action.Video start"] = "Video load",
+        ["action.UVC start"] = "Video capture",
         ["action.Define colour generator"] = "Define colour generator",
         ["action.Add output"] = "Add output",
         ["action.Set unit state"] = "Set Mixing Unit state",
@@ -295,6 +310,8 @@ public static class Loc
         ["error.device"] = "デバイスエラーです",
         ["error.io"] = "入出力エラーです",
         ["error.unknown"] = "エラー ({0})",
+        ["error.badSession"] = "セッションとして読めないファイルです。",
+        ["error.missingFile"] = "ファイルが存在しません。",
         ["action.DX12 mixer initialization"] = "DX12 ミキサー初期化",
         ["action.Metal mixer initialization"] = "Metal ミキサー初期化",
         ["action.Create Mixing Unit"] = "Mixing Unit の作成",
@@ -309,6 +326,8 @@ public static class Loc
         ["action.Load session"] = "セッションの読み込み",
         ["action.Save session"] = "セッションの保存",
         ["action.Still load"] = "静止画の読み込み",
+        ["action.Video start"] = "動画の読み込み",
+        ["action.UVC start"] = "映像キャプチャ",
         ["action.Define colour generator"] = "カラージェネレーターの定義",
         ["action.Add output"] = "出力の追加",
         ["action.Set unit state"] = "Mixing Unit 状態の設定",

@@ -9,17 +9,29 @@ enum L10n {
 
     static func error(_ action: String, _ code: Int32) -> String {
         let reason: String
-        switch code {
-        case 1: reason = t("error.alreadyCreated")
-        case 2: reason = t("error.notCreated")
-        case 3: reason = t("error.invalidArgument")
-        case 4: reason = t("error.device")
-        case 5: reason = t("error.io")
+        switch (action, code) {
+        case ("Load session", 3), ("Load session", -1), ("Load session", -3),
+             ("Save session", 3), ("Save session", -1), ("Save session", -3):
+            reason = t("error.badSession")
+        case ("Load session", 5), ("Load session", -5):
+            reason = t("error.io")
+        case (_, 1): reason = t("error.alreadyCreated")
+        case (_, 2): reason = t("error.notCreated")
+        case (_, 3): reason = t("error.invalidArgument")
+        case (_, 4): reason = t("error.device")
+        case (_, 5): reason = t("error.io")
+        case (_, -1): reason = t("error.badSession")
         default: reason = t("error.unknown").replacingOccurrences(of: "{0}", with: "\(code)")
         }
         return t("error.format")
             .replacingOccurrences(of: "{0}", with: t("action.\(action)"))
             .replacingOccurrences(of: "{1}", with: reason)
+    }
+
+    static func missingFile(_ action: String) -> String {
+        t("error.format")
+            .replacingOccurrences(of: "{0}", with: t("action.\(action)"))
+            .replacingOccurrences(of: "{1}", with: t("error.missingFile"))
     }
 
     private static let en: [String: String] = [
@@ -63,6 +75,8 @@ enum L10n {
         "error.device": "Device error",
         "error.io": "I/O error",
         "error.unknown": "Error ({0})",
+        "error.badSession": "This file is not a valid session.",
+        "error.missingFile": "The file does not exist.",
         "action.Metal mixer initialization": "Metal mixer initialization",
         "action.Create Mixing Unit": "Create Mixing Unit",
         "action.Configure Mixing Unit": "Configure Mixing Unit",
@@ -73,6 +87,8 @@ enum L10n {
         "action.Load session": "Load session",
         "action.Save session": "Save session",
         "action.Still load": "Still load",
+        "action.Video start": "Video load",
+        "action.UVC start": "Video capture",
         "action.Add output": "Add output",
         "action.Set Mixing Unit state": "Set Mixing Unit state",
         "action.Preview scene": "Preview scene",
@@ -125,6 +141,8 @@ enum L10n {
         "error.device": "デバイスエラーです",
         "error.io": "入出力エラーです",
         "error.unknown": "エラー ({0})",
+        "error.badSession": "セッションとして読めないファイルです。",
+        "error.missingFile": "ファイルが存在しません。",
         "action.Metal mixer initialization": "Metal ミキサー初期化",
         "action.Create Mixing Unit": "Mixing Unit の作成",
         "action.Configure Mixing Unit": "Mixing Unit の設定",
@@ -135,6 +153,8 @@ enum L10n {
         "action.Load session": "セッションの読み込み",
         "action.Save session": "セッションの保存",
         "action.Still load": "静止画の読み込み",
+        "action.Video start": "動画の読み込み",
+        "action.UVC start": "映像キャプチャ",
         "action.Add output": "出力の追加",
         "action.Set Mixing Unit state": "Mixing Unit 状態の設定",
         "action.Preview scene": "シーンのプレビュー",

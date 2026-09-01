@@ -783,15 +783,15 @@ final class MixerController: ObservableObject {
                 mixer_session_load(path, ptr.baseAddress, ptr.count)
             }
         }
-        guard n >= 0 else {
-            fail(n, "Load session")
+        guard n > 0 else {
+            fail(n == 0 ? 5 : n, "Load session")
             return
         }
         do {
             replaceSession(try SessionFile.decode(Data(buffer.prefix(Int(n)))))
             AppPrefs.shared.rememberSession(url.path)
         } catch {
-            errorText = error.localizedDescription
+            errorText = L10n.error("Load session", 3)
         }
     }
 
@@ -839,6 +839,10 @@ final class MixerController: ObservableObject {
     }
 
     private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
+        if capture == 0 && !FileManager.default.fileExists(atPath: path) {
+            errorText = L10n.missingFile("Video start")
+            return
+        }
         MixerFFI.withCString(path) { cstr in
             fail(
                 mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA),
@@ -899,6 +903,10 @@ final class MixerController: ObservableObject {
             break
         case .still:
             if let path = input.pathOrAddress {
+                guard FileManager.default.fileExists(atPath: path) else {
+                    errorText = L10n.missingFile("Still load")
+                    return
+                }
                 MixerFFI.withCString(path) { cstr in
                     fail(mixer_load_still(input.id, cstr), "Still load")
                 }
