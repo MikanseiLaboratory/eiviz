@@ -522,149 +522,9 @@ struct OverlayView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading) {
-                HStack {
-                    Text("Overlays").fontWeight(.bold)
-                    Spacer()
-                    Button("+") { add() }
-                }
-                List(selection: $selected) {
-                    ForEach(Array(unit.overlays.enumerated()), id: \.element.id) { index, slot in
-                        HStack {
-                            Text("\(index + 1). \(sourceName(slot))")
-                                .foregroundStyle(slot.enabled ? EivizTheme.text : EivizTheme.dim)
-                            Spacer()
-                            Button(slot.enabled ? "ON" : "OFF") {
-                                mixer.setOverlayEnabled(slot.id, enabled: !slot.enabled)
-                            }
-                            .buttonStyle(.plain)
-                            Button(slot.locked ? "🔒" : "🔓") { toggleOverlay(slot.id, \.locked) }
-                                .buttonStyle(.plain)
-                        }
-                        .tag(Optional(slot.id))
-                    }
-                    .onMove(perform: moveOverlays)
-                }
-                .scrollContentBackground(.hidden)
-                .background(EivizTheme.list)
-                Picker("", selection: $addKind) {
-                    Text("Scene").tag(OverlaySourceKind.scene)
-                    Text("Input").tag(OverlaySourceKind.input)
-                }
-                Picker("", selection: $addSourceId) {
-                    if addKind == .scene {
-                        ForEach(mixer.session.scenes) { scene in
-                            Text(scene.name).tag(scene.gpuId)
-                        }
-                    } else {
-                        ForEach(mixer.session.inputs) { input in
-                            Text(input.name).tag(input.id)
-                        }
-                    }
-                }
-                Spacer()
-                Button("Z up") { shift(-1) }
-                Button("Z down") { shift(1) }
-                Button("Delete") { delete() }
-            }
-            .frame(width: 260, maxHeight: .infinity, alignment: .top)
-            .buttonStyle(MixerButtonStyle())
-
-            VStack {
-                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
-                WireCanvasView(
-                    items: unit.overlays.map {
-                        WireRect(
-                            id: $0.id,
-                            x: $0.x,
-                            y: $0.y,
-                            width: $0.width,
-                            height: $0.height,
-                            enabled: $0.enabled,
-                            locked: $0.locked,
-                            sizeLinked: $0.sizeLinked,
-                            cropX: $0.cropX,
-                            cropY: $0.cropY,
-                            cropWidth: $0.cropWidth,
-                            cropHeight: $0.cropHeight
-                        )
-                    },
-                    aspect: CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
-                    selected: $selected,
-                    onChange: applyWire
-                )
-                .clipped()
-            }
-            .clipped()
-
-            VStack(alignment: .leading) {
-                Text("Live preview").fontWeight(.bold)
-                MetalPreviewRepresentable(role: .monitor(
-                    monitorId: previewMonitor,
-                    sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
-                ))
-                .aspectRatio(
-                    CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
-                    contentMode: .fit
-                )
-                .frame(maxWidth: .infinity)
-                .background(Color.black)
-                if let slot = current {
-                    Picker("Source", selection: Binding(
-                        get: { slot.sourceKind },
-                        set: { value in
-                            mutate { current in
-                                current.sourceKind = value
-                                current.sceneGpuId = value == .input
-                                    ? mixer.session.inputs.first?.id ?? 0
-                                    : mixer.session.scenes.first?.gpuId ?? 0
-                            }
-                            mixer.pushOverlays()
-                        }
-                    )) {
-                        Text("Scene").tag(OverlaySourceKind.scene)
-                        Text("Input").tag(OverlaySourceKind.input)
-                    }
-                    Picker("", selection: Binding(
-                        get: { slot.sceneGpuId },
-                        set: { value in
-                            mutate { $0.sceneGpuId = value }
-                            mixer.pushOverlays()
-                        }
-                    )) {
-                        if slot.sourceKind == .input {
-                            ForEach(mixer.session.inputs) { input in
-                                Text(input.name).tag(input.id)
-                            }
-                        } else {
-                            ForEach(mixer.session.scenes) { scene in
-                                Text(scene.name).tag(scene.gpuId)
-                            }
-                        }
-                    }
-                    Toggle("Audio Follow", isOn: Binding(
-                        get: { slot.audioFollow },
-                        set: { value in
-                            mutate { $0.audioFollow = value }
-                            mixer.pushOverlays()
-                        }
-                    ))
-                    Button("Reset") {
-                        guard slot.locked == false else { return }
-                        mutate { $0.resetLayout() }
-                        mixer.pushOverlays()
-                    }
-                    overlayTransform
-                    overlayFields
-                }
-                Spacer()
-                HStack {
-                    Spacer()
-                    Button("Close") { dismiss() }
-                }
-            }
-            .frame(width: 300)
-            .buttonStyle(MixerButtonStyle())
+            overlaySidebar
+            overlayCanvas
+            overlayInspector
         }
         .padding(12)
         .frame(minWidth: 1280, minHeight: 720)
@@ -681,6 +541,170 @@ struct OverlayView: View {
             addSourceId = kind == .input
                 ? mixer.session.inputs.first?.id ?? 0
                 : mixer.session.scenes.first?.gpuId ?? 0
+        }
+    }
+
+    private var overlaySidebar: some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text("Overlays").fontWeight(.bold)
+                Spacer()
+                Button("+") { add() }
+            }
+            List(selection: $selected) {
+                ForEach(Array(unit.overlays.enumerated()), id: \.element.id) { index, slot in
+                    overlayListRow(index: index, slot: slot)
+                }
+                .onMove(perform: moveOverlays)
+            }
+            .scrollContentBackground(.hidden)
+            .background(EivizTheme.list)
+            Picker("", selection: $addKind) {
+                Text("Scene").tag(OverlaySourceKind.scene)
+                Text("Input").tag(OverlaySourceKind.input)
+            }
+            Picker("", selection: $addSourceId) {
+                if addKind == .scene {
+                    ForEach(mixer.session.scenes) { scene in
+                        Text(scene.name).tag(scene.gpuId)
+                    }
+                } else {
+                    ForEach(mixer.session.inputs) { input in
+                        Text(input.name).tag(input.id)
+                    }
+                }
+            }
+            Spacer()
+            Button("Z up") { shift(-1) }
+            Button("Z down") { shift(1) }
+            Button("Delete") { delete() }
+        }
+        .frame(width: 260, maxHeight: .infinity, alignment: .top)
+        .buttonStyle(MixerButtonStyle())
+    }
+
+    private func overlayListRow(index: Int, slot: OverlaySlot) -> some View {
+        let title = "\(index + 1). \(sourceName(slot))"
+        return HStack {
+            Text(title)
+                .foregroundStyle(slot.enabled ? EivizTheme.text : EivizTheme.dim)
+            Spacer()
+            Button(slot.enabled ? "ON" : "OFF") {
+                mixer.setOverlayEnabled(slot.id, enabled: !slot.enabled)
+            }
+            .buttonStyle(.plain)
+            Button(slot.locked ? "🔒" : "🔓") { toggleOverlay(slot.id, \.locked) }
+                .buttonStyle(.plain)
+        }
+        .tag(Optional(slot.id))
+    }
+
+    private var overlayCanvas: some View {
+        VStack {
+            Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+            WireCanvasView(
+                items: overlayWireItems,
+                aspect: CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+                selected: $selected,
+                onChange: applyWire
+            )
+            .clipped()
+        }
+        .clipped()
+    }
+
+    private var overlayWireItems: [WireRect] {
+        unit.overlays.map {
+            WireRect(
+                id: $0.id,
+                x: $0.x,
+                y: $0.y,
+                width: $0.width,
+                height: $0.height,
+                enabled: $0.enabled,
+                locked: $0.locked,
+                sizeLinked: $0.sizeLinked,
+                cropX: $0.cropX,
+                cropY: $0.cropY,
+                cropWidth: $0.cropWidth,
+                cropHeight: $0.cropHeight
+            )
+        }
+    }
+
+    private var overlayInspector: some View {
+        VStack(alignment: .leading) {
+            Text("Live preview").fontWeight(.bold)
+            MetalPreviewRepresentable(role: .monitor(
+                monitorId: previewMonitor,
+                sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
+            ))
+            .aspectRatio(
+                CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+                contentMode: .fit
+            )
+            .frame(maxWidth: .infinity)
+            .background(Color.black)
+            if let slot = current {
+                overlaySourcePickers(slot)
+                Toggle("Audio Follow", isOn: Binding(
+                    get: { slot.audioFollow },
+                    set: { value in
+                        mutate { $0.audioFollow = value }
+                        mixer.pushOverlays()
+                    }
+                ))
+                Button("Reset") {
+                    guard slot.locked == false else { return }
+                    mutate { $0.resetLayout() }
+                    mixer.pushOverlays()
+                }
+                overlayTransform
+                overlayFields
+            }
+            Spacer()
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }
+            }
+        }
+        .frame(width: 300)
+        .buttonStyle(MixerButtonStyle())
+    }
+
+    @ViewBuilder
+    private func overlaySourcePickers(_ slot: OverlaySlot) -> some View {
+        Picker("Source", selection: Binding(
+            get: { slot.sourceKind },
+            set: { value in
+                mutate { current in
+                    current.sourceKind = value
+                    current.sceneGpuId = value == .input
+                        ? mixer.session.inputs.first?.id ?? 0
+                        : mixer.session.scenes.first?.gpuId ?? 0
+                }
+                mixer.pushOverlays()
+            }
+        )) {
+            Text("Scene").tag(OverlaySourceKind.scene)
+            Text("Input").tag(OverlaySourceKind.input)
+        }
+        Picker("", selection: Binding(
+            get: { slot.sceneGpuId },
+            set: { value in
+                mutate { $0.sceneGpuId = value }
+                mixer.pushOverlays()
+            }
+        )) {
+            if slot.sourceKind == .input {
+                ForEach(mixer.session.inputs) { input in
+                    Text(input.name).tag(input.id)
+                }
+            } else {
+                ForEach(mixer.session.scenes) { scene in
+                    Text(scene.name).tag(scene.gpuId)
+                }
+            }
         }
     }
 
