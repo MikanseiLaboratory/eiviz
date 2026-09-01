@@ -17,7 +17,9 @@ use crate::upload::{
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
 static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
-/// NDI forbids overlapping `NDIlib_find_get_current_sources` on one instance.
+/// The NDI SDK invalidates `NDIlib_find_get_current_sources` on the next call
+/// to the same instance. grafton-ndi copies immediately but does not serialize
+/// overlapping calls, so we lock around Finder use.
 static FINDER_OP: Mutex<()> = Mutex::new(());
 
 fn runtime() -> Result<&'static NDI, String> {
@@ -69,221 +71,15 @@ mod macos {
 fn finder() -> Result<&'static Finder, String> {
     match FINDER.get_or_init(|| {
         let ndi = runtime()?;
-        // p_extra_ips replaces Access Manager / registry extras and must be
-        // machine IPs ("12.0.0.8,13.0.12.8"), not a CIDR of our NIC.
-        let mut builder = FinderOptions::builder().show_local_sources(true);
-        match extra_ips() {
-            Some(ips) => {
-                eprintln!("eiviz ndi finder extra_ips={ips}");
-                builder = builder.extra_ips(ips);
-            }
-            None => eprintln!("eiviz ndi finder extra_ips unset (mDNS/registry only)"),
-        }
-        Finder::new(ndi, &builder.build()).map_err(|error| error.to_string())
+        Finder::new(
+            ndi,
+            &FinderOptions::builder().show_local_sources(true).build(),
+        )
+        .map_err(|error| error.to_string())
     }) {
         Ok(finder) => Ok(finder),
         Err(error) => Err(error.clone()),
     }
-}
-
-/// Official NDI extra-IP list: unicast machine addresses, never CIDR / masks.
-fn extra_ips() -> Option<String> {
-    let mut ips = Vec::new();
-    append_unique(&mut ips, ndi_config_extra_ips());
-    append_unique(&mut ips, arp_neighbor_ips());
-    if ips.is_empty() {
-        None
-    } else {
-        Some(ips.join(","))
-    }
-}
-
-fn append_unique(dst: &mut Vec<String>, src: Vec<String>) {
-    for ip in src {
-        if !dst.contains(&ip) {
-            dst.push(ip);
-        }
-    }
-}
-
-fn ndi_config_extra_ips() -> Vec<String> {
-    for path in ndi_config_paths() {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let parsed = parse_ndi_config_ips(&text);
-        if !parsed.is_empty() {
-            return parsed;
-        }
-    }
-    Vec::new()
-}
-
-fn ndi_config_paths() -> Vec<std::path::PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(root) = std::env::var("PROGRAMDATA") {
-        paths.push(
-            std::path::PathBuf::from(root)
-                .join("NDI")
-                .join("ndi-config.v1.json"),
-        );
-    }
-    paths.push(std::path::PathBuf::from(r"C:\ProgramData\NDI\ndi-config.v1.json"));
-    if let Ok(home) = std::env::var("HOME") {
-        paths.push(
-            std::path::PathBuf::from(home)
-                .join("Library/Application Support/NDI/ndi-config.v1.json"),
-        );
-    }
-    paths
-}
-
-fn parse_ndi_config_ips(text: &str) -> Vec<String> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return Vec::new();
-    };
-    let Some(ips) = value
-        .pointer("/ndi/networks/ips")
-        .and_then(|value| value.as_str())
-    else {
-        return Vec::new();
-    };
-    split_machine_ips(ips)
-}
-
-fn split_machine_ips(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for token in text.split(|ch: char| ch == ',' || ch.is_whitespace()) {
-        let token = token.trim();
-        if token.is_empty() || token.contains('/') {
-            continue;
-        }
-        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
-            push_machine_ip(&mut out, v4);
-        }
-    }
-    out
-}
-
-fn push_machine_ip(out: &mut Vec<String>, v4: std::net::Ipv4Addr) {
-    if !usable_lan_v4(v4) || is_net_or_broadcast(v4) {
-        return;
-    }
-    let ip = v4.to_string();
-    if !out.contains(&ip) {
-        out.push(ip);
-    }
-}
-
-fn is_net_or_broadcast(v4: std::net::Ipv4Addr) -> bool {
-    matches!(v4.octets()[3], 0 | 255)
-}
-
-fn local_adapter_v4s() -> Vec<std::net::Ipv4Addr> {
-    let mut ips = Vec::new();
-    if cfg!(windows)
-        && let Ok(output) = std::process::Command::new("ipconfig").output()
-    {
-        collect_ipconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut ips);
-    }
-    if ips.is_empty()
-        && let Ok(output) = std::process::Command::new("ifconfig").output()
-    {
-        collect_ifconfig_adapter_v4s(&String::from_utf8_lossy(&output.stdout), &mut ips);
-    }
-    ips
-}
-
-fn collect_ipconfig_adapter_v4s(text: &str, ips: &mut Vec<std::net::Ipv4Addr>) {
-    for line in text.lines() {
-        if !line.contains("IPv4") {
-            continue;
-        }
-        let Some(token) = line.split_whitespace().last() else {
-            continue;
-        };
-        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>()
-            && usable_lan_v4(v4)
-            && !ips.contains(&v4)
-        {
-            ips.push(v4);
-        }
-    }
-}
-
-fn collect_ifconfig_adapter_v4s(text: &str, ips: &mut Vec<std::net::Ipv4Addr>) {
-    for line in text.lines() {
-        let mut tokens = line.split_whitespace();
-        if tokens.next() != Some("inet") {
-            continue;
-        }
-        let Some(token) = tokens.next() else {
-            continue;
-        };
-        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>()
-            && usable_lan_v4(v4)
-            && !ips.contains(&v4)
-        {
-            ips.push(v4);
-        }
-    }
-}
-
-fn arp_neighbor_ips() -> Vec<String> {
-    let Ok(output) = std::process::Command::new("arp").arg("-a").output() else {
-        return Vec::new();
-    };
-    collect_arp_neighbors(
-        &String::from_utf8_lossy(&output.stdout),
-        &local_adapter_v4s(),
-    )
-}
-
-fn collect_arp_neighbors(text: &str, locals: &[std::net::Ipv4Addr]) -> Vec<String> {
-    let mut iface = None;
-    let mut out = Vec::new();
-    for line in text.lines() {
-        if let Some(ip) = parse_arp_interface(line) {
-            iface = Some(ip);
-            continue;
-        }
-        for raw in line.split_whitespace() {
-            let token = raw.trim_matches(|ch: char| matches!(ch, '(' | ')' | ','));
-            let Ok(v4) = token.parse::<std::net::Ipv4Addr>() else {
-                continue;
-            };
-            if locals.contains(&v4) || iface == Some(v4) {
-                continue;
-            }
-            push_machine_ip(&mut out, v4);
-            if out.len() >= 32 {
-                return out;
-            }
-        }
-    }
-    out
-}
-
-fn parse_arp_interface(line: &str) -> Option<std::net::Ipv4Addr> {
-    let lower = line.to_ascii_lowercase();
-    if !lower.contains("interface") && !line.contains("インターフェイス") {
-        return None;
-    }
-    for raw in line.split_whitespace() {
-        let token = raw.trim_matches(|ch: char| matches!(ch, '(' | ')' | ',' | ':'));
-        if let Ok(v4) = token.parse::<std::net::Ipv4Addr>() {
-            return Some(v4);
-        }
-    }
-    None
-}
-
-fn usable_lan_v4(v4: std::net::Ipv4Addr) -> bool {
-    if v4.is_loopback() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
-    {
-        return false;
-    }
-    v4.octets()[0] < 224
 }
 
 fn with_finder<T>(f: impl FnOnce(&Finder) -> Result<T, String>) -> Result<T, String> {
@@ -508,33 +304,21 @@ fn resolve_source(query: &str) -> Result<Source, String> {
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    if let Ok(sources) = with_finder(|finder| {
-        let _ = finder.wait_for_sources(Duration::from_millis(200));
-        finder.current_sources().map_err(|error| error.to_string())
-    }) {
-        if let Some(source) = sources
-            .iter()
-            .find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
-        {
+    if let Ok(sources) = with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
+    {
+        if let Some(source) = sources.iter().find(|source| {
+            source.to_string().eq_ignore_ascii_case(trimmed)
+                || source.name.eq_ignore_ascii_case(trimmed)
+        }) {
             return Ok(source.clone());
         }
-        if let Some(source) = sources
-            .iter()
-            .find(|source| source.name.eq_ignore_ascii_case(trimmed))
-        {
-            return Ok(source.clone());
-        }
-        let matches: Vec<_> = sources
-            .iter()
-            .filter(|source| {
-                let needle = trimmed.to_ascii_lowercase();
-                source_key(source).to_ascii_lowercase().contains(&needle)
-                    || source.name.to_ascii_lowercase().contains(&needle)
-            })
-            .cloned()
-            .collect();
-        if matches.len() == 1 {
-            return Ok(matches.into_iter().next().expect("len 1"));
+        let needle = trimmed.to_ascii_lowercase();
+        let mut matches = sources.into_iter().filter(|source| {
+            source.to_string().to_ascii_lowercase().contains(&needle)
+                || source.name.to_ascii_lowercase().contains(&needle)
+        });
+        if let (Some(only), None) = (matches.next(), matches.next()) {
+            return Ok(only);
         }
     }
     Ok(source_from_query(trimmed))
@@ -560,10 +344,6 @@ pub(crate) fn source_from_query(query: &str) -> Source {
         name: trimmed.to_string(),
         address: SourceAddress::None,
     }
-}
-
-fn source_key(source: &Source) -> String {
-    source.to_string()
 }
 
 fn ingest_video(
@@ -746,69 +526,5 @@ mod tests {
             grafton_ndi::SourceAddress::Ip(ip) => assert!(ip.starts_with("192.168.0.10")),
             other => panic!("{other:?}"),
         }
-    }
-
-    #[test]
-    fn extra_ips_are_machine_addresses_not_cidr() {
-        assert_eq!(
-            super::split_machine_ips("12.0.0.8,13.0.12.8,192.168.3.0/24,255.255.255.0"),
-            vec!["12.0.0.8".to_string(), "13.0.12.8".to_string()]
-        );
-        assert!(super::parse_ndi_config_ips(
-            r#"{"ndi":{"networks":{"ips":"192.168.3.3, 10.0.0.8"}}}"#
-        )
-        .contains(&"192.168.3.3".to_string()));
-        assert!(super::parse_ndi_config_ips(r#"{"ndi":{"networks":{"ips":""}}}"#).is_empty());
-    }
-
-    #[test]
-    fn extra_ips_ignores_masks_gateways_and_apipa() {
-        let text = "\
-Windows IP Configuration
-
-Ethernet adapter LAN:
-   IPv4 Address. . . . . . . . . . . : 192.168.3.34
-   Subnet Mask . . . . . . . . . . . : 255.255.255.0
-   Default Gateway . . . . . . . . . : 192.168.3.1
-
-Ethernet adapter Bluetooth:
-   IPv4 Address. . . . . . . . . . . : 169.254.61.129
-   Subnet Mask . . . . . . . . . . . : 255.255.0.0
-";
-        let mut ips = Vec::new();
-        super::collect_ipconfig_adapter_v4s(text, &mut ips);
-        assert_eq!(ips, vec!["192.168.3.34".parse::<std::net::Ipv4Addr>().unwrap()]);
-    }
-
-    #[test]
-    fn arp_neighbors_are_unicast_hosts() {
-        let text = "\
-Interface: 192.168.3.34 --- 0x15
-  Internet Address      Physical Address      Type
-  192.168.3.1           98-2c-c6-9b-ae-10     dynamic
-  192.168.3.3           4c-ed-fb-cb-fa-75     dynamic
-  192.168.3.255         ff-ff-ff-ff-ff-ff     static
-  224.0.0.251           01-00-5e-00-00-fb     static
-? (10.0.0.9) at aa:bb:cc:dd:ee:ff on en0
-";
-        let locals = vec!["192.168.3.34".parse().unwrap()];
-        let ips = super::collect_arp_neighbors(text, &locals);
-        assert_eq!(
-            ips,
-            vec![
-                "192.168.3.1".to_string(),
-                "192.168.3.3".to_string(),
-                "10.0.0.9".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn usable_lan_v4_rejects_reserved() {
-        assert!(super::usable_lan_v4("192.168.3.34".parse().unwrap()));
-        assert!(!super::usable_lan_v4("255.255.255.0".parse().unwrap()));
-        assert!(!super::usable_lan_v4("169.254.1.1".parse().unwrap()));
-        assert!(!super::usable_lan_v4("127.0.0.1".parse().unwrap()));
-        assert!(!super::usable_lan_v4("224.0.0.251".parse().unwrap()));
     }
 }
