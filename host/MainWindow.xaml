@@ -29,6 +29,7 @@
                     <Button Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="OpenOverlay_Click"/>
                     <Button x:Name="MultiviewButton" Content="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="OpenMultiview_Click"/>
                     <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
+                    <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
                     <Button Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
                     <Button Content="{Binding [chrome.preferences], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Preferences_Click"/>
                 </StackPanel>

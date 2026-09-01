@@ -1,0 +1,35 @@
+<Window x:Class="Eiviz.Host.Dialogs.LogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:i18n="clr-namespace:Eiviz.Host.I18n"
+        Title="{Binding [logs.title], Source={x:Static i18n:Loc.Source}}"
+        Height="560" Width="920"
+        Background="{DynamicResource DialogBackground}" Foreground="{DynamicResource TextForeground}">
+    <DockPanel Margin="12">
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <CheckBox x:Name="HostBox" Content="{Binding [logs.host], Source={x:Static i18n:Loc.Source}}"
+                          IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
+                          Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                <CheckBox x:Name="MixerBox" Content="{Binding [logs.mixer], Source={x:Static i18n:Loc.Source}}"
+                          IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
+                          Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                <CheckBox x:Name="AutoScrollBox" Content="{Binding [logs.autoscroll], Source={x:Static i18n:Loc.Source}}"
+                          IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <CheckBox x:Name="PauseBox" Content="{Binding [logs.pause], Source={x:Static i18n:Loc.Source}}"
+                          VerticalAlignment="Center" Margin="0,0,12,0"
+                          Unchecked="Pause_Unchecked"/>
+                <Button Content="{Binding [logs.clear], Source={x:Static i18n:Loc.Source}}" Width="72" Click="Clear_Click"/>
+                <Button Content="{Binding [logs.folder], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="Folder_Click"/>
+            </StackPanel>
+            <TextBlock x:Name="PathText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource DimForeground}"/>
+        </DockPanel>
+        <TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 FontFamily="Consolas" FontSize="12"
+                 Background="{DynamicResource ListBackground}"
+                 Foreground="{DynamicResource TextForeground}"
+                 BorderBrush="{DynamicResource ButtonBorder}"/>
+    </DockPanel>
+</Window>

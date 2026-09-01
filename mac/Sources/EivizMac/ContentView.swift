@@ -37,6 +37,7 @@ struct ContentView: View {
         .sheet(isPresented: $mixer.showMultiview) { MultiviewView() }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
         .sheet(isPresented: $mixer.showResources) { ResourcesView() }
+        .sheet(isPresented: $mixer.showLogs) { LogsView() }
     }
 
     private var topBar: some View {
@@ -77,6 +78,7 @@ struct ContentView: View {
                 Text(L10n.t("chrome.multiview"))
             }
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
+            Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
             Button(L10n.t("chrome.preferences")) { mixer.showPreferences = true }
         }

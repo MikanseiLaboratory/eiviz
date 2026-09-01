@@ -5,8 +5,14 @@ namespace Eiviz.Host;
 
 internal static class HostLog
 {
+    internal static event Action<string>? LineWritten;
+
     internal static string DirectoryPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "eiviz");
+
+    internal static string HostFilePath => Path.Combine(DirectoryPath, "eiviz-host.log");
+
+    internal static string MixerFilePath => Path.Combine(DirectoryPath, "eiviz-mixer.log");
 
     internal static void Install()
     {
@@ -33,9 +39,10 @@ internal static class HostLog
         try
         {
             Directory.CreateDirectory(DirectoryPath);
-            File.AppendAllText(Path.Combine(DirectoryPath, "eiviz-host.log"), line);
+            File.AppendAllText(HostFilePath, line);
             if (level is "ERROR")
                 File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "host-error.txt"), line);
+            LineWritten?.Invoke(line.TrimEnd('\r', '\n'));
         }
         catch
         {

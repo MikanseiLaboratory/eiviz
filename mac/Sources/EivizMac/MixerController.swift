@@ -34,6 +34,7 @@ final class MixerController: ObservableObject {
     @Published var showMultiview = false
     @Published var showMultiviewSlots = false
     @Published var showResources = false
+    @Published var showLogs = false
     @Published var editingUnit: MixingUnitEntry?
     @Published var editingScene: SceneEntry?
     @Published var openMultiview: MultiviewLayout?

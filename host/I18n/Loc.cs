@@ -78,6 +78,7 @@ public static class Loc
         ["chrome.overlay"] = "Overlay",
         ["chrome.multiview"] = "Multiview",
         ["chrome.resources"] = "Resources",
+        ["chrome.logs"] = "Logs",
         ["chrome.settings"] = "Settings",
         ["chrome.preferences"] = "Preferences",
         ["chrome.inputs"] = "Inputs",
@@ -204,6 +205,13 @@ public static class Loc
         ["rebar.mixerDown"] = "Mixer is not running.",
         ["filter.session"] = "eiviz session|*.eiviz.json;*.json|JSON|*.json",
         ["filter.sessionSave"] = "eiviz session|*.eiviz.json|JSON|*.json",
+        ["logs.title"] = "Logs",
+        ["logs.host"] = "Host",
+        ["logs.mixer"] = "Mixer",
+        ["logs.autoscroll"] = "Follow",
+        ["logs.pause"] = "Pause",
+        ["logs.clear"] = "Clear",
+        ["logs.folder"] = "Folder",
     };
 
     private static readonly Dictionary<string, string> Ja = new()
@@ -221,6 +229,7 @@ public static class Loc
         ["chrome.overlay"] = "Overlay",
         ["chrome.multiview"] = "Multiview",
         ["chrome.resources"] = "リソース",
+        ["chrome.logs"] = "ログ",
         ["chrome.settings"] = "設定",
         ["chrome.preferences"] = "環境設定",
         ["chrome.inputs"] = "入力",
@@ -347,5 +356,12 @@ public static class Loc
         ["rebar.mixerDown"] = "ミキサーが起動していません。",
         ["filter.session"] = "eiviz セッション|*.eiviz.json;*.json|JSON|*.json",
         ["filter.sessionSave"] = "eiviz セッション|*.eiviz.json|JSON|*.json",
+        ["logs.title"] = "ログ",
+        ["logs.host"] = "ホスト",
+        ["logs.mixer"] = "ミキサー",
+        ["logs.autoscroll"] = "追従",
+        ["logs.pause"] = "一時停止",
+        ["logs.clear"] = "消去",
+        ["logs.folder"] = "フォルダー",
     };
 }

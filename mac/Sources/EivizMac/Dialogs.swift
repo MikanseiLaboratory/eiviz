@@ -1268,3 +1268,126 @@ struct ResourcesView: View {
         summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
+
+struct LogsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var showHost = true
+    @State private var showMixer = true
+    @State private var follow = true
+    @State private var paused = false
+    @State private var hostOffset: UInt64 = .max
+    @State private var mixerOffset: UInt64 = .max
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L10n.t("logs.title")).fontWeight(.bold)
+                Spacer()
+                Toggle(L10n.t("logs.host"), isOn: $showHost)
+                Toggle(L10n.t("logs.mixer"), isOn: $showMixer)
+                Toggle(L10n.t("logs.autoscroll"), isOn: $follow)
+                Toggle(L10n.t("logs.pause"), isOn: $paused)
+                Button(L10n.t("logs.clear")) { text = "" }
+                Button(L10n.t("logs.folder")) {
+                    NSWorkspace.shared.open(HostLog.directory)
+                }
+            }
+            .toggleStyle(.checkbox)
+            Text(HostLog.directory.path)
+                .font(.system(size: 11))
+                .foregroundStyle(EivizTheme.hud)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(text.isEmpty ? " " : text)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .id("end")
+                }
+                .onChange(of: text) { _, _ in
+                    if follow {
+                        proxy.scrollTo("end", anchor: .bottom)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }
+            }
+        }
+        .padding(12)
+        .frame(width: 920, height: 560)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .task {
+            while !Task.isCancelled {
+                if !paused {
+                    pump()
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+    }
+
+    private func pump() {
+        if showHost {
+            append(source: "host", url: HostLog.directory.appendingPathComponent("eiviz-host.log"), offset: &hostOffset)
+        } else {
+            _ = readNew(url: HostLog.directory.appendingPathComponent("eiviz-host.log"), offset: &hostOffset)
+        }
+        if showMixer {
+            append(source: "mixer", url: HostLog.directory.appendingPathComponent("eiviz-mixer.log"), offset: &mixerOffset)
+        } else {
+            _ = readNew(url: HostLog.directory.appendingPathComponent("eiviz-mixer.log"), offset: &mixerOffset)
+        }
+    }
+
+    private func append(source: String, url: URL, offset: inout UInt64) {
+        let lines = readNew(url: url, offset: &offset)
+        guard !lines.isEmpty else { return }
+        var next = text
+        for line in lines where !line.isEmpty {
+            next += "\(source) \(line)\n"
+        }
+        if next.count > 400_000 {
+            next = String(next.suffix(300_000))
+        }
+        text = next
+    }
+
+    private func readNew(url: URL, offset: inout UInt64) -> [String] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        if offset == .max {
+            offset = size > 64 * 1024 ? size - 64 * 1024 : 0
+        } else if size < offset {
+            offset = 0
+        }
+        guard size > offset else { return [] }
+        do {
+            try handle.seek(toOffset: offset)
+            guard let data = try handle.readToEnd(), !data.isEmpty else { return [] }
+            offset = size
+            var text = String(data: data, encoding: .utf8) ?? ""
+            text = text.replacingOccurrences(of: "\r\n", with: "\n")
+            var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            if offset > data.count && !text.hasPrefix("\n") && lines.count > 1 {
+                lines.removeFirst()
+            }
+            if !text.hasSuffix("\n"), let last = lines.last, last.isEmpty == false {
+                // keep last partial until the next read by rolling offset back
+                if let lastData = last.data(using: .utf8) {
+                    offset -= UInt64(lastData.count)
+                }
+                lines.removeLast()
+            }
+            return lines
+        } catch {
+            return []
+        }
+    }
+}
