@@ -487,31 +487,37 @@ fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMo
         .unwrap_or(wgpu::CompositeAlphaMode::Auto)
 }
 
-fn draw_presenter(
-    device: &GpuDevice,
-    presenter: &mut Presenter,
-    cache_key: u64,
-    src: Option<&wgpu::TextureView>,
-    packed: bool,
-    encoder: &mut wgpu::CommandEncoder,
-) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTexture> {
     if !presenter.ready {
         return None;
     }
-    let texture = match presenter.surface.get_current_texture() {
+    // wgpu 30 panics in Surface::get_current_texture when the HAL surface was
+    // never configured (error_sink is None). Device error scopes do not catch that.
+    let acquired = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        presenter.surface.get_current_texture()
+    })) {
+        Ok(acquired) => acquired,
+        Err(_) => {
+            crate::diag::error("surface get_current_texture panicked");
+            presenter.ready = false;
+            presenter.pending = None;
+            return None;
+        }
+    };
+    match acquired {
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
             presenter.occluded_streak = 0;
-            texture
+            Some(texture)
         }
         wgpu::CurrentSurfaceTexture::Outdated
         | wgpu::CurrentSurfaceTexture::Lost
         | wgpu::CurrentSurfaceTexture::Validation => {
             presenter.ready = false;
             presenter.pending = Some((presenter.config.width, presenter.config.height));
-            return None;
+            None
         }
-        wgpu::CurrentSurfaceTexture::Timeout => return None,
+        wgpu::CurrentSurfaceTexture::Timeout => None,
         wgpu::CurrentSurfaceTexture::Occluded => {
             // Scene tiles live in a WPF ScrollViewer. DXGI reports Occluded when
             // the child HWND is clipped; tearing the surface down after a short
@@ -523,9 +529,20 @@ fn draw_presenter(
                     presenter.occluded_streak
                 ));
             }
-            return None;
+            None
         }
-    };
+    }
+}
+
+fn draw_presenter(
+    device: &GpuDevice,
+    presenter: &mut Presenter,
+    cache_key: u64,
+    src: Option<&wgpu::TextureView>,
+    packed: bool,
+    encoder: &mut wgpu::CommandEncoder,
+) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+    let texture = acquire_surface_texture(presenter)?;
     let dest = texture.texture.create_view(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -378,6 +378,7 @@ enum GpuCmd {
     },
     DetachMonitor {
         monitor_id: u64,
+        reply: mpsc::Sender<i32>,
     },
     SetMonitorSource {
         monitor_id: u64,
@@ -1479,11 +1480,16 @@ pub extern "C" fn mixer_resize_monitor(monitor_id: u64, width: u32, height: u32)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_detach_monitor(monitor_id: u64) -> i32 {
-    with_mixer(|mixer| {
-        let _ = mixer.cmds.send(GpuCmd::DetachMonitor { monitor_id });
+    send_gpu_and_wait(|mixer, reply| {
+        if mixer
+            .cmds
+            .send(GpuCmd::DetachMonitor { monitor_id, reply })
+            .is_err()
+        {
+            return ERR_DEVICE;
+        }
         OK
     })
-    .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
@@ -2893,7 +2899,10 @@ fn render_loop(
                     width,
                     height,
                 } => presenters.resize_monitor(&device, monitor_id, width, height),
-                GpuCmd::DetachMonitor { monitor_id } => presenters.detach_monitor(monitor_id),
+                GpuCmd::DetachMonitor { monitor_id, reply } => {
+                    presenters.detach_monitor(monitor_id);
+                    let _ = reply.send(OK);
+                }
                 GpuCmd::SetMonitorSource {
                     monitor_id,
                     source_id,

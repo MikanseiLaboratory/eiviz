@@ -81,23 +81,48 @@ public partial class MainWindow : Window
     private uint SceneWidth => SelectedUnit.Width;
     private uint SceneHeight => SelectedUnit.Height;
 
+    private SceneTile CreateSceneTile()
+    {
+        var tile = new SceneTile();
+        tile.SceneSelected += (_, selected) => SelectScene(selected);
+        tile.SceneEditRequested += (_, selected) => OpenSceneEditor(selected);
+        tile.SceneCutRequested += (_, selected) => CutScene(selected);
+        tile.SceneLoopRequested += (_, selected) => ToggleSceneLoop(selected);
+        tile.ScenePlayRequested += (_, selected) => ToggleScenePlay(selected);
+        tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
+        tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
+        tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
+        return tile;
+    }
+
     private void RebuildScenes()
     {
-        ScenePanel.Children.Clear();
+        var existing = ScenePanel.Children.OfType<SceneTile>().ToList();
+        var byId = existing
+            .Where(tile => tile.Scene is not null)
+            .ToDictionary(tile => tile.Scene!.Id);
+        var keep = _session.Scenes.Select(scene => scene.Id).ToHashSet();
+        foreach (var tile in existing)
+        {
+            if (tile.Scene is not { } scene || !keep.Contains(scene.Id))
+                ScenePanel.Children.Remove(tile);
+        }
+
         var index = 1;
+        var interval = _session.Settings.ResolvedPresentInterval();
+        var preview = BusTheme.Preview(_session.Settings);
+        var inactive = BusTheme.Inactive(_session.Settings);
         foreach (var scene in _session.Scenes)
         {
-            var tile = new SceneTile();
-            tile.SceneSelected += (_, selected) => SelectScene(selected);
-            tile.SceneEditRequested += (_, selected) => OpenSceneEditor(selected);
-            tile.SceneCutRequested += (_, selected) => CutScene(selected);
-            tile.SceneLoopRequested += (_, selected) => ToggleSceneLoop(selected);
-            tile.ScenePlayRequested += (_, selected) => ToggleScenePlay(selected);
-            tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
-            tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
-            tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
-            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval(), BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
-            ScenePanel.Children.Add(tile);
+            var selected = _selectedScene?.Id == scene.Id;
+            if (byId.TryGetValue(scene.Id, out var tile) && ScenePanel.Children.Contains(tile))
+                tile.Bind(scene, index++, selected, interval, preview, inactive);
+            else
+            {
+                tile = CreateSceneTile();
+                tile.Bind(scene, index++, selected, interval, preview, inactive);
+                ScenePanel.Children.Add(tile);
+            }
         }
         RefreshSceneTiles();
     }

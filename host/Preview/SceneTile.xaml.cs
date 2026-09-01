@@ -30,7 +30,8 @@ public partial class SceneTile : UserControl
         Title.Text = scene.Name;
         Number.Text = number.ToString();
         Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
-        Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
+        if (!Monitor.HasMonitor(scene.MonitorId, scene.GpuId))
+            Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
         Monitor.ApplyPresentInterval();
     }
 

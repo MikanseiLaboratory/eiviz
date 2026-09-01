@@ -78,8 +78,13 @@ internal sealed partial class SwapchainHost : HwndHost
         ApplySize();
     }
 
+    public bool HasMonitor(ulong monitorId, ulong sourceId) =>
+        _attached && IsMonitor && MonitorId == monitorId && SourceId == sourceId;
+
     public void RetargetMonitor(ulong monitorId, ulong sourceId)
     {
+        if (HasMonitor(monitorId, sourceId))
+            return;
         DetachNative();
         IsMonitor = true;
         MonitorId = monitorId;
