@@ -46,16 +46,6 @@
                     <Border x:Name="InactiveColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
                     <Button Content="{Binding [settings.change], Source={x:Static i18n:Loc.Source}}" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
                 </StackPanel>
-                <TextBlock Text="{Binding [settings.mvLabelSize], Source={x:Static i18n:Loc.Source}}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24"/>
-                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0">
-                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
-                        <ComboBoxItem Content="%" Tag="Percent"/>
-                    </ComboBox>
-                </StackPanel>
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}" Margin="0,0,0,12"
-                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text."/>
                 <TextBlock Text="{Binding [settings.masterFps], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
@@ -133,6 +123,17 @@
                     <ComboBoxItem Content="{Binding [anchor.bottom], Source={x:Static i18n:Loc.Source}}" Tag="Bottom" IsSelected="True"/>
                     <ComboBoxItem Content="{Binding [anchor.top], Source={x:Static i18n:Loc.Source}}" Tag="Top"/>
                 </ComboBox>
+                <TextBlock Text="{Binding [settings.mvLabelSize], Source={x:Static i18n:Loc.Source}}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24" LostFocus="MvLabelSize_LostFocus"/>
+                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0"
+                              SelectionChanged="MvLabelUnit_SelectionChanged">
+                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
+                        <ComboBoxItem Content="%" Tag="Percent"/>
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}" Margin="0,0,0,12"
+                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text."/>
                 <TextBlock Text="{Binding [settings.defaultMvUnit], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="MvUnitBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left"
                           DisplayMemberPath="Name"/>

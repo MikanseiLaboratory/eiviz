@@ -300,6 +300,8 @@ internal static class SessionStore
         public bool ProgramLabelFollow { get; set; } = true;
         public string ProgramLabel { get; set; } = "";
         public MvLabelAnchor? LabelAnchor { get; set; }
+        public float? LabelSize { get; set; }
+        public MvLabelUnit? LabelUnit { get; set; }
         public bool? AlwaysOnTop { get; set; }
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
@@ -316,6 +318,8 @@ internal static class SessionStore
             ProgramLabelFollow = layout.ProgramLabelFollow,
             ProgramLabel = layout.ProgramLabel ?? "",
             LabelAnchor = layout.LabelAnchor,
+            LabelSize = layout.LabelSize,
+            LabelUnit = layout.LabelUnit,
             AlwaysOnTop = layout.AlwaysOnTop
         };
 
@@ -335,6 +339,8 @@ internal static class SessionStore
                 ProgramLabelFollow = ProgramLabelFollow,
                 ProgramLabel = ProgramLabel ?? "",
                 LabelAnchor = LabelAnchor ?? session.Settings.MultiviewLabelAnchor,
+                LabelSize = LabelSize ?? session.Settings.MultiviewLabelSize,
+                LabelUnit = LabelUnit ?? session.Settings.MultiviewLabelUnit,
                 AlwaysOnTop = AlwaysOnTop ?? true
             };
             foreach (var tile in Tiles)

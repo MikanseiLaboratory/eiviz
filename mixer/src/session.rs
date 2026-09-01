@@ -576,6 +576,10 @@ pub struct MultiviewDto {
     pub program_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_anchor: Option<MvLabelAnchor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_unit: Option<MvLabelUnit>,
     #[serde(default = "default_true")]
     pub always_on_top: bool,
 }
@@ -694,6 +698,9 @@ impl Document {
         for layout in &mut doc.multiviews {
             if layout.present_interval > 0 {
                 layout.present_interval = layout.present_interval.clamp(1, 8);
+            }
+            if let Some(size) = layout.label_size {
+                layout.label_size = Some(crate::labels::clamp_size(size));
             }
             absorb_fixed_bus_panes(layout);
             let want = layout.template.tile_count();
@@ -899,6 +906,8 @@ mod tests {
         assert_eq!(doc.multiviews[0].tiles[0].label, "Cam 1");
         assert_eq!(doc.multiviews[0].template, MultiviewTemplate::PreviewProgram8);
         assert_eq!(doc.multiviews[0].label_anchor, None);
+        assert_eq!(doc.multiviews[0].label_size, None);
+        assert_eq!(doc.multiviews[0].label_unit, None);
         assert!(doc.multiviews[0].always_on_top);
     }
 
@@ -910,15 +919,21 @@ mod tests {
     "id": 1,
     "name": "MV",
     "labelAnchor": "Top",
+    "labelSize": 6,
+    "labelUnit": "Percent",
     "alwaysOnTop": false
   }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.multiviews[0].label_anchor, Some(MvLabelAnchor::Top));
+        assert_eq!(doc.multiviews[0].label_size, Some(6.0));
+        assert_eq!(doc.multiviews[0].label_unit, Some(MvLabelUnit::Percent));
         assert!(!doc.multiviews[0].always_on_top);
         let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
         let again = parse(text.as_bytes()).unwrap();
         assert_eq!(again.multiviews[0].label_anchor, Some(MvLabelAnchor::Top));
+        assert_eq!(again.multiviews[0].label_size, Some(6.0));
+        assert_eq!(again.multiviews[0].label_unit, Some(MvLabelUnit::Percent));
         assert!(!again.multiviews[0].always_on_top);
     }
 

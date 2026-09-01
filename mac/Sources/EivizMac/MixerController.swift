@@ -688,17 +688,19 @@ final class MixerController: ObservableObject {
             program.r, program.g, program.b,
             inactive.r, inactive.g, inactive.b
         )
-        let size = min(200, max(1, session.settings.multiviewLabelSize))
-        session.settings.multiviewLabelSize = size
+        let fallback = min(200, max(1, session.settings.multiviewLabelSize))
+        session.settings.multiviewLabelSize = fallback
         _ = mixer_set_mv_label(
             0,
-            size,
+            fallback,
             session.settings.multiviewLabelUnit == .percent ? 1 : 0,
             session.settings.multiviewLabelAnchor == .top ? 1 : 0
         )
         for layout in session.multiviews {
-            let top = (layout.labelAnchor ?? session.settings.multiviewLabelAnchor) == .top
-            _ = mixer_set_mv_label(layout.gpuId, size, session.settings.multiviewLabelUnit == .percent ? 1 : 0, top ? 1 : 0)
+            let size = layout.resolvedLabelSize(session.settings)
+            let percent = layout.resolvedLabelUnit(session.settings) == .percent ? UInt32(1) : 0
+            let top = layout.resolvedLabelAnchor(session.settings) == .top ? UInt32(1) : 0
+            _ = mixer_set_mv_label(layout.gpuId, size, percent, top)
         }
     }
 

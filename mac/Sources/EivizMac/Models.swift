@@ -603,13 +603,15 @@ struct MultiviewLayout: Identifiable, Codable {
     var programLabelFollow: Bool = true
     var programLabel: String = ""
     var labelAnchor: MvLabelAnchor?
+    var labelSize: Float?
+    var labelUnit: MvLabelUnit?
     var alwaysOnTop: Bool = true
     var gpuId: UInt64 { EIVIZ_MULTIVIEW_BASE | id }
 
     enum CodingKeys: String, CodingKey {
         case id, name, previewUnitId, programUnitId, presentInterval, tiles, template
         case previewLabelFollow, previewLabel, programLabelFollow, programLabel
-        case labelAnchor, alwaysOnTop
+        case labelAnchor, labelSize, labelUnit, alwaysOnTop
     }
 
     init(
@@ -626,6 +628,8 @@ struct MultiviewLayout: Identifiable, Codable {
         programLabelFollow: Bool = true,
         programLabel: String = "",
         labelAnchor: MvLabelAnchor? = nil,
+        labelSize: Float? = nil,
+        labelUnit: MvLabelUnit? = nil,
         alwaysOnTop: Bool = true
     ) {
         self.id = id
@@ -641,6 +645,8 @@ struct MultiviewLayout: Identifiable, Codable {
         self.programLabelFollow = programLabelFollow
         self.programLabel = programLabel
         self.labelAnchor = labelAnchor
+        self.labelSize = labelSize
+        self.labelUnit = labelUnit
         self.alwaysOnTop = alwaysOnTop
         ensureTiles()
     }
@@ -659,8 +665,23 @@ struct MultiviewLayout: Identifiable, Codable {
         programLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .programLabelFollow) ?? true
         programLabel = try container.decodeIfPresent(String.self, forKey: .programLabel) ?? ""
         labelAnchor = try container.decodeIfPresent(MvLabelAnchor.self, forKey: .labelAnchor)
+        labelSize = try container.decodeIfPresent(Float.self, forKey: .labelSize)
+        labelUnit = try container.decodeIfPresent(MvLabelUnit.self, forKey: .labelUnit)
         alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
         ensureTiles()
+    }
+
+    func resolvedLabelSize(_ settings: SessionSettings) -> Float {
+        let size = labelSize ?? settings.multiviewLabelSize
+        return min(200, max(1, size > 0 ? size : 18))
+    }
+
+    func resolvedLabelUnit(_ settings: SessionSettings) -> MvLabelUnit {
+        labelUnit ?? settings.multiviewLabelUnit
+    }
+
+    func resolvedLabelAnchor(_ settings: SessionSettings) -> MvLabelAnchor {
+        labelAnchor ?? settings.multiviewLabelAnchor
     }
 
     mutating func ensureTiles() {
@@ -870,7 +891,10 @@ struct MixerSessionData: Codable {
             name: "Multiview \(nextMultiviewId)",
             monitorId: nextMonitorId,
             previewUnitId: unitId,
-            programUnitId: unitId
+            programUnitId: unitId,
+            labelAnchor: settings.multiviewLabelAnchor,
+            labelSize: settings.multiviewLabelSize,
+            labelUnit: settings.multiviewLabelUnit
         )
         layout.seedDefaultBuses(unitId)
         nextMultiviewId += 1

@@ -23,6 +23,14 @@
                         <ComboBoxItem Content="{Binding [mv.bottom], Source={x:Static i18n:Loc.Source}}" Tag="Bottom"/>
                         <ComboBoxItem Content="{Binding [mv.top], Source={x:Static i18n:Loc.Source}}" Tag="Top"/>
                     </ComboBox>
+                    <TextBlock Text="{Binding [settings.mvLabelSize], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBox x:Name="SizeBox" Width="48" Height="24" Margin="0,0,4,0" VerticalAlignment="Center"
+                             LostFocus="SizeBox_LostFocus"/>
+                    <ComboBox x:Name="UnitBox" Width="56" Margin="0,0,8,0" VerticalAlignment="Center"
+                              SelectionChanged="UnitBox_SelectionChanged">
+                        <ComboBoxItem Content="px" Tag="Px"/>
+                        <ComboBoxItem Content="%" Tag="Percent"/>
+                    </ComboBox>
                     <TextBlock Text="{Binding [mv.previewRefresh], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox x:Name="PresentBox" Width="168" Margin="0,0,8,0" VerticalAlignment="Center"
                               SelectionChanged="PresentBox_SelectionChanged">

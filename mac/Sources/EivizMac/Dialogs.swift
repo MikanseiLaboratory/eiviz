@@ -78,19 +78,6 @@ struct SettingsView: View {
             ), supportsOpacity: false)
             .labelsHidden()
             .frame(width: 220, alignment: .leading)
-            Text("Multiview label size")
-            HStack(spacing: 8) {
-                TextField("", value: $mixer.session.settings.multiviewLabelSize, format: .number)
-                    .frame(width: 72)
-                Picker("", selection: $mixer.session.settings.multiviewLabelUnit) {
-                    Text("px").tag(MvLabelUnit.px)
-                    Text("%").tag(MvLabelUnit.percent)
-                }
-                .frame(width: 88)
-            }
-            Text("px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
             Text("Master Frame Rate")
             Picker("", selection: Binding(
                 get: { "\(mixer.session.settings.masterFpsNum)/\(mixer.session.settings.masterFpsDen)" },
@@ -296,6 +283,28 @@ struct SettingsView: View {
                     Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
                 }
                 .frame(width: 168)
+                Text(L10n.t("settings.mvLabelSize"))
+                HStack(spacing: 8) {
+                    TextField("", value: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
+                            mixer.applyBusColors()
+                        }
+                    ), format: .number)
+                    .frame(width: 72)
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelUnit = $0
+                            mixer.applyBusColors()
+                        }
+                    )) {
+                        Text("px").tag(MvLabelUnit.px)
+                        Text("%").tag(MvLabelUnit.percent)
+                    }
+                    .frame(width: 88)
+                }
             }
             Text("Default Mixing Unit for new Multiview windows")
             Picker("", selection: $mixer.session.settings.defaultMultiviewUnitId) {
@@ -878,6 +887,25 @@ struct MultiviewView: View {
                         Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
                     }
                     .frame(width: 120)
+                    TextField("", value: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
+                            mixer.applyBusColors()
+                        }
+                    ), format: .number)
+                    .frame(width: 48)
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelUnit = $0
+                            mixer.applyBusColors()
+                        }
+                    )) {
+                        Text("px").tag(MvLabelUnit.px)
+                        Text("%").tag(MvLabelUnit.percent)
+                    }
+                    .frame(width: 56)
                 }
                 Button("Layout…") {
                     mixer.showMultiviewSlots = true
