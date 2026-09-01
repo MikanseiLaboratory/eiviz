@@ -1185,6 +1185,11 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
+    private void NewSession_Click(object sender, RoutedEventArgs e)
+    {
+        ApplySession(Session.Default());
+    }
+
     private void LoadSession_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Loc.T("filter.session") };
@@ -1197,36 +1202,43 @@ public partial class MainWindow : Window
     {
         try
         {
-            _overlay?.Close();
-            CloseAllSwitchers();
-            foreach (var window in _multiviews.ToArray())
-                window.Close();
-            PreviewHost.ReleaseNative();
-            ProgramHost.ReleaseNative();
-            ScenePanel.Children.Clear();
-            ((App)Application.Current).ReplaceSession(SessionStore.Load(path));
+            ApplySession(SessionStore.Load(path));
             AppPrefs.Current.RememberSession(path);
-            InputList.ItemsSource = _session.Inputs;
-            UnitBox.ItemsSource = _session.Units;
-            _suppressUnitChange = true;
-            UnitBox.SelectedIndex = 0;
-            _suppressUnitChange = false;
-            RebuildScenes();
-            RebuildTransitions();
-            RebuildOverlayToggles();
-            RebuildMeters();
-            if (_session.Scenes.Count > 0)
-                SelectScene(_session.Scenes[0]);
-            PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
-            ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
-            ApplyBusColors();
-            ApplyAspect();
-            UpdateStatus();
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, Loc.T("msg.loadSession"));
         }
+    }
+
+    private void ApplySession(Session session)
+    {
+        _overlay?.Close();
+        CloseAllSwitchers();
+        foreach (var window in _multiviews.ToArray())
+            window.Close();
+        foreach (var preview in _inputPreviews.Values.ToArray())
+            preview.Close();
+        PreviewHost.ReleaseNative();
+        ProgramHost.ReleaseNative();
+        ScenePanel.Children.Clear();
+        ((App)Application.Current).ReplaceSession(session);
+        InputList.ItemsSource = _session.Inputs;
+        UnitBox.ItemsSource = _session.Units;
+        _suppressUnitChange = true;
+        UnitBox.SelectedIndex = 0;
+        _suppressUnitChange = false;
+        RebuildScenes();
+        RebuildTransitions();
+        RebuildOverlayToggles();
+        RebuildMeters();
+        if (_session.Scenes.Count > 0)
+            SelectScene(_session.Scenes[0]);
+        PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
+        ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
+        ApplyBusColors();
+        ApplyAspect();
+        UpdateStatus();
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e)

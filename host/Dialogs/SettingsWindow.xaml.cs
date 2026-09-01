@@ -61,7 +61,6 @@ public partial class SettingsWindow : Window
         RebuildBuses();
         FillRebar();
         PaintBusColors();
-        FillSelectedMultiview();
     }
 
     public SessionSettings Settings { get; }
@@ -71,7 +70,6 @@ public partial class SettingsWindow : Window
     private ulong _nextBusId;
     private bool _suppressOutputs;
     private bool _rebarAvailable;
-    private bool _suppressMv;
     private List<(uint Kind, uint Channels, string Id, string Name)> _devices = [];
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -196,80 +194,6 @@ public partial class SettingsWindow : Window
         MvList.ItemsSource = _session.Multiviews;
         if (_session.Multiviews.Count > 0 && MvList.SelectedIndex < 0)
             MvList.SelectedIndex = 0;
-        FillSelectedMultiview();
-    }
-
-    private void MvList_SelectionChanged(object sender, SelectionChangedEventArgs e) => FillSelectedMultiview();
-
-    private void FillSelectedMultiview()
-    {
-        if (MvOnTopBox is null || MvLabelAnchorBox is null || MvLabelSizeBox is null || MvLabelUnitBox is null)
-            return;
-        _suppressMv = true;
-        if (MvList.SelectedItem is MultiviewLayout layout)
-        {
-            MvOnTopBox.IsEnabled = true;
-            MvLabelAnchorBox.IsEnabled = true;
-            MvLabelSizeBox.IsEnabled = true;
-            MvLabelUnitBox.IsEnabled = true;
-            MvOnTopBox.IsChecked = layout.AlwaysOnTop;
-            SelectTag(MvLabelAnchorBox, layout.ResolvedLabelAnchor(Settings) == MvLabelAnchor.Top ? "Top" : "Bottom");
-            MvLabelSizeBox.Text = layout.ResolvedLabelSize(Settings).ToString("0.##");
-            SelectTag(MvLabelUnitBox, layout.ResolvedLabelUnit(Settings) == MvLabelUnit.Percent ? "Percent" : "Px");
-        }
-        else
-        {
-            MvOnTopBox.IsEnabled = false;
-            MvLabelAnchorBox.IsEnabled = false;
-            MvLabelSizeBox.IsEnabled = false;
-            MvLabelUnitBox.IsEnabled = false;
-            MvOnTopBox.IsChecked = false;
-        }
-        _suppressMv = false;
-    }
-
-    private void MvOnTop_Click(object sender, RoutedEventArgs e)
-    {
-        if (_suppressMv || MvList.SelectedItem is not MultiviewLayout layout)
-            return;
-        layout.AlwaysOnTop = MvOnTopBox.IsChecked == true;
-        if (Owner is MainWindow main)
-            main.ApplyMultiviewTopmost(layout);
-    }
-
-    private void MvLabelAnchor_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressMv || MvList.SelectedItem is not MultiviewLayout layout)
-            return;
-        if (MvLabelAnchorBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
-        {
-            layout.LabelAnchor = tag == "Top" ? MvLabelAnchor.Top : MvLabelAnchor.Bottom;
-            layout.PushLabelStyle(Settings);
-        }
-    }
-
-    private void MvLabelSize_LostFocus(object sender, RoutedEventArgs e)
-    {
-        if (_suppressMv || MvList.SelectedItem is not MultiviewLayout layout)
-            return;
-        if (float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var size)
-            || float.TryParse(MvLabelSizeBox.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out size))
-        {
-            layout.LabelSize = Math.Clamp(size, 1f, 200f);
-            MvLabelSizeBox.Text = layout.LabelSize.Value.ToString("0.##");
-            layout.PushLabelStyle(Settings);
-        }
-    }
-
-    private void MvLabelUnit_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressMv || MvList.SelectedItem is not MultiviewLayout layout)
-            return;
-        if (MvLabelUnitBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
-        {
-            layout.LabelUnit = tag == "Percent" ? MvLabelUnit.Percent : MvLabelUnit.Px;
-            layout.PushLabelStyle(Settings);
-        }
     }
 
     private void AddBus_Click(object sender, RoutedEventArgs e)
@@ -650,7 +574,6 @@ public partial class SettingsWindow : Window
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
-        MvLabelSize_LostFocus(sender, e);
         Settings.RebarOptimization = _rebarAvailable && RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;

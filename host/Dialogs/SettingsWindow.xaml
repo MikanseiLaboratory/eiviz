@@ -109,31 +109,12 @@
                     <TextBlock Text="{Binding [settings.multiviews], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <ListBox x:Name="MvList" Height="140" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
-                         DisplayMemberPath="Name" SelectionChanged="MvList_SelectionChanged"/>
+                         DisplayMemberPath="Name"/>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,12">
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="88" Click="OpenMv_Click"/>
                     <Button Content="{Binding [settings.layout], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="EditLayoutTiles_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="DeleteMv_Click"/>
                 </StackPanel>
-                <CheckBox x:Name="MvOnTopBox" Content="{Binding [settings.alwaysOnTop], Source={x:Static i18n:Loc.Source}}"
-                          Foreground="{DynamicResource TextForeground}" Margin="0,0,0,8" Click="MvOnTop_Click"/>
-                <TextBlock Text="{Binding [settings.labelPosition], Source={x:Static i18n:Loc.Source}}"/>
-                <ComboBox x:Name="MvLabelAnchorBox" Margin="0,4,0,12" Width="168" HorizontalAlignment="Left"
-                          SelectionChanged="MvLabelAnchor_SelectionChanged">
-                    <ComboBoxItem Content="{Binding [anchor.bottom], Source={x:Static i18n:Loc.Source}}" Tag="Bottom" IsSelected="True"/>
-                    <ComboBoxItem Content="{Binding [anchor.top], Source={x:Static i18n:Loc.Source}}" Tag="Top"/>
-                </ComboBox>
-                <TextBlock Text="{Binding [settings.mvLabelSize], Source={x:Static i18n:Loc.Source}}"/>
-                <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
-                    <TextBox x:Name="MvLabelSizeBox" Width="72" Height="24" LostFocus="MvLabelSize_LostFocus"/>
-                    <ComboBox x:Name="MvLabelUnitBox" Width="88" Height="24" Margin="8,0,0,0"
-                              SelectionChanged="MvLabelUnit_SelectionChanged">
-                        <ComboBoxItem Content="px" Tag="Px" IsSelected="True"/>
-                        <ComboBoxItem Content="%" Tag="Percent"/>
-                    </ComboBox>
-                </StackPanel>
-                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}" Margin="0,0,0,12"
-                           Text="px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text."/>
                 <TextBlock Text="{Binding [settings.defaultMvUnit], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="MvUnitBox" Margin="0,4,0,12" Width="280" HorizontalAlignment="Left"
                           DisplayMemberPath="Name"/>

@@ -762,6 +762,10 @@ final class MixerController: ObservableObject {
         }
     }
 
+    func newSession() {
+        replaceSession(MixerSessionData.default())
+    }
+
     func loadSession(path: String? = nil) {
         let url: URL
         if let path {
@@ -784,22 +788,37 @@ final class MixerController: ObservableObject {
             return
         }
         do {
-            let loaded = try SessionFile.decode(Data(buffer.prefix(Int(n))))
-            closeAllSwitchers()
-            mixer_destroy()
-            session = loaded
-            selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
-            mix = 0
-            fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
-            fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
-            fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
-            fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
-            applyBusColors()
-            applySession()
+            replaceSession(try SessionFile.decode(Data(buffer.prefix(Int(n)))))
             AppPrefs.shared.rememberSession(url.path)
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    private func replaceSession(_ loaded: MixerSessionData) {
+        closeAllInputPreviews()
+        closeAllSwitchers()
+        closeAllMultiviews()
+        mixer_destroy()
+        session = loaded
+        selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
+        mix = 0
+        fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
+        fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
+        fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
+        fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        applyBusColors()
+        applySession()
+    }
+
+    private func closeAllMultiviews() {
+        for id in Array(multiviewWindows.keys) {
+            let window = multiviewWindows.removeValue(forKey: id)
+            window?.delegate = nil
+            window?.close()
+        }
+        showMultiview = false
+        openMultiview = nil
     }
 
     var selectedVideoId: UInt64? {

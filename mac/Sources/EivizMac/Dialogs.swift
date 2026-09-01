@@ -267,45 +267,6 @@ struct SettingsView: View {
                 Text(layout.name).tag(Optional(layout.id))
             }
             .frame(minHeight: 120)
-            if let index = mixer.session.multiviews.firstIndex(where: { $0.id == selectedMultiviewId }) {
-                Toggle(L10n.t("settings.alwaysOnTop"), isOn: Binding(
-                    get: { mixer.session.multiviews[index].alwaysOnTop },
-                    set: {
-                        mixer.session.multiviews[index].alwaysOnTop = $0
-                        mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
-                    }
-                ))
-                Picker(L10n.t("settings.labelPosition"), selection: Binding(
-                    get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
-                    set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
-                )) {
-                    Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
-                    Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
-                }
-                .frame(width: 168)
-                Text(L10n.t("settings.mvLabelSize"))
-                HStack(spacing: 8) {
-                    TextField("", value: Binding(
-                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
-                        set: {
-                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
-                            mixer.applyBusColors()
-                        }
-                    ), format: .number)
-                    .frame(width: 72)
-                    Picker("", selection: Binding(
-                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
-                        set: {
-                            mixer.session.multiviews[index].labelUnit = $0
-                            mixer.applyBusColors()
-                        }
-                    )) {
-                        Text("px").tag(MvLabelUnit.px)
-                        Text("%").tag(MvLabelUnit.percent)
-                    }
-                    .frame(width: 88)
-                }
-            }
             Text("Default Mixing Unit for new Multiview windows")
             Picker("", selection: $mixer.session.settings.defaultMultiviewUnitId) {
                 ForEach(mixer.session.units) { unit in
@@ -939,41 +900,87 @@ struct MultiviewSlotsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var template: MultiviewTemplate = .previewProgram8
     @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 10)
+    @State private var selectedTile = 0
 
     private var layoutId: UInt64? { mixer.openMultiview?.id }
+    private var layoutIndex: Int? {
+        guard let id = layoutId else { return nil }
+        return mixer.session.multiviews.firstIndex(where: { $0.id == id })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Click a mosaic. Every window is an Input, Scene, or Mixing Unit preview/program, and fills the frame with no gaps, crop, or zoom.")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Numbers match Window 1…N. Click a pane to assign that window.")
                 .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Template").fontWeight(.bold)
-                ForEach(MultiviewTemplate.groups, id: \.title) { group in
-                    Text(group.title)
-                        .foregroundStyle(EivizTheme.dim)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 8)], alignment: .leading, spacing: 8) {
-                        ForEach(group.items) { item in
-                            Button {
-                                template = item
-                            } label: {
-                                VStack(spacing: 4) {
-                                    MosaicThumb(template: item, selected: template == item)
-                                    Text(item.title)
-                                        .font(.system(size: 11))
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
+            if let index = layoutIndex {
+                HStack(spacing: 8) {
+                    Text(L10n.t("mv.labelPosition"))
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
+                        set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
+                    )) {
+                        Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
+                        Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
                     }
+                    .frame(width: 88)
+                    Text(L10n.t("settings.mvLabelSize"))
+                    TextField("", value: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelSize(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelSize = min(200, max(1, $0))
+                            mixer.applyBusColors()
+                        }
+                    ), format: .number)
+                    .frame(width: 48)
+                    Picker("", selection: Binding(
+                        get: { mixer.session.multiviews[index].resolvedLabelUnit(mixer.session.settings) },
+                        set: {
+                            mixer.session.multiviews[index].labelUnit = $0
+                            mixer.applyBusColors()
+                        }
+                    )) {
+                        Text("px").tag(MvLabelUnit.px)
+                        Text("%").tag(MvLabelUnit.percent)
+                    }
+                    .frame(width: 56)
                 }
             }
-            .padding(8)
-            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Template").fontWeight(.bold)
+                    MosaicThumb(template: template, selected: true, selectedPane: selectedTile) { pane in
+                        selectedTile = pane
+                    }
+                    .frame(width: 320, height: 180)
+                }
+                if tiles.indices.contains(selectedTile) {
+                    tileRow(selectedTile)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(tiles.indices, id: \.self) { index in
-                        tileRow(index)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(MultiviewTemplate.groups, id: \.title) { group in
+                        Text(group.title)
+                            .foregroundStyle(EivizTheme.dim)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 6)], alignment: .leading, spacing: 6) {
+                            ForEach(group.items) { item in
+                                Button {
+                                    template = item
+                                } label: {
+                                    VStack(spacing: 2) {
+                                        MosaicThumb(
+                                            template: item,
+                                            selected: template == item,
+                                            selectedPane: template == item ? selectedTile : -1
+                                        )
+                                        Text(item.title)
+                                            .font(.system(size: 10))
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
             }
@@ -983,8 +990,8 @@ struct MultiviewSlotsView: View {
                 Button("Cancel") { dismiss() }
             }
         }
-        .padding(16)
-        .frame(width: 760, height: 720)
+        .padding(12)
+        .frame(width: 820, height: 520)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -1006,6 +1013,9 @@ struct MultiviewSlotsView: View {
         }
         if tiles.count > want {
             tiles.removeLast(tiles.count - want)
+        }
+        if selectedTile >= tiles.count {
+            selectedTile = max(0, tiles.count - 1)
         }
     }
 
@@ -1106,6 +1116,8 @@ struct MultiviewSlotsView: View {
 private struct MosaicThumb: View {
     var template: MultiviewTemplate
     var selected: Bool
+    var selectedPane: Int = -1
+    var onPick: ((Int) -> Void)?
 
     var body: some View {
         GeometryReader { geo in
@@ -1113,17 +1125,26 @@ private struct MosaicThumb: View {
             let h = geo.size.height
             ZStack(alignment: .topLeading) {
                 Rectangle().fill(Color.black)
-                ForEach(Array(template.panes.enumerated()), id: \.offset) { _, pane in
-                    Rectangle()
-                        .fill(Color(white: 0.29))
-                        .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
-                        .frame(width: max(1, CGFloat(pane.width) * w - 1), height: max(1, CGFloat(pane.height) * h - 1))
-                        .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
+                ForEach(Array(template.panes.enumerated()), id: \.offset) { index, pane in
+                    let pw = max(1, CGFloat(pane.width) * w - 1)
+                    let ph = max(1, CGFloat(pane.height) * h - 1)
+                    ZStack {
+                        Rectangle()
+                            .fill(Color(white: index == selectedPane ? 0.43 : 0.29))
+                            .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+                        Text("\(index + 1)")
+                            .font(.system(size: min(18, max(7, min(pw, ph) * 0.42)), weight: .bold))
+                            .foregroundStyle(Color.white)
+                    }
+                    .frame(width: pw, height: ph)
+                    .offset(x: CGFloat(pane.x) * w, y: CGFloat(pane.y) * h)
+                    .onTapGesture {
+                        onPick?(index)
+                    }
                 }
             }
         }
         .aspectRatio(16 / 9, contentMode: .fit)
-        .frame(height: 83)
         .overlay(Rectangle().stroke(selected ? Color.white : EivizTheme.stroke, lineWidth: selected ? 2 : 1))
     }
 }

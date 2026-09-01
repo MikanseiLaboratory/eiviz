@@ -41,6 +41,17 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack {
+            Button(L10n.t("chrome.new")) { mixer.newSession() }
+            Button(L10n.t("chrome.save")) { mixer.saveSession() }
+            Button(L10n.t("chrome.load")) { mixer.loadSession() }
+            Menu {
+                ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
+                    Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
+                }
+            } label: {
+                Text("▾")
+            }
+            Spacer()
             Text(L10n.t("chrome.mixingUnit"))
             Picker("", selection: $mixer.selectedUnitId) {
                 ForEach(mixer.session.units) { unit in
@@ -54,19 +65,7 @@ struct ContentView: View {
                 mixer.showMixingUnit = true
             }
             Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
-            Menu {
-                Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
-                Menu(L10n.t("chrome.openRecent")) {
-                    ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
-                        Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
-                    }
-                }
-            } label: {
-                Text(L10n.t("chrome.open"))
-            }
-            Spacer()
-            Button(L10n.t("chrome.save")) { mixer.saveSession() }
-            Button(L10n.t("chrome.load")) { mixer.loadSession() }
+            Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
             Button(L10n.t("chrome.overlay")) { mixer.showOverlay = true }
             Menu {
                 ForEach(mixer.session.multiviews) { layout in

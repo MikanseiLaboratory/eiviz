@@ -14,17 +14,18 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal">
+                    <Button Content="{Binding [chrome.new], Source={x:Static i18n:Loc.Source}}" Width="64" Click="NewSession_Click"/>
+                    <Button Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
+                    <Button Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
+                    <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <TextBlock Text="{Binding [chrome.mixingUnit], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox x:Name="UnitBox" Width="280" SelectionChanged="UnitBox_SelectionChanged"/>
                     <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
                     <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
-                    <Button x:Name="OpenRecentButton" Content="▾" Width="22" Margin="0,0,0,0" Click="OpenRecent_Click"/>
-                </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Click="SaveSession_Click"/>
-                    <Button Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
                     <Button Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="OpenOverlay_Click"/>
                     <Button x:Name="MultiviewButton" Content="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="OpenMultiview_Click"/>
                     <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
