@@ -16,6 +16,8 @@ mod media;
 pub use media::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod media_macos;
+#[cfg(target_os = "macos")]
+pub use media_macos::enumerate_video_captures;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 #[cfg(target_os = "macos")]
@@ -32,11 +34,11 @@ mod upload;
 pub use abi::{
     AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
     GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
-    NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc,
-    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
+    NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW,
+    OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
+    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
+    VideoCaptureInfo,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 
@@ -1281,6 +1283,34 @@ pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_enum_captures(
+    out: *mut VideoCaptureInfo,
+    cap: u32,
+) -> i32 {
+    if out.is_null() || cap == 0 {
+        return 0;
+    }
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = dest;
+        return 0;
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let devices = enumerate_video_captures();
+        let n = devices.len().min(dest.len());
+        for (slot, (name, id)) in dest.iter_mut().zip(devices).take(n) {
+            *slot = VideoCaptureInfo {
+                id: write_fixed(&id),
+                name: write_fixed(&name),
+            };
+        }
+        n as i32
+    }
 }
 
 #[unsafe(no_mangle)]

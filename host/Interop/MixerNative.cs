@@ -164,6 +164,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_start", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int VideoStart(ulong id, string path, uint capture, uint format);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_enum_captures")]
+    internal static unsafe partial int VideoEnumCaptures(MixerVideoCaptureInfo* devices, uint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_playing")]
     internal static partial int VideoSetPlaying(ulong id, uint playing);
 
@@ -320,6 +323,36 @@ internal static partial class MixerNative
         }
     }
 
+    internal static List<(string Name, string Id)> EnumVideoCaptures()
+    {
+        var list = new List<(string, string)>();
+        var buffer = new MixerVideoCaptureInfo[64];
+        unsafe
+        {
+            fixed (MixerVideoCaptureInfo* ptr = buffer)
+            {
+                var n = VideoEnumCaptures(ptr, (uint)buffer.Length);
+                for (var i = 0; i < n && i < buffer.Length; i++)
+                {
+                    var current = ptr + i;
+                    var id = ReadFixedUtf8(current->Id, 512);
+                    var name = ReadFixedUtf8(current->Name, 256);
+                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                        list.Add((name, id));
+                }
+            }
+        }
+        return list;
+    }
+
+    private static unsafe string ReadFixedUtf8(byte* ptr, int cap)
+    {
+        var n = 0;
+        while (n < cap && ptr[n] != 0)
+            n++;
+        return n == 0 ? "" : Encoding.UTF8.GetString(new ReadOnlySpan<byte>(ptr, n));
+    }
+
     internal static bool TryCopyVideoInfo(ulong id, out MixerVideoInfo info)
     {
         unsafe
@@ -347,6 +380,13 @@ internal struct MixerVideoInfo
     public uint IsFile;
     public long PositionHns;
     public long DurationHns;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MixerVideoCaptureInfo
+{
+    public fixed byte Id[512];
+    public fixed byte Name[256];
 }
 
 [StructLayout(LayoutKind.Sequential)]

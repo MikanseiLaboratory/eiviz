@@ -580,3 +580,8 @@ struct AudioDevice: Identifiable, Hashable {
     var id: String
     var name: String
 }
+
+struct VideoCaptureDevice: Identifiable, Hashable {
+    var id: String
+    var name: String
+}

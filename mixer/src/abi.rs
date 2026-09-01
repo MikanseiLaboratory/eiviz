@@ -90,6 +90,22 @@ pub struct MixerVideoInfo {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+pub struct VideoCaptureInfo {
+    pub id: [u8; 512],
+    pub name: [u8; 256],
+}
+
+impl Default for VideoCaptureInfo {
+    fn default() -> Self {
+        Self {
+            id: [0; 512],
+            name: [0; 256],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct MixerRebarInfo {
     pub available: u32,
     pub active: u32,

@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import EivizMixer
 import SwiftUI
 import UniformTypeIdentifiers
@@ -406,7 +405,7 @@ struct AddInputView: View {
     @State private var ndiAddress = ""
     @State private var omtList: [String] = []
     @State private var ndiList: [String] = []
-    @State private var uvcList: [AVCaptureDevice] = []
+    @State private var uvcList: [VideoCaptureDevice] = []
     @State private var selectedUvc: String = ""
     @State private var r: Double = 220
     @State private var g: Double = 32
@@ -508,8 +507,8 @@ struct AddInputView: View {
                 .foregroundStyle(EivizTheme.dim)
         default:
             Button("Refresh devices") { refreshUvc() }
-            List(uvcList, id: \.uniqueID, selection: $selectedUvc) { device in
-                Text(device.localizedName).tag(device.uniqueID)
+            List(uvcList, id: \.id, selection: $selectedUvc) { device in
+                Text(device.name).tag(device.id)
             }
         }
     }
@@ -547,12 +546,7 @@ struct AddInputView: View {
     }
 
     private func refreshUvc() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .external],
-            mediaType: .video,
-            position: .unspecified
-        )
-        uvcList = session.devices
+        uvcList = MixerFFI.videoCaptures()
     }
 
     private func loadEditing() {
@@ -599,7 +593,7 @@ struct AddInputView: View {
         case "NDI®":
             return ndiAddress
         default:
-            return uvcList.first { $0.uniqueID == selectedUvc }?.localizedName ?? "Video Capture"
+            return uvcList.first { $0.id == selectedUvc }?.name ?? "Video Capture"
         }
     }
 

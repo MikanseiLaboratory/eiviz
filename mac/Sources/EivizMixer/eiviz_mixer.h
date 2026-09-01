@@ -91,6 +91,11 @@ typedef struct EivizVideoInfo {
     int64_t duration_hns;
 } EivizVideoInfo;
 
+typedef struct EivizVideoCaptureInfo {
+    uint8_t id[512];
+    uint8_t name[256];
+} EivizVideoCaptureInfo;
+
 typedef struct EivizAudioPeak {
     uint64_t source_id;
     float left;
@@ -165,6 +170,7 @@ int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint3
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
 int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format);
+int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
 int32_t mixer_video_set_loop(uint64_t id, uint32_t looping);
 int32_t mixer_video_seek(uint64_t id, int64_t hns);

@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Eiviz.Host.Interop;
-using Eiviz.Host.Media;
 using Microsoft.Win32;
 
 namespace Eiviz.Host.Dialogs;
@@ -219,8 +218,8 @@ public partial class AddInputWindow : Window
     {
         try
         {
-            UvcList.ItemsSource = MfFramePump.EnumerateCameras()
-                .Select(item => new CameraItem(item.Name, item.Link))
+            UvcList.ItemsSource = MixerNative.EnumVideoCaptures()
+                .Select(item => new CameraItem(item.Name, item.Id))
                 .ToArray();
         }
         catch (Exception ex)

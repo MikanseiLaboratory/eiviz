@@ -447,6 +447,42 @@ int64_t eiviz_av_duration_hns(const EivizAvPump *pump) {
     return owned.durationHns;
 }
 
+static void copy_fixed(char *dest, size_t cap, NSString *text) {
+    if (!dest || cap == 0) {
+        return;
+    }
+    const char *src = text.UTF8String ?: "";
+    strncpy(dest, src, cap - 1);
+    dest[cap - 1] = 0;
+}
+
+int eiviz_av_enum_captures(EivizAvCaptureInfo *out, uint32_t cap) {
+    if (!out || cap == 0) {
+        return 0;
+    }
+    AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession
+        discoverySessionWithDeviceTypes:@[
+            AVCaptureDeviceTypeBuiltInWideAngleCamera,
+            AVCaptureDeviceTypeExternal
+        ]
+        mediaType:AVMediaTypeVideo
+        position:AVCaptureDevicePositionUnspecified];
+    uint32_t n = 0;
+    for (AVCaptureDevice *device in session.devices) {
+        if (n >= cap) {
+            break;
+        }
+        memset(&out[n], 0, sizeof(out[n]));
+        copy_fixed(out[n].id, sizeof(out[n].id), device.uniqueID);
+        copy_fixed(out[n].name, sizeof(out[n].name), device.localizedName);
+        if (out[n].id[0] == 0 || out[n].name[0] == 0) {
+            continue;
+        }
+        n++;
+    }
+    return (int)n;
+}
+
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out) {
     if (!pump || !out) {
         return EIVIZ_AV_ERR;

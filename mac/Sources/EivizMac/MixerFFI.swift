@@ -49,6 +49,20 @@ enum MixerFFI {
         }
     }
 
+    static func videoCaptures() -> [VideoCaptureDevice] {
+        var buffer = [EivizVideoCaptureInfo](repeating: zeroed(), count: 64)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_video_enum_captures(ptr.baseAddress, UInt32(ptr.count))
+        }
+        guard n > 0 else { return [] }
+        return buffer.prefix(Int(n)).compactMap { info in
+            let id = cString(info.id)
+            let name = cString(info.name)
+            guard !id.isEmpty, !name.isEmpty else { return nil }
+            return VideoCaptureDevice(id: id, name: name)
+        }
+    }
+
     static func audioDevices() -> [AudioDevice] {
         var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

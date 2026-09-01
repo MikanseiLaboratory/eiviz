@@ -27,8 +27,14 @@ typedef struct EivizAvPump EivizAvPump;
 extern "C" {
 #endif
 
+typedef struct EivizAvCaptureInfo {
+    char id[512];
+    char name[256];
+} EivizAvCaptureInfo;
+
 EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns);
 EivizAvPump *eiviz_av_open_capture(const char *device_id);
+int eiviz_av_enum_captures(EivizAvCaptureInfo *out, uint32_t cap);
 void eiviz_av_close(EivizAvPump *pump);
 int64_t eiviz_av_duration_hns(const EivizAvPump *pump);
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out);
