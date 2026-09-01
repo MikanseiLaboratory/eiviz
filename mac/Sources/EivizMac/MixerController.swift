@@ -61,10 +61,12 @@ final class MixerController: ObservableObject {
     func boot() {
         guard !booted else { return }
         guard mixer_ping() == 0x4549_5649 else {
-            errorText = "The Rust mixer ABI does not match this host."
+            presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
         }
-        fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
+        guard fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+            return
+        }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
@@ -91,7 +93,6 @@ final class MixerController: ObservableObject {
         guard let id = selectedInputId,
               let input = session.inputs.first(where: { $0.id == id })
         else {
-            errorText = "Select an Input to preview."
             let alert = NSAlert()
             alert.messageText = "Select an Input to preview."
             alert.alertStyle = .informational
@@ -339,7 +340,7 @@ final class MixerController: ObservableObject {
     func setMix(_ value: Float, unitId: UInt64) {
         var state = currentState(unitId)
         state.mix = value
-        fail(mixer_unit_set_state(unitId, &state), "T-bar")
+        _ = mixer_unit_set_state(unitId, &state)
     }
 
     func finishTBar() {
@@ -748,7 +749,7 @@ final class MixerController: ObservableObject {
         session.settings.lastSessionPath = nil
         do {
             let json = try SessionFile.encode(session)
-            MixerFFI.withCString(url.path) { path in
+            let saved = MixerFFI.withCString(url.path) { path in
                 json.withUnsafeBytes { ptr in
                     fail(
                         mixer_session_save(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
@@ -756,9 +757,11 @@ final class MixerController: ObservableObject {
                     )
                 }
             }
-            AppPrefs.shared.rememberSession(url.path)
+            if saved {
+                AppPrefs.shared.rememberSession(url.path)
+            }
         } catch {
-            errorText = error.localizedDescription
+            presentError(L10n.error("Save session", 3), title: L10n.t("action.Save session"))
         }
     }
 
@@ -791,7 +794,7 @@ final class MixerController: ObservableObject {
             replaceSession(try SessionFile.decode(Data(buffer.prefix(Int(n)))))
             AppPrefs.shared.rememberSession(url.path)
         } catch {
-            errorText = L10n.error("Load session", 3)
+            presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
         }
     }
 
@@ -803,7 +806,9 @@ final class MixerController: ObservableObject {
         session = loaded
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
         mix = 0
-        fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization")
+        guard fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+            return
+        }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
@@ -974,11 +979,11 @@ final class MixerController: ObservableObject {
                 if await AVCaptureDevice.requestAccess(for: .video) {
                     startVideoInput(id: id, path: deviceId, capture: 1, loop: false, playing: true)
                 } else {
-                    errorText = "Camera access was denied."
+                    presentError(L10n.t("error.cameraDenied"), title: L10n.t("action.UVC start"))
                 }
             }
         default:
-            errorText = "Camera access was denied."
+            presentError(L10n.t("error.cameraDenied"), title: L10n.t("action.UVC start"))
         }
     }
 
@@ -1211,14 +1216,11 @@ final class MixerController: ObservableObject {
         presentError(message, title: L10n.t(editing ? "msg.editInput" : "msg.addInput"))
     }
 
-    private func fail(_ code: Int32, _ action: String) {
-        if let message = MixerFFI.check(code, action) {
-            if action == "Still load" || action == "Video start" {
-                presentInputError(message)
-            } else {
-                errorText = message
-            }
-        }
+    @discardableResult
+    private func fail(_ code: Int32, _ action: String) -> Bool {
+        guard let message = MixerFFI.check(code, action) else { return true }
+        presentError(message, title: L10n.t("action.\(action)"))
+        return false
     }
 }
 
