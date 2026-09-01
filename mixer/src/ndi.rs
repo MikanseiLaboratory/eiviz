@@ -175,7 +175,7 @@ impl Drop for NdiReceiver {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            crate::diag::join_timeout(join, Duration::from_secs(2), "ndi-recv");
         }
     }
 }
@@ -188,7 +188,7 @@ impl NdiSender {
     pub fn start(name: &str) -> Result<Self, String> {
         let ndi = runtime()?;
         let options = SenderOptions::builder(name)
-            .clock_video(true)
+            .clock_video(false)
             .clock_audio(true)
             .build();
         let sender = Sender::new(ndi, &options).map_err(|error| error.to_string())?;

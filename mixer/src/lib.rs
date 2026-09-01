@@ -7,6 +7,7 @@ mod compose;
 mod convert;
 mod delay;
 mod device;
+mod diag;
 mod labels;
 mod generator_audio;
 #[cfg(windows)]
@@ -388,11 +389,82 @@ fn mixer_slot() -> &'static Mutex<Option<Mixer>> {
 }
 
 fn with_mixer<T>(f: impl FnOnce(&Mixer) -> T) -> Result<T, i32> {
+    let start = Instant::now();
     let slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    match slot.as_ref() {
+    let result = match slot.as_ref() {
         Some(mixer) => Ok(f(mixer)),
         None => Err(ERR_NOT_CREATED),
-    }
+    };
+    crate::diag::lock_held("mixer_slot", start, result)
+}
+
+fn report_io(error: impl Into<String>) -> i32 {
+    let error = error.into();
+    crate::diag::error(&error);
+    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
+    ERR_IO
+}
+
+fn insert_receiver(id: u64, receiver: LiveReceiver) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .receivers
+            .insert(id, receiver);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn insert_video(id: u64, pump: VideoPump) -> i32 {
+    with_mixer(|mixer| {
+        mixer.shared.lock().expect("shared").videos.insert(id, pump);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+struct DetachedSource {
+    receiver: Option<LiveReceiver>,
+    #[cfg(any(windows, target_os = "macos"))]
+    video: Option<VideoPump>,
+    uploads: Arc<Mutex<UploadStore>>,
+}
+
+fn detach_source(id: u64) -> Result<DetachedSource, i32> {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        #[cfg(any(windows, target_os = "macos"))]
+        let video = shared.videos.remove(&id);
+        let receiver = shared.receivers.remove(&id);
+        shared.generators.remove(&id);
+        shared.tone_phase.remove(&id);
+        shared.live_save.remove(&id);
+        let uploads = shared.uploads.clone();
+        DetachedSource {
+            receiver,
+            #[cfg(any(windows, target_os = "macos"))]
+            video,
+            uploads,
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn take_source_uploads(id: u64) -> Result<Arc<Mutex<UploadStore>>, i32> {
+    let (video, receiver, uploads) = with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let video = shared.videos.remove(&id);
+        let receiver = shared.receivers.remove(&id);
+        let uploads = shared.uploads.clone();
+        (video, receiver, uploads)
+    })?;
+    drop(receiver);
+    drop(video);
+    Ok(uploads)
 }
 
 /// Send a GPU command that replies, without holding the mixer slot while waiting.
@@ -465,6 +537,8 @@ fn prepare_surface_off_slot(
 /// Creates the OS-fixed wgpu device (DX12 on Windows, Metal on macOS).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+    crate::diag::init();
+    crate::diag::info("mixer_create");
     if fps_num == 0 || fps_den == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -584,24 +658,38 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
+    crate::diag::info("mixer_destroy begin");
     let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
         return;
     };
     mixer.stop.store(true, Ordering::Relaxed);
-    let audio = mixer.shared.lock().expect("shared").audio.clone();
+    let (audio, receivers, videos) = {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let audio = shared.audio.clone();
+        let receivers = std::mem::take(&mut shared.receivers);
+        #[cfg(any(windows, target_os = "macos"))]
+        let videos = std::mem::take(&mut shared.videos);
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let videos = ();
+        (audio, receivers, videos)
+    };
     audio.shutdown();
+    drop(receivers);
+    drop(videos);
     let _ = mixer.cmds.send(GpuCmd::Shutdown);
     if let Some(join) = mixer.render.take() {
-        let _ = join.join();
+        crate::diag::join_timeout(join, Duration::from_secs(2), "render");
     }
     let _ = mixer.send_tx.send(SendCmd::Shutdown);
     if let Some(join) = mixer.send.take() {
-        let _ = join.join();
+        crate::diag::join_timeout(join, Duration::from_secs(2), "send");
     }
+    crate::diag::info("mixer_destroy end");
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_ping() -> u32 {
+    crate::diag::init();
     0x4549_5649
 }
 
@@ -1238,58 +1326,42 @@ pub unsafe extern "C" fn mixer_video_start(
         })
         .unwrap_or_else(|code| code);
     }
+    crate::diag::info(&format!("video_start id={id}"));
     #[cfg(target_os = "macos")]
     {
         let _ = format;
-        return with_mixer(|mixer| {
-            let uploads = {
-                let mut shared = mixer.shared.lock().expect("shared");
-                let previous = shared.videos.remove(&id);
-                drop(shared.receivers.remove(&id));
-                let uploads = shared.uploads.clone();
-                drop(shared);
-                drop(previous);
-                uploads
-            };
-            match VideoPump::start(id, path, capture != 0, uploads) {
-                Ok(pump) => {
-                    mixer.shared.lock().expect("shared").videos.insert(id, pump);
-                    OK
-                }
-                Err(error) => {
-                    set_error(&mixer.telemetry, error);
-                    ERR_IO
-                }
-            }
-        })
-        .unwrap_or_else(|code| code);
+        let uploads = match take_source_uploads(id) {
+            Ok(uploads) => uploads,
+            Err(code) => return code,
+        };
+        return match VideoPump::start(id, path, capture != 0, uploads) {
+            Ok(pump) => insert_video(id, pump),
+            Err(error) => report_io(error),
+        };
     }
     #[cfg(windows)]
-    with_mixer(|mixer| {
-        let (uploads, gpu) = {
+    {
+        let (uploads, gpu, previous_video, previous_recv) = match with_mixer(|mixer| {
             let mut shared = mixer.shared.lock().expect("shared");
-            let previous = shared.videos.remove(&id);
-            drop(shared.receivers.remove(&id));
+            let previous_video = shared.videos.remove(&id);
+            let previous_recv = shared.receivers.remove(&id);
             let uploads = shared.uploads.clone();
-            let Some(gpu) = shared.gpu_video.clone() else {
-                return ERR_DEVICE;
-            };
-            drop(shared);
-            drop(previous);
-            (uploads, gpu)
+            let gpu = shared.gpu_video.clone();
+            (uploads, gpu, previous_video, previous_recv)
+        }) {
+            Ok(value) => value,
+            Err(code) => return code,
         };
-        match VideoPump::start(id, path, capture != 0, format, uploads, gpu) {
-            Ok(pump) => {
-                mixer.shared.lock().expect("shared").videos.insert(id, pump);
-                OK
-            }
-            Err(error) => {
-                set_error(&mixer.telemetry, error);
-                ERR_IO
-            }
-        }
-    })
-    .unwrap_or_else(|code| code)
+        drop(previous_recv);
+        drop(previous_video);
+        let Some(gpu) = gpu else {
+            return ERR_DEVICE;
+        };
+        return match VideoPump::start(id, path, capture != 0, format, uploads, gpu) {
+            Ok(pump) => insert_video(id, pump),
+            Err(error) => report_io(error),
+        };
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1415,40 +1487,41 @@ pub unsafe extern "C" fn mixer_omt_connect(
         .unwrap_or_default()
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
-    with_mixer(|mixer| {
-        let (uploads, gpu) = {
-            let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(any(windows, target_os = "macos"))]
-            let previous = shared.videos.remove(&id);
-            drop(shared.receivers.remove(&id));
-            let uploads = shared.uploads.clone();
-            let gpu = if use_gpu != 0 {
-                Some(shared.omt_gpu.clone())
-            } else {
-                None
-            };
-            drop(shared);
-            #[cfg(any(windows, target_os = "macos"))]
-            drop(previous);
-            (uploads, gpu)
+    crate::diag::info(&format!("omt_connect id={id}"));
+    let taken = match with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        #[cfg(any(windows, target_os = "macos"))]
+        let previous_video = shared.videos.remove(&id);
+        let previous_recv = shared.receivers.remove(&id);
+        let uploads = shared.uploads.clone();
+        let gpu = if use_gpu != 0 {
+            Some(shared.omt_gpu.clone())
+        } else {
+            None
         };
-        match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
-            Ok(receiver) => {
-                mixer
-                    .shared
-                    .lock()
-                    .expect("shared")
-                    .receivers
-                    .insert(id, LiveReceiver::Omt(receiver));
-                OK
-            }
-            Err(error) => {
-                set_error(&mixer.telemetry, error);
-                ERR_IO
-            }
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            (uploads, gpu, previous_recv, previous_video)
         }
-    })
-    .unwrap_or_else(|code| code)
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            (uploads, gpu, previous_recv)
+        }
+    }) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    #[cfg(any(windows, target_os = "macos"))]
+    let (uploads, gpu, previous_recv, previous_video) = taken;
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let (uploads, gpu, previous_recv) = taken;
+    drop(previous_recv);
+    #[cfg(any(windows, target_os = "macos"))]
+    drop(previous_video);
+    match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
+        Ok(receiver) => insert_receiver(id, LiveReceiver::Omt(receiver)),
+        Err(error) => report_io(error),
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1475,37 +1548,27 @@ pub unsafe extern "C" fn mixer_ndi_connect(
         })
         .unwrap_or_else(|code| code);
     }
+    crate::diag::info(&format!("ndi_connect id={id}"));
     #[cfg(any(windows, target_os = "macos"))]
-    with_mixer(|mixer| {
-        let (uploads, gpu) = {
+    {
+        let (uploads, gpu, previous_video, previous_recv) = match with_mixer(|mixer| {
             let mut shared = mixer.shared.lock().expect("shared");
-            #[cfg(any(windows, target_os = "macos"))]
-            let previous = shared.videos.remove(&id);
-            drop(shared.receivers.remove(&id));
+            let previous_video = shared.videos.remove(&id);
+            let previous_recv = shared.receivers.remove(&id);
             let uploads = shared.uploads.clone();
             let gpu = shared.gpu_ingest.clone();
-            drop(shared);
-            #[cfg(any(windows, target_os = "macos"))]
-            drop(previous);
-            (uploads, gpu)
+            (uploads, gpu, previous_video, previous_recv)
+        }) {
+            Ok(value) => value,
+            Err(code) => return code,
         };
-        match NdiReceiver::start(id, address, uploads, Some(gpu), depth, low_bandwidth) {
-            Ok(receiver) => {
-                mixer
-                    .shared
-                    .lock()
-                    .expect("shared")
-                    .receivers
-                    .insert(id, LiveReceiver::Ndi(receiver));
-                OK
-            }
-            Err(error) => {
-                set_error(&mixer.telemetry, error);
-                ERR_IO
-            }
-        }
-    })
-    .unwrap_or_else(|code| code)
+        drop(previous_recv);
+        drop(previous_video);
+        return match NdiReceiver::start(id, address, uploads, Some(gpu), depth, low_bandwidth) {
+            Ok(receiver) => insert_receiver(id, LiveReceiver::Ndi(receiver)),
+            Err(error) => report_io(error),
+        };
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1566,6 +1629,7 @@ pub unsafe extern "C" fn mixer_output_add(
         .to_str()
         .unwrap_or_default()
         .to_string();
+    crate::diag::info(&format!("output_add id={output_id} transport={transport}"));
     if transport == OUT_DECKLINK {
         let _ = with_mixer(|mixer| {
             set_error(&mixer.telemetry, "DeckLink output is not linked in this build");
@@ -1808,25 +1872,17 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
-    with_mixer(|mixer| {
-        let uploads = {
-            let mut shared = mixer.shared.lock().expect("shared");
+    crate::diag::info(&format!("destroy_source id={id}"));
+    match detach_source(id) {
+        Ok(taken) => {
+            drop(taken.receiver);
             #[cfg(any(windows, target_os = "macos"))]
-            let previous = shared.videos.remove(&id);
-            shared.receivers.remove(&id);
-            shared.generators.remove(&id);
-            shared.tone_phase.remove(&id);
-            shared.live_save.remove(&id);
-            let uploads = shared.uploads.clone();
-            drop(shared);
-            #[cfg(any(windows, target_os = "macos"))]
-            drop(previous);
-            uploads
-        };
-        uploads.lock().expect("uploads").unregister(id);
-        OK
-    })
-    .unwrap_or_else(|code| code)
+            drop(taken.video);
+            taken.uploads.lock().expect("uploads").unregister(id);
+            OK
+        }
+        Err(code) => code,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2517,7 +2573,21 @@ fn render_loop(
                 GpuCmd::Shutdown => return,
             }
         }
-        presenters.reconfigure_pending(&device);
+        if crate::diag::take_gpu_fault() {
+            crate::diag::warn("gpu fault; invalidating presenters");
+            presenters.invalidate_all();
+            set_error(&telemetry, "GPU device fault");
+        }
+        let frame = panic::catch_unwind(AssertUnwindSafe(|| {
+            presenters.reconfigure_pending(&device);
+        }));
+        if frame.is_err() {
+            crate::diag::error("presenter reconfigure panicked");
+            presenters.invalidate_all();
+            set_error(&telemetry, "presenter reconfigure panicked");
+            thread::sleep(frame_dt);
+            continue;
+        }
         let (buffer_frames, use_rebar, direct_sample) = {
             let guard = shared.lock().expect("shared");
             let use_rebar = guard.rebar.available && guard.rebar_optimization;
@@ -2663,16 +2733,23 @@ fn render_loop(
             let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
             let phase = ((secs * 0.12) % 1.0) as f32;
             let phase_y = ((secs * 0.07) % 1.0) as f32;
-            composer.begin_frame();
-            composer.ensure_builtins(&device);
-            composer.sync_generators(&generators, phase, phase_y);
-            if !skip_compose {
-                let snaps = {
-                    let mut upload_guard = uploads.lock().expect("uploads");
-                    upload_guard.advance_playout(&used_uploads);
-                    upload_guard.snapshot(&used_uploads)
-                };
-                composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
+            let composed = panic::catch_unwind(AssertUnwindSafe(|| {
+                composer.begin_frame();
+                composer.ensure_builtins(&device);
+                composer.sync_generators(&generators, phase, phase_y);
+                if !skip_compose {
+                    let snaps = {
+                        let mut upload_guard = uploads.lock().expect("uploads");
+                        upload_guard.advance_playout(&used_uploads);
+                        upload_guard.snapshot(&used_uploads)
+                    };
+                    composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
+                }
+            }));
+            if composed.is_err() {
+                crate::diag::error("compose panicked");
+                set_error(&telemetry, "compose panicked");
+                presenters.invalidate_all();
             }
             let need_prv = outputs_snap
                 .iter()
@@ -2681,14 +2758,22 @@ fn render_loop(
                 .iter()
                 .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
-            if let Err(error) =
-                presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
-                    frame_delay
-                        .view(unit_id, kind)
-                        .or_else(|| composer.unit_view(unit_id, kind))
-                })
+            if panic::catch_unwind(AssertUnwindSafe(|| {
+                if let Err(error) =
+                    presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                        frame_delay
+                            .view(unit_id, kind)
+                            .or_else(|| composer.unit_view(unit_id, kind))
+                    })
+                {
+                    set_error(&telemetry, error);
+                }
+            }))
+            .is_err()
             {
-                set_error(&telemetry, error);
+                crate::diag::error("present unit buses panicked");
+                set_error(&telemetry, "present panicked");
+                presenters.invalidate_all();
             }
             {
                 let mut encoder =
@@ -2890,15 +2975,23 @@ fn render_loop(
                 }
             }
             if presenters.any_monitor_due(frame_i) {
-                if let Err(error) =
-                    presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
-                        frame_delay
-                            .view_for_source(source_id)
-                            .or_else(|| composer.view_for_source(source_id))
-                            .map(|view| (view, composer.source_is_packed(source_id)))
-                    })
+                if panic::catch_unwind(AssertUnwindSafe(|| {
+                    if let Err(error) =
+                        presenters.present_monitors(&device, present_epoch, frame_i, |source_id| {
+                            frame_delay
+                                .view_for_source(source_id)
+                                .or_else(|| composer.view_for_source(source_id))
+                                .map(|view| (view, composer.source_is_packed(source_id)))
+                        })
+                    {
+                        set_error(&telemetry, error);
+                    }
+                }))
+                .is_err()
                 {
-                    set_error(&telemetry, error);
+                    crate::diag::error("present monitors panicked");
+                    set_error(&telemetry, "present monitors panicked");
+                    presenters.invalidate_all();
                 }
             }
             audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
@@ -3207,7 +3300,18 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
         loop {
             match rx.try_recv() {
                 Ok(SendCmd::Shutdown) => return,
-                Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu),
+                Ok(cmd) => {
+                    if stop.load(Ordering::Relaxed) {
+                        if let SendCmd::GpuVideo { busy, .. } = &cmd {
+                            busy.store(false, Ordering::Release);
+                        }
+                        if matches!(cmd, SendCmd::Shutdown) {
+                            return;
+                        }
+                        continue;
+                    }
+                    apply_send_cmd(&mut senders, cmd, &omt_gpu);
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }

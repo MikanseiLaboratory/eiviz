@@ -155,6 +155,21 @@ impl Presenters {
             .any(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
     }
 
+    pub fn invalidate_all(&mut self) {
+        for presenter in self.by_key.values_mut() {
+            presenter.ready = false;
+            presenter.bind = None;
+            presenter.bind_key = 0;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+        }
+        for presenter in self.monitors.values_mut() {
+            presenter.ready = false;
+            presenter.bind = None;
+            presenter.bind_key = 0;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+        }
+    }
+
     pub fn present_unit_buses(
         &mut self,
         device: &GpuDevice,
@@ -339,6 +354,7 @@ pub(crate) fn prepare_surface(
     config.format = pick_surface_format(&caps.formats);
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
+    crate::diag::info(&format!("surface present_mode={:?}", config.present_mode));
     configure_surface(device, &surface, &config)?;
     Ok(PreparedSurface { surface, config })
 }
@@ -437,10 +453,9 @@ fn configure_surface(
 }
 
 fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
-    const PREFERRED: [wgpu::PresentMode; 4] = [
+    const PREFERRED: [wgpu::PresentMode; 3] = [
         wgpu::PresentMode::Mailbox,
-        wgpu::PresentMode::Immediate,
-        wgpu::PresentMode::AutoNoVsync,
+        wgpu::PresentMode::Fifo,
         wgpu::PresentMode::FifoRelaxed,
     ];
     PREFERRED
@@ -706,4 +721,25 @@ fn make_present_pipeline(
             multiview_mask: None,
             cache: None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_present_mode;
+
+    #[test]
+    fn prefers_fifo_over_immediate() {
+        let modes = [wgpu::PresentMode::Fifo, wgpu::PresentMode::Immediate];
+        assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Fifo);
+    }
+
+    #[test]
+    fn prefers_mailbox_when_available() {
+        let modes = [
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Fifo,
+            wgpu::PresentMode::Immediate,
+        ];
+        assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Mailbox);
+    }
 }

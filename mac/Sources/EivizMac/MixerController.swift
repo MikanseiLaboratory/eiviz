@@ -518,19 +518,22 @@ final class MixerController: ObservableObject {
         }
         _ = mixer_output_remove(entry.id)
         guard entry.enabled else { return }
-        MixerFFI.withCString(entry.name) { name in
-            fail(
-                mixer_output_add(
-                    entry.id,
-                    entry.transport.rawValueU32,
-                    name,
-                    entry.sourceKind.rawValueU32,
-                    entry.sourceId,
-                    entry.unitId,
-                    entry.useGpu ? 1 : 0
-                ),
-                "Add output"
-            )
+        let id = entry.id
+        let transport = entry.transport.rawValueU32
+        let name = entry.name
+        let sourceKind = entry.sourceKind.rawValueU32
+        let sourceId = entry.sourceId
+        let unitId = entry.unitId
+        let useGpu: UInt32 = entry.useGpu ? 1 : 0
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            MixerFFI.withCString(name) { cName in
+                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu)
+                if code != 0 {
+                    DispatchQueue.main.async {
+                        _ = self?.fail(code, "Add output")
+                    }
+                }
+            }
         }
     }
 

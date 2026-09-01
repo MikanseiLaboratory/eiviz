@@ -887,7 +887,7 @@ public partial class MainWindow : Window
             case InputKind.Still:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
                     throw new InvalidOperationException(Loc.MissingFile("Still load"));
-                MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, dialog.ResultPath!), "Still load");
+                Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
                 break;
             case InputKind.Video:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))

@@ -4,6 +4,10 @@ import SwiftUI
 struct EivizMacApp: App {
     @StateObject private var mixer = MixerController()
 
+    init() {
+        HostLog.install()
+    }
+
     var body: some Scene {
         WindowGroup("eiviz") {
             ContentView()
