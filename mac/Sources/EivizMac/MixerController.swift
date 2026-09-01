@@ -365,6 +365,19 @@ final class MixerController: ObservableObject {
     func setMix(_ value: Float, unitId: UInt64) {
         var state = currentState(unitId)
         state.mix = value
+        let preset = tbarPreset(for: unit(for: unitId))
+        state.transition_kind = preset.kind
+        state.transition_easing = preset.easing
+        state.transition_direction = preset.direction
+        state.dip_r = preset.dipR
+        state.dip_g = preset.dipG
+        state.dip_b = preset.dipB
+        state.dip_a = preset.dipA <= 0 ? 1 : preset.dipA
+        if let wgsl = preset.customWgsl, !wgsl.isEmpty {
+            wgsl.withCString { _ = mixer_unit_set_custom_wgsl(unitId, $0) }
+        } else {
+            _ = mixer_unit_set_custom_wgsl(unitId, nil)
+        }
         _ = mixer_unit_set_state(unitId, &state)
     }
 
@@ -773,7 +786,7 @@ final class MixerController: ObservableObject {
         desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
         desc.opacity = slot.opacity
         desc.z = slot.z
-        desc.audio_follow = 1
+        desc.audio_follow = slot.audioFollow ? 1 : 0
         let ms = slot.durationUnit == EIVIZ_DURATION_MS
             ? max(1, slot.durationValue)
             : unit.durationMs(slot.durationValue)
@@ -1076,6 +1089,7 @@ final class MixerController: ObservableObject {
             var desc = MixerFFI.emptyOverlay()
             desc.source_id = layer.inputId
             desc.rect = EivizRect(x: layer.x, y: layer.y, width: layer.width, height: layer.height)
+            desc.crop = EivizRect(x: layer.cropX, y: layer.cropY, width: layer.cropWidth, height: layer.cropHeight)
             desc.opacity = layer.opacity
             desc.z = layer.z
             desc.audio_follow = layer.audioFollow ? 1 : 0
@@ -1123,7 +1137,7 @@ final class MixerController: ObservableObject {
             desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
             desc.opacity = slot.opacity
             desc.z = slot.z
-            desc.audio_follow = 1
+            desc.audio_follow = slot.audioFollow ? 1 : 0
             MixerFFI.setOverlay(&state, index: index, desc)
         }
     }

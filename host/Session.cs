@@ -355,6 +355,10 @@ public sealed class SceneLayer
     public bool AudioFollow { get; set; } = true;
     public bool Locked { get; set; }
     public bool SizeLinked { get; set; } = true;
+    public float CropX { get; set; }
+    public float CropY { get; set; }
+    public float CropWidth { get; set; } = 1;
+    public float CropHeight { get; set; } = 1;
 }
 
 public sealed class SceneEntry
@@ -383,6 +387,14 @@ public sealed class TransitionPreset
     public float DipA { get; set; } = 1;
     public string? CustomWgsl { get; set; }
     public string Label => MixerNative.TransitionLabel(Kind);
+
+    public bool HasDuration => Kind != MixerNative.TransitionCut;
+    public bool HasEasing => HasDuration;
+    public bool HasDirection =>
+        Kind is MixerNative.TransitionWipe or MixerNative.TransitionSlide
+            or MixerNative.TransitionPush or MixerNative.TransitionBlinds;
+    public bool HasDipColor => Kind is MixerNative.TransitionDip or MixerNative.TransitionPush;
+    public bool HasCustomWgsl => Kind == MixerNative.TransitionCustom;
 
     public uint DurationMsFor(MixingUnitEntry unit) =>
         DurationUnit == MixerNative.DurationMs
@@ -418,6 +430,7 @@ public sealed class OverlaySlot
     public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
     public uint DurationValue { get; set; } = 15;
     public uint DurationUnit { get; set; }
+    public bool AudioFollow { get; set; } = true;
 }
 
 public sealed class SceneLayoutPreset

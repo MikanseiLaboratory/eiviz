@@ -9,7 +9,7 @@ using Rect = Eiviz.Host.Interop.Rect;
 namespace Eiviz.Host;
 
 internal abstract record MixerCommand;
-internal sealed record SetMixCommand(ulong UnitId, float Value) : MixerCommand;
+internal sealed record SetMixCommand(ulong UnitId, float Value, TransitionPreset? Preset = null) : MixerCommand;
 internal sealed record CutCommand(ulong UnitId, bool Swap) : MixerCommand;
 internal sealed record AutoCommand(
     ulong UnitId,
@@ -113,7 +113,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                     Rect = new Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
                     Opacity = slot.Opacity,
                     Z = slot.Z,
-                    AudioFollow = 1
+                    AudioFollow = slot.AudioFollow ? 1u : 0u
                 };
             SetOverlay(ref state, i, desc);
         }
@@ -152,7 +152,8 @@ internal sealed class CommandQueue : IAsyncDisposable
             Rect = new Rect { X = layer.X, Y = layer.Y, Width = layer.Width, Height = layer.Height },
             Opacity = layer.Opacity,
             Z = layer.Z,
-            AudioFollow = layer.AudioFollow ? 1u : 0u
+            AudioFollow = layer.AudioFollow ? 1u : 0u,
+            Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight }
         }).ToArray());
     }
 
@@ -257,7 +258,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                 switch (command)
                 {
                     case SetMixCommand setMix:
-                        ApplyMix(setMix.UnitId, setMix.Value);
+                        ApplyMix(setMix.UnitId, setMix.Value, setMix.Preset);
                         break;
                     case CutCommand cut:
                         MixerNative.ThrowIfFailed(MixerNative.Cut(cut.UnitId, cut.Swap ? 1u : 0u), "CUT");
@@ -448,7 +449,7 @@ internal sealed class CommandQueue : IAsyncDisposable
         }
     }
 
-    private static void ApplyMix(ulong unitId, float mix)
+    private static void ApplyMix(ulong unitId, float mix, TransitionPreset? preset)
     {
         unsafe
         {
@@ -456,6 +457,17 @@ internal sealed class CommandQueue : IAsyncDisposable
             if (MixerNative.GetUnitState(unitId, &current) != 0)
                 return;
             current.Mix = Math.Clamp(mix, 0f, 1f);
+            if (preset is { } look)
+            {
+                current.TransitionKind = look.Kind;
+                current.TransitionEasing = look.Easing;
+                current.TransitionDirection = look.Direction;
+                current.DipR = look.DipR;
+                current.DipG = look.DipG;
+                current.DipB = look.DipB;
+                current.DipA = look.DipA <= 0 ? 1 : look.DipA;
+                MixerNative.SetCustomWgsl(unitId, look.CustomWgsl ?? "");
+            }
             MixerNative.SetUnitState(unitId, &current);
         }
     }

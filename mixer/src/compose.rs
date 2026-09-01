@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
-    mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
+    mixing_unit_preview, mixing_unit_source, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
     TRANSITION_CUSTOM, TRANSITION_STINGER,
 };
@@ -46,10 +46,26 @@ impl Default for Generator {
     }
 }
 
+const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+fn crop_uv(crop: Rect) -> [f32; 4] {
+    if crop.width <= 0.0 || crop.height <= 0.0 {
+        FULL_UV
+    } else {
+        [
+            crop.x.clamp(0.0, 1.0),
+            crop.y.clamp(0.0, 1.0),
+            crop.width.clamp(0.0, 1.0),
+            crop.height.clamp(0.0, 1.0),
+        ]
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitParams {
     dst: [f32; 4],
+    src: [f32; 4],
     opacity: f32,
     pad: [f32; 3],
 }
@@ -664,6 +680,7 @@ impl Composer {
                         layer.source_id,
                         [layer.rect.x, layer.rect.y, layer.rect.width, layer.rect.height],
                         layer.opacity,
+                        crop_uv(layer.crop),
                     )?;
                 }
             }
@@ -837,6 +854,22 @@ impl Composer {
         Ok(())
     }
 
+    pub fn validate_custom_wgsl(user_wgsl: &str) -> Result<(), String> {
+        let trimmed = user_wgsl.trim();
+        if trimmed.is_empty() {
+            return Err("WGSL is empty".into());
+        }
+        if !trimmed.contains("fn user_transition") {
+            return Err("Define fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>".into());
+        }
+        let source = format!(
+            "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    return user_transition(in.uv, params.mix);\n}}\n",
+            CUSTOM_MIX_PREAMBLE, user_wgsl
+        );
+        naga::front::wgsl::parse_str(&source).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn render_unit(
         &mut self,
         device: &GpuDevice,
@@ -916,7 +949,7 @@ impl Composer {
             self.units[&unit_id].preview_view.clone()
         };
         let mut pass = begin_clear(encoder, &target_view);
-        self.draw_source_pass(device, &mut pass, source_id, [0.0, 0.0, 1.0, 1.0], 1.0)?;
+        self.draw_source_pass(device, &mut pass, source_id, [0.0, 0.0, 1.0, 1.0], 1.0, FULL_UV)?;
         drop(pass);
         Ok(())
     }
@@ -951,6 +984,7 @@ impl Composer {
                         overlay.rect.height,
                     ],
                     overlay.opacity,
+                    crop_uv(overlay.crop),
                 )?;
             }
         }
@@ -1002,7 +1036,7 @@ impl Composer {
                 if slot == 0 {
                     self.blit_builtin_pass(device, &mut pass, SRC_BLACK, [x, y, w, h], 1.0);
                 } else {
-                    self.draw_source_pass(device, &mut pass, slot, [x, y, w, h], 1.0)?;
+                    self.draw_source_pass(device, &mut pass, slot, [x, y, w, h], 1.0, FULL_UV)?;
                 }
             }
         }
@@ -1083,10 +1117,11 @@ impl Composer {
         source_id: u64,
         dst: [f32; 4],
         opacity: f32,
+        crop: [f32; 4],
     ) -> Result<(), String> {
         if is_scene(source_id) {
             if let Some(view) = self.scenes.get(&source_id).map(|scene| scene.view.clone()) {
-                self.blit_pass(device, pass, source_id, &view, dst, opacity, false);
+                self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
                 return Ok(());
             }
         }
@@ -1100,17 +1135,17 @@ impl Composer {
                 _ => unit.mixed_view.clone(),
             });
             if let Some(view) = view {
-                self.blit_pass(device, pass, source_id, &view, dst, opacity, false);
+                self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
                 return Ok(());
             }
         }
         if self.generators.contains_key(&source_id) {
-            self.blit_builtin_pass(device, pass, source_id, dst, opacity);
+            self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
             return Ok(());
         }
         match source_id {
             SRC_COLOR | SRC_BLACK | SRC_BLUE | SRC_BARS => {
-                self.blit_builtin_pass(device, pass, source_id, dst, opacity);
+                self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
                 Ok(())
             }
             id => {
@@ -1119,10 +1154,10 @@ impl Composer {
                     .get(&id)
                     .map(|gpu| (gpu.view.clone(), gpu.packed));
                 if let Some((view, packed)) = copied {
-                    self.blit_pass(device, pass, id, &view, dst, opacity, packed);
+                    self.blit_uv(device, pass, id, &view, dst, crop, opacity, packed);
                     Ok(())
                 } else {
-                    self.blit_builtin_pass(device, pass, SRC_BLACK, dst, opacity);
+                    self.blit_builtin_uv(device, pass, SRC_BLACK, dst, crop, opacity);
                     Ok(())
                 }
             }
@@ -1151,7 +1186,33 @@ impl Composer {
         let Some(view) = self.sources.get(&key).map(|gpu| gpu.view.clone()) else {
             return;
         };
-        self.blit_pass(device, pass, key, &view, dst, opacity, false);
+        self.blit_uv(device, pass, key, &view, dst, FULL_UV, opacity, false);
+    }
+
+    fn blit_builtin_uv(
+        &mut self,
+        device: &GpuDevice,
+        pass: &mut wgpu::RenderPass,
+        source_id: u64,
+        dst: [f32; 4],
+        crop: [f32; 4],
+        opacity: f32,
+    ) {
+        let key = if self.sources.contains_key(&source_id) {
+            source_id
+        } else if self.generators.contains_key(&source_id) {
+            if self.generators[&source_id].kind == GEN_BARS {
+                SRC_BARS
+            } else {
+                SRC_COLOR
+            }
+        } else {
+            SRC_BLACK
+        };
+        let Some(view) = self.sources.get(&key).map(|gpu| gpu.view.clone()) else {
+            return;
+        };
+        self.blit_uv(device, pass, key, &view, dst, crop, opacity, false);
     }
 
     fn blit_pass(
@@ -1164,10 +1225,25 @@ impl Composer {
         opacity: f32,
         uyvy: bool,
     ) {
+        self.blit_uv(device, pass, key, src, dst, FULL_UV, opacity, uyvy);
+    }
+
+    fn blit_uv(
+        &mut self,
+        device: &GpuDevice,
+        pass: &mut wgpu::RenderPass,
+        key: u64,
+        src: &wgpu::TextureView,
+        dst: [f32; 4],
+        uv: [f32; 4],
+        opacity: f32,
+        uyvy: bool,
+    ) {
         let offset = self.pool.push(
             &device.queue,
             &BlitParams {
                 dst,
+                src: uv,
                 opacity,
                 pad: [0.0; 3],
             },

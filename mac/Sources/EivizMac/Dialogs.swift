@@ -1437,3 +1437,89 @@ struct LogsView: View {
         }
     }
 }
+
+struct CustomWgslEditor: View {
+    @State private var text: String
+    @State private var status = ""
+    @State private var valid = false
+    let onSave: (String) -> Void
+    let onCancel: () -> Void
+
+    init(text: String, onSave: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+        _text = State(initialValue: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Self.template : text)
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    private static let template = """
+    fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
+        let a = textureSample(pgm_tex, src_samp, uv);
+        let b = textureSample(pvw_tex, src_samp, uv);
+        return mix(a, b, t);
+    }
+    """
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Custom WGSL").fontWeight(.bold)
+            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. pgm_tex, pvw_tex, and src_samp are already bound.")
+                .font(.system(size: 11))
+                .foregroundStyle(EivizTheme.dim)
+            TextEditor(text: $text)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .foregroundStyle(EivizTheme.text)
+                .padding(6)
+                .background(Color.black.opacity(0.45))
+                .frame(minWidth: 640, minHeight: 360)
+            Text(status)
+                .font(.system(size: 11))
+                .foregroundStyle(valid ? Color.green : Color.red)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Load file…") { loadFile() }
+                Button("Validate") { _ = validate() }
+                Spacer()
+                Button("Cancel") { onCancel() }
+                Button("Save") {
+                    if validate() { onSave(text) }
+                }
+            }
+            .buttonStyle(MixerButtonStyle())
+        }
+        .padding(16)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear { _ = validate() }
+    }
+
+    @discardableResult
+    private func validate() -> Bool {
+        let code = text.withCString { mixer_validate_custom_wgsl($0) }
+        if code == EIVIZ_OK {
+            status = "Valid WGSL. user_transition will be used."
+            valid = true
+            return true
+        }
+        let error = MixerFFI.lastErrorText()
+        status = error.isEmpty ? "Invalid WGSL." : error
+        valid = false
+        return false
+    }
+
+    private func loadFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if let wgsl = UTType(filenameExtension: "wgsl") {
+            panel.allowedContentTypes = [wgsl, .plainText]
+        } else {
+            panel.allowedContentTypes = [.plainText]
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let loaded = try? String(contentsOf: url, encoding: .utf8) {
+            text = loaded
+            _ = validate()
+        }
+    }
+}

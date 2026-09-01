@@ -178,6 +178,7 @@ pub struct Rect {
 pub struct OverlayDesc {
     pub source_id: u64,
     pub rect: Rect,
+    pub crop: Rect,
     pub opacity: f32,
     pub z: i32,
     pub audio_follow: u32,
@@ -190,6 +191,7 @@ impl Default for OverlayDesc {
         Self {
             source_id: 0,
             rect: Rect::default(),
+            crop: Rect::default(),
             opacity: 0.0,
             z: 0,
             audio_follow: 0,

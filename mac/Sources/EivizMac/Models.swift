@@ -322,9 +322,20 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var audioFollow: Bool = true
     var locked: Bool = false
     var sizeLinked: Bool = true
+    var cropX: Float = 0
+    var cropY: Float = 0
+    var cropWidth: Float = 1
+    var cropHeight: Float = 1
+
+    mutating func clampCrop() {
+        cropX = min(0.99, max(0, cropX))
+        cropY = min(0.99, max(0, cropY))
+        cropWidth = min(1 - cropX, max(0.01, cropWidth))
+        cropHeight = min(1 - cropY, max(0.01, cropHeight))
+    }
 
     enum CodingKeys: String, CodingKey {
-        case inputId, x, y, width, height, opacity, z, audioFollow, locked, sizeLinked
+        case inputId, x, y, width, height, opacity, z, audioFollow, locked, sizeLinked, cropX, cropY, cropWidth, cropHeight
     }
 }
 
@@ -366,6 +377,14 @@ struct TransitionPreset: Identifiable, Codable {
     var dipA: Float = 1
     var customWgsl: String?
     var durationLabel: String { "\(durationValue)\(durationUnit == EIVIZ_DURATION_MS ? "ms" : "f")" }
+    var hasDuration: Bool { kind != EIVIZ_TRANSITION_CUT }
+    var hasEasing: Bool { hasDuration }
+    var hasDirection: Bool {
+        kind == EIVIZ_TRANSITION_WIPE || kind == EIVIZ_TRANSITION_SLIDE
+            || kind == EIVIZ_TRANSITION_PUSH || kind == EIVIZ_TRANSITION_BLINDS
+    }
+    var hasDipColor: Bool { kind == EIVIZ_TRANSITION_DIP || kind == EIVIZ_TRANSITION_PUSH }
+    var hasCustomWgsl: Bool { kind == EIVIZ_TRANSITION_CUSTOM }
     var label: String {
         switch kind {
         case EIVIZ_TRANSITION_CUT: return "Cut"
@@ -401,9 +420,10 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var transitionKind: UInt32 = EIVIZ_TRANSITION_FADE
     var durationValue: UInt32 = 15
     var durationUnit: UInt32 = 0
+    var audioFollow: Bool = true
 
     enum CodingKeys: String, CodingKey {
-        case sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit
+        case sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit, audioFollow
     }
 }
 

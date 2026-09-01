@@ -14,6 +14,11 @@
         <DockPanel>
             <TextBlock DockPanel.Dock="Top" Text="Layers" FontWeight="Bold" Margin="0,0,0,6"/>
             <StackPanel DockPanel.Dock="Bottom">
+                <TextBlock Text="Preset (all layers)" Margin="0,8,0,4"/>
+                <ComboBox x:Name="PresetBox" Height="28" SelectionChanged="Preset_SelectionChanged"/>
+                <TextBlock Text="Copy from" Margin="0,8,0,4"/>
+                <ComboBox x:Name="CopyFromBox" Height="28" SelectionChanged="CopyFrom_SelectionChanged"/>
+                <Button Content="Save preset" Height="26" Margin="0,8,0,8" Click="SavePreset_Click"/>
                 <ComboBox x:Name="InputPick" Margin="0,0,0,6"/>
                 <Button Content="Add layer" Height="28" Click="AddLayer_Click"/>
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
@@ -43,9 +48,9 @@
                 <TextBox x:Name="NameBox"/>
                 <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="56"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="28"/>
+                        <ColumnDefinition Width="56"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
@@ -54,41 +59,46 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="X" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
                     <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PosYLabel" Grid.Column="2" Text="Pos Y" VerticalAlignment="Center"/>
                     <TextBox x:Name="YBox" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Text="SX" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
                     <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="SY" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="2" Text="Size Y" VerticalAlignment="Center"/>
                     <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <CheckBox x:Name="LinkBox" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                    <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Crop X" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="2" Text="Crop Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Crop W" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="2" Text="Crop H" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <CheckBox x:Name="LinkBox" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
                               Content="Link" VerticalAlignment="Center" Foreground="#EEEEEE"
                               Click="Link_Click"/>
-                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Z" VerticalAlignment="Center"/>
-                    <TextBox x:Name="ZBox" Grid.Row="2" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock Grid.Row="3" Text="Op" VerticalAlignment="Center"/>
-                    <TextBox x:Name="OpBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <CheckBox x:Name="LockBox" Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2"
+                    <TextBlock x:Name="OpLabel" Grid.Row="4" Grid.Column="2" Text="Opacity" VerticalAlignment="Center"/>
+                    <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="3" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                    <CheckBox x:Name="LockBox" Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="4"
                               Content="Lock" VerticalAlignment="Center" Foreground="#EEEEEE"
                               Click="Lock_Click"/>
-                    <CheckBox x:Name="AudioFollowBox" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
+                    <CheckBox x:Name="AudioFollowBox" Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4"
                               Content="Audio Follow" VerticalAlignment="Center" Foreground="#EEEEEE"
                               Click="AudioFollow_Click"/>
                 </Grid>
-                <TextBlock Text="Preset" Margin="0,12,0,4"/>
-                <ComboBox x:Name="PresetBox" Height="28" SelectionChanged="Preset_SelectionChanged"/>
-                <TextBlock Text="Copy from" Margin="0,8,0,4"/>
-                <ComboBox x:Name="CopyFromBox" Height="28" SelectionChanged="CopyFrom_SelectionChanged"/>
-                <Button Content="Save preset" Height="26" Margin="0,8,0,0" Click="SavePreset_Click"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
                     <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
                 </StackPanel>
             </StackPanel>
-            <Border Background="#111" BorderBrush="#555" BorderThickness="1" MinHeight="180" Margin="0,0,0,12">
-                <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True" MinHeight="180"/>
+            <Border Background="#111" BorderBrush="#555" BorderThickness="1" Margin="0,0,0,12">
+                <preview:AspectBox x:Name="PreviewAspect" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True"/>
+                </preview:AspectBox>
             </Border>
         </DockPanel>
     </Grid>

@@ -14,6 +14,14 @@ struct SwitcherView: View {
         mixer.session.units.first { $0.id == unitId } ?? mixer.selectedUnit
     }
 
+    private var previewTitle: String {
+        if let id = mixer.previewingSceneId(for: unitId),
+           let scene = mixer.session.scenes.first(where: { $0.id == id }) {
+            return "PREVIEW — \(scene.name)"
+        }
+        return "PREVIEW"
+    }
+
     private var programTitle: String {
         if let id = mixer.programmingSceneId(for: unitId),
            let scene = mixer.session.scenes.first(where: { $0.id == id }) {
@@ -25,7 +33,7 @@ struct SwitcherView: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                 transitions
                 bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
             }
@@ -77,10 +85,10 @@ struct SwitcherView: View {
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
-            .frame(width: 132)
+            .frame(width: 220)
             .frame(maxWidth: .infinity)
         }
-        .frame(width: 168)
+        .frame(width: 260)
     }
 
     private var scenes: some View {
@@ -140,8 +148,8 @@ struct SwitcherView: View {
     }
 
     private func rowStroke(preview: Bool, program: Bool) -> Color {
-        if preview { return mixer.session.settings.previewColor.color }
         if program { return mixer.session.settings.programColor.color }
+        if preview { return mixer.session.settings.previewColor.color }
         return mixer.session.settings.inactiveColor.color
     }
 

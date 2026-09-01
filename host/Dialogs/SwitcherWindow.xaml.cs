@@ -28,6 +28,7 @@ public partial class SwitcherWindow : Window
         Loaded += (_, _) =>
         {
             ApplyBusColors();
+            RefreshBusTitles();
             PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         };
@@ -55,6 +56,7 @@ public partial class SwitcherWindow : Window
         RebuildScenes();
         RebuildTransitions();
         ApplyBusColors();
+        RefreshBusTitles();
     }
 
     internal void ApplyBusColors()
@@ -155,7 +157,7 @@ public partial class SwitcherWindow : Window
             Commands.TryEnqueue(new CutCommand(_unit.Id, TbarPreset().Swap));
             return;
         }
-        Commands.TryEnqueue(new SetMixCommand(_unit.Id, mix));
+        Commands.TryEnqueue(new SetMixCommand(_unit.Id, mix, TbarPreset()));
     }
 
     private void TBar_MouseUp(object sender, MouseButtonEventArgs e) => FinishTBar();
@@ -178,11 +180,28 @@ public partial class SwitcherWindow : Window
             return;
         if (SceneList.SelectedItem is SceneEntry scene)
             Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        RefreshBusTitles();
     }
 
     private void SceneList_Activate(object sender, MouseButtonEventArgs e)
     {
         if (SceneList.SelectedItem is SceneEntry scene)
             Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        RefreshBusTitles();
+    }
+
+    private void RefreshBusTitles()
+    {
+        var preview = SceneList.SelectedItem as SceneEntry;
+        PreviewHeaderText.Text = preview is null ? "PREVIEW" : $"PREVIEW — {preview.Name}";
+        var programId = 0UL;
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(_unit.Id, &state) == 0)
+                programId = state.ProgramSource;
+        }
+        var programName = Session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
+        ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? "PROGRAM" : $"PROGRAM — {programName}";
     }
 }

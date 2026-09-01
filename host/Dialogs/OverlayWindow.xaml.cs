@@ -26,6 +26,8 @@ public partial class OverlayWindow : Window
         _monitorId = session.NextMonitorId++;
         SceneBox.ItemsSource = session.Scenes;
         Title = $"Overlays — {unit.Name}";
+        PreviewAspect.RatioWidth = unit.Width;
+        PreviewAspect.RatioHeight = unit.Height;
         Loaded += (_, _) => RefreshList();
     }
 
@@ -33,6 +35,8 @@ public partial class OverlayWindow : Window
     {
         _unit = unit;
         Title = $"Overlays — {unit.Name}";
+        PreviewAspect.RatioWidth = unit.Width;
+        PreviewAspect.RatioHeight = unit.Height;
         _selected = unit.Overlays.FirstOrDefault();
         RefreshList();
     }
@@ -126,6 +130,7 @@ public partial class OverlayWindow : Window
         WBox.Text = _selected.Width.ToString("0.####");
         HBox.Text = _selected.Height.ToString("0.####");
         OpBox.Text = _selected.Opacity.ToString("0.###");
+        AudioFollowBox.IsChecked = _selected.AudioFollow;
         KindBox.SelectedIndex = _selected.TransitionKind == MixerNative.TransitionCut ? 0 : 1;
         DurationBox.Text = _selected.DurationValue.ToString();
         DurationUnitBox.SelectedIndex = _selected.DurationUnit == MixerNative.DurationMs ? 1 : 0;
@@ -201,6 +206,14 @@ public partial class OverlayWindow : Window
             return;
         _selected.Enabled = OnBox.IsChecked == true;
         Commit();
+    }
+
+    private void AudioFollow_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppress || _selected is null)
+            return;
+        _selected.AudioFollow = AudioFollowBox.IsChecked == true;
+        Push();
     }
 
     private void SceneBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -151,6 +151,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_set_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int SetCustomWgsl(ulong unitId, string? wgsl);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_validate_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ValidateCustomWgsl(string? wgsl);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_register_source")]
     internal static partial int RegisterSource(ulong id, uint width, uint height, uint format);
 
@@ -481,6 +484,7 @@ internal struct OverlayDesc
 {
     public ulong SourceId;
     public Rect Rect;
+    public Rect Crop;
     public float Opacity;
     public int Z;
     public uint AudioFollow;

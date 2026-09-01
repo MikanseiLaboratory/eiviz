@@ -81,10 +81,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let soft = select(params.softness, 0.02, params.softness <= 0.0);
 
     if kind == 2u {
-        if t < 0.5 {
-            return mix(a, params.dip, t * 2.0);
+        let hold = 0.08;
+        let fade = 0.5 - hold * 0.5;
+        if t < fade {
+            return mix(a, params.dip, t / max(fade, 0.001));
         }
-        return mix(params.dip, b, (t - 0.5) * 2.0);
+        if t > 1.0 - fade {
+            return mix(params.dip, b, (t - (1.0 - fade)) / max(fade, 0.001));
+        }
+        return params.dip;
     }
     if kind == 3u {
         return mix(b, a, wipe_axis(in.uv, t, dir, soft));

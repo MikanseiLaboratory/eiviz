@@ -2,8 +2,18 @@ import EivizMixer
 import Foundation
 
 enum MixerFFI {
+    static func lastErrorText() -> String {
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_last_error(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0 else { return "" }
+        return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
+    }
+
     static func lastError(_ action: String) -> String {
-        L10n.error(action, -1)
+        let detail = lastErrorText()
+        return detail.isEmpty ? L10n.error(action, -1) : "\(L10n.error(action, -1)): \(detail)"
     }
 
     static func check(_ code: Int32, _ action: String) -> String? {

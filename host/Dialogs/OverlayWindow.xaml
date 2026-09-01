@@ -66,6 +66,8 @@
                     <TextBlock Grid.Row="2" Text="Op" VerticalAlignment="Center"/>
                     <TextBox x:Name="OpBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                 </Grid>
+                <CheckBox x:Name="AudioFollowBox" Content="Audio Follow" Foreground="#EEE" Margin="0,8,0,8"
+                          Checked="AudioFollow_Changed" Unchecked="AudioFollow_Changed"/>
                 <TextBlock Text="On/Off" Margin="0,8,0,4"/>
                 <ComboBox x:Name="KindBox" Margin="0,0,0,8" SelectionChanged="KindBox_SelectionChanged">
                     <ComboBoxItem Content="Cut" Tag="0"/>
@@ -81,8 +83,10 @@
                     <TextBox x:Name="DurationBox" Margin="0,0,8,0" LostFocus="Duration_LostFocus"/>
                 </DockPanel>
             </StackPanel>
-            <Border Background="#111" BorderBrush="#555" BorderThickness="1" MinHeight="180" Margin="0,0,0,12">
-                <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True" MinHeight="180"/>
+            <Border Background="#111" BorderBrush="#555" BorderThickness="1" Margin="0,0,0,12">
+                <preview:AspectBox x:Name="PreviewAspect" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True"/>
+                </preview:AspectBox>
             </Border>
         </DockPanel>
     </Grid>

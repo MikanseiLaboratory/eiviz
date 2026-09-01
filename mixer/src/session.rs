@@ -439,6 +439,14 @@ pub struct SceneLayer {
     pub locked: bool,
     #[serde(default = "true_bool")]
     pub size_linked: bool,
+    #[serde(default)]
+    pub crop_x: f32,
+    #[serde(default)]
+    pub crop_y: f32,
+    #[serde(default = "one_f32")]
+    pub crop_width: f32,
+    #[serde(default = "one_f32")]
+    pub crop_height: f32,
 }
 
 fn true_bool() -> bool {
@@ -481,6 +489,14 @@ pub struct SceneLayerGeom {
     pub opacity: f32,
     #[serde(default)]
     pub z: i32,
+    #[serde(default)]
+    pub crop_x: f32,
+    #[serde(default)]
+    pub crop_y: f32,
+    #[serde(default = "one_f32")]
+    pub crop_width: f32,
+    #[serde(default = "one_f32")]
+    pub crop_height: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -583,6 +599,8 @@ pub struct OverlaySlot {
     pub duration_value: u32,
     #[serde(default)]
     pub duration_unit: u32,
+    #[serde(default = "true_bool")]
+    pub audio_follow: bool,
 }
 
 fn fifteen() -> u32 {

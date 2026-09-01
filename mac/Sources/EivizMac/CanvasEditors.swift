@@ -9,6 +9,7 @@ struct SceneEditorView: View {
     @State private var name: String = ""
     @State private var presetName = ""
     @State private var copyFromId: UInt64 = 0
+    @State private var lastGpuPush = Date.distantPast
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -25,6 +26,33 @@ struct SceneEditorView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
+                Text("Preset (all layers)").padding(.top, 8)
+                Picker("", selection: $presetName) {
+                    Text("Apply…").tag("")
+                    ForEach(["Full", "Split H", "Split V", "Quad", "PiP TR", "PiP TL", "PiP BR", "PiP BL"], id: \.self) {
+                        Text($0).tag($0)
+                    }
+                    ForEach(mixer.session.scenePresets) { preset in
+                        Text(preset.name).tag(preset.name)
+                    }
+                }
+                .onChange(of: presetName) { _, name in
+                    guard !name.isEmpty else { return }
+                    applyPreset(name)
+                    presetName = ""
+                }
+                Picker("Copy from", selection: $copyFromId) {
+                    Text("Copy from…").tag(UInt64(0))
+                    ForEach(mixer.session.scenes.filter { $0.id != current?.id }) { scene in
+                        Text(scene.name).tag(scene.id)
+                    }
+                }
+                .onChange(of: copyFromId) { _, id in
+                    guard id != 0 else { return }
+                    copyFrom(id)
+                    copyFromId = 0
+                }
+                Button("Save preset") { savePreset() }
                 Picker("Input", selection: Binding(
                     get: { mixer.selectedInputId ?? EIVIZ_SRC_BARS },
                     set: { mixer.selectedInputId = $0 }
@@ -54,7 +82,11 @@ struct SceneEditorView: View {
                             width: $0.width,
                             height: $0.height,
                             locked: $0.locked,
-                            sizeLinked: $0.sizeLinked
+                            sizeLinked: $0.sizeLinked,
+                            cropX: $0.cropX,
+                            cropY: $0.cropY,
+                            cropWidth: $0.cropWidth,
+                            cropHeight: $0.cropHeight
                         )
                     },
                     aspect: projectAspect,
@@ -69,7 +101,8 @@ struct SceneEditorView: View {
                 Text("Live preview").fontWeight(.bold)
                 if let scene = current {
                     MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
-                        .frame(height: 180)
+                        .aspectRatio(projectAspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
                         .background(Color.black)
                 }
                 Text("Name").padding(.top, 8)
@@ -77,33 +110,6 @@ struct SceneEditorView: View {
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
                 }
-                Text("Preset").padding(.top, 8)
-                Picker("", selection: $presetName) {
-                    Text("Apply…").tag("")
-                    ForEach(["Full", "Split H", "Split V", "Quad", "PiP TR", "PiP TL", "PiP BR", "PiP BL"], id: \.self) {
-                        Text($0).tag($0)
-                    }
-                    ForEach(mixer.session.scenePresets) { preset in
-                        Text(preset.name).tag(preset.name)
-                    }
-                }
-                .onChange(of: presetName) { _, name in
-                    guard !name.isEmpty else { return }
-                    applyPreset(name)
-                    presetName = ""
-                }
-                Picker("Copy from", selection: $copyFromId) {
-                    Text("Copy from…").tag(UInt64(0))
-                    ForEach(mixer.session.scenes.filter { $0.id != current?.id }) { scene in
-                        Text(scene.name).tag(scene.id)
-                    }
-                }
-                .onChange(of: copyFromId) { _, id in
-                    guard id != 0 else { return }
-                    copyFrom(id)
-                    copyFromId = 0
-                }
-                Button("Save preset") { savePreset() }
                 Spacer()
                 HStack {
                     Spacer()
@@ -204,7 +210,10 @@ struct SceneEditorView: View {
                 scene.layers[i].height = h
             }
         }
-        if ended { push() }
+        if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+            lastGpuPush = Date()
+            push()
+        }
     }
 
     private func push() {
@@ -215,25 +224,45 @@ struct SceneEditorView: View {
         let locked = layer(index)?.locked == true
         return Grid(alignment: .leading) {
             GridRow {
-                Text("X")
+                dragLabel("Pos X", index: index, axis: .x)
                 pixelField(index, axis: .x).disabled(locked)
-                Text("Y")
+                dragLabel("Pos Y", index: index, axis: .y)
                 pixelField(index, axis: .y).disabled(locked)
             }
             GridRow {
-                Text("SX")
+                dragLabel("Size X", index: index, axis: .w)
                 pixelField(index, axis: .w).disabled(locked)
-                Text("SY")
+                dragLabel("Size Y", index: index, axis: .h)
                 pixelField(index, axis: .h).disabled(locked)
             }
             GridRow {
-                Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
-                Text("Z")
-                zField(index)
+                dragLabel("Crop X", index: index, axis: .cx)
+                pixelField(index, axis: .cx).disabled(locked)
+                dragLabel("Crop Y", index: index, axis: .cy)
+                pixelField(index, axis: .cy).disabled(locked)
             }
             GridRow {
-                Text("Op")
+                dragLabel("Crop W", index: index, axis: .cw)
+                pixelField(index, axis: .cw).disabled(locked)
+                dragLabel("Crop H", index: index, axis: .ch)
+                pixelField(index, axis: .ch).disabled(locked)
+            }
+            GridRow {
+                Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
+                DragAdjustLabel(title: "Opacity") { delta, ended in
+                    guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+                    var layer = mixer.session.scenes[i].layers[index]
+                    guard !layer.locked else { return }
+                    layer.opacity = min(1, max(0, layer.opacity + delta / 80))
+                    mixer.session.scenes[i].layers[index] = layer
+                    if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+                        lastGpuPush = Date()
+                        push()
+                    }
+                }
                 field(index, get: \.opacity, set: { $0.opacity = min(1, max(0, $1)) }).disabled(locked)
+            }
+            GridRow {
                 Toggle("Lock", isOn: boolBinding(index, \.locked))
             }
             GridRow {
@@ -242,7 +271,41 @@ struct SceneEditorView: View {
         }
     }
 
-    private enum PixelAxis { case x, y, w, h }
+    private enum PixelAxis { case x, y, w, h, cx, cy, cw, ch }
+
+    private func dragLabel(_ title: String, index: Int, axis: PixelAxis) -> some View {
+        DragAdjustLabel(title: title) { delta, ended in
+            guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+            var layer = mixer.session.scenes[i].layers[index]
+            guard !layer.locked else { return }
+            switch axis {
+            case .x: layer.x = (layer.x * projectW + delta) / projectW
+            case .y: layer.y = (layer.y * projectH + delta) / projectH
+            case .w:
+                let width = max(1, layer.width * projectW + delta) / projectW
+                if layer.sizeLinked && layer.width > 0 {
+                    layer.height = width * (layer.height / layer.width)
+                }
+                layer.width = width
+            case .h:
+                let height = max(1, layer.height * projectH + delta) / projectH
+                if layer.sizeLinked && layer.height > 0 {
+                    layer.width = height * (layer.width / layer.height)
+                }
+                layer.height = height
+            case .cx: layer.cropX = (layer.cropX * projectW + delta) / projectW
+            case .cy: layer.cropY = (layer.cropY * projectH + delta) / projectH
+            case .cw: layer.cropWidth = (layer.cropWidth * projectW + delta) / projectW
+            case .ch: layer.cropHeight = (layer.cropHeight * projectH + delta) / projectH
+            }
+            layer.clampCrop()
+            mixer.session.scenes[i].layers[index] = layer
+            if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+                lastGpuPush = Date()
+                push()
+            }
+        }
+    }
 
     private func layer(_ index: Int) -> SceneLayer? {
         guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return nil }
@@ -258,6 +321,10 @@ struct SceneEditorView: View {
                 case .y: return layer.y * projectH
                 case .w: return layer.width * projectW
                 case .h: return layer.height * projectH
+                case .cx: return layer.cropX * projectW
+                case .cy: return layer.cropY * projectH
+                case .cw: return layer.cropWidth * projectW
+                case .ch: return layer.cropHeight * projectH
                 }
             },
             set: { value in
@@ -278,22 +345,15 @@ struct SceneEditorView: View {
                         layer.width = height * (layer.width / layer.height)
                     }
                     layer.height = height
+                case .cx: layer.cropX = value / projectW
+                case .cy: layer.cropY = value / projectH
+                case .cw: layer.cropWidth = max(1, value) / projectW
+                case .ch: layer.cropHeight = max(1, value) / projectH
                 }
+                layer.clampCrop()
                 mixer.session.scenes[i].layers[index] = layer
             }
         ), onSubmit: { push() })
-        .frame(width: 72)
-    }
-
-    private func zField(_ index: Int) -> some View {
-        mixerInt32Field(Binding(
-            get: { layer(index)?.z ?? 0 },
-            set: { value in
-                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
-                mixer.session.scenes[i].layers[index].z = value
-                push()
-            }
-        ))
         .frame(width: 72)
     }
 
@@ -314,7 +374,7 @@ struct SceneEditorView: View {
         set: @escaping (inout SceneLayer, Float) -> Void
     ) -> some View {
         mixerFloatField(Binding(
-            get: { layer(index)?[keyPath: get] ?? 0 },
+            get: { layer(index)?[keyPath: get] ?? 1 },
             set: { value in
                 guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
                 set(&mixer.session.scenes[i].layers[index], value)
@@ -333,11 +393,23 @@ struct SceneEditorView: View {
                     scene.layers[i].height = user.layers[i].height
                     scene.layers[i].opacity = user.layers[i].opacity
                     scene.layers[i].z = user.layers[i].z
+                    scene.layers[i].cropX = user.layers[i].cropX
+                    scene.layers[i].cropY = user.layers[i].cropY
+                    scene.layers[i].cropWidth = user.layers[i].cropWidth
+                    scene.layers[i].cropHeight = user.layers[i].cropHeight
+                }
+                return
+            }
+            if name == "Full" {
+                for i in scene.layers.indices where !scene.layers[i].locked {
+                    scene.layers[i].x = 0
+                    scene.layers[i].y = 0
+                    scene.layers[i].width = 1
+                    scene.layers[i].height = 1
                 }
                 return
             }
             let boxes: [(Float, Float, Float, Float)] = switch name {
-            case "Full": [(0, 0, 1, 1)]
             case "Split H": [(0, 0, 0.5, 1), (0.5, 0, 0.5, 1)]
             case "Split V": [(0, 0, 1, 0.5), (0, 0.5, 1, 0.5)]
             case "Quad": [(0, 0, 0.5, 0.5), (0.5, 0, 0.5, 0.5), (0, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)]
@@ -347,8 +419,9 @@ struct SceneEditorView: View {
             case "PiP BL": [(0, 0, 1, 1), (0.06, 0.60, 0.32, 0.32)]
             default: []
             }
-            for i in 0..<min(scene.layers.count, boxes.count) where !scene.layers[i].locked {
-                let box = boxes[i]
+            let unlocked = scene.layers.indices.filter { !scene.layers[$0].locked }
+            for (slot, i) in unlocked.prefix(boxes.count).enumerated() {
+                let box = boxes[slot]
                 scene.layers[i].x = box.0
                 scene.layers[i].y = box.1
                 scene.layers[i].width = box.2
@@ -402,11 +475,12 @@ struct OverlayView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .background(EivizTheme.list)
+                Spacer()
                 Button("Z up") { shift(1) }
                 Button("Z down") { shift(-1) }
                 Button("Delete") { delete() }
             }
-            .frame(width: 260)
+            .frame(width: 260, maxHeight: .infinity, alignment: .top)
             .buttonStyle(MixerButtonStyle())
 
             VStack {
@@ -429,7 +503,11 @@ struct OverlayView: View {
                     monitorId: previewMonitor,
                     sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
                 ))
-                .frame(height: 180)
+                .aspectRatio(
+                    CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+                    contentMode: .fit
+                )
+                .frame(maxWidth: .infinity)
                 .background(Color.black)
                 if let slot = current {
                     Toggle("ON", isOn: Binding(
@@ -449,6 +527,13 @@ struct OverlayView: View {
                             Text(scene.name).tag(scene.gpuId)
                         }
                     }
+                    Toggle("Audio Follow", isOn: Binding(
+                        get: { slot.audioFollow },
+                        set: { value in
+                            mutate { $0.audioFollow = value }
+                            mixer.pushOverlays()
+                        }
+                    ))
                     overlayFields
                 }
                 Spacer()
@@ -580,5 +665,30 @@ struct OverlayView: View {
             set: { value in mutate { $0[keyPath: key] = value } }
         ), onSubmit: { mixer.pushOverlays() })
         .frame(width: 72)
+    }
+}
+
+private struct DragAdjustLabel: View {
+    let title: String
+    let onDelta: (Float, Bool) -> Void
+    @State private var lastY: CGFloat = 0
+
+    var body: some View {
+        Text(title)
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        let y = value.translation.height
+                        let step = Float(lastY - y) / 2
+                        lastY = y
+                        if step != 0 {
+                            onDelta(step, false)
+                        }
+                    }
+                    .onEnded { _ in
+                        lastY = 0
+                        onDelta(0, true)
+                    }
+            )
     }
 }

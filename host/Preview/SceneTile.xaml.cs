@@ -32,7 +32,6 @@ public partial class SceneTile : UserControl
         Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
         Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
         Monitor.ApplyPresentInterval();
-        SetSelected(selected, previewColor, inactiveColor);
     }
 
     public void SetPresentInterval(uint presentInterval)
@@ -44,6 +43,10 @@ public partial class SceneTile : UserControl
     public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null) =>
         SetBusRoles(selected, false, previewColor, null, inactiveColor);
 
+    private bool _preview;
+    private bool _program;
+    private Color _borderColor;
+
     public void SetBusRoles(bool preview, bool program, Color? previewColor = null, Color? programColor = null, Color? inactiveColor = null)
     {
         var idle = inactiveColor ?? Color.FromRgb(64, 64, 64);
@@ -52,8 +55,13 @@ public partial class SceneTile : UserControl
             : preview
                 ? previewColor ?? Color.FromRgb(0, 255, 0)
                 : idle;
+        if (_preview == preview && _program == program && _borderColor == color)
+            return;
+        _preview = preview;
+        _program = program;
+        _borderColor = color;
         Chrome.BorderBrush = new SolidColorBrush(color);
-        Chrome.BorderThickness = program || preview ? new Thickness(3) : new Thickness(1);
+        Chrome.BorderThickness = new Thickness(3);
     }
 
     public void SetTransport(bool hasVideo, bool loop, bool playing, bool muted)

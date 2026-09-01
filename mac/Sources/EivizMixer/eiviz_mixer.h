@@ -88,6 +88,7 @@ typedef struct EivizRect {
 typedef struct EivizOverlayDesc {
     uint64_t source_id;
     EivizRect rect;
+    EivizRect crop;
     float opacity;
     int32_t z;
     uint32_t audio_follow;
@@ -205,6 +206,7 @@ int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap);
 int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a);
 int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_ms, const EivizOverlayDesc *desc);
 int32_t mixer_unit_set_custom_wgsl(uint64_t unit_id, const char *wgsl);
+int32_t mixer_validate_custom_wgsl(const char *wgsl);
 int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint32_t format);
 int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint32_t height, int64_t pts);
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);

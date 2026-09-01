@@ -26,7 +26,6 @@
                     <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
-                    <Button Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="OpenOverlay_Click"/>
                     <Button x:Name="MultiviewButton" Content="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="OpenMultiview_Click"/>
                     <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
                     <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
@@ -48,6 +47,8 @@
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                     <TextBlock Text="{Binding [chrome.audio], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                 </DockPanel>
+                <Button DockPanel.Dock="Right" Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}"
+                        Width="88" Height="28" Margin="8,0,0,0" VerticalAlignment="Bottom" Click="OpenOverlay_Click"/>
                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <StackPanel Orientation="Horizontal">
                         <StackPanel x:Name="MeterPanel" Orientation="Horizontal"/>
@@ -64,7 +65,7 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="168"/>
+                    <ColumnDefinition Width="260"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
@@ -84,7 +85,7 @@
                         <TextBlock Text="{Binding [chrome.transitions], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <Slider x:Name="TBar" DockPanel.Dock="Bottom" Orientation="Horizontal" Minimum="0" Maximum="1"
-                            Width="132" HorizontalAlignment="Center" Margin="0,10,0,0" Height="18"
+                            Width="220" HorizontalAlignment="Center" Margin="0,10,0,0" Height="18"
                             IsMoveToPointEnabled="True"
                             ValueChanged="TBar_ValueChanged"
                             PreviewMouseLeftButtonUp="TBar_MouseUp"

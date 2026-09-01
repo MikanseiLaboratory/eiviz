@@ -5,6 +5,7 @@ struct VsOut {
 
 struct BlitParams {
     dst: vec4<f32>,
+    src: vec4<f32>,
     opacity: f32,
     _pad0: f32,
     _pad1: f32,
@@ -29,7 +30,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     let dest_uv = params.dst.xy + local * params.dst.zw;
     var out: VsOut;
     out.clip = vec4<f32>(dest_uv.x * 2.0 - 1.0, (1.0 - dest_uv.y) * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = local;
+    out.uv = params.src.xy + local * params.src.zw;
     return out;
 }
 

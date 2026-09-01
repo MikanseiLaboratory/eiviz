@@ -33,6 +33,9 @@ public partial class MainWindow : Window
     private bool _videoSeeking;
     private bool _videoSeekSuppress;
     private long _lastSeekSentMs;
+    private ulong _lastProgramId;
+    private ulong _shownProgramId;
+    private ulong _shownPreviewId;
 
     public MainWindow()
     {
@@ -105,28 +108,41 @@ public partial class MainWindow : Window
     private void RefreshSceneTiles()
     {
         var programId = CurrentProgramSceneId();
+        if (programId != 0)
+            _lastProgramId = programId;
+        else
+            programId = _lastProgramId;
+        _shownProgramId = programId;
+        _shownPreviewId = _selectedScene?.Id ?? 0;
         var programName = _session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
+        var previewName = _selectedScene?.Name;
+        PreviewHeaderText.Text = string.IsNullOrEmpty(previewName) ? Loc.T("chrome.preview") : $"{Loc.T("chrome.preview")} — {previewName}";
         ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? Loc.T("chrome.program") : $"{Loc.T("chrome.program")} — {programName}";
         foreach (SceneTile tile in ScenePanel.Children)
         {
             if (tile.Scene is not { } scene)
                 continue;
-            var video = SceneVideo(scene);
-            var playing = false;
-            if (video is not null && TryVideoInfo(video.Id, out var info))
-                playing = info.Playing != 0;
-            tile.SetTransport(
-                video is not null,
-                video?.VideoLoop == true,
-                playing,
-                SceneInputs(scene).All(item => item.Mute));
+            RefreshSceneTransport(tile, scene);
             tile.SetBusRoles(
-                _selectedScene?.Id == scene.Id,
+                _selectedScene?.Id == scene.Id && scene.GpuId != programId,
                 scene.GpuId == programId,
                 BusTheme.Preview(_session.Settings),
                 BusTheme.Program(_session.Settings),
                 BusTheme.Inactive(_session.Settings));
         }
+    }
+
+    private void RefreshSceneTransport(SceneTile tile, SceneEntry scene)
+    {
+        var video = SceneVideo(scene);
+        var playing = false;
+        if (video is not null && TryVideoInfo(video.Id, out var info))
+            playing = info.Playing != 0;
+        tile.SetTransport(
+            video is not null,
+            video?.VideoLoop == true,
+            playing,
+            SceneInputs(scene).All(item => item.Mute));
     }
 
     private ulong CurrentProgramSceneId()
@@ -194,8 +210,7 @@ public partial class MainWindow : Window
     {
         _selectedScene = scene;
         Commands.TryEnqueue(new PreviewSceneCommand(SelectedUnit.Id, scene.GpuId));
-        foreach (SceneTile tile in ScenePanel.Children)
-            tile.SetSelected(tile.Scene?.Id == scene.Id, BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
+        RefreshSceneTiles();
     }
 
     private void FirePreset(TransitionPreset preset)
@@ -240,7 +255,7 @@ public partial class MainWindow : Window
             Commands.TryEnqueue(new CutCommand(SelectedUnit.Id, TbarPreset().Swap));
             return;
         }
-        Commands.TryEnqueue(new SetMixCommand(SelectedUnit.Id, mix));
+        Commands.TryEnqueue(new SetMixCommand(SelectedUnit.Id, mix, TbarPreset()));
     }
 
     private void TBar_MouseUp(object sender, MouseButtonEventArgs e) => FinishTBar();
@@ -320,10 +335,11 @@ public partial class MainWindow : Window
                 ("Blinds", MixerNative.TransitionBlinds),
                 ("Zoom", MixerNative.TransitionZoom),
                 ("Additive", MixerNative.TransitionAdditive),
-                ("Custom WGSL", MixerNative.TransitionCustom),
-                ("Stinger", MixerNative.TransitionStinger)
+                ("Custom WGSL", MixerNative.TransitionCustom)
             })
                 kind.Items.Add(new ComboBoxItem { Content = label, Tag = value });
+            if (preset.Kind == MixerNative.TransitionStinger)
+                preset.Kind = MixerNative.TransitionFade;
             kind.SelectedIndex = Math.Max(0, Enumerable.Range(0, kind.Items.Count)
                 .FirstOrDefault(i => kind.Items[i] is ComboBoxItem item && item.Tag is uint value && value == preset.Kind));
             kind.SelectionChanged += (_, _) =>
@@ -378,29 +394,6 @@ public partial class MainWindow : Window
             var keep = new CheckBox { Content = "Keep Preview Scene", IsChecked = preset.KeepPreview, Foreground = System.Windows.Media.Brushes.White, Margin = new Thickness(0, 0, 0, 4) };
             keep.Checked += (_, _) => preset.KeepPreview = true;
             keep.Unchecked += (_, _) => preset.KeepPreview = false;
-            var dip = new TextBox { Text = $"{preset.DipR:0.##},{preset.DipG:0.##},{preset.DipB:0.##}", Margin = new Thickness(0, 0, 0, 4) };
-            dip.LostFocus += (_, _) =>
-            {
-                var parts = dip.Text.Split(',');
-                if (parts.Length >= 3
-                    && float.TryParse(parts[0], out var r)
-                    && float.TryParse(parts[1], out var g)
-                    && float.TryParse(parts[2], out var b))
-                {
-                    preset.DipR = r;
-                    preset.DipG = g;
-                    preset.DipB = b;
-                    preset.DipA = 1;
-                }
-            };
-            var custom = new TextBox { Text = preset.CustomWgsl ?? "", AcceptsReturn = true, Height = 64, Margin = new Thickness(0, 0, 0, 4), FontFamily = new System.Windows.Media.FontFamily("Consolas") };
-            custom.LostFocus += (_, _) => preset.CustomWgsl = custom.Text;
-            var tbar = new Button { Content = "Use for T-bar", Height = 24 };
-            tbar.Click += (_, _) =>
-            {
-                _tbarPresetIndex = index;
-                RebuildTransitions();
-            };
             var remove = new Button { Content = "−", Height = 22, Margin = new Thickness(0, 4, 0, 0) };
             remove.Click += (_, _) =>
             {
@@ -410,20 +403,52 @@ public partial class MainWindow : Window
                 RebuildTransitions();
             };
             stack.Children.Add(kind);
-            stack.Children.Add(new TextBlock { Text = "Duration", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
-            stack.Children.Add(duration);
-            stack.Children.Add(unitBox);
-            stack.Children.Add(new TextBlock { Text = "Easing", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
-            stack.Children.Add(easing);
-            stack.Children.Add(new TextBlock { Text = "Direction", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
-            stack.Children.Add(direction);
+            if (preset.HasDuration)
+            {
+                stack.Children.Add(new TextBlock { Text = "Duration", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(duration);
+                stack.Children.Add(unitBox);
+            }
+            if (preset.HasEasing)
+            {
+                stack.Children.Add(new TextBlock { Text = "Easing", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(easing);
+            }
+            if (preset.HasDirection)
+            {
+                stack.Children.Add(new TextBlock { Text = "Direction", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(direction);
+            }
             stack.Children.Add(swap);
             stack.Children.Add(keep);
-            stack.Children.Add(new TextBlock { Text = "Dip color R,G,B", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
-            stack.Children.Add(dip);
-            stack.Children.Add(new TextBlock { Text = "Custom WGSL", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
-            stack.Children.Add(custom);
-            stack.Children.Add(tbar);
+            if (preset.HasDipColor)
+            {
+                stack.Children.Add(new TextBlock { Text = preset.Kind == MixerNative.TransitionPush ? "Fill color" : "Dip color", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+                stack.Children.Add(ColorPick.Swatch(
+                    () => (preset.DipR, preset.DipG, preset.DipB),
+                    (r, g, b) =>
+                    {
+                        preset.DipR = r;
+                        preset.DipG = g;
+                        preset.DipB = b;
+                        preset.DipA = 1;
+                    }));
+            }
+            if (preset.HasCustomWgsl)
+            {
+                var edit = new Button { Content = string.IsNullOrWhiteSpace(preset.CustomWgsl) ? "Edit WGSL…" : "Edit WGSL (set)", Height = 26, Margin = new Thickness(0, 0, 0, 4) };
+                edit.Click += (_, _) =>
+                {
+                    var dialog = new CustomWgslWindow(preset.CustomWgsl) { Owner = this };
+                    if (dialog.ShowDialog() == true)
+                    {
+                        preset.CustomWgsl = dialog.Wgsl;
+                        MixerNative.SetCustomWgsl(unit.Id, dialog.Wgsl);
+                        RebuildTransitions();
+                    }
+                };
+                stack.Children.Add(edit);
+            }
             stack.Children.Add(remove);
             expander.Content = stack;
             expander.MouseLeftButtonDown += (_, _) =>
@@ -472,7 +497,7 @@ public partial class MainWindow : Window
             Rect = new Interop.Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
             Opacity = slot.Opacity,
             Z = slot.Z,
-            AudioFollow = 1
+            AudioFollow = slot.AudioFollow ? 1u : 0u
         };
         var ms = slot.DurationUnit == MixerNative.DurationMs
             ? Math.Max(1, slot.DurationValue)
@@ -1426,8 +1451,7 @@ public partial class MainWindow : Window
         _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
-        foreach (SceneTile tile in ScenePanel.Children)
-            tile.SetSelected(tile.Scene?.Id == _selectedScene?.Id, BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
+        RefreshSceneTiles();
         RebuildTransitions();
         foreach (var window in _switchers.Values)
             window.ApplyBusColors();

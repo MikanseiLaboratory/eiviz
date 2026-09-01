@@ -19,6 +19,7 @@ public partial class SceneEditorWindow : Window
     private bool _dragging;
     private bool _resizing;
     private Point _last;
+    private DateTime _lastGpuPush;
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
@@ -29,6 +30,7 @@ public partial class SceneEditorWindow : Window
         _width = width;
         _height = height;
         _original = scene.Layers.Select(Clone).ToList();
+        _selected = scene.Layers.FirstOrDefault();
         NameBox.Text = scene.Name;
         WireCanvas.Width = width;
         WireCanvas.Height = height;
@@ -37,12 +39,35 @@ public partial class SceneEditorWindow : Window
         if (session.Inputs.Count > 0)
             InputPick.SelectedIndex = 0;
         PreviewHost.RetargetMonitor(monitorId, scene.GpuId);
+        PreviewAspect.RatioWidth = width;
+        PreviewAspect.RatioHeight = height;
         Loaded += (_, _) =>
         {
             FillPresets();
             RefreshLayers();
             PushGpu();
+            AttachDrags();
         };
+    }
+
+    private void AttachDrags()
+    {
+        void Bind(FrameworkElement handle, TextBox box, float scale)
+        {
+            void Preview() => ApplyNumeric(false, box);
+            void Commit() => ApplyNumeric(true, box);
+            NumericDrag.Attach(handle, box, scale, Preview, Commit);
+            NumericDrag.AttachBox(box, scale, Preview, Commit);
+        }
+        Bind(PosXLabel, XBox, 2);
+        Bind(PosYLabel, YBox, 2);
+        Bind(SizeXLabel, WBox, 2);
+        Bind(SizeYLabel, HBox, 2);
+        Bind(CropXLabel, CropXBox, 2);
+        Bind(CropYLabel, CropYBox, 2);
+        Bind(CropWLabel, CropWBox, 2);
+        Bind(CropHLabel, CropHBox, 2);
+        Bind(OpLabel, OpBox, 80);
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -56,7 +81,11 @@ public partial class SceneEditorWindow : Window
         Z = layer.Z,
         AudioFollow = layer.AudioFollow,
         Locked = layer.Locked,
-        SizeLinked = layer.SizeLinked
+        SizeLinked = layer.SizeLinked,
+        CropX = layer.CropX,
+        CropY = layer.CropY,
+        CropWidth = layer.CropWidth,
+        CropHeight = layer.CropHeight
     };
 
     private void RefreshLayers()
@@ -107,6 +136,26 @@ public partial class SceneEditorWindow : Window
             Canvas.SetLeft(rect, layer.X * WireCanvas.Width);
             Canvas.SetTop(rect, layer.Y * WireCanvas.Height);
             WireCanvas.Children.Add(rect);
+            var cropW = Math.Clamp(layer.CropWidth, 0.01f, 1f);
+            var cropH = Math.Clamp(layer.CropHeight, 0.01f, 1f);
+            var cropX = Math.Clamp(layer.CropX, 0f, 1f - cropW);
+            var cropY = Math.Clamp(layer.CropY, 0f, 1f - cropH);
+            if (cropX > 0.001f || cropY > 0.001f || cropW < 0.999f || cropH < 0.999f)
+            {
+                var crop = new Rectangle
+                {
+                    Width = Math.Max(4, rect.Width * cropW),
+                    Height = Math.Max(4, rect.Height * cropH),
+                    Stroke = new SolidColorBrush(color),
+                    StrokeThickness = 1,
+                    StrokeDashArray = new DoubleCollection { 3, 2 },
+                    Fill = Brushes.Transparent,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(crop, Canvas.GetLeft(rect) + rect.Width * cropX);
+                Canvas.SetTop(crop, Canvas.GetTop(rect) + rect.Height * cropY);
+                WireCanvas.Children.Add(crop);
+            }
             if (ReferenceEquals(layer, _selected))
             {
                 var handle = new Rectangle
@@ -125,22 +174,28 @@ public partial class SceneEditorWindow : Window
 
     private void FillNumeric()
     {
-        if (_selected is null)
-            return;
-        XBox.Text = (_selected.X * _width).ToString("0.#");
-        YBox.Text = (_selected.Y * _height).ToString("0.#");
-        WBox.Text = (_selected.Width * _width).ToString("0.#");
-        HBox.Text = (_selected.Height * _height).ToString("0.#");
-        ZBox.Text = _selected.Z.ToString();
-        OpBox.Text = _selected.Opacity.ToString("0.###");
-        AudioFollowBox.IsChecked = _selected.AudioFollow;
-        LinkBox.IsChecked = _selected.SizeLinked;
-        LockBox.IsChecked = _selected.Locked;
-        var edit = !_selected.Locked;
+        var layer = _selected;
+        XBox.Text = ((layer?.X ?? 0) * _width).ToString("0.#");
+        YBox.Text = ((layer?.Y ?? 0) * _height).ToString("0.#");
+        WBox.Text = ((layer?.Width ?? 1) * _width).ToString("0.#");
+        HBox.Text = ((layer?.Height ?? 1) * _height).ToString("0.#");
+        CropXBox.Text = ((layer?.CropX ?? 0) * _width).ToString("0.#");
+        CropYBox.Text = ((layer?.CropY ?? 0) * _height).ToString("0.#");
+        CropWBox.Text = ((layer?.CropWidth ?? 1) * _width).ToString("0.#");
+        CropHBox.Text = ((layer?.CropHeight ?? 1) * _height).ToString("0.#");
+        OpBox.Text = (layer?.Opacity ?? 1).ToString("0.###");
+        AudioFollowBox.IsChecked = layer?.AudioFollow ?? true;
+        LinkBox.IsChecked = layer?.SizeLinked ?? true;
+        LockBox.IsChecked = layer?.Locked ?? false;
+        var edit = layer is { Locked: false };
         XBox.IsEnabled = edit;
         YBox.IsEnabled = edit;
         WBox.IsEnabled = edit;
         HBox.IsEnabled = edit;
+        CropXBox.IsEnabled = edit;
+        CropYBox.IsEnabled = edit;
+        CropWBox.IsEnabled = edit;
+        CropHBox.IsEnabled = edit;
         LinkBox.IsEnabled = edit;
         OpBox.IsEnabled = edit;
     }
@@ -204,31 +259,61 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private void Numeric_LostFocus(object sender, RoutedEventArgs e)
+    private void Numeric_LostFocus(object sender, RoutedEventArgs e) => ApplyNumeric(true, sender);
+
+    private void ApplyNumeric(bool push, object? sender)
     {
         if (_selected is null || _selected.Locked)
             return;
         if (float.TryParse(XBox.Text, out var x)) _selected.X = x / _width;
         if (float.TryParse(YBox.Text, out var y)) _selected.Y = y / _height;
-        if (float.TryParse(WBox.Text, out var w))
+        var fromW = ReferenceEquals(sender, WBox);
+        var fromH = ReferenceEquals(sender, HBox);
+        if (fromW && float.TryParse(WBox.Text, out var w))
         {
             var width = Math.Max(1f, w) / _width;
             if (_selected.SizeLinked && _selected.Width > 0)
                 _selected.Height = width * (_selected.Height / _selected.Width);
             _selected.Width = width;
         }
-        if (float.TryParse(HBox.Text, out var h))
+        else if (fromH && float.TryParse(HBox.Text, out var h))
         {
             var height = Math.Max(1f, h) / _height;
-            if (_selected.SizeLinked && _selected.Height > 0 && !ReferenceEquals(sender, WBox))
+            if (_selected.SizeLinked && _selected.Height > 0)
                 _selected.Width = height * (_selected.Width / _selected.Height);
             _selected.Height = height;
         }
-        if (int.TryParse(ZBox.Text, out var z)) _selected.Z = z;
+        else
+        {
+            if (float.TryParse(WBox.Text, out var bothW))
+                _selected.Width = Math.Max(1f, bothW) / _width;
+            if (float.TryParse(HBox.Text, out var bothH))
+                _selected.Height = Math.Max(1f, bothH) / _height;
+        }
+        if (float.TryParse(CropXBox.Text, out var cx)) _selected.CropX = cx / _width;
+        if (float.TryParse(CropYBox.Text, out var cy)) _selected.CropY = cy / _height;
+        if (float.TryParse(CropWBox.Text, out var cw)) _selected.CropWidth = Math.Max(1f, cw) / _width;
+        if (float.TryParse(CropHBox.Text, out var ch)) _selected.CropHeight = Math.Max(1f, ch) / _height;
+        ClampCrop(_selected);
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
-        FillNumeric();
-        PushGpu();
+        if (push)
+        {
+            FillNumeric();
+            PushGpu();
+        }
+        else
+        {
+            if (fromW)
+                HBox.Text = (_selected.Height * _height).ToString("0.#");
+            else if (fromH)
+                WBox.Text = (_selected.Width * _width).ToString("0.#");
+            if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+            {
+                _lastGpuPush = DateTime.UtcNow;
+                PushGpu();
+            }
+        }
     }
 
     private void AudioFollow_Click(object sender, RoutedEventArgs e)
@@ -297,6 +382,11 @@ public partial class SceneEditorWindow : Window
         }
         DrawWireframe();
         FillNumeric();
+        if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+        {
+            _lastGpuPush = DateTime.UtcNow;
+            PushGpu();
+        }
     }
 
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -390,6 +480,23 @@ public partial class SceneEditorWindow : Window
                 _scene.Layers[i].Height = src.Height;
                 _scene.Layers[i].Opacity = src.Opacity;
                 _scene.Layers[i].Z = src.Z;
+                _scene.Layers[i].CropX = src.CropX;
+                _scene.Layers[i].CropY = src.CropY;
+                _scene.Layers[i].CropWidth = src.CropWidth;
+                _scene.Layers[i].CropHeight = src.CropHeight;
+            }
+            RefreshLayers();
+            PushGpu();
+            return;
+        }
+        if (name == "Full")
+        {
+            foreach (var layer in _scene.Layers.Where(item => !item.Locked))
+            {
+                layer.X = 0;
+                layer.Y = 0;
+                layer.Width = 1;
+                layer.Height = 1;
             }
             RefreshLayers();
             PushGpu();
@@ -397,7 +504,6 @@ public partial class SceneEditorWindow : Window
         }
         var boxes = name switch
         {
-            "Full" => new[] { (0f, 0f, 1f, 1f) },
             "Split H" => new[] { (0f, 0f, 0.5f, 1f), (0.5f, 0f, 0.5f, 1f) },
             "Split V" => new[] { (0f, 0f, 1f, 0.5f), (0f, 0.5f, 1f, 0.5f) },
             "Quad" => new[] { (0f, 0f, 0.5f, 0.5f), (0.5f, 0f, 0.5f, 0.5f), (0f, 0.5f, 0.5f, 0.5f), (0.5f, 0.5f, 0.5f, 0.5f) },
@@ -407,18 +513,25 @@ public partial class SceneEditorWindow : Window
             "PiP BL" => new[] { (0f, 0f, 1f, 1f), (0.06f, 0.60f, 0.32f, 0.32f) },
             _ => Array.Empty<(float, float, float, float)>()
         };
-        for (var i = 0; i < _scene.Layers.Count && i < boxes.Length; i++)
+        var unlocked = _scene.Layers.Where(item => !item.Locked).ToList();
+        for (var i = 0; i < unlocked.Count && i < boxes.Length; i++)
         {
-            if (_scene.Layers[i].Locked)
-                continue;
             var (x, y, w, h) = boxes[i];
-            _scene.Layers[i].X = x;
-            _scene.Layers[i].Y = y;
-            _scene.Layers[i].Width = w;
-            _scene.Layers[i].Height = h;
+            unlocked[i].X = x;
+            unlocked[i].Y = y;
+            unlocked[i].Width = w;
+            unlocked[i].Height = h;
         }
         RefreshLayers();
         PushGpu();
+    }
+
+    private static void ClampCrop(SceneLayer layer)
+    {
+        layer.CropX = Math.Clamp(layer.CropX, 0, 0.99f);
+        layer.CropY = Math.Clamp(layer.CropY, 0, 0.99f);
+        layer.CropWidth = Math.Clamp(layer.CropWidth, 0.01f, 1f - layer.CropX);
+        layer.CropHeight = Math.Clamp(layer.CropHeight, 0.01f, 1f - layer.CropY);
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)

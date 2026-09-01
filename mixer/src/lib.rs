@@ -1159,6 +1159,25 @@ pub unsafe extern "C" fn mixer_unit_overlay_auto(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_validate_custom_wgsl(wgsl: *const c_char) -> i32 {
+    let text = if wgsl.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(wgsl) }
+            .to_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    match crate::compose::Composer::validate_custom_wgsl(&text) {
+        Ok(()) => OK,
+        Err(error) => {
+            report_session_error(error);
+            ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_set_custom_wgsl(unit_id: u64, wgsl: *const c_char) -> i32 {
     let text = if wgsl.is_null() {
         String::new()
@@ -2027,8 +2046,8 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     let error = match with_mixer(|mixer| mixer.telemetry.lock().expect("telemetry").last_error.clone()) {
-        Ok(error) => error,
-        Err(code) => return code,
+        Ok(error) if !error.is_empty() => error,
+        _ => session_error_slot().lock().expect("session error").clone(),
     };
     let n = error.len().min(cap);
     unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };

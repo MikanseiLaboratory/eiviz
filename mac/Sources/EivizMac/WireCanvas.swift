@@ -9,6 +9,10 @@ struct WireRect: Identifiable, Equatable {
     var enabled: Bool = true
     var locked: Bool = false
     var sizeLinked: Bool = false
+    var cropX: Float = 0
+    var cropY: Float = 0
+    var cropWidth: Float = 1
+    var cropHeight: Float = 1
 }
 
 struct WireCanvasView: View {
@@ -48,6 +52,18 @@ struct WireCanvasView: View {
                         .overlay(Rectangle().stroke(color, lineWidth: selected == item.id ? 4 : 2))
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
+                    if item.cropX > 0.001 || item.cropY > 0.001 || item.cropWidth < 0.999 || item.cropHeight < 0.999 {
+                        let crop = CGRect(
+                            x: frame.minX + frame.width * CGFloat(item.cropX),
+                            y: frame.minY + frame.height * CGFloat(item.cropY),
+                            width: max(4, frame.width * CGFloat(item.cropWidth)),
+                            height: max(4, frame.height * CGFloat(item.cropHeight))
+                        )
+                        Rectangle()
+                            .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                            .frame(width: crop.width, height: crop.height)
+                            .position(x: crop.midX, y: crop.midY)
+                    }
                     if selected == item.id && !item.locked {
                         Rectangle()
                             .fill(color)
