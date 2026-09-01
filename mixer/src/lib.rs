@@ -2313,8 +2313,6 @@ fn render_loop(
     let mut next = Instant::now();
     let clock_start = Instant::now();
     let mut frame_i = 0u64;
-    let mut skipped_compose = 0u32;
-    let mut hold_compose = 0u32;
     let mut audio_produced = 0u64;
     let mut audio_carry = 0u64;
     let mut last_bus: HashMap<u64, (u64, u64, u32)> = HashMap::new();
@@ -2436,9 +2434,7 @@ fn render_loop(
             thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         let overdue = Instant::now().saturating_duration_since(next);
-        let mut skip_compose = buffer_frames > 1
-            && skipped_compose < buffer_frames
-            && overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
+        let mut skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
         {
             let mut guard = shared.lock().expect("shared");
             if guard.compose_needed || guard.units.values().any(|unit| unit.auto.is_some()) {
@@ -2509,24 +2505,20 @@ fn render_loop(
                 .collect();
             let binds: HashMap<u64, (u64, u64)> = guard.multiview_binds.clone();
             drop(guard);
-            let bus_changed = snapshot.iter().any(|(id, .., state)| {
-                last_bus.get(id).is_none_or(|(program, preview, mix)| {
-                    *program != state.program_source
-                        || *preview != state.preview_source
-                        || *mix != state.mix.to_bits()
+            let changed_units: Vec<u64> = snapshot
+                .iter()
+                .filter(|(id, .., state)| {
+                    last_bus.get(id).is_none_or(|(program, preview, mix)| {
+                        *program != state.program_source
+                            || *preview != state.preview_source
+                            || *mix != state.mix.to_bits()
+                    })
                 })
-            });
-            if bus_changed {
+                .map(|(id, ..)| *id)
+                .collect();
+            if !changed_units.is_empty() {
                 skip_compose = false;
-                hold_compose = buffer_frames;
-            } else if hold_compose > 0 {
-                skip_compose = false;
-                hold_compose = hold_compose.saturating_sub(1);
-            }
-            if skip_compose {
-                skipped_compose = skipped_compose.saturating_add(1);
-            } else {
-                skipped_compose = 0;
+                frame_delay.discard(changed_units);
             }
             let mut tallies = HashMap::new();
             for (scene_id, (preview_unit, program_unit)) in &binds {
@@ -2583,16 +2575,14 @@ fn render_loop(
                 .iter()
                 .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
-            if !bus_changed {
-                if let Err(error) =
-                    presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
-                        frame_delay
-                            .view(unit_id, kind)
-                            .or_else(|| composer.unit_view(unit_id, kind))
-                    })
-                {
-                    set_error(&telemetry, error);
-                }
+            if let Err(error) =
+                presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                    frame_delay
+                        .view(unit_id, kind)
+                        .or_else(|| composer.unit_view(unit_id, kind))
+                })
+            {
+                set_error(&telemetry, error);
             }
             {
                 let mut encoder =
@@ -2794,16 +2784,6 @@ fn render_loop(
                         *id,
                         (state.program_source, state.preview_source, state.mix.to_bits()),
                     );
-                }
-            }
-            if bus_changed {
-                let switch_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
-                if let Err(error) =
-                    presenters.present_unit_buses(&device, switch_epoch, |unit_id, kind| {
-                        composer.unit_view(unit_id, kind)
-                    })
-                {
-                    set_error(&telemetry, error);
                 }
             }
             if presenters.any_monitor_due(frame_i) {

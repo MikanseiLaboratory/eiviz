@@ -55,6 +55,27 @@ impl FrameDelay {
         self.epoch
     }
 
+    /// Drop queued display frames so present falls back to the current compose
+    /// until new captures fill the ring. Avoids NEW→old-delay rollback flicker.
+    pub fn discard(&mut self, unit_ids: impl IntoIterator<Item = u64>) {
+        let mut changed = false;
+        for unit_id in unit_ids {
+            let Some(ring) = self.units.get_mut(&unit_id) else {
+                continue;
+            };
+            if ring.queued == 0 {
+                continue;
+            }
+            ring.write = 0;
+            ring.read = 0;
+            ring.queued = 0;
+            changed = true;
+        }
+        if changed {
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+    }
+
     pub fn capture(
         &mut self,
         device: &GpuDevice,
