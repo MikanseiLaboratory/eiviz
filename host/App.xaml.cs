@@ -59,6 +59,7 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");
+        BusTheme.PushMixer(Session.Settings);
         MixerNative.ThrowIfFailed(
             MixerNative.SetRebarOptimization(Session.Settings.RebarOptimizationEnabled ? 1u : 0u),
             "Set ReBAR optimization");

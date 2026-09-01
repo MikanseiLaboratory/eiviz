@@ -35,8 +35,12 @@ struct SettingsView: View {
                     Spacer()
                     Button("OK") {
                         mixer.pushAudio()
+                        mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
                         _ = mixer_set_ndi_gpu_upload(mixer.session.settings.ndiGpuUploadEnabled ? 1 : 0)
+                        for layout in mixer.session.multiviews {
+                            mixer.pushMultiview(layout)
+                        }
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -63,6 +67,13 @@ struct SettingsView: View {
             ColorPicker("", selection: Binding(
                 get: { mixer.session.settings.programColor.color },
                 set: { mixer.session.settings.programColor = RgbColor($0) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .frame(width: 220, alignment: .leading)
+            Text("Inactive color")
+            ColorPicker("", selection: Binding(
+                get: { mixer.session.settings.inactiveColor.color },
+                set: { mixer.session.settings.inactiveColor = RgbColor($0) }
             ), supportsOpacity: false)
             .labelsHidden()
             .frame(width: 220, alignment: .leading)
@@ -779,6 +790,10 @@ struct MultiviewSlotsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var previewUnit: UInt64 = 1
     @State private var programUnit: UInt64 = 1
+    @State private var previewFollow = true
+    @State private var previewLabel = ""
+    @State private var programFollow = true
+    @State private var programLabel = ""
     @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
 
     private var layoutId: UInt64? { mixer.openMultiview?.id }
@@ -788,8 +803,8 @@ struct MultiviewSlotsView: View {
             Text("Top left is that Mixing Unit's Preview. Top right is Program. The lower half holds eight Input or Scene windows.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            unitRow("PRV (top left)", $previewUnit)
-            unitRow("PGM (top right)", $programUnit)
+            unitRow("PRV (top left)", $previewUnit, follow: $previewFollow, custom: $previewLabel)
+            unitRow("PGM (top right)", $programUnit, follow: $programFollow, custom: $programLabel)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(0..<8, id: \.self) { index in
@@ -811,6 +826,10 @@ struct MultiviewSlotsView: View {
             if let id = layoutId, let layout = mixer.session.multiviews.first(where: { $0.id == id }) {
                 previewUnit = layout.previewUnitId
                 programUnit = layout.programUnitId
+                previewFollow = layout.previewLabelFollow
+                previewLabel = layout.previewLabel
+                programFollow = layout.programLabelFollow
+                programLabel = layout.programLabel
                 tiles = layout.tiles
                 if tiles.count < 8 {
                     tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - tiles.count))
@@ -819,7 +838,7 @@ struct MultiviewSlotsView: View {
         }
     }
 
-    private func unitRow(_ title: String, _ unit: Binding<UInt64>) -> some View {
+    private func unitRow(_ title: String, _ unit: Binding<UInt64>, follow: Binding<Bool>, custom: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).fontWeight(.bold)
             Picker("", selection: unit) {
@@ -827,9 +846,23 @@ struct MultiviewSlotsView: View {
                     Text(item.name).tag(item.id)
                 }
             }
+            labelEditor(follow: follow, custom: custom)
         }
         .padding(8)
         .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+    }
+
+    private func labelEditor(follow: Binding<Bool>, custom: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("", selection: follow) {
+                Text("Follow").tag(true)
+                Text("Custom").tag(false)
+            }
+            .pickerStyle(.segmented)
+            mixerTextField(custom)
+                .disabled(follow.wrappedValue)
+                .opacity(follow.wrappedValue ? 0.45 : 1)
+        }
     }
 
     private func tileRow(_ index: Int) -> some View {
@@ -863,6 +896,16 @@ struct MultiviewSlotsView: View {
                     }
                 }
             }
+            labelEditor(
+                follow: Binding(
+                    get: { tiles[index].labelFollow },
+                    set: { tiles[index].labelFollow = $0 }
+                ),
+                custom: Binding(
+                    get: { tiles[index].label },
+                    set: { tiles[index].label = $0 }
+                )
+            )
         }
         .padding(8)
         .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
@@ -874,6 +917,10 @@ struct MultiviewSlotsView: View {
         else { return }
         mixer.session.multiviews[index].previewUnitId = previewUnit
         mixer.session.multiviews[index].programUnitId = programUnit
+        mixer.session.multiviews[index].previewLabelFollow = previewFollow
+        mixer.session.multiviews[index].previewLabel = previewLabel
+        mixer.session.multiviews[index].programLabelFollow = programFollow
+        mixer.session.multiviews[index].programLabel = programLabel
         mixer.session.multiviews[index].tiles = tiles
         mixer.openMultiview = mixer.session.multiviews[index]
         mixer.pushMultiview(mixer.session.multiviews[index])

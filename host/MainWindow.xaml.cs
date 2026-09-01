@@ -86,7 +86,7 @@ public partial class MainWindow : Window
             tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
             tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
             tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
-            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval(), BusTheme.Preview(_session.Settings));
+            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval(), BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
             ScenePanel.Children.Add(tile);
         }
         RefreshSceneTiles();
@@ -172,7 +172,7 @@ public partial class MainWindow : Window
         _selectedScene = scene;
         Commands.TryEnqueue(new PreviewSceneCommand(SelectedUnit.Id, scene.GpuId));
         foreach (SceneTile tile in ScenePanel.Children)
-            tile.SetSelected(tile.Scene?.Id == scene.Id, BusTheme.Preview(_session.Settings));
+            tile.SetSelected(tile.Scene?.Id == scene.Id, BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
     }
 
     private void FirePreset(TransitionPreset preset)
@@ -639,6 +639,13 @@ public partial class MainWindow : Window
         BusTheme.Apply(_session.Settings, ProgramFrame, ProgramHeader, ProgramHeaderText, preview: false);
     }
 
+    private void RefreshMultiviewLabels()
+    {
+        var unit = SelectedUnit;
+        foreach (var layout in _session.Multiviews)
+            Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+    }
+
     private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
 
     private void ResourceHud_MouseUp(object sender, MouseButtonEventArgs e) => OpenResources();
@@ -712,6 +719,7 @@ public partial class MainWindow : Window
         InputList.Items.Refresh();
         RebuildMeters();
         TickVideo();
+        RefreshMultiviewLabels();
         if (_inputPreviews.TryGetValue(input.Id, out var preview))
             preview.SetTitle(input.Name);
     }
@@ -974,6 +982,7 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
         RebuildScenes();
         SelectScene(scene);
+        RefreshMultiviewLabels();
     }
 
     private void UnitBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1175,9 +1184,11 @@ public partial class MainWindow : Window
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
         _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
         _session.Settings.ProgramColor = RgbColor.FromOrDefault(dialog.Settings.ProgramColor, RgbColor.ProgramDefault);
+        _session.Settings.InactiveColor = RgbColor.FromOrDefault(dialog.Settings.InactiveColor, RgbColor.InactiveDefault);
+        BusTheme.PushMixer(_session.Settings);
         ApplyBusColors();
         foreach (SceneTile tile in ScenePanel.Children)
-            tile.SetSelected(tile.Scene?.Id == _selectedScene?.Id, BusTheme.Preview(_session.Settings));
+            tile.SetSelected(tile.Scene?.Id == _selectedScene?.Id, BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
         RebuildTransitions();
         foreach (var window in _switchers.Values)
             window.ApplyBusColors();
@@ -1196,7 +1207,10 @@ public partial class MainWindow : Window
             MixerNative.SetNdiGpuUpload(_session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
             "Set NDI GPU upload");
         foreach (var layout in _session.Multiviews)
+        {
             layout.PushPresentInterval(_session.Settings);
+            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
+        }
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
         PushScenePresentIntervals();

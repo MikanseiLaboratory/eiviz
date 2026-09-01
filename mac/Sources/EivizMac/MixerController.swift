@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import Darwin
 import EivizMixer
 import Foundation
 import SwiftUI
@@ -64,6 +65,7 @@ final class MixerController: ObservableObject {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        applyBusColors()
         applySession()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -620,6 +622,20 @@ final class MixerController: ObservableObject {
             let row = Float(i / 4)
             layer(item.tiles[i].kind.encoded(item.tiles[i].sourceId), col / 4, 0.5 + row / 4, 0.25, 0.25, Int32(2 + i))
         }
+        let names = slotNames(item)
+        var owned = names.map { $0.isEmpty ? nil : strdup($0) }
+        defer {
+            for pointer in owned {
+                if let pointer {
+                    free(pointer)
+                }
+            }
+        }
+        for i in layers.indices where i < owned.count {
+            if let pointer = owned[i] {
+                layers[i].label = UnsafePointer(pointer)
+            }
+        }
         layers.withUnsafeMutableBufferPointer { ptr in
             fail(
                 mixer_define_scene(item.gpuId, selectedUnit.width, selectedUnit.height, UInt32(ptr.count), ptr.baseAddress),
@@ -629,6 +645,59 @@ final class MixerController: ObservableObject {
         fail(mixer_bind_multiview(item.gpuId, item.previewUnitId, item.programUnitId), "Bind Multiview")
         let interval = item.presentInterval == 0 ? session.settings.defaultPresentInterval : item.presentInterval
         _ = mixer_set_monitor_present_interval(item.monitorId, max(1, interval))
+    }
+
+    func applyBusColors() {
+        let preview = session.settings.previewColor
+        let program = session.settings.programColor
+        let inactive = session.settings.inactiveColor
+        _ = mixer_set_bus_colors(
+            preview.r, preview.g, preview.b,
+            program.r, program.g, program.b,
+            inactive.r, inactive.g, inactive.b
+        )
+    }
+
+    private func slotNames(_ layout: MultiviewLayout) -> [String] {
+        var names = Array(repeating: "", count: 10)
+        names[0] = busLabel(
+            follow: layout.previewLabelFollow,
+            custom: layout.previewLabel,
+            prefix: "PRV",
+            unitId: layout.previewUnitId
+        )
+        names[1] = busLabel(
+            follow: layout.programLabelFollow,
+            custom: layout.programLabel,
+            prefix: "PGM",
+            unitId: layout.programUnitId
+        )
+        for i in 0..<8 {
+            names[2 + i] = tileLabel(layout.tiles[i])
+        }
+        return names
+    }
+
+    private func busLabel(follow: Bool, custom: String, prefix: String, unitId: UInt64) -> String {
+        if !follow {
+            return custom
+        }
+        let name = session.units.first(where: { $0.id == unitId })?.name ?? String(unitId)
+        return "\(prefix)  \(name)"
+    }
+
+    private func tileLabel(_ tile: MvSlot) -> String {
+        if !tile.labelFollow {
+            return tile.label
+        }
+        switch tile.kind {
+        case .input:
+            return session.inputs.first(where: { $0.id == tile.sourceId })?.name ?? ""
+        case .scene:
+            return session.scenes.first(where: { $0.gpuId == tile.sourceId })?.name ?? ""
+        default:
+            return ""
+        }
     }
 
     func setOverlayEnabled(_ id: UUID, enabled: Bool) {
@@ -688,6 +757,7 @@ final class MixerController: ObservableObject {
             fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
             fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
             fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+            applyBusColors()
             applySession()
         } catch {
             errorText = error.localizedDescription

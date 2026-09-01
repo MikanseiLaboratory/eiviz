@@ -295,7 +295,7 @@ struct ContentView: View {
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
-        .background(Rectangle().stroke(selected ? mixer.session.settings.previewColor.color : Color(white: 0.33), lineWidth: 2))
+        .background(Rectangle().stroke(selected ? mixer.session.settings.previewColor.color : mixer.session.settings.inactiveColor.color, lineWidth: 2))
         .contextMenu {
             Button("Edit") {
                 mixer.editingScene = scene

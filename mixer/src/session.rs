@@ -75,6 +75,8 @@ pub struct SessionSettings {
     pub preview_color: RgbColor,
     #[serde(default = "program_color", deserialize_with = "de_program_color")]
     pub program_color: RgbColor,
+    #[serde(default = "inactive_color", deserialize_with = "de_inactive_color")]
+    pub inactive_color: RgbColor,
     pub last_session_path: Option<String>,
 }
 
@@ -95,6 +97,7 @@ impl Default for SessionSettings {
             ndi_gpu_upload: true,
             preview_color: preview_color(),
             program_color: program_color(),
+            inactive_color: inactive_color(),
             last_session_path: None,
         }
     }
@@ -124,6 +127,14 @@ fn de_preview_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result
 
 fn de_program_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
     Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(program_color))
+}
+
+fn inactive_color() -> RgbColor {
+    RgbColor { r: 64, g: 64, b: 64 }
+}
+
+fn de_inactive_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+    Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(inactive_color))
 }
 
 fn fps_num() -> u32 {
@@ -422,6 +433,10 @@ pub struct MvSlot {
     pub kind: MvSlotKind,
     #[serde(default)]
     pub source_id: u64,
+    #[serde(default = "default_true")]
+    pub label_follow: bool,
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -484,6 +499,14 @@ pub struct MultiviewDto {
     pub present_interval: u32,
     #[serde(default)]
     pub tiles: Vec<MvSlot>,
+    #[serde(default = "default_true")]
+    pub preview_label_follow: bool,
+    #[serde(default)]
+    pub preview_label: String,
+    #[serde(default = "default_true")]
+    pub program_label_follow: bool,
+    #[serde(default)]
+    pub program_label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,6 +622,8 @@ impl Document {
                 unit.multiview_tiles.push(MvSlot {
                     kind: MvSlotKind::None,
                     source_id: 0,
+                    label_follow: true,
+                    label: String::new(),
                 });
             }
             unit.multiview_tiles.truncate(8);
@@ -611,6 +636,8 @@ impl Document {
                 layout.tiles.push(MvSlot {
                     kind: MvSlotKind::None,
                     source_id: 0,
+                    label_follow: true,
+                    label: String::new(),
                 });
             }
             layout.tiles.truncate(8);
@@ -717,6 +744,7 @@ mod tests {
         assert!(doc.settings.ndi_gpu_upload);
         assert_eq!(doc.settings.preview_color, RgbColor { r: 0, g: 255, b: 0 });
         assert_eq!(doc.settings.program_color, RgbColor { r: 255, g: 0, b: 0 });
+        assert_eq!(doc.settings.inactive_color, RgbColor { r: 64, g: 64, b: 64 });
     }
 
     #[test]
@@ -735,6 +763,32 @@ mod tests {
         let again = parse(text.as_bytes()).unwrap();
         assert_eq!(again.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
         assert_eq!(again.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
+        assert_eq!(again.settings.inactive_color, RgbColor { r: 64, g: 64, b: 64 });
+    }
+
+    #[test]
+    fn inactive_color_and_mv_labels_roundtrip() {
+        let src = r#"{
+  "version": 1,
+  "settings": {
+    "inactiveColor": { "r": 8, "g": 9, "b": 10 }
+  },
+  "multiviews": [{
+    "id": 1,
+    "name": "MV",
+    "previewLabelFollow": false,
+    "previewLabel": "PRV custom",
+    "programLabelFollow": true,
+    "tiles": [{ "kind": "Scene", "sourceId": 1, "labelFollow": false, "label": "Cam 1" }]
+  }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.settings.inactive_color, RgbColor { r: 8, g: 9, b: 10 });
+        assert!(!doc.multiviews[0].preview_label_follow);
+        assert_eq!(doc.multiviews[0].preview_label, "PRV custom");
+        assert!(doc.multiviews[0].program_label_follow);
+        assert!(!doc.multiviews[0].tiles[0].label_follow);
+        assert_eq!(doc.multiviews[0].tiles[0].label, "Cam 1");
     }
 
     #[test]

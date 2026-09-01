@@ -10,6 +10,10 @@ public partial class MultiviewSlotsWindow : Window
     private readonly List<MvSlot> _tiles;
     private ulong _previewUnit;
     private ulong _programUnit;
+    private bool _previewFollow;
+    private string _previewLabel = "";
+    private bool _programFollow;
+    private string _programLabel = "";
     private bool _suppress;
 
     public MultiviewSlotsWindow(Session session, MultiviewLayout layout)
@@ -20,6 +24,10 @@ public partial class MultiviewSlotsWindow : Window
         layout.EnsureTiles();
         _previewUnit = layout.PreviewUnitId;
         _programUnit = layout.ProgramUnitId;
+        _previewFollow = layout.PreviewLabelFollow;
+        _previewLabel = layout.PreviewLabel ?? "";
+        _programFollow = layout.ProgramLabelFollow;
+        _programLabel = layout.ProgramLabel ?? "";
         _tiles = layout.Tiles.Select(Clone).ToList();
         Rebuild();
     }
@@ -63,6 +71,25 @@ public partial class MultiviewSlotsWindow : Window
             }
         };
         stack.Children.Add(pick);
+        stack.Children.Add(LabelEditor(
+            preview ? "label-prv" : "label-pgm",
+            preview ? _previewFollow : _programFollow,
+            preview ? _previewLabel : _programLabel,
+            follow =>
+            {
+                if (preview)
+                    _previewFollow = follow;
+                else
+                    _programFollow = follow;
+                Rebuild();
+            },
+            text =>
+            {
+                if (preview)
+                    _previewLabel = text;
+                else
+                    _programLabel = text;
+            }));
         box.Child = stack;
         return box;
     }
@@ -85,8 +112,64 @@ public partial class MultiviewSlotsWindow : Window
                 tile.SourceId = choice.Id;
         };
         stack.Children.Add(pick);
+        stack.Children.Add(LabelEditor(
+            $"label-tile-{index}",
+            tile.LabelFollow,
+            tile.Label,
+            follow =>
+            {
+                tile.LabelFollow = follow;
+                Rebuild();
+            },
+            text => tile.Label = text));
         box.Child = stack;
         return box;
+    }
+
+    private UIElement LabelEditor(string group, bool follow, string custom, Action<bool> setFollow, Action<string> setCustom)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var modes = new WrapPanel();
+        var followRadio = new RadioButton
+        {
+            Content = "Follow",
+            GroupName = group,
+            IsChecked = follow,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 12, 4)
+        };
+        var customRadio = new RadioButton
+        {
+            Content = "Custom",
+            GroupName = group,
+            IsChecked = !follow,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 12, 4)
+        };
+        followRadio.Checked += (_, _) =>
+        {
+            if (_suppress)
+                return;
+            setFollow(true);
+        };
+        customRadio.Checked += (_, _) =>
+        {
+            if (_suppress)
+                return;
+            setFollow(false);
+        };
+        modes.Children.Add(followRadio);
+        modes.Children.Add(customRadio);
+        stack.Children.Add(modes);
+        var box = new TextBox
+        {
+            Text = custom,
+            IsEnabled = !follow,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        box.TextChanged += (_, _) => setCustom(box.Text);
+        stack.Children.Add(box);
+        return stack;
     }
 
     private static Border Frame() => new()
@@ -136,6 +219,10 @@ public partial class MultiviewSlotsWindow : Window
     {
         _layout.PreviewUnitId = _previewUnit;
         _layout.ProgramUnitId = _programUnit;
+        _layout.PreviewLabelFollow = _previewFollow;
+        _layout.PreviewLabel = _previewLabel ?? "";
+        _layout.ProgramLabelFollow = _programFollow;
+        _layout.ProgramLabel = _programLabel ?? "";
         _layout.Tiles.Clear();
         foreach (var tile in _tiles)
             _layout.Tiles.Add(tile);
@@ -143,7 +230,13 @@ public partial class MultiviewSlotsWindow : Window
         DialogResult = true;
     }
 
-    private static MvSlot Clone(MvSlot slot) => new() { Kind = slot.Kind, SourceId = slot.SourceId };
+    private static MvSlot Clone(MvSlot slot) => new()
+    {
+        Kind = slot.Kind,
+        SourceId = slot.SourceId,
+        LabelFollow = slot.LabelFollow,
+        Label = slot.Label ?? ""
+    };
 
     private sealed record SlotChoice(string Label, ulong Id);
 }

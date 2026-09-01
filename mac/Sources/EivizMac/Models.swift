@@ -150,6 +150,27 @@ enum InternalColorFormat: String, Codable {
 struct MvSlot: Codable, Equatable {
     var kind: MvSlotKind = .none
     var sourceId: UInt64 = 0
+    var labelFollow: Bool = true
+    var label: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case kind, sourceId, labelFollow, label
+    }
+
+    init(kind: MvSlotKind = .none, sourceId: UInt64 = 0, labelFollow: Bool = true, label: String = "") {
+        self.kind = kind
+        self.sourceId = sourceId
+        self.labelFollow = labelFollow
+        self.label = label
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(MvSlotKind.self, forKey: .kind) ?? .none
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        labelFollow = try container.decodeIfPresent(Bool.self, forKey: .labelFollow) ?? true
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+    }
 }
 
 enum VideoPlayWhen: String, Codable, Hashable {
@@ -418,10 +439,55 @@ struct MultiviewLayout: Identifiable, Codable {
     var programUnitId: UInt64 = 1
     var presentInterval: UInt32 = 0
     var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
+    var previewLabelFollow: Bool = true
+    var previewLabel: String = ""
+    var programLabelFollow: Bool = true
+    var programLabel: String = ""
     var gpuId: UInt64 { EIVIZ_MULTIVIEW_BASE | id }
 
     enum CodingKeys: String, CodingKey {
         case id, name, previewUnitId, programUnitId, presentInterval, tiles
+        case previewLabelFollow, previewLabel, programLabelFollow, programLabel
+    }
+
+    init(
+        id: UInt64,
+        name: String,
+        monitorId: UInt64 = 0,
+        previewUnitId: UInt64 = 1,
+        programUnitId: UInt64 = 1,
+        presentInterval: UInt32 = 0,
+        tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8),
+        previewLabelFollow: Bool = true,
+        previewLabel: String = "",
+        programLabelFollow: Bool = true,
+        programLabel: String = ""
+    ) {
+        self.id = id
+        self.name = name
+        self.monitorId = monitorId
+        self.previewUnitId = previewUnitId
+        self.programUnitId = programUnitId
+        self.presentInterval = presentInterval
+        self.tiles = tiles
+        self.previewLabelFollow = previewLabelFollow
+        self.previewLabel = previewLabel
+        self.programLabelFollow = programLabelFollow
+        self.programLabel = programLabel
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Multiview \(id)"
+        previewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .previewUnitId) ?? 1
+        programUnitId = try container.decodeIfPresent(UInt64.self, forKey: .programUnitId) ?? 1
+        presentInterval = try container.decodeIfPresent(UInt32.self, forKey: .presentInterval) ?? 0
+        tiles = try container.decodeIfPresent([MvSlot].self, forKey: .tiles) ?? Array(repeating: MvSlot(), count: 8)
+        previewLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .previewLabelFollow) ?? true
+        previewLabel = try container.decodeIfPresent(String.self, forKey: .previewLabel) ?? ""
+        programLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .programLabelFollow) ?? true
+        programLabel = try container.decodeIfPresent(String.self, forKey: .programLabel) ?? ""
     }
 }
 
@@ -446,6 +512,7 @@ struct RgbColor: Codable, Equatable, Hashable {
 
     static let previewDefault = RgbColor(r: 0, g: 255, b: 0)
     static let programDefault = RgbColor(r: 255, g: 0, b: 0)
+    static let inactiveDefault = RgbColor(r: 64, g: 64, b: 64)
 }
 
 struct SessionSettings: Codable {
@@ -463,6 +530,7 @@ struct SessionSettings: Codable {
     var ndiGpuUpload: Bool?
     var previewColor: RgbColor = .previewDefault
     var programColor: RgbColor = .programDefault
+    var inactiveColor: RgbColor = .inactiveDefault
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
@@ -491,6 +559,7 @@ struct SessionSettings: Codable {
         ndiGpuUpload = try container.decodeIfPresent(Bool.self, forKey: .ndiGpuUpload)
         previewColor = try container.decodeIfPresent(RgbColor.self, forKey: .previewColor) ?? .previewDefault
         programColor = try container.decodeIfPresent(RgbColor.self, forKey: .programColor) ?? .programDefault
+        inactiveColor = try container.decodeIfPresent(RgbColor.self, forKey: .inactiveColor) ?? .inactiveDefault
         lastSessionPath = try container.decodeIfPresent(String.self, forKey: .lastSessionPath)
     }
 }

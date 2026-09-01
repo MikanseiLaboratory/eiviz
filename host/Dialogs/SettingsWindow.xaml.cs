@@ -31,7 +31,8 @@ public partial class SettingsWindow : Window
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
             NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
             PreviewColor = RgbColor.FromOrDefault(session.Settings.PreviewColor, RgbColor.PreviewDefault),
-            ProgramColor = RgbColor.FromOrDefault(session.Settings.ProgramColor, RgbColor.ProgramDefault)
+            ProgramColor = RgbColor.FromOrDefault(session.Settings.ProgramColor, RgbColor.ProgramDefault),
+            InactiveColor = RgbColor.FromOrDefault(session.Settings.InactiveColor, RgbColor.InactiveDefault)
         };
         foreach (var output in session.Outputs)
         {
@@ -127,6 +128,15 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void PickInactiveColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Inactive color", Settings.InactiveColor) is { } color)
+        {
+            Settings.InactiveColor = color;
+            PaintBusColors();
+        }
+    }
+
     private RgbColor? PickColor(string title, RgbColor current)
     {
         var dialog = new ColorPickWindow(title, current) { Owner = this };
@@ -135,10 +145,11 @@ public partial class SettingsWindow : Window
 
     private void PaintBusColors()
     {
-        if (PreviewColorSwatch is null || ProgramColorSwatch is null)
+        if (PreviewColorSwatch is null || ProgramColorSwatch is null || InactiveColorSwatch is null)
             return;
         PreviewColorSwatch.Background = BusTheme.PreviewBrush(Settings);
         ProgramColorSwatch.Background = BusTheme.ProgramBrush(Settings);
+        InactiveColorSwatch.Background = BusTheme.InactiveBrush(Settings);
     }
 
     private void FillRebar()

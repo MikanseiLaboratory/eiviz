@@ -24,7 +24,7 @@ public partial class SceneTile : UserControl
     public event EventHandler<SceneEntry>? ScenePreviewRequested;
     public event EventHandler<SceneEntry>? SceneCloseRequested;
 
-    public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3, Color? previewColor = null)
+    public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3, Color? previewColor = null, Color? inactiveColor = null)
     {
         Scene = scene;
         Title.Text = scene.Name;
@@ -32,7 +32,7 @@ public partial class SceneTile : UserControl
         Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
         Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
         Monitor.ApplyPresentInterval();
-        SetSelected(selected, previewColor);
+        SetSelected(selected, previewColor, inactiveColor);
     }
 
     public void SetPresentInterval(uint presentInterval)
@@ -41,12 +41,13 @@ public partial class SceneTile : UserControl
         Monitor.ApplyPresentInterval();
     }
 
-    public void SetSelected(bool selected, Color? previewColor = null)
+    public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null)
     {
         var accent = previewColor ?? Color.FromRgb(0, 255, 0);
+        var idle = inactiveColor ?? Color.FromRgb(64, 64, 64);
         Chrome.BorderBrush = selected
             ? new SolidColorBrush(accent)
-            : new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
+            : new SolidColorBrush(idle);
     }
 
     public void SetTransport(bool hasVideo, bool loop, bool playing, bool muted)

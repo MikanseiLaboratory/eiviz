@@ -236,6 +236,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_ndi_gpu_upload")]
     internal static partial int SetNdiGpuUpload(uint enabled);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_set_bus_colors")]
+    internal static partial int SetBusColors(
+        byte prvR, byte prvG, byte prvB,
+        byte pgmR, byte pgmG, byte pgmB,
+        byte inR, byte inG, byte inB);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_frame_buffer")]
     internal static partial int SetFrameBuffer(uint frames);
 
@@ -407,6 +413,7 @@ internal struct OverlayDesc
     public int Z;
     public uint AudioFollow;
     public uint Pad;
+    public nint Label;
 }
 
 [StructLayout(LayoutKind.Sequential)]

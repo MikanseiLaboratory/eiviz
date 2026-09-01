@@ -81,6 +81,8 @@ public sealed class MvSlot
 {
     public MvSlotKind Kind { get; set; }
     public ulong SourceId { get; set; }
+    public bool LabelFollow { get; set; } = true;
+    public string Label { get; set; } = "";
 }
 
 public sealed class InputEntry
@@ -184,6 +186,10 @@ public sealed class MultiviewLayout
     public ulong ProgramUnitId { get; set; } = 1;
     public uint PresentInterval { get; set; }
     public List<MvSlot> Tiles { get; } = [];
+    public bool PreviewLabelFollow { get; set; } = true;
+    public string PreviewLabel { get; set; } = "";
+    public bool ProgramLabelFollow { get; set; } = true;
+    public string ProgramLabel { get; set; } = "";
     public ulong GpuId => MixerNative.MultiviewBase | Id;
     public override string ToString() => Name;
 
@@ -331,6 +337,7 @@ public sealed class SessionSettings
     public bool? NdiGpuUpload { get; set; } = true;
     public RgbColor PreviewColor { get; set; } = RgbColor.PreviewDefault;
     public RgbColor ProgramColor { get; set; } = RgbColor.ProgramDefault;
+    public RgbColor InactiveColor { get; set; } = RgbColor.InactiveDefault;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
@@ -340,6 +347,7 @@ public sealed class SessionSettings
     {
         PreviewColor = RgbColor.PreviewDefault;
         ProgramColor = RgbColor.ProgramDefault;
+        InactiveColor = RgbColor.InactiveDefault;
     }
 
     public uint ResolvedPresentInterval() =>
@@ -354,6 +362,7 @@ public sealed class RgbColor
 
     public static RgbColor PreviewDefault => new() { R = 0, G = 255, B = 0 };
     public static RgbColor ProgramDefault => new() { R = 255, G = 0, B = 0 };
+    public static RgbColor InactiveDefault => new() { R = 64, G = 64, B = 64 };
 
     public RgbColor Clone() => new() { R = R, G = G, B = B };
 

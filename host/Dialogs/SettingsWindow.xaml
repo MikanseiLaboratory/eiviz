@@ -45,6 +45,11 @@
                     <Border x:Name="ProgramColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
                     <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickProgramColor_Click"/>
                 </StackPanel>
+                <TextBlock Text="Inactive color"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,12">
+                    <Border x:Name="InactiveColorSwatch" Width="48" Height="24" BorderBrush="#666" BorderThickness="1"/>
+                    <Button Content="Change" Width="72" Height="24" Margin="8,0,0,0" Click="PickInactiveColor_Click"/>
+                </StackPanel>
                 <TextBlock Text="Master Frame Rate"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
                     <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>

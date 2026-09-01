@@ -94,6 +94,7 @@ internal static class SessionStore
             session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
             session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
             session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
+            session.Settings.InactiveColor = RgbColor.FromOrDefault(Settings.InactiveColor, RgbColor.InactiveDefault);
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)
@@ -297,6 +298,10 @@ internal static class SessionStore
         public ulong ProgramUnitId { get; set; }
         public uint PresentInterval { get; set; }
         public List<MvSlot> Tiles { get; set; } = [];
+        public bool PreviewLabelFollow { get; set; } = true;
+        public string PreviewLabel { get; set; } = "";
+        public bool ProgramLabelFollow { get; set; } = true;
+        public string ProgramLabel { get; set; } = "";
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
         {
@@ -305,7 +310,11 @@ internal static class SessionStore
             PreviewUnitId = layout.PreviewUnitId,
             ProgramUnitId = layout.ProgramUnitId,
             PresentInterval = layout.PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(layout.PresentInterval),
-            Tiles = [.. layout.Tiles]
+            Tiles = [.. layout.Tiles],
+            PreviewLabelFollow = layout.PreviewLabelFollow,
+            PreviewLabel = layout.PreviewLabel ?? "",
+            ProgramLabelFollow = layout.ProgramLabelFollow,
+            ProgramLabel = layout.ProgramLabel ?? ""
         };
 
         public MultiviewLayout ToEntry(Session session)
@@ -317,7 +326,11 @@ internal static class SessionStore
                 MonitorId = session.NextMonitorId++,
                 PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
                 ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId,
-                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval)
+                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval),
+                PreviewLabelFollow = PreviewLabelFollow,
+                PreviewLabel = PreviewLabel ?? "",
+                ProgramLabelFollow = ProgramLabelFollow,
+                ProgramLabel = ProgramLabel ?? ""
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);

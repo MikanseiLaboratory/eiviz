@@ -134,7 +134,7 @@ struct SwitcherView: View {
     private func rowStroke(preview: Bool, program: Bool) -> Color {
         if preview { return mixer.session.settings.previewColor.color }
         if program { return mixer.session.settings.programColor.color }
-        return Color.clear
+        return mixer.session.settings.inactiveColor.color
     }
 
     private func isPreviewing(_ scene: SceneEntry) -> Bool {
