@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ScenePreviewTile: View, Equatable {
+struct ScenePreviewTile: View, @MainActor Equatable {
     let sceneId: UInt64
     let monitorId: UInt64
     let gpuId: UInt64
