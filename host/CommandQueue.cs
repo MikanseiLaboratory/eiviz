@@ -363,7 +363,7 @@ internal sealed class CommandQueue : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "host-error.txt"), ex.ToString());
+                HostLog.WriteException(ex);
                 if (command is LoadStillCommand or StartVideoCommand)
                     ReportUserError(ex.Message, Loc.T("msg.addInput"));
             }

@@ -64,7 +64,7 @@ impl GpuDevice {
                 SURFACE_CONFIGURE_FAILED.set(true);
                 return;
             }
-            eprintln!("eiviz wgpu: {error}");
+            crate::diag::mark_gpu_fault(&format!("wgpu: {error}"));
         }));
 
         Ok(Self {

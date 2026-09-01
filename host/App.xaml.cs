@@ -1,5 +1,4 @@
-﻿using System.IO;
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Threading;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
@@ -15,6 +14,7 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        HostLog.Install();
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
         Loc.Apply(AppPrefs.Current.Language);
         ThemeService.Apply(AppPrefs.Current.Theme);
@@ -33,7 +33,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "host-error.txt"), ex.ToString());
+            HostLog.WriteCrash(ex);
             throw;
         }
     }
@@ -96,7 +96,7 @@ public partial class App : Application
                 continue;
             if (output.Transport is not (OutputTransport.Omt or OutputTransport.Ndi))
                 continue;
-            Commands.AddOutputNow(output);
+            Commands.TryEnqueue(new AddOutputCommand(output));
         }
     }
 
@@ -126,7 +126,7 @@ public partial class App : Application
                         MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
                         break;
                     case InputKind.Still when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, input.PathOrAddress), "Still load");
+                        Commands.TryEnqueue(new LoadStillCommand(input.Id, input.PathOrAddress));
                         break;
                     case InputKind.Video when !string.IsNullOrWhiteSpace(input.PathOrAddress):
                         Commands.TryEnqueue(new StartVideoCommand(
@@ -159,16 +159,14 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "host-error.txt"), ex + Environment.NewLine);
+                HostLog.WriteException(ex);
             }
         }
     }
 
     private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        File.WriteAllText(
-            Path.Combine(AppContext.BaseDirectory, "host-error.txt"),
-            e.Exception.ToString());
+        HostLog.WriteCrash(e.Exception);
     }
 
     protected override async void OnExit(ExitEventArgs e)

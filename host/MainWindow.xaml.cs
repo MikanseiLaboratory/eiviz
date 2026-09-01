@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private bool _suppressUnitChange;
     private OverlayWindow? _overlay;
     private ResourceMonitorWindow? _resourcesWindow;
+    private LogWindow? _logWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
     private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
@@ -700,6 +701,8 @@ public partial class MainWindow : Window
 
     private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
 
+    private void Logs_Click(object sender, RoutedEventArgs e) => OpenLogs();
+
     private void ResourceHud_MouseUp(object sender, MouseButtonEventArgs e) => OpenResources();
 
     private void OpenResources()
@@ -712,6 +715,18 @@ public partial class MainWindow : Window
         _resourcesWindow = new ResourceMonitorWindow { Owner = this };
         _resourcesWindow.Closed += (_, _) => _resourcesWindow = null;
         _resourcesWindow.Show();
+    }
+
+    private void OpenLogs()
+    {
+        if (_logWindow is not null)
+        {
+            _logWindow.Activate();
+            return;
+        }
+        _logWindow = new LogWindow { Owner = this };
+        _logWindow.Closed += (_, _) => _logWindow = null;
+        _logWindow.Show();
     }
 
     private void AddInput_Click(object sender, RoutedEventArgs e)
@@ -887,7 +902,7 @@ public partial class MainWindow : Window
             case InputKind.Still:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
                     throw new InvalidOperationException(Loc.MissingFile("Still load"));
-                MixerNative.ThrowIfFailed(MixerNative.LoadStill(input.Id, dialog.ResultPath!), "Still load");
+                Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
                 break;
             case InputKind.Video:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))

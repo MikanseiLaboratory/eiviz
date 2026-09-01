@@ -242,7 +242,7 @@ impl Drop for VideoPump {
         self.stop.store(true, Ordering::Relaxed);
         self.playing.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            crate::diag::join_timeout(join, Duration::from_secs(2), "av-video");
         }
     }
 }
