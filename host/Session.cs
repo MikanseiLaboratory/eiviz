@@ -467,7 +467,6 @@ public sealed class MixingUnitEntry
     public uint FpsDen { get; set; } = 1_001;
     public List<TransitionPreset> Transitions { get; } = [];
     public List<OverlaySlot> Overlays { get; } = [];
-    public List<MvSlot> MultiviewTiles { get; } = [];
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
@@ -492,13 +491,6 @@ public sealed class MixingUnitEntry
         Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
     }
 
-    public void EnsureDefaultTiles()
-    {
-        if (MultiviewTiles.Count > 0)
-            return;
-        for (var i = 0; i < 8; i++)
-            MultiviewTiles.Add(new MvSlot());
-    }
 }
 
 public sealed class OutputEntry
@@ -635,7 +627,6 @@ public sealed class Session
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
         unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
-        unit.EnsureDefaultTiles();
         session.Units.Add(unit);
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);

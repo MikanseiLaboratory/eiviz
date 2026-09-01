@@ -370,7 +370,6 @@ struct MixingUnitEntry: Identifiable, Codable {
     var fpsDen: UInt32 = 1_001
     var transitions: [TransitionPreset] = []
     var overlays: [OverlaySlot] = []
-    var multiviewTiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
     var audioBusId: UInt64 = 1
     var audioLink: AudioLinkMode = .follow
     var displayName: String { "\(name)  \(width)x\(height) \(fpsLabel)" }

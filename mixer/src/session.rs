@@ -509,8 +509,6 @@ pub struct UnitDto {
     pub transitions: Vec<TransitionPreset>,
     #[serde(default)]
     pub overlays: Vec<OverlaySlot>,
-    #[serde(default)]
-    pub multiview_tiles: Vec<MvSlot>,
     #[serde(default = "one")]
     pub audio_bus_id: u64,
     #[serde(default)]
@@ -672,15 +670,6 @@ impl Document {
                     }
                 }
             }
-            while unit.multiview_tiles.len() < 8 {
-                unit.multiview_tiles.push(MvSlot {
-                    kind: MvSlotKind::None,
-                    source_id: 0,
-                    label_follow: true,
-                    label: String::new(),
-                });
-            }
-            unit.multiview_tiles.truncate(8);
         }
         for layout in &mut doc.multiviews {
             if layout.present_interval > 0 {
@@ -793,7 +782,6 @@ mod tests {
         assert_eq!(doc.inputs[0].kind, InputKind::Bars);
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(doc.units[0].transitions.len(), 2);
-        assert_eq!(doc.units[0].multiview_tiles.len(), 8);
         assert!(doc.settings.rebar_optimization);
         assert!(!doc.settings.rebar_direct_sample);
         assert!(doc.settings.ndi_gpu_upload);

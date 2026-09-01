@@ -985,11 +985,6 @@ final class MixerController: ObservableObject {
             desc.audio_follow = 1
             MixerFFI.setOverlay(&state, index: index, desc)
         }
-        let tiles = unit.multiviewTiles
-        state.mv_slot_count = UInt32(min(16, tiles.count))
-        for (index, tile) in tiles.prefix(16).enumerated() {
-            MixerFFI.setMv(&state, index: index, tile.kind.encoded(tile.sourceId))
-        }
     }
 
     private func unit(for id: UInt64?) -> MixingUnitEntry {

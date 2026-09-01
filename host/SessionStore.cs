@@ -118,7 +118,6 @@ internal static class SessionStore
             {
                 var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
                 unit.EnsureDefaultTransitions();
-                unit.EnsureDefaultTiles();
                 session.Units.Add(unit);
                 session.NextUnitId = 2;
             }
@@ -246,7 +245,6 @@ internal static class SessionStore
         public uint FpsDen { get; set; }
         public List<TransitionPreset> Transitions { get; set; } = [];
         public List<OverlaySlot> Overlays { get; set; } = [];
-        public List<MvSlot> MultiviewTiles { get; set; } = [];
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
 
@@ -260,7 +258,6 @@ internal static class SessionStore
             FpsDen = unit.FpsDen,
             Transitions = [.. unit.Transitions],
             Overlays = [.. unit.Overlays],
-            MultiviewTiles = [.. unit.MultiviewTiles],
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
             AudioLink = unit.AudioLink
         };
@@ -282,10 +279,7 @@ internal static class SessionStore
                 unit.Transitions.Add(preset);
             foreach (var overlay in Overlays)
                 unit.Overlays.Add(overlay);
-            foreach (var tile in MultiviewTiles)
-                unit.MultiviewTiles.Add(tile);
             unit.EnsureDefaultTransitions();
-            unit.EnsureDefaultTiles();
             return unit;
         }
     }

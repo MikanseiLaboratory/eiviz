@@ -885,9 +885,9 @@ public partial class MainWindow : Window
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
             scene.Layers.RemoveAll(layer => layer.InputId == input.Id);
-        foreach (var unit in _session.Units)
+        foreach (var layout in _session.Multiviews)
         {
-            foreach (var tile in unit.MultiviewTiles)
+            foreach (var tile in layout.Tiles)
             {
                 if (tile.Kind == MvSlotKind.Input && tile.SourceId == input.Id)
                 {
@@ -895,8 +895,10 @@ public partial class MainWindow : Window
                     tile.SourceId = 0;
                 }
             }
-            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
+        foreach (var unit in _session.Units)
+            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
         foreach (var scene in _session.Scenes)
             Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
         _session.Inputs.Remove(input);
@@ -937,10 +939,9 @@ public partial class MainWindow : Window
         CloseInputPreview(removed.GpuId);
         Commands.TryEnqueue(new DestroySceneCommand(removed.GpuId));
         _session.Scenes.Remove(removed);
-        foreach (var unit in _session.Units)
+        foreach (var layout in _session.Multiviews)
         {
-            unit.Overlays.RemoveAll(slot => slot.SceneGpuId == removed.GpuId);
-            foreach (var tile in unit.MultiviewTiles)
+            foreach (var tile in layout.Tiles)
             {
                 if (tile.Kind == MvSlotKind.Scene && tile.SourceId == removed.GpuId)
                 {
@@ -948,6 +949,11 @@ public partial class MainWindow : Window
                     tile.SourceId = 0;
                 }
             }
+            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
+        }
+        foreach (var unit in _session.Units)
+        {
+            unit.Overlays.RemoveAll(slot => slot.SceneGpuId == removed.GpuId);
             Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
         }
         var fallback = _session.Scenes[0];
@@ -1050,7 +1056,6 @@ public partial class MainWindow : Window
         var unit = dialog.Result;
         unit.Id = _session.NextUnitId++;
         unit.EnsureDefaultTransitions();
-        unit.EnsureDefaultTiles();
         unit.AudioBusId = dialog.Result.AudioBusId == 0 ? 1 : dialog.Result.AudioBusId;
         unit.AudioLink = dialog.Result.AudioLink;
         MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");

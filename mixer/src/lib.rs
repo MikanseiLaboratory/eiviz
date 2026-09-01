@@ -2679,9 +2679,6 @@ fn render_loop(
                     }
                     let packed = match output.source_kind {
                         SRC_KIND_MU_PREVIEW => frame_delay.packed(output.unit_id, OUTPUT_PREVIEW),
-                        SRC_KIND_MU_MULTIVIEW => {
-                            frame_delay.packed(output.unit_id, OUTPUT_MULTIVIEW)
-                        }
                         _ => None,
                     };
                     if let Some(texture) = packed {
@@ -2701,7 +2698,6 @@ fn render_loop(
                     let rgba = match output.source_kind {
                         SRC_KIND_MU_PROGRAM => frame_delay.rgba(output.unit_id, OUTPUT_PROGRAM),
                         SRC_KIND_MU_PREVIEW => frame_delay.rgba(output.unit_id, OUTPUT_PREVIEW),
-                        SRC_KIND_MU_MULTIVIEW => frame_delay.rgba(output.unit_id, OUTPUT_MULTIVIEW),
                         _ => None,
                     };
                     if let Some(src) = rgba
@@ -2770,7 +2766,6 @@ fn render_loop(
                 for output in &outputs_snap {
                     if output.source_kind == SRC_KIND_MU_PROGRAM
                         || output.source_kind == SRC_KIND_MU_PREVIEW
-                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
                         || !output.cpu_video()
                     {
                         continue;
@@ -2784,7 +2779,7 @@ fn render_loop(
                                 .unwrap_or((1920, 1080));
                             composer.pack_source(&device, &mut encoder, output.source_id, w, h)
                         }
-                        SRC_KIND_SCENE => {
+                        SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
                             composer.pack_scene(&device, &mut encoder, output.source_id)
                         }
                         _ => None,
@@ -2802,14 +2797,15 @@ fn render_loop(
                 for output in &outputs_snap {
                     if output.source_kind == SRC_KIND_MU_PROGRAM
                         || output.source_kind == SRC_KIND_MU_PREVIEW
-                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
                         || !output.gpu_video()
                     {
                         continue;
                     }
                     let src = match output.source_kind {
                         SRC_KIND_INPUT => composer.source_texture(output.source_id),
-                        SRC_KIND_SCENE => composer.scene_texture(output.source_id),
+                        SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
+                            composer.scene_texture(output.source_id)
+                        }
                         _ => None,
                     };
                     if let Some(src) = src

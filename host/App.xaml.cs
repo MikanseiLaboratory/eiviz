@@ -50,7 +50,6 @@ public partial class App : Application
         foreach (var unit in Session.Units)
         {
             unit.EnsureDefaultTransitions();
-            unit.EnsureDefaultTiles();
             MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
             MixerNative.ThrowIfFailed(
                 MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),

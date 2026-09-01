@@ -89,9 +89,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         };
         var enabled = unit.Overlays.Where(slot => slot.Enabled).Take(8).ToList();
         state.OverlayCount = (uint)enabled.Count;
-        unit.EnsureDefaultTiles();
-        var tiles = unit.MultiviewTiles.Take(16).ToList();
-        state.MvSlotCount = (uint)tiles.Count;
         for (var i = 0; i < 8; i++)
         {
             var slot = i < enabled.Count ? enabled[i] : null;
@@ -107,8 +104,6 @@ internal sealed class CommandQueue : IAsyncDisposable
                 };
             SetOverlay(ref state, i, desc);
         }
-        for (var i = 0; i < 16; i++)
-            SetMv(ref state, i, i < tiles.Count ? EncodeSlot(tiles[i]) : 0);
         return state;
     }
 
@@ -133,29 +128,6 @@ internal sealed class CommandQueue : IAsyncDisposable
             case 5: state.Overlay5 = desc; break;
             case 6: state.Overlay6 = desc; break;
             default: state.Overlay7 = desc; break;
-        }
-    }
-
-    private static void SetMv(ref UnitState state, int index, ulong id)
-    {
-        switch (index)
-        {
-            case 0: state.Mv0 = id; break;
-            case 1: state.Mv1 = id; break;
-            case 2: state.Mv2 = id; break;
-            case 3: state.Mv3 = id; break;
-            case 4: state.Mv4 = id; break;
-            case 5: state.Mv5 = id; break;
-            case 6: state.Mv6 = id; break;
-            case 7: state.Mv7 = id; break;
-            case 8: state.Mv8 = id; break;
-            case 9: state.Mv9 = id; break;
-            case 10: state.Mv10 = id; break;
-            case 11: state.Mv11 = id; break;
-            case 12: state.Mv12 = id; break;
-            case 13: state.Mv13 = id; break;
-            case 14: state.Mv14 = id; break;
-            default: state.Mv15 = id; break;
         }
     }
 
