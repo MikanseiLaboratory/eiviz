@@ -513,11 +513,15 @@ fn draw_presenter(
         }
         wgpu::CurrentSurfaceTexture::Timeout => return None,
         wgpu::CurrentSurfaceTexture::Occluded => {
+            // Scene tiles live in a WPF ScrollViewer. DXGI reports Occluded when
+            // the child HWND is clipped; tearing the surface down after a short
+            // streak leaves the last frame stuck even after the tile is visible.
             presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
-            if presenter.occluded_streak >= 8 {
-                presenter.ready = false;
-                presenter.pending = Some((presenter.config.width, presenter.config.height));
-                presenter.occluded_streak = 0;
+            if presenter.occluded_streak == 8 || presenter.occluded_streak.is_multiple_of(120) {
+                crate::diag::warn(&format!(
+                    "present occluded streak={}",
+                    presenter.occluded_streak
+                ));
             }
             return None;
         }
