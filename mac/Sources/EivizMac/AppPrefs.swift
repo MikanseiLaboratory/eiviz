@@ -16,7 +16,7 @@ enum AppThemeMode: String, Codable {
 }
 
 final class AppPrefs: ObservableObject {
-    static let shared = AppPrefs()
+    nonisolated(unsafe) static let shared = AppPrefs()
 
     @Published var language: AppLanguage
     @Published var theme: AppThemeMode

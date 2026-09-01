@@ -24,8 +24,8 @@ enum EivizTheme {
     static var status: Color { isDark ? rgb(124, 252, 124) : rgb(46, 125, 50) }
     static var warn: Color { isDark ? rgb(255, 183, 77) : rgb(230, 81, 0) }
     static var hud: Color { isDark ? rgb(156, 204, 101) : rgb(85, 139, 47) }
-    static var preview = Color(red: 0, green: 1, blue: 0)
-    static var program = Color(red: 1, green: 0, blue: 0)
+    nonisolated(unsafe) static let preview = Color(red: 0, green: 1, blue: 0)
+    nonisolated(unsafe) static let program = Color(red: 1, green: 0, blue: 0)
     static var button: Color { isDark ? rgb(58, 58, 58) : rgb(221, 221, 221) }
     static var stroke: Color { isDark ? Color(white: 0.27) : Color(white: 0.73) }
 
