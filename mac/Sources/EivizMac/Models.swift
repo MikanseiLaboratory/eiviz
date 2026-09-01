@@ -431,6 +431,98 @@ struct OutputEntry: Identifiable, Codable {
     }
 }
 
+enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
+    case previewProgram8 = "PreviewProgram8"
+    case previewProgram4 = "PreviewProgram4"
+    case previewProgram12 = "PreviewProgram12"
+    case previewProgram16 = "PreviewProgram16"
+    case grid2x2 = "Grid2x2"
+    case grid3x3 = "Grid3x3"
+    case grid4x4 = "Grid4x4"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .previewProgram8: return "Preview + Program + 8"
+        case .previewProgram4: return "Preview + Program + 4"
+        case .previewProgram12: return "Preview + Program + 12"
+        case .previewProgram16: return "Preview + Program + 16"
+        case .grid2x2: return "2×2"
+        case .grid3x3: return "3×3"
+        case .grid4x4: return "4×4"
+        }
+    }
+
+    var tileCount: Int {
+        switch self {
+        case .previewProgram8: return 8
+        case .previewProgram4: return 4
+        case .previewProgram12: return 12
+        case .previewProgram16: return 16
+        case .grid2x2: return 4
+        case .grid3x3: return 9
+        case .grid4x4: return 16
+        }
+    }
+
+    var hasBusPanes: Bool {
+        switch self {
+        case .previewProgram8, .previewProgram4, .previewProgram12, .previewProgram16: return true
+        default: return false
+        }
+    }
+
+    var panes: [MultiviewPane] {
+        if hasBusPanes {
+            var panes = [
+                MultiviewPane(x: 0, y: 0, width: 0.5, height: 0.5, kind: .preview),
+                MultiviewPane(x: 0.5, y: 0, width: 0.5, height: 0.5, kind: .program)
+            ]
+            let colsRows: (Int, Int) = switch self {
+            case .previewProgram4: (2, 2)
+            case .previewProgram12: (4, 3)
+            case .previewProgram16: (4, 4)
+            default: (4, 2)
+            }
+            panes.append(contentsOf: MultiviewPane.grid(cols: colsRows.0, rows: colsRows.1, x: 0, y: 0.5, width: 1, height: 0.5))
+            return panes
+        }
+        let colsRows: (Int, Int) = switch self {
+        case .grid3x3: (3, 3)
+        case .grid4x4: (4, 4)
+        default: (2, 2)
+        }
+        return MultiviewPane.grid(cols: colsRows.0, rows: colsRows.1, x: 0, y: 0, width: 1, height: 1)
+    }
+}
+
+enum MultiviewPaneKind {
+    case preview, program, tile
+}
+
+struct MultiviewPane {
+    var x: Float
+    var y: Float
+    var width: Float
+    var height: Float
+    var kind: MultiviewPaneKind
+
+    static func grid(cols: Int, rows: Int, x: Float, y: Float, width: Float, height: Float) -> [MultiviewPane] {
+        let cw = width / Float(cols)
+        let ch = height / Float(rows)
+        return (0..<(cols * rows)).map { i in
+            MultiviewPane(
+                x: x + Float(i % cols) * cw,
+                y: y + Float(i / cols) * ch,
+                width: cw,
+                height: ch,
+                kind: .tile
+            )
+        }
+    }
+}
+
 struct MultiviewLayout: Identifiable, Codable {
     var id: UInt64
     var name: String
@@ -438,6 +530,7 @@ struct MultiviewLayout: Identifiable, Codable {
     var previewUnitId: UInt64 = 1
     var programUnitId: UInt64 = 1
     var presentInterval: UInt32 = 0
+    var template: MultiviewTemplate = .previewProgram8
     var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
     var previewLabelFollow: Bool = true
     var previewLabel: String = ""
@@ -446,7 +539,7 @@ struct MultiviewLayout: Identifiable, Codable {
     var gpuId: UInt64 { EIVIZ_MULTIVIEW_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, previewUnitId, programUnitId, presentInterval, tiles
+        case id, name, previewUnitId, programUnitId, presentInterval, tiles, template
         case previewLabelFollow, previewLabel, programLabelFollow, programLabel
     }
 
@@ -457,6 +550,7 @@ struct MultiviewLayout: Identifiable, Codable {
         previewUnitId: UInt64 = 1,
         programUnitId: UInt64 = 1,
         presentInterval: UInt32 = 0,
+        template: MultiviewTemplate = .previewProgram8,
         tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8),
         previewLabelFollow: Bool = true,
         previewLabel: String = "",
@@ -469,11 +563,13 @@ struct MultiviewLayout: Identifiable, Codable {
         self.previewUnitId = previewUnitId
         self.programUnitId = programUnitId
         self.presentInterval = presentInterval
+        self.template = template
         self.tiles = tiles
         self.previewLabelFollow = previewLabelFollow
         self.previewLabel = previewLabel
         self.programLabelFollow = programLabelFollow
         self.programLabel = programLabel
+        ensureTiles()
     }
 
     init(from decoder: Decoder) throws {
@@ -483,11 +579,29 @@ struct MultiviewLayout: Identifiable, Codable {
         previewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .previewUnitId) ?? 1
         programUnitId = try container.decodeIfPresent(UInt64.self, forKey: .programUnitId) ?? 1
         presentInterval = try container.decodeIfPresent(UInt32.self, forKey: .presentInterval) ?? 0
-        tiles = try container.decodeIfPresent([MvSlot].self, forKey: .tiles) ?? Array(repeating: MvSlot(), count: 8)
+        template = try container.decodeIfPresent(MultiviewTemplate.self, forKey: .template) ?? .previewProgram8
+        tiles = try container.decodeIfPresent([MvSlot].self, forKey: .tiles) ?? []
         previewLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .previewLabelFollow) ?? true
         previewLabel = try container.decodeIfPresent(String.self, forKey: .previewLabel) ?? ""
         programLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .programLabelFollow) ?? true
         programLabel = try container.decodeIfPresent(String.self, forKey: .programLabel) ?? ""
+        ensureTiles()
+    }
+
+    mutating func ensureTiles() {
+        let want = template.tileCount
+        if tiles.count < want {
+            tiles.append(contentsOf: Array(repeating: MvSlot(), count: want - tiles.count))
+        }
+        if tiles.count > want {
+            tiles.removeLast(tiles.count - want)
+        }
+        for i in tiles.indices {
+            if tiles[i].kind == .muPreview || tiles[i].kind == .muProgram {
+                tiles[i].kind = .none
+                tiles[i].sourceId = 0
+            }
+        }
     }
 }
 

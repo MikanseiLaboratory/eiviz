@@ -602,9 +602,7 @@ final class MixerController: ObservableObject {
     func pushMultiview(_ layout: MultiviewLayout) {
         guard let index = session.multiviews.firstIndex(where: { $0.id == layout.id }) else { return }
         var item = layout
-        if item.tiles.count < 8 {
-            item.tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - item.tiles.count))
-        }
+        item.ensureTiles()
         session.multiviews[index] = item
         var layers: [EivizOverlayDesc] = []
         func layer(_ source: UInt64, _ x: Float, _ y: Float, _ w: Float, _ h: Float, _ z: Int32) {
@@ -615,12 +613,20 @@ final class MixerController: ObservableObject {
             desc.z = z
             layers.append(desc)
         }
-        layer(MvSlotKind.muPreview.encoded(item.previewUnitId), 0, 0, 0.5, 0.5, 0)
-        layer(MvSlotKind.muProgram.encoded(item.programUnitId), 0.5, 0, 0.5, 0.5, 1)
-        for i in 0..<8 {
-            let col = Float(i % 4)
-            let row = Float(i / 4)
-            layer(item.tiles[i].kind.encoded(item.tiles[i].sourceId), col / 4, 0.5 + row / 4, 0.25, 0.25, Int32(2 + i))
+        var tile = 0
+        for (z, pane) in item.template.panes.enumerated() {
+            let source: UInt64
+            switch pane.kind {
+            case .preview:
+                source = MvSlotKind.muPreview.encoded(item.previewUnitId)
+            case .program:
+                source = MvSlotKind.muProgram.encoded(item.programUnitId)
+            case .tile:
+                let slot = item.tiles[tile]
+                tile += 1
+                source = slot.kind.encoded(slot.sourceId)
+            }
+            layer(source, pane.x, pane.y, pane.width, pane.height, Int32(z))
         }
         let names = slotNames(item)
         var owned = names.map { $0.isEmpty ? nil : strdup($0) }
@@ -659,21 +665,28 @@ final class MixerController: ObservableObject {
     }
 
     private func slotNames(_ layout: MultiviewLayout) -> [String] {
-        var names = Array(repeating: "", count: 10)
-        names[0] = busLabel(
-            follow: layout.previewLabelFollow,
-            custom: layout.previewLabel,
-            prefix: "PRV",
-            unitId: layout.previewUnitId
-        )
-        names[1] = busLabel(
-            follow: layout.programLabelFollow,
-            custom: layout.programLabel,
-            prefix: "PGM",
-            unitId: layout.programUnitId
-        )
-        for i in 0..<8 {
-            names[2 + i] = tileLabel(layout.tiles[i])
+        var names: [String] = []
+        var tile = 0
+        for pane in layout.template.panes {
+            switch pane.kind {
+            case .preview:
+                names.append(busLabel(
+                    follow: layout.previewLabelFollow,
+                    custom: layout.previewLabel,
+                    prefix: "PRV",
+                    unitId: layout.previewUnitId
+                ))
+            case .program:
+                names.append(busLabel(
+                    follow: layout.programLabelFollow,
+                    custom: layout.programLabel,
+                    prefix: "PGM",
+                    unitId: layout.programUnitId
+                ))
+            case .tile:
+                names.append(tileLabel(layout.tiles[tile]))
+                tile += 1
+            }
         }
         return names
     }

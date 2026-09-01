@@ -174,22 +174,21 @@ internal sealed class CommandQueue : IAsyncDisposable
     internal static void PushLayout(MultiviewLayout layout, uint width, uint height, Session? session)
     {
         layout.EnsureTiles();
-        var layers = new List<OverlayDesc>(20);
-        layers.Add(BusLayer(MixerNative.MuPreview(layout.PreviewUnitId), 0f, 0f, 0.5f, 0.5f, 0));
-        layers.Add(BusLayer(MixerNative.MuProgram(layout.ProgramUnitId), 0.5f, 0f, 0.5f, 0.5f, 1));
-        for (var i = 0; i < 8; i++)
+        var panes = MultiviewGeometry.Panes(layout.Template);
+        var layers = new List<OverlayDesc>(panes.Count);
+        var names = session is null ? new string[panes.Count] : SlotNames(layout, session, panes);
+        var tile = 0;
+        for (var i = 0; i < panes.Count; i++)
         {
-            var col = i % 4;
-            var row = i / 4;
-            layers.Add(BusLayer(
-                EncodeSlot(layout.Tiles[i]),
-                col / 4f,
-                0.5f + row / 4f,
-                0.25f,
-                0.25f,
-                2 + i));
+            var pane = panes[i];
+            var source = pane.Kind switch
+            {
+                MultiviewPaneKind.Preview => MixerNative.MuPreview(layout.PreviewUnitId),
+                MultiviewPaneKind.Program => MixerNative.MuProgram(layout.ProgramUnitId),
+                _ => EncodeSlot(layout.Tiles[tile++])
+            };
+            layers.Add(BusLayer(source, pane.X, pane.Y, pane.Width, pane.Height, i));
         }
-        var names = session is null ? new string[10] : SlotNames(layout, session);
         PushLayers(layout.GpuId, width, height, layers.ToArray(), names);
         MixerNative.ThrowIfFailed(
             MixerNative.BindMultiview(layout.GpuId, layout.PreviewUnitId, layout.ProgramUnitId),
@@ -205,15 +204,21 @@ internal sealed class CommandQueue : IAsyncDisposable
         AudioFollow = 0
     };
 
-    private static string[] SlotNames(MultiviewLayout layout, Session session)
+    private static string[] SlotNames(MultiviewLayout layout, Session session, IReadOnlyList<MultiviewPane> panes)
     {
         var prv = session.Units.FirstOrDefault(item => item.Id == layout.PreviewUnitId);
         var pgm = session.Units.FirstOrDefault(item => item.Id == layout.ProgramUnitId);
-        var names = new string[10];
-        names[0] = BusLabel(layout.PreviewLabelFollow, layout.PreviewLabel, "PRV", prv?.Name ?? layout.PreviewUnitId.ToString());
-        names[1] = BusLabel(layout.ProgramLabelFollow, layout.ProgramLabel, "PGM", pgm?.Name ?? layout.ProgramUnitId.ToString());
-        for (var i = 0; i < 8; i++)
-            names[2 + i] = TileLabel(layout.Tiles[i], session);
+        var names = new string[panes.Count];
+        var tile = 0;
+        for (var i = 0; i < panes.Count; i++)
+        {
+            names[i] = panes[i].Kind switch
+            {
+                MultiviewPaneKind.Preview => BusLabel(layout.PreviewLabelFollow, layout.PreviewLabel, "PRV", prv?.Name ?? layout.PreviewUnitId.ToString()),
+                MultiviewPaneKind.Program => BusLabel(layout.ProgramLabelFollow, layout.ProgramLabel, "PGM", pgm?.Name ?? layout.ProgramUnitId.ToString()),
+                _ => TileLabel(layout.Tiles[tile++], session)
+            };
+        }
         return names;
     }
 

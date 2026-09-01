@@ -10,7 +10,7 @@
             <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
         </StackPanel>
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
-                   Text="Top left is that Mixing Unit's Preview. Top right is Program. The lower half holds eight Input or Scene windows."/>
+                   Text="Choose a mosaic template for this Multiview. Preview + Program templates keep those buses on top. Grid templates fill the frame with Input or Scene windows."/>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="SlotRows"/>
         </ScrollViewer>

@@ -8,6 +8,7 @@ public partial class MultiviewSlotsWindow : Window
     private readonly MultiviewLayout _layout;
     private readonly Session _session;
     private readonly List<MvSlot> _tiles;
+    private MultiviewTemplate _template;
     private ulong _previewUnit;
     private ulong _programUnit;
     private bool _previewFollow;
@@ -21,6 +22,8 @@ public partial class MultiviewSlotsWindow : Window
         InitializeComponent();
         _session = session;
         _layout = layout;
+        _template = layout.Template;
+        layout.Template = _template;
         layout.EnsureTiles();
         _previewUnit = layout.PreviewUnitId;
         _programUnit = layout.ProgramUnitId;
@@ -36,11 +39,53 @@ public partial class MultiviewSlotsWindow : Window
     {
         SlotRows.Children.Clear();
         _suppress = true;
-        SlotRows.Children.Add(UnitRow("PRV (top left)", true));
-        SlotRows.Children.Add(UnitRow("PGM (top right)", false));
-        for (var i = 0; i < 8; i++)
+        EnsureTileCount();
+        SlotRows.Children.Add(TemplateRow());
+        var bus = MultiviewGeometry.HasBusPanes(_template);
+        SlotRows.Children.Add(UnitRow(bus ? "PRV (top left)" : "Preview tally unit", true));
+        SlotRows.Children.Add(UnitRow(bus ? "PGM (top right)" : "Program tally unit", false));
+        for (var i = 0; i < _tiles.Count; i++)
             SlotRows.Children.Add(TileRow(i, _tiles[i]));
         _suppress = false;
+    }
+
+    private void EnsureTileCount()
+    {
+        var want = MultiviewGeometry.TileCount(_template);
+        while (_tiles.Count < want)
+            _tiles.Add(new MvSlot());
+        while (_tiles.Count > want)
+            _tiles.RemoveAt(_tiles.Count - 1);
+    }
+
+    private Border TemplateRow()
+    {
+        var box = Frame();
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock { Text = "Template", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
+        var pick = new ComboBox();
+        foreach (MultiviewTemplate item in Enum.GetValues<MultiviewTemplate>())
+            pick.Items.Add(new ComboBoxItem { Content = MultiviewGeometry.Title(item), Tag = item });
+        foreach (ComboBoxItem item in pick.Items)
+        {
+            if (Equals(item.Tag, _template))
+            {
+                pick.SelectedItem = item;
+                break;
+            }
+        }
+        if (pick.SelectedItem is null && pick.Items.Count > 0)
+            pick.SelectedIndex = 0;
+        pick.SelectionChanged += (_, _) =>
+        {
+            if (_suppress || pick.SelectedItem is not ComboBoxItem item || item.Tag is not MultiviewTemplate value)
+                return;
+            _template = value;
+            Rebuild();
+        };
+        stack.Children.Add(pick);
+        box.Child = stack;
+        return box;
     }
 
     private Border UnitRow(string title, bool preview)
@@ -217,6 +262,7 @@ public partial class MultiviewSlotsWindow : Window
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
+        _layout.Template = _template;
         _layout.PreviewUnitId = _previewUnit;
         _layout.ProgramUnitId = _programUnit;
         _layout.PreviewLabelFollow = _previewFollow;

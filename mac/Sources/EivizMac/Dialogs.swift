@@ -282,7 +282,7 @@ struct SettingsView: View {
                 Text("Every 8 frames").tag(UInt32(8))
             }
             .frame(width: 280)
-            Text("Each Multiview window is a mosaic: Preview and Program on top, eight Input or Scene windows below.")
+            Text("Each Multiview window picks its own mosaic template (Preview + Program plus a lower grid, or a full 2×2 / 3×3 / 4×4).")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -794,20 +794,41 @@ struct MultiviewSlotsView: View {
     @State private var previewLabel = ""
     @State private var programFollow = true
     @State private var programLabel = ""
+    @State private var template: MultiviewTemplate = .previewProgram8
     @State private var tiles: [MvSlot] = Array(repeating: MvSlot(), count: 8)
 
     private var layoutId: UInt64? { mixer.openMultiview?.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Top left is that Mixing Unit's Preview. Top right is Program. The lower half holds eight Input or Scene windows.")
+            Text("Choose a mosaic template for this Multiview. Preview + Program templates keep those buses on top. Grid templates fill the frame with Input or Scene windows.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            unitRow("PRV (top left)", $previewUnit, follow: $previewFollow, custom: $previewLabel)
-            unitRow("PGM (top right)", $programUnit, follow: $programFollow, custom: $programLabel)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Template").fontWeight(.bold)
+                Picker("", selection: $template) {
+                    ForEach(MultiviewTemplate.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+            }
+            .padding(8)
+            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            unitRow(
+                template.hasBusPanes ? "PRV (top left)" : "Preview tally unit",
+                $previewUnit,
+                follow: $previewFollow,
+                custom: $previewLabel
+            )
+            unitRow(
+                template.hasBusPanes ? "PGM (top right)" : "Program tally unit",
+                $programUnit,
+                follow: $programFollow,
+                custom: $programLabel
+            )
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(0..<8, id: \.self) { index in
+                    ForEach(tiles.indices, id: \.self) { index in
                         tileRow(index)
                     }
                 }
@@ -830,11 +851,23 @@ struct MultiviewSlotsView: View {
                 previewLabel = layout.previewLabel
                 programFollow = layout.programLabelFollow
                 programLabel = layout.programLabel
+                template = layout.template
                 tiles = layout.tiles
-                if tiles.count < 8 {
-                    tiles.append(contentsOf: Array(repeating: MvSlot(), count: 8 - tiles.count))
-                }
+                resizeTiles()
             }
+        }
+        .onChange(of: template) { _, _ in
+            resizeTiles()
+        }
+    }
+
+    private func resizeTiles() {
+        let want = template.tileCount
+        if tiles.count < want {
+            tiles.append(contentsOf: Array(repeating: MvSlot(), count: want - tiles.count))
+        }
+        if tiles.count > want {
+            tiles.removeLast(tiles.count - want)
         }
     }
 
@@ -915,6 +948,7 @@ struct MultiviewSlotsView: View {
         guard let id = layoutId,
               let index = mixer.session.multiviews.firstIndex(where: { $0.id == id })
         else { return }
+        mixer.session.multiviews[index].template = template
         mixer.session.multiviews[index].previewUnitId = previewUnit
         mixer.session.multiviews[index].programUnitId = programUnit
         mixer.session.multiviews[index].previewLabelFollow = previewFollow
@@ -922,6 +956,7 @@ struct MultiviewSlotsView: View {
         mixer.session.multiviews[index].programLabelFollow = programFollow
         mixer.session.multiviews[index].programLabel = programLabel
         mixer.session.multiviews[index].tiles = tiles
+        mixer.session.multiviews[index].ensureTiles()
         mixer.openMultiview = mixer.session.multiviews[index]
         mixer.pushMultiview(mixer.session.multiviews[index])
     }

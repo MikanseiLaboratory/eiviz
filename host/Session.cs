@@ -61,6 +61,94 @@ public enum MvSlotKind
     MuProgram
 }
 
+public enum MultiviewTemplate
+{
+    PreviewProgram8,
+    PreviewProgram4,
+    PreviewProgram12,
+    PreviewProgram16,
+    Grid2x2,
+    Grid3x3,
+    Grid4x4
+}
+
+internal static class MultiviewGeometry
+{
+    public static int TileCount(MultiviewTemplate template) => template switch
+    {
+        MultiviewTemplate.PreviewProgram4 => 4,
+        MultiviewTemplate.PreviewProgram12 => 12,
+        MultiviewTemplate.PreviewProgram16 => 16,
+        MultiviewTemplate.Grid2x2 => 4,
+        MultiviewTemplate.Grid3x3 => 9,
+        MultiviewTemplate.Grid4x4 => 16,
+        _ => 8
+    };
+
+    public static bool HasBusPanes(MultiviewTemplate template) => template
+        is MultiviewTemplate.PreviewProgram8
+        or MultiviewTemplate.PreviewProgram4
+        or MultiviewTemplate.PreviewProgram12
+        or MultiviewTemplate.PreviewProgram16;
+
+    public static string Title(MultiviewTemplate template) => template switch
+    {
+        MultiviewTemplate.PreviewProgram4 => "Preview + Program + 4",
+        MultiviewTemplate.PreviewProgram12 => "Preview + Program + 12",
+        MultiviewTemplate.PreviewProgram16 => "Preview + Program + 16",
+        MultiviewTemplate.Grid2x2 => "2×2",
+        MultiviewTemplate.Grid3x3 => "3×3",
+        MultiviewTemplate.Grid4x4 => "4×4",
+        _ => "Preview + Program + 8"
+    };
+
+    public static IReadOnlyList<MultiviewPane> Panes(MultiviewTemplate template)
+    {
+        var panes = new List<MultiviewPane>();
+        if (HasBusPanes(template))
+        {
+            panes.Add(new MultiviewPane(0f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Preview));
+            panes.Add(new MultiviewPane(0.5f, 0f, 0.5f, 0.5f, MultiviewPaneKind.Program));
+            var (cols, rows) = template switch
+            {
+                MultiviewTemplate.PreviewProgram4 => (2, 2),
+                MultiviewTemplate.PreviewProgram12 => (4, 3),
+                MultiviewTemplate.PreviewProgram16 => (4, 4),
+                _ => (4, 2)
+            };
+            AddGrid(panes, cols, rows, 0f, 0.5f, 1f, 0.5f);
+        }
+        else
+        {
+            var (cols, rows) = template switch
+            {
+                MultiviewTemplate.Grid3x3 => (3, 3),
+                MultiviewTemplate.Grid4x4 => (4, 4),
+                _ => (2, 2)
+            };
+            AddGrid(panes, cols, rows, 0f, 0f, 1f, 1f);
+        }
+        return panes;
+    }
+
+    private static void AddGrid(List<MultiviewPane> panes, int cols, int rows, float x, float y, float w, float h)
+    {
+        var cw = w / cols;
+        var ch = h / rows;
+        for (var i = 0; i < cols * rows; i++)
+            panes.Add(new MultiviewPane(x + i % cols * cw, y + i / cols * ch, cw, ch, MultiviewPaneKind.Tile));
+    }
+}
+
+internal enum MultiviewPaneKind
+{
+    Preview,
+    Program,
+    Tile
+}
+
+internal readonly record struct MultiviewPane(float X, float Y, float Width, float Height, MultiviewPaneKind Kind);
+
 public enum VideoPlayWhen
 {
     Never = 0,
@@ -185,6 +273,7 @@ public sealed class MultiviewLayout
     public ulong PreviewUnitId { get; set; } = 1;
     public ulong ProgramUnitId { get; set; } = 1;
     public uint PresentInterval { get; set; }
+    public MultiviewTemplate Template { get; set; } = MultiviewTemplate.PreviewProgram8;
     public List<MvSlot> Tiles { get; } = [];
     public bool PreviewLabelFollow { get; set; } = true;
     public string PreviewLabel { get; set; } = "";
@@ -207,9 +296,10 @@ public sealed class MultiviewLayout
 
     public void EnsureTiles()
     {
-        while (Tiles.Count < 8)
+        var want = MultiviewGeometry.TileCount(Template);
+        while (Tiles.Count < want)
             Tiles.Add(new MvSlot());
-        while (Tiles.Count > 8)
+        while (Tiles.Count > want)
             Tiles.RemoveAt(Tiles.Count - 1);
         foreach (var tile in Tiles)
         {

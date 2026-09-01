@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
-    OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, TRANSITION_DIP,
+    OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    TRANSITION_DIP,
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
@@ -644,18 +645,14 @@ impl Composer {
         labels: &[String],
     ) {
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
-        for (index, layer) in video.iter().enumerate().take(10) {
-            let rgb = match index {
-                0 => self.preview_rgb,
-                1 => self.program_rgb,
-                _ => self.inactive_rgb,
-            };
+        for (index, layer) in video.iter().enumerate() {
+            let rgb = mv_label_rgb(layer.source_id, self.preview_rgb, self.program_rgb, self.inactive_rgb);
             let text = labels.get(index).map(String::as_str).unwrap_or("");
             let Some(view) = self.ensure_label_texture(device, text, rgb) else {
                 continue;
             };
             let key = label_cache_key(text, rgb);
-            let dst = mv_label_rect(index, layer.rect);
+            let dst = mv_label_rect(layer.rect);
             self.blit_pass(device, pass, key, &view, dst, 1.0, false);
         }
     }
@@ -708,20 +705,10 @@ impl Composer {
         let tx = 3.0 / width.max(1) as f32;
         let ty = 3.0 / height.max(1) as f32;
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
-        for (index, layer) in video.iter().enumerate().take(10) {
-            let mut use_red = index == 1;
-            let mut use_green = index == 0;
-            if index >= 2 {
-                if layer.source_id != 0 && layer.source_id == program_source {
-                    use_red = true;
-                    use_green = false;
-                } else if layer.source_id != 0 && layer.source_id == preview_source {
-                    use_green = true;
-                }
-            }
-            if !use_red && !use_green {
+        for layer in video {
+            let Some(use_red) = mv_tally_program(layer.source_id, preview_source, program_source) else {
                 continue;
-            }
+            };
             let (key, swatch) = if use_red {
                 (KEY_TALLY_RED, self.tally_red.as_ref().map(|item| item.1.clone()))
             } else {
@@ -1767,9 +1754,37 @@ fn label_cache_key(text: &str, rgb: [u8; 3]) -> u64 {
     LABEL_BASE.wrapping_add(0xF000) ^ hasher.finish()
 }
 
-fn mv_label_rect(index: usize, rect: crate::abi::Rect) -> [f32; 4] {
-    let frac = if index < 2 { 0.16 } else { 0.28 };
+fn mv_label_rect(rect: crate::abi::Rect) -> [f32; 4] {
+    let frac = if rect.height >= 0.4 { 0.16 } else { 0.28 };
     let height = rect.height * frac;
     [rect.x, rect.y + rect.height - height, rect.width, height]
+}
+
+fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) -> [u8; 3] {
+    if mixing_unit_from_source(source_id).is_none() {
+        return inactive;
+    }
+    match mixing_unit_bus(source_id) {
+        OUTPUT_PREVIEW => preview,
+        OUTPUT_PROGRAM => program,
+        _ => inactive,
+    }
+}
+
+fn mv_tally_program(source_id: u64, preview_source: u64, program_source: u64) -> Option<bool> {
+    if mixing_unit_from_source(source_id).is_some() {
+        return match mixing_unit_bus(source_id) {
+            OUTPUT_PREVIEW => Some(false),
+            OUTPUT_PROGRAM => Some(true),
+            _ => None,
+        };
+    }
+    if source_id != 0 && source_id == program_source {
+        return Some(true);
+    }
+    if source_id != 0 && source_id == preview_source {
+        return Some(false);
+    }
+    None
 }
 

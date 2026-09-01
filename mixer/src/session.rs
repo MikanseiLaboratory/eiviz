@@ -239,6 +239,39 @@ pub enum MvSlotKind {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MultiviewTemplate {
+    #[default]
+    PreviewProgram8,
+    PreviewProgram4,
+    PreviewProgram12,
+    PreviewProgram16,
+    Grid2x2,
+    Grid3x3,
+    Grid4x4,
+}
+
+impl MultiviewTemplate {
+    pub fn tile_count(self) -> usize {
+        match self {
+            Self::PreviewProgram8 => 8,
+            Self::PreviewProgram4 => 4,
+            Self::PreviewProgram12 => 12,
+            Self::PreviewProgram16 => 16,
+            Self::Grid2x2 => 4,
+            Self::Grid3x3 => 9,
+            Self::Grid4x4 => 16,
+        }
+    }
+
+    pub fn has_bus_panes(self) -> bool {
+        matches!(
+            self,
+            Self::PreviewProgram8 | Self::PreviewProgram4 | Self::PreviewProgram12 | Self::PreviewProgram16
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AudioBusRole {
     #[default]
     Master,
@@ -499,6 +532,8 @@ pub struct MultiviewDto {
     pub present_interval: u32,
     #[serde(default)]
     pub tiles: Vec<MvSlot>,
+    #[serde(default)]
+    pub template: MultiviewTemplate,
     #[serde(default = "default_true")]
     pub preview_label_follow: bool,
     #[serde(default)]
@@ -632,7 +667,8 @@ impl Document {
             if layout.present_interval > 0 {
                 layout.present_interval = layout.present_interval.clamp(1, 8);
             }
-            while layout.tiles.len() < 8 {
+            let want = layout.template.tile_count();
+            while layout.tiles.len() < want {
                 layout.tiles.push(MvSlot {
                     kind: MvSlotKind::None,
                     source_id: 0,
@@ -640,7 +676,7 @@ impl Document {
                     label: String::new(),
                 });
             }
-            layout.tiles.truncate(8);
+            layout.tiles.truncate(want);
             for tile in &mut layout.tiles {
                 if matches!(tile.kind, MvSlotKind::MuPreview | MvSlotKind::MuProgram) {
                     tile.kind = MvSlotKind::None;
@@ -789,6 +825,20 @@ mod tests {
         assert!(doc.multiviews[0].program_label_follow);
         assert!(!doc.multiviews[0].tiles[0].label_follow);
         assert_eq!(doc.multiviews[0].tiles[0].label, "Cam 1");
+        assert_eq!(doc.multiviews[0].template, MultiviewTemplate::PreviewProgram8);
+    }
+
+    #[test]
+    fn multiview_template_canonicalize_tile_count() {
+        let src = r#"{
+  "version": 1,
+  "multiviews": [{ "id": 1, "name": "MV", "template": "Grid4x4", "tiles": [] }]
+}"#;
+        let text = String::from_utf8(canonicalize_bytes(src.as_bytes()).unwrap()).unwrap();
+        let doc = parse(text.as_bytes()).unwrap();
+        assert_eq!(doc.multiviews[0].template, MultiviewTemplate::Grid4x4);
+        assert!(!doc.multiviews[0].template.has_bus_panes());
+        assert_eq!(doc.multiviews[0].tiles.len(), 16);
     }
 
     #[test]

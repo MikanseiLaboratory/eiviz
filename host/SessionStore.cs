@@ -297,6 +297,7 @@ internal static class SessionStore
         public ulong PreviewUnitId { get; set; }
         public ulong ProgramUnitId { get; set; }
         public uint PresentInterval { get; set; }
+        public MultiviewTemplate Template { get; set; } = MultiviewTemplate.PreviewProgram8;
         public List<MvSlot> Tiles { get; set; } = [];
         public bool PreviewLabelFollow { get; set; } = true;
         public string PreviewLabel { get; set; } = "";
@@ -310,6 +311,7 @@ internal static class SessionStore
             PreviewUnitId = layout.PreviewUnitId,
             ProgramUnitId = layout.ProgramUnitId,
             PresentInterval = layout.PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(layout.PresentInterval),
+            Template = layout.Template,
             Tiles = [.. layout.Tiles],
             PreviewLabelFollow = layout.PreviewLabelFollow,
             PreviewLabel = layout.PreviewLabel ?? "",
@@ -327,6 +329,7 @@ internal static class SessionStore
                 PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
                 ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId,
                 PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval),
+                Template = Template,
                 PreviewLabelFollow = PreviewLabelFollow,
                 PreviewLabel = PreviewLabel ?? "",
                 ProgramLabelFollow = ProgramLabelFollow,
