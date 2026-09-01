@@ -448,7 +448,7 @@ public sealed class TransitionPreset
     public bool HasEasing => HasDuration;
     public bool HasDirection => TransitionCatalog.Info(Kind).HasDirection;
     public bool HasDipColor => TransitionCatalog.Info(Kind).HasDipColor;
-    public bool HasSoftness => TransitionCatalog.Info(Kind).HasSoftness;
+    public bool HasSoftness => TransitionCatalog.ShowsSoftness(Kind);
     public bool HasParam => TransitionCatalog.Info(Kind).HasParam;
     public bool HasCustomWgsl => Kind == MixerNative.TransitionCustom;
 

@@ -71,6 +71,9 @@ enum TransitionCatalog {
         .init(kind: EIVIZ_TRANSITION_PAGE_CURL, label: "PageCurl", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: false, hasParam: false, softnessLabel: "", paramLabel: ""),
         .init(kind: EIVIZ_TRANSITION_FILM_BURN, label: "FilmBurn", group: .shader, hasDirection: false, hasDipColor: true, hasSoftness: true, hasParam: true, softnessLabel: "Edge", paramLabel: "Intensity"),
         .init(kind: EIVIZ_TRANSITION_ZOOM_BLUR, label: "ZoomBlur", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
+        .init(kind: EIVIZ_TRANSITION_PIXEL_SORT, label: "PixelSort", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Threshold", paramLabel: "Span"),
+        .init(kind: EIVIZ_TRANSITION_DATAMOSH, label: "Datamosh", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
+        .init(kind: EIVIZ_TRANSITION_VISUAL_DISSOLVE, label: "VisualDissolve", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Edge", paramLabel: "Flow"),
     ]
 
     static func info(_ kind: UInt32) -> TransitionInfo {
@@ -83,5 +86,33 @@ enum TransitionCatalog {
 
     static func items(in group: TransitionGroup) -> [TransitionInfo] {
         all.filter { $0.group == group }
+    }
+
+    static func showsSoftness(_ kind: UInt32) -> Bool {
+        let label = info(kind).softnessLabel
+        return !label.isEmpty && label != "Edge"
+    }
+
+    static func defaultSoftness(_ kind: UInt32) -> Float {
+        kind == EIVIZ_TRANSITION_PIXEL_SORT ? 0.3 : 0.02
+    }
+
+    static func defaultParam(_ kind: UInt32) -> Float {
+        switch kind {
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.4
+        case EIVIZ_TRANSITION_DATAMOSH: return 1
+        case EIVIZ_TRANSITION_METAMIX: return 8
+        case EIVIZ_TRANSITION_TILE: return 8
+        case EIVIZ_TRANSITION_PARTS: return 6
+        case EIVIZ_TRANSITION_VISUAL_DISSOLVE: return 0.42
+        default: return 0
+        }
+    }
+
+    static func applyKindDefaults(_ preset: inout TransitionPreset) {
+        if preset.kind == EIVIZ_TRANSITION_PIXEL_SORT {
+            if preset.softness <= 0.021 { preset.softness = 0.3 }
+            if preset.param <= 0 { preset.param = 0.4 }
+        }
     }
 }

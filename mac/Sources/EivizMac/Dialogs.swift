@@ -1455,15 +1455,16 @@ struct CustomWgslEditor: View {
     fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
         let a = textureSample(pgm_tex, src_samp, uv);
         let b = textureSample(pvw_tex, src_samp, uv);
-        let w = smoothstep(t - 0.02, t + 0.02, uv.x);
-        return mix(b, a, w);
+        let prev = textureSample(prev_tex, src_samp, uv);
+        let w = 1.0 - smoothstep(t - 0.04, t + 0.04, uv.x);
+        return mix(mix(a, prev, 0.15 * t), b, w);
     }
     """
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Custom WGSL").fontWeight(.bold)
-            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. pgm_tex, pvw_tex, and src_samp are bound.")
+            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. Bound: pgm_tex, pvw_tex, prev_tex, src_samp, src_samp_n, params (mix/direction/softness/dip/param/time/resolution).")
                 .font(.system(size: 11))
                 .foregroundStyle(EivizTheme.dim)
             TextEditor(text: $text)

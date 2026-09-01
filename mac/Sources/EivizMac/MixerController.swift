@@ -41,6 +41,7 @@ final class MixerController: ObservableObject {
     @Published var editingScene: SceneEntry?
     @Published var openMultiview: MultiviewLayout?
     @Published var expandedTransitions: Set<UUID> = []
+    @Published var kindMenuGroup: [UUID: TransitionGroup] = [:]
 
     private var booted = false
     private var tbarLatching = false
@@ -375,7 +376,9 @@ final class MixerController: ObservableObject {
     func setMix(_ value: Float, unitId: UInt64) {
         var state = currentState(unitId)
         state.mix = value
-        let preset = tbarPreset(for: unit(for: unitId))
+        normalizePixelSortDefaults(unitId)
+        var preset = tbarPreset(for: unit(for: unitId))
+        TransitionCatalog.applyKindDefaults(&preset)
         state.transition_kind = preset.kind
         state.transition_easing = preset.easing
         state.transition_direction = preset.direction
@@ -1171,6 +1174,13 @@ final class MixerController: ObservableObject {
     private func unit(for id: UInt64?) -> MixingUnitEntry {
         guard let id else { return selectedUnit }
         return session.units.first { $0.id == id } ?? selectedUnit
+    }
+
+    private func normalizePixelSortDefaults(_ unitId: UInt64) {
+        guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
+        for i in session.units[index].transitions.indices {
+            TransitionCatalog.applyKindDefaults(&session.units[index].transitions[i])
+        }
     }
 
     private func resolvedCustomWgsl(_ preset: TransitionPreset) -> String {

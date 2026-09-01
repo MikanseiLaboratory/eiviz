@@ -82,7 +82,8 @@ struct MixParams {
     softness: f32,
     dip: [f32; 4],
     param: f32,
-    pad: [f32; 3],
+    time: f32,
+    resolution: [f32; 2],
 }
 
 struct SourceGpu {
@@ -102,6 +103,7 @@ pub struct UnitTargets {
     pub program: wgpu::Texture,
     pub preview: wgpu::Texture,
     pub mixed: wgpu::Texture,
+    pub prev: wgpu::Texture,
     pub packed: Option<wgpu::Texture>,
     pub packed_mv: Option<wgpu::Texture>,
     pub packed_prv: Option<wgpu::Texture>,
@@ -109,6 +111,8 @@ pub struct UnitTargets {
     program_view: wgpu::TextureView,
     preview_view: wgpu::TextureView,
     mixed_view: wgpu::TextureView,
+    prev_view: wgpu::TextureView,
+    prev_seeded: bool,
     packed_view: Option<wgpu::TextureView>,
     multiview_view: Option<wgpu::TextureView>,
 }
@@ -135,6 +139,8 @@ pub struct Composer {
     mix: wgpu::RenderPipeline,
     pack: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    nearest: wgpu::Sampler,
+    mix_time: f32,
     color_bg_layout: wgpu::BindGroupLayout,
     blit_bg_layout: wgpu::BindGroupLayout,
     mix_bg_layout: wgpu::BindGroupLayout,
@@ -182,7 +188,14 @@ impl Composer {
         });
         let mix_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mix"),
-            entries: &[sampled(0), sampled(1), sampler_entry(2), uniform_dyn(3)],
+            entries: &[
+                sampled(0),
+                sampled(1),
+                sampler_entry(2),
+                uniform_dyn(3),
+                sampled(4),
+                sampler_entry(5),
+            ],
         });
         let pack_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pack"),
@@ -192,6 +205,11 @@ impl Composer {
         let sampler = device.device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let nearest = device.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -218,6 +236,8 @@ impl Composer {
             mix,
             pack,
             sampler,
+            nearest,
+            mix_time: 0.0,
             color_bg_layout,
             blit_bg_layout,
             mix_bg_layout,
@@ -256,6 +276,7 @@ impl Composer {
 
     pub fn begin_frame(&mut self) {
         self.pool.reset();
+        self.mix_time = self.mix_time + 1.0 / 60.0;
     }
 
     pub fn gpu_epoch(&self) -> u64 {
@@ -853,10 +874,7 @@ impl Composer {
         if self.custom_mix_src.get(&unit_id).map(String::as_str) == Some(trimmed) {
             return Ok(());
         }
-        let source = format!(
-            "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    return user_transition(in.uv, params.mix);\n}}\n",
-            CUSTOM_MIX_PREAMBLE, user_wgsl
-        );
+        let source = custom_mix_source(user_wgsl);
         let pipeline = pipeline(
             device,
             "mix-custom",
@@ -878,10 +896,7 @@ impl Composer {
         if !trimmed.contains("fn user_transition") {
             return Err("Define fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>".into());
         }
-        let source = format!(
-            "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    return user_transition(in.uv, params.mix);\n}}\n",
-            CUSTOM_MIX_PREAMBLE, user_wgsl
-        );
+        let source = custom_mix_source(user_wgsl);
         naga::front::wgsl::parse_str(&source).map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -920,6 +935,7 @@ impl Composer {
         } else {
             self.draw_bus(device, encoder, unit_id, mix_source, false, width, height)?;
         }
+        self.seed_mix_history(encoder, unit_id);
         if state.mix == 0.0 {
             let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
             encoder.copy_texture_to_texture(
@@ -946,6 +962,7 @@ impl Composer {
             self.ensure_packed(device, unit_id);
             self.draw_pack(device, encoder, unit_id)?;
         }
+        self.store_mix_history(encoder, unit_id);
         Ok(())
     }
 
@@ -1062,6 +1079,40 @@ impl Composer {
         Ok(())
     }
 
+    fn seed_mix_history(&mut self, encoder: &mut wgpu::CommandEncoder, unit_id: u64) {
+        let Some(unit) = self.units.get_mut(&unit_id) else {
+            return;
+        };
+        if unit.prev_seeded {
+            return;
+        }
+        encoder.copy_texture_to_texture(
+            unit.program.as_image_copy(),
+            unit.prev.as_image_copy(),
+            wgpu::Extent3d {
+                width: unit.width.max(1),
+                height: unit.height.max(1),
+                depth_or_array_layers: 1,
+            },
+        );
+        unit.prev_seeded = true;
+    }
+
+    fn store_mix_history(&mut self, encoder: &mut wgpu::CommandEncoder, unit_id: u64) {
+        let Some(unit) = self.units.get(&unit_id) else {
+            return;
+        };
+        encoder.copy_texture_to_texture(
+            unit.mixed.as_image_copy(),
+            unit.prev.as_image_copy(),
+            wgpu::Extent3d {
+                width: unit.width.max(1),
+                height: unit.height.max(1),
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     fn draw_mix(
         &mut self,
         device: &GpuDevice,
@@ -1070,6 +1121,11 @@ impl Composer {
         state: &UnitState,
     ) -> Result<(), String> {
         self.ensure_mix_group(device, unit_id);
+        let (width, height) = self
+            .units
+            .get(&unit_id)
+            .map(|unit| (unit.width as f32, unit.height as f32))
+            .unwrap_or((1920.0, 1080.0));
         let offset = self.pool.push(
             &device.queue,
             &MixParams {
@@ -1088,7 +1144,8 @@ impl Composer {
                     if state.dip_a <= 0.0 { 1.0 } else { state.dip_a },
                 ],
                 param: state.param,
-                pad: [0.0; 3],
+                time: self.mix_time,
+                resolution: [width, height],
             },
         );
         let dest = self.units.get(&unit_id).ok_or("unit missing")?.mixed_view.clone();
@@ -1342,6 +1399,14 @@ impl Composer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: self.pool.slot_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&unit.prev_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.nearest),
                 },
             ],
         });
@@ -1703,23 +1768,34 @@ impl UnitTargets {
         let program = make_texture(device, width, height, usage);
         let preview = make_texture(device, width, height, usage);
         let mixed = make_texture(device, width, height, usage);
+        let prev = make_texture(device, width, height, usage);
         Self {
             width,
             height,
             program_view: program.create_view(&Default::default()),
             preview_view: preview.create_view(&Default::default()),
             mixed_view: mixed.create_view(&Default::default()),
+            prev_view: prev.create_view(&Default::default()),
+            prev_seeded: false,
             packed_view: None,
             multiview_view: None,
             program,
             preview,
             mixed,
+            prev,
             packed: None,
             packed_mv: None,
             packed_prv: None,
             multiview: None,
         }
     }
+}
+
+fn custom_mix_source(user_wgsl: &str) -> String {
+    format!(
+        "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    if params.mix <= 0.001 {{\n        return textureSample(pgm_tex, src_samp, in.uv);\n    }}\n    if params.mix >= 0.999 {{\n        return textureSample(pvw_tex, src_samp, in.uv);\n    }}\n    return user_transition(in.uv, params.mix);\n}}\n",
+        CUSTOM_MIX_PREAMBLE, user_wgsl
+    )
 }
 
 const CUSTOM_MIX_PREAMBLE: &str = r#"
@@ -1734,12 +1810,15 @@ struct MixParams {
     softness: f32,
     dip: vec4<f32>,
     param: f32,
-    _pad: vec3<f32>,
+    time: f32,
+    resolution: vec2<f32>,
 }
 @group(0) @binding(0) var pgm_tex: texture_2d<f32>;
 @group(0) @binding(1) var pvw_tex: texture_2d<f32>;
 @group(0) @binding(2) var src_samp: sampler;
 @group(0) @binding(3) var<uniform> params: MixParams;
+@group(0) @binding(4) var prev_tex: texture_2d<f32>;
+@group(0) @binding(5) var src_samp_n: sampler;
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     var positions = array<vec2<f32>, 3>(

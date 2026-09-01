@@ -179,37 +179,50 @@ struct ContentView: View {
 
     private func transitionKindGrid(index: Int, preset: TransitionPreset) -> some View {
         let selected = mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind
+        let open = mixer.kindMenuGroup[preset.id] ?? TransitionCatalog.info(selected).group
         return VStack(alignment: .leading, spacing: 4) {
-            ForEach(TransitionGroup.allCases, id: \.self) { group in
-                let items = TransitionCatalog.items(in: group)
-                if !items.isEmpty {
-                    Text(group.title)
-                        .font(.system(size: 11))
-                        .foregroundStyle(EivizTheme.dim)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
-                        ForEach(items) { item in
-                            Button(item.label) {
-                                updateTransition(index) {
-                                    $0.kind = item.kind
-                                    if item.kind == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
-                                        $0.customWgsl = CustomWgslEditor.template
-                                    }
-                                }
-                                if item.kind == EIVIZ_TRANSITION_CUSTOM {
-                                    let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
-                                        ?? CustomWgslEditor.template
-                                    wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
-                                }
+            HStack(spacing: 4) {
+                ForEach(TransitionGroup.allCases, id: \.self) { group in
+                    Button(group.title) {
+                        mixer.kindMenuGroup[preset.id] = group
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: open == group ? .semibold : .regular))
+                    .foregroundStyle(open == group ? EivizTheme.text : EivizTheme.dim)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 3)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(open == group ? mixer.session.settings.previewColor.color : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                ForEach(TransitionCatalog.items(in: open)) { item in
+                    Button(item.label) {
+                        mixer.kindMenuGroup[preset.id] = item.group
+                        updateTransition(index) {
+                            $0.kind = item.kind
+                            $0.softness = TransitionCatalog.defaultSoftness(item.kind)
+                            $0.param = TransitionCatalog.defaultParam(item.kind)
+                            if item.kind == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
+                                $0.customWgsl = CustomWgslEditor.template
                             }
-                            .buttonStyle(MixerButtonStyle())
-                            .overlay(
-                                Rectangle().stroke(
-                                    selected == item.kind ? mixer.session.settings.previewColor.color : EivizTheme.stroke,
-                                    lineWidth: 1
-                                )
-                            )
+                        }
+                        if item.kind == EIVIZ_TRANSITION_CUSTOM {
+                            let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
+                                ?? CustomWgslEditor.template
+                            wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
                         }
                     }
+                    .buttonStyle(MixerButtonStyle())
+                    .overlay(
+                        Rectangle().stroke(
+                            selected == item.kind ? mixer.session.settings.previewColor.color : EivizTheme.stroke,
+                            lineWidth: 1
+                        )
+                    )
                 }
             }
         }

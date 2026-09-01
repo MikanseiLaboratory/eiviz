@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Eiviz.Host.Dialogs;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
     private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
+    private readonly Dictionary<int, TransitionGroup> _kindMenuGroup = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly DispatcherTimer _tbarTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
@@ -257,7 +259,9 @@ public partial class MainWindow : Window
         if (list.Count == 0)
             return new TransitionPreset { Kind = MixerNative.TransitionCut, Swap = true };
         var index = Math.Clamp(_tbarPresetIndex, 0, list.Count - 1);
-        return list[index];
+        var preset = list[index];
+        TransitionCatalog.ApplyKindDefaults(preset);
+        return preset;
     }
 
     private void TBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -321,6 +325,7 @@ public partial class MainWindow : Window
         {
             var index = i;
             var preset = unit.Transitions[i];
+            TransitionCatalog.ApplyKindDefaults(preset);
             var selected = index == _tbarPresetIndex;
             var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var fire = new Button { Content = "TAKE", Width = 48, Height = 22, Margin = new Thickness(4, 0, 0, 0), FontSize = 11 };
@@ -353,7 +358,7 @@ public partial class MainWindow : Window
             var stack = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
             if (preset.Kind == MixerNative.TransitionStinger)
                 preset.Kind = MixerNative.TransitionFade;
-            stack.Children.Add(BuildTransitionKindGrid(preset, unit));
+            stack.Children.Add(BuildTransitionKindGrid(preset, unit, index));
             var duration = new TextBox { Text = preset.DurationValue.ToString(), Margin = new Thickness(0, 0, 0, 4) };
             duration.TextChanged += (_, _) =>
             {
@@ -480,56 +485,112 @@ public partial class MainWindow : Window
         }
     }
 
-    private UIElement BuildTransitionKindGrid(TransitionPreset preset, MixingUnitEntry unit)
+    private static ControlTemplate FlatTabTemplate()
     {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetBinding(Border.BackgroundProperty, new Binding(nameof(Button.Background))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        border.SetBinding(Border.BorderBrushProperty, new Binding(nameof(Button.BorderBrush))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        border.SetBinding(Border.BorderThicknessProperty, new Binding(nameof(Button.BorderThickness))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(content);
+        return new ControlTemplate(typeof(Button)) { VisualTree = border };
+    }
+
+    private Button TransitionGroupTab(string label, bool on)
+    {
+        return new Button
+        {
+            Content = label,
+            Height = 20,
+            FontSize = 11,
+            FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal,
+            Margin = new Thickness(1, 0, 1, 2),
+            Padding = new Thickness(2, 0, 2, 0),
+            Foreground = on
+                ? System.Windows.Media.Brushes.White
+                : System.Windows.Media.Brushes.Silver,
+            Background = System.Windows.Media.Brushes.Transparent,
+            BorderBrush = on
+                ? BusTheme.PreviewBrush(_session.Settings)
+                : System.Windows.Media.Brushes.Transparent,
+            BorderThickness = new Thickness(0, 0, 0, 2),
+            Cursor = Cursors.Hand,
+            Template = FlatTabTemplate()
+        };
+    }
+
+    private Button TransitionPickerButton(string label, bool on)
+    {
+        return new Button
+        {
+            Content = label,
+            Height = 22,
+            FontSize = 11,
+            Margin = new Thickness(1),
+            Padding = new Thickness(2, 0, 2, 0),
+            Foreground = System.Windows.Media.Brushes.White,
+            Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
+            BorderBrush = on
+                ? BusTheme.PreviewBrush(_session.Settings)
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(1)
+        };
+    }
+
+    private UIElement BuildTransitionKindGrid(TransitionPreset preset, MixingUnitEntry unit, int index)
+    {
+        var open = _kindMenuGroup.TryGetValue(index, out var stored)
+            ? stored
+            : TransitionCatalog.Info(preset.Kind).Group;
         var root = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+        var groups = new UniformGrid { Columns = 4 };
         foreach (var group in new[] { TransitionGroup.Basic, TransitionGroup.Wipe, TransitionGroup.Motion, TransitionGroup.Shader })
         {
-            var items = TransitionCatalog.All.Where(item => item.Group == group).ToArray();
-            if (items.Length == 0)
-                continue;
-            root.Children.Add(new TextBlock
+            var captured = group;
+            var button = TransitionGroupTab(TransitionCatalog.GroupName(group), open == group);
+            button.Click += (_, _) =>
             {
-                Text = TransitionCatalog.GroupName(group),
-                FontSize = 11,
-                Foreground = System.Windows.Media.Brushes.Silver,
-                Margin = new Thickness(0, 4, 0, 2)
-            });
-            var grid = new UniformGrid { Columns = 3 };
-            foreach (var item in items)
-            {
-                var kind = item.Kind;
-                var on = preset.Kind == kind;
-                var button = new Button
-                {
-                    Content = item.Label,
-                    Height = 22,
-                    FontSize = 11,
-                    Margin = new Thickness(1),
-                    Padding = new Thickness(2, 0, 2, 0),
-                    Tag = kind,
-                    Foreground = System.Windows.Media.Brushes.White,
-                    Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
-                    BorderBrush = on
-                        ? BusTheme.PreviewBrush(_session.Settings)
-                        : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
-                    BorderThickness = new Thickness(1)
-                };
-                button.Click += (_, _) =>
-                {
-                    preset.Kind = kind;
-                    if (kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
-                    {
-                        preset.CustomWgsl = CustomWgslWindow.WgslTemplate;
-                        MixerNative.SetCustomWgsl(unit.Id, preset.CustomWgsl);
-                    }
-                    RebuildTransitions();
-                };
-                grid.Children.Add(button);
-            }
-            root.Children.Add(grid);
+                _kindMenuGroup[index] = captured;
+                RebuildTransitions();
+            };
+            groups.Children.Add(button);
         }
+        root.Children.Add(groups);
+
+        var grid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 2, 0, 0) };
+        foreach (var item in TransitionCatalog.All.Where(item => item.Group == open))
+        {
+            var kind = item.Kind;
+            var button = TransitionPickerButton(item.Label, preset.Kind == kind);
+            button.Tag = kind;
+            button.Click += (_, _) =>
+            {
+                preset.Kind = kind;
+                preset.Softness = TransitionCatalog.DefaultSoftness(kind);
+                preset.Param = TransitionCatalog.DefaultParam(kind);
+                _kindMenuGroup[index] = item.Group;
+                if (kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
+                {
+                    preset.CustomWgsl = CustomWgslWindow.WgslTemplate;
+                    MixerNative.SetCustomWgsl(unit.Id, preset.CustomWgsl);
+                }
+                RebuildTransitions();
+            };
+            grid.Children.Add(button);
+        }
+        root.Children.Add(grid);
         return root;
     }
 

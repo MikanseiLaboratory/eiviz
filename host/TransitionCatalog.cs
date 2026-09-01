@@ -63,6 +63,9 @@ internal static class TransitionCatalog
         new(MixerNative.TransitionPageCurl, "PageCurl", TransitionGroup.Shader, true, false, false, false, "", ""),
         new(MixerNative.TransitionFilmBurn, "FilmBurn", TransitionGroup.Shader, false, true, true, true, "Edge", "Intensity"),
         new(MixerNative.TransitionZoomBlur, "ZoomBlur", TransitionGroup.Shader, false, false, false, true, "", "Intensity"),
+        new(MixerNative.TransitionPixelSort, "PixelSort", TransitionGroup.Shader, true, false, true, true, "Threshold", "Span"),
+        new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, true, false, false, true, "", "Intensity"),
+        new(MixerNative.TransitionVisualDissolve, "VisualDissolve", TransitionGroup.Shader, false, false, true, true, "Edge", "Flow"),
     ];
 
     internal static TransitionInfo Info(uint kind) =>
@@ -81,4 +84,38 @@ internal static class TransitionCatalog
         TransitionGroup.Shader => "Shader",
         _ => "Basic"
     };
+
+    internal static float DefaultSoftness(uint kind) => kind switch
+    {
+        MixerNative.TransitionPixelSort => 0.3f,
+        _ => 0.02f
+    };
+
+    internal static float DefaultParam(uint kind) => kind switch
+    {
+        MixerNative.TransitionPixelSort => 0.4f,
+        MixerNative.TransitionDatamosh => 1f,
+        MixerNative.TransitionMetamix => 8f,
+        MixerNative.TransitionTile => 8f,
+        MixerNative.TransitionParts => 6f,
+        MixerNative.TransitionVisualDissolve => 0.42f,
+        _ => 0f
+    };
+
+    internal static bool ShowsSoftness(uint kind)
+    {
+        var label = Info(kind).SoftnessLabel;
+        return !string.IsNullOrEmpty(label) && label != "Edge";
+    }
+
+    internal static void ApplyKindDefaults(TransitionPreset preset)
+    {
+        if (preset.Kind == MixerNative.TransitionPixelSort)
+        {
+            if (preset.Softness <= 0.021f)
+                preset.Softness = 0.3f;
+            if (preset.Param <= 0f)
+                preset.Param = 0.4f;
+        }
+    }
 }

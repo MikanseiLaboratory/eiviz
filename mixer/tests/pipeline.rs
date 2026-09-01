@@ -10,9 +10,13 @@ use eiviz_mixer::{
     mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
     mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_enum_captures, mixer_video_start,
-    EASING_IN_OUT, TRANSITION_CUBE, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_GLITCH,
-    TRANSITION_HEART, TRANSITION_LOREZ, TRANSITION_PAGE_CURL, TRANSITION_SLIDE, TRANSITION_WIPE,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
+    mixer_video_enum_captures, mixer_video_start,
+    EASING_IN_OUT, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
+    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
+    TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
+    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -490,10 +494,21 @@ fn shader_transitions_emit_frames() {
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
     let kinds = [
         TRANSITION_CUBE,
+        TRANSITION_CUBE_ZOOM,
+        TRANSITION_FLY_ROTATE,
         TRANSITION_LOREZ,
+        TRANSITION_METAMIX,
+        TRANSITION_TILE,
+        TRANSITION_PARTS,
+        TRANSITION_SWIRL,
+        TRANSITION_MULTITASK,
+        TRANSITION_HEART,
+        TRANSITION_STAR,
         TRANSITION_GLITCH,
         TRANSITION_PAGE_CURL,
-        TRANSITION_HEART,
+        TRANSITION_PIXEL_SORT,
+        TRANSITION_DATAMOSH,
+        TRANSITION_VISUAL_DISSOLVE,
     ];
     for kind in kinds {
         let state = UnitState {
@@ -512,6 +527,21 @@ fn shader_transitions_emit_frames() {
         }
     }
     mixer_destroy();
+}
+
+#[test]
+fn custom_wgsl_can_sample_prev_and_time() {
+    let src = r#"
+fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
+    let a = textureSample(pgm_tex, src_samp, uv);
+    let p = textureSample(prev_tex, src_samp_n, uv);
+    return mix(a, p, fract(params.time) * t);
+}
+"#;
+    let cstr = CString::new(src).unwrap();
+    unsafe {
+        assert_eq!(mixer_validate_custom_wgsl(cstr.as_ptr()), OK);
+    }
 }
 
 #[test]

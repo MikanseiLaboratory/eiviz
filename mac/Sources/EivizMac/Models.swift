@@ -474,7 +474,7 @@ struct TransitionPreset: Identifiable, Codable {
     var hasEasing: Bool { hasDuration }
     var hasDirection: Bool { TransitionCatalog.info(kind).hasDirection }
     var hasDipColor: Bool { TransitionCatalog.info(kind).hasDipColor }
-    var hasSoftness: Bool { TransitionCatalog.info(kind).hasSoftness }
+    var hasSoftness: Bool { TransitionCatalog.showsSoftness(kind) }
     var hasParam: Bool { TransitionCatalog.info(kind).hasParam }
     var hasCustomWgsl: Bool { kind == EIVIZ_TRANSITION_CUSTOM }
     var label: String { TransitionCatalog.label(kind) }
