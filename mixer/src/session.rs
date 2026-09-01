@@ -574,6 +574,10 @@ pub struct MultiviewDto {
     pub program_label_follow: bool,
     #[serde(default)]
     pub program_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_anchor: Option<MvLabelAnchor>,
+    #[serde(default = "default_true")]
+    pub always_on_top: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -894,6 +898,28 @@ mod tests {
         assert!(!doc.multiviews[0].tiles[0].label_follow);
         assert_eq!(doc.multiviews[0].tiles[0].label, "Cam 1");
         assert_eq!(doc.multiviews[0].template, MultiviewTemplate::PreviewProgram8);
+        assert_eq!(doc.multiviews[0].label_anchor, None);
+        assert!(doc.multiviews[0].always_on_top);
+    }
+
+    #[test]
+    fn mv_per_layout_fields_roundtrip() {
+        let src = r#"{
+  "version": 1,
+  "multiviews": [{
+    "id": 1,
+    "name": "MV",
+    "labelAnchor": "Top",
+    "alwaysOnTop": false
+  }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.multiviews[0].label_anchor, Some(MvLabelAnchor::Top));
+        assert!(!doc.multiviews[0].always_on_top);
+        let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(again.multiviews[0].label_anchor, Some(MvLabelAnchor::Top));
+        assert!(!again.multiviews[0].always_on_top);
     }
 
     #[test]

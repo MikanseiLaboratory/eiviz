@@ -161,6 +161,8 @@ internal sealed class CommandQueue : IAsyncDisposable
         MixerNative.ThrowIfFailed(
             MixerNative.BindMultiview(layout.GpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit),
             "Bind multiview");
+        if (session is not null)
+            layout.PushLabelStyle(session.Settings);
     }
 
     private static OverlayDesc BusLayer(ulong sourceId, float x, float y, float w, float h, int z) => new()

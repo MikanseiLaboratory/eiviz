@@ -602,11 +602,14 @@ struct MultiviewLayout: Identifiable, Codable {
     var previewLabel: String = ""
     var programLabelFollow: Bool = true
     var programLabel: String = ""
+    var labelAnchor: MvLabelAnchor?
+    var alwaysOnTop: Bool = true
     var gpuId: UInt64 { EIVIZ_MULTIVIEW_BASE | id }
 
     enum CodingKeys: String, CodingKey {
         case id, name, previewUnitId, programUnitId, presentInterval, tiles, template
         case previewLabelFollow, previewLabel, programLabelFollow, programLabel
+        case labelAnchor, alwaysOnTop
     }
 
     init(
@@ -621,7 +624,9 @@ struct MultiviewLayout: Identifiable, Codable {
         previewLabelFollow: Bool = true,
         previewLabel: String = "",
         programLabelFollow: Bool = true,
-        programLabel: String = ""
+        programLabel: String = "",
+        labelAnchor: MvLabelAnchor? = nil,
+        alwaysOnTop: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -635,6 +640,8 @@ struct MultiviewLayout: Identifiable, Codable {
         self.previewLabel = previewLabel
         self.programLabelFollow = programLabelFollow
         self.programLabel = programLabel
+        self.labelAnchor = labelAnchor
+        self.alwaysOnTop = alwaysOnTop
         ensureTiles()
     }
 
@@ -651,6 +658,8 @@ struct MultiviewLayout: Identifiable, Codable {
         previewLabel = try container.decodeIfPresent(String.self, forKey: .previewLabel) ?? ""
         programLabelFollow = try container.decodeIfPresent(Bool.self, forKey: .programLabelFollow) ?? true
         programLabel = try container.decodeIfPresent(String.self, forKey: .programLabel) ?? ""
+        labelAnchor = try container.decodeIfPresent(MvLabelAnchor.self, forKey: .labelAnchor)
+        alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
         ensureTiles()
     }
 

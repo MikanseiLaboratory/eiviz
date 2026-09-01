@@ -8,8 +8,8 @@ namespace Eiviz.Host.Dialogs;
 
 public partial class AddInputWindow : Window
 {
-    private static readonly List<string> StillHistory = [];
-    private static readonly List<string> VideoHistory = [];
+    private static List<string> StillHistory => AppPrefs.Current.RecentStills;
+    private static List<string> VideoHistory => AppPrefs.Current.RecentVideos;
     private InputKind _kind = InputKind.Still;
     private bool _lockKind;
 
@@ -369,12 +369,12 @@ public partial class AddInputWindow : Window
         }
     }
 
-    private static void Remember(List<string> history, string path)
+    private void Remember(List<string> history, string path)
     {
-        history.Remove(path);
-        history.Insert(0, path);
-        if (history.Count > 24)
-            history.RemoveRange(24, history.Count - 24);
+        if (ReferenceEquals(history, AppPrefs.Current.RecentStills))
+            AppPrefs.Current.RememberStill(path);
+        else
+            AppPrefs.Current.RememberVideo(path);
     }
 
     private sealed record CameraItem(string Name, string Link)

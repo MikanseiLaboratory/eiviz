@@ -100,6 +100,9 @@ struct SceneGpu {
     height: u32,
     layers: Arc<[OverlayDesc]>,
     labels: Arc<[String]>,
+    label_size: f32,
+    label_percent: bool,
+    label_top: bool,
 }
 
 pub struct Composer {
@@ -508,17 +511,20 @@ impl Composer {
     pub fn sync_scenes(
         &mut self,
         device: &GpuDevice,
-        specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+        specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         labels: &HashMap<u64, Arc<[String]>>,
     ) {
         let keep: std::collections::HashSet<u64> = specs.iter().map(|spec| spec.0).collect();
         self.scenes.retain(|id, _| keep.contains(id));
-        for (id, width, height, layers) in specs {
+        for (id, width, height, layers, style) in specs {
             let scene_labels = labels
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| Arc::from([]));
             if let Some(existing) = self.scenes.get_mut(id) {
+                existing.label_size = style.size;
+                existing.label_percent = style.percent;
+                existing.label_top = style.top;
                 if existing.width == *width && existing.height == *height {
                     if !Arc::ptr_eq(&existing.layers, layers) {
                         existing.layers = Arc::clone(layers);
@@ -529,7 +535,15 @@ impl Composer {
                     continue;
                 }
             }
-            self.define_scene(device, *id, *width, *height, Arc::clone(layers), scene_labels);
+            self.define_scene(
+                device,
+                *id,
+                *width,
+                *height,
+                Arc::clone(layers),
+                scene_labels,
+                *style,
+            );
         }
     }
 
@@ -541,6 +555,7 @@ impl Composer {
         height: u32,
         layers: Arc<[OverlayDesc]>,
         labels: Arc<[String]>,
+        style: crate::MvLabelStyle,
     ) {
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
@@ -561,6 +576,9 @@ impl Composer {
                 height,
                 layers,
                 labels,
+                label_size: style.size,
+                label_percent: style.percent,
+                label_top: style.top,
             },
         );
     }
@@ -617,7 +635,7 @@ impl Composer {
         scene_id: u64,
         tallies: &[(u64, u64)],
     ) -> Result<(), String> {
-        let (width, height, mut layers, labels, view) = {
+        let (width, height, mut layers, labels, view, label_size, label_percent, label_top) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
             (
                 scene.width,
@@ -625,6 +643,9 @@ impl Composer {
                 scene.layers.iter().copied().collect::<Vec<_>>(),
                 scene.labels.clone(),
                 scene.view.clone(),
+                scene.label_size,
+                scene.label_percent,
+                scene.label_top,
             )
         };
         layers.sort_by_key(|layer| layer.z);
@@ -644,7 +665,17 @@ impl Composer {
                 }
             }
             if is_multiview(scene_id) {
-                self.draw_mv_label_pass(device, &mut pass, &layers, &labels, width, height);
+                self.draw_mv_label_pass(
+                    device,
+                    &mut pass,
+                    &layers,
+                    &labels,
+                    width,
+                    height,
+                    label_size,
+                    label_percent,
+                    label_top,
+                );
                 self.draw_mv_tally_pass(device, &mut pass, &layers, tallies, width, height);
             }
         }
@@ -659,6 +690,9 @@ impl Composer {
         labels: &[String],
         canvas_w: u32,
         canvas_h: u32,
+        label_size: f32,
+        label_percent: bool,
+        label_top: bool,
     ) {
         let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
         for (index, layer) in video.iter().enumerate() {
@@ -666,14 +700,14 @@ impl Composer {
             let text = labels.get(index).map(String::as_str).unwrap_or("");
             let tile_h = layer.rect.height * canvas_h.max(1) as f32;
             let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
-            let font_px = crate::labels::font_px(self.label_size, self.label_percent, tile_h);
+            let font_px = crate::labels::font_px(label_size, label_percent, tile_h);
             let dest_h = crate::labels::band_height(font_px);
             let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h) else {
                 continue;
             };
             let key = LabelTexKey::new(text, rgb, font_px, dest_w);
             let nh = dest_h as f32 / canvas_h.max(1) as f32;
-            let y = if self.label_top {
+            let y = if label_top {
                 layer.rect.y
             } else {
                 layer.rect.y + layer.rect.height - nh

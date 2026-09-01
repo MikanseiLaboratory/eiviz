@@ -16,7 +16,7 @@ internal static class SessionStore
 
     public static void Save(Session session, string path)
     {
-        session.Settings.LastSessionPath = path;
+        session.Settings.LastSessionPath = null;
         var dto = Document.From(session);
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
@@ -26,7 +26,6 @@ internal static class SessionStore
         var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
             ?? throw new InvalidOperationException("Session file is empty.");
         var session = dto.ToSession();
-        session.Settings.LastSessionPath = path;
         return session;
     }
 
@@ -300,6 +299,8 @@ internal static class SessionStore
         public string PreviewLabel { get; set; } = "";
         public bool ProgramLabelFollow { get; set; } = true;
         public string ProgramLabel { get; set; } = "";
+        public MvLabelAnchor? LabelAnchor { get; set; }
+        public bool? AlwaysOnTop { get; set; }
 
         public static MultiviewDto From(MultiviewLayout layout) => new()
         {
@@ -313,7 +314,9 @@ internal static class SessionStore
             PreviewLabelFollow = layout.PreviewLabelFollow,
             PreviewLabel = layout.PreviewLabel ?? "",
             ProgramLabelFollow = layout.ProgramLabelFollow,
-            ProgramLabel = layout.ProgramLabel ?? ""
+            ProgramLabel = layout.ProgramLabel ?? "",
+            LabelAnchor = layout.LabelAnchor,
+            AlwaysOnTop = layout.AlwaysOnTop
         };
 
         public MultiviewLayout ToEntry(Session session)
@@ -330,7 +333,9 @@ internal static class SessionStore
                 PreviewLabelFollow = PreviewLabelFollow,
                 PreviewLabel = PreviewLabel ?? "",
                 ProgramLabelFollow = ProgramLabelFollow,
-                ProgramLabel = ProgramLabel ?? ""
+                ProgramLabel = ProgramLabel ?? "",
+                LabelAnchor = LabelAnchor ?? session.Settings.MultiviewLabelAnchor,
+                AlwaysOnTop = AlwaysOnTop ?? true
             };
             foreach (var tile in Tiles)
                 layout.Tiles.Add(tile);

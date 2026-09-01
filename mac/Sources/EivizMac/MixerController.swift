@@ -25,6 +25,7 @@ final class MixerController: ObservableObject {
     @Published var videoPlaying = false
     @Published var videoTitle = ""
     @Published var showSettings = false
+    @Published var showPreferences = false
     @Published var showAddInput = false
     @Published var editingInput: InputEntry?
     @Published var showMixingUnit = false
@@ -49,6 +50,8 @@ final class MixerController: ObservableObject {
     private let inputPreviewCloser = InputPreviewCloser()
     private var switcherWindows: [UInt64: NSWindow] = [:]
     private let switcherCloser = SwitcherCloser()
+    private var multiviewWindows: [UInt64: NSWindow] = [:]
+    private let multiviewCloser = SwitcherCloser()
     private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
 
     var selectedUnit: MixingUnitEntry {
@@ -542,7 +545,37 @@ final class MixerController: ObservableObject {
     func openMultiviewWindow(_ layout: MultiviewLayout) {
         pushMultiview(layout)
         openMultiview = layout
-        showMultiview = true
+        if let existing = multiviewWindows[layout.id] {
+            existing.makeKeyAndOrderFront(nil)
+            existing.level = layout.alwaysOnTop ? .floating : .normal
+            return
+        }
+        let host = NSHostingController(rootView: MultiviewView(layoutId: layout.id).environmentObject(self))
+        let window = SwitcherHostWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 792),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = layout.name
+        window.identifier = NSUserInterfaceItemIdentifier("multiview-\(layout.id)")
+        window.contentViewController = host
+        window.isReleasedWhenClosed = false
+        window.level = layout.alwaysOnTop ? .floating : .normal
+        window.center()
+        multiviewCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.multiviewWindows.removeValue(forKey: closedId)
+            }
+        }
+        window.delegate = multiviewCloser
+        window.makeKeyAndOrderFront(nil)
+        multiviewWindows[layout.id] = window
+        showMultiview = false
+    }
+
+    func applyMultiviewWindowLevel(_ layout: MultiviewLayout) {
+        multiviewWindows[layout.id]?.level = layout.alwaysOnTop ? .floating : .normal
     }
 
     func openSwitcher(_ unitId: UInt64? = nil) {
@@ -658,10 +691,15 @@ final class MixerController: ObservableObject {
         let size = min(200, max(1, session.settings.multiviewLabelSize))
         session.settings.multiviewLabelSize = size
         _ = mixer_set_mv_label(
+            0,
             size,
             session.settings.multiviewLabelUnit == .percent ? 1 : 0,
             session.settings.multiviewLabelAnchor == .top ? 1 : 0
         )
+        for layout in session.multiviews {
+            let top = (layout.labelAnchor ?? session.settings.multiviewLabelAnchor) == .top
+            _ = mixer_set_mv_label(layout.gpuId, size, session.settings.multiviewLabelUnit == .percent ? 1 : 0, top ? 1 : 0)
+        }
     }
 
     private func slotNames(_ layout: MultiviewLayout) -> [String] {
@@ -705,7 +743,7 @@ final class MixerController: ObservableObject {
         panel.nameFieldStringValue = "eiviz.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         session.selectedUnitId = selectedUnitId
-        session.settings.lastSessionPath = url.path
+        session.settings.lastSessionPath = nil
         do {
             let json = try SessionFile.encode(session)
             MixerFFI.withCString(url.path) { path in
@@ -716,16 +754,23 @@ final class MixerController: ObservableObject {
                     )
                 }
             }
+            AppPrefs.shared.rememberSession(url.path)
         } catch {
             errorText = error.localizedDescription
         }
     }
 
-    func loadSession() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+    func loadSession(path: String? = nil) {
+        let url: URL
+        if let path {
+            url = URL(fileURLWithPath: path)
+        } else {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.json]
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let picked = panel.url else { return }
+            url = picked
+        }
         var buffer = [UInt8](repeating: 0, count: 1 << 20)
         let n = MixerFFI.withCString(url.path) { path in
             buffer.withUnsafeMutableBufferPointer { ptr in
@@ -749,6 +794,7 @@ final class MixerController: ObservableObject {
             fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
             applyBusColors()
             applySession()
+            AppPrefs.shared.rememberSession(url.path)
         } catch {
             errorText = error.localizedDescription
         }
@@ -1160,10 +1206,12 @@ private final class SwitcherCloser: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              let raw = window.identifier?.rawValue,
-              raw.hasPrefix("switcher-"),
-              let unitId = UInt64(raw.dropFirst("switcher-".count))
+              let raw = window.identifier?.rawValue
         else { return }
-        onClose?(unitId)
+        if raw.hasPrefix("switcher-"), let unitId = UInt64(raw.dropFirst("switcher-".count)) {
+            onClose?(unitId)
+        } else if raw.hasPrefix("multiview-"), let id = UInt64(raw.dropFirst("multiview-".count)) {
+            onClose?(id)
+        }
     }
 }

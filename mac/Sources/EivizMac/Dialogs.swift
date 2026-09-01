@@ -17,7 +17,6 @@ struct SettingsView: View {
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
                 Text("Audio Auxiliary").tag(4)
-                Text("About").tag(5)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -27,13 +26,15 @@ struct SettingsView: View {
                     else if category == 1 { performance }
                     else if category == 2 { outputs }
                     else if category == 3 { multiview }
-                    else if category == 4 { audio }
-                    else { about }
+                    else { audio }
                 }
                 Spacer()
                 HStack {
                     Spacer()
                     Button("OK") {
+                        if !copyUmaInfo().available {
+                            mixer.session.settings.rebarOptimization = false
+                        }
                         mixer.pushAudio()
                         mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
@@ -87,13 +88,7 @@ struct SettingsView: View {
                 }
                 .frame(width: 88)
             }
-            Text("Multiview label position")
-            Picker("", selection: $mixer.session.settings.multiviewLabelAnchor) {
-                Text("Bottom").tag(MvLabelAnchor.bottom)
-                Text("Top").tag(MvLabelAnchor.top)
-            }
-            .frame(width: 168)
-            Text("px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text. Position is the top or bottom edge of each window.")
+            Text("px is pixels on the Multiview canvas. % is of each window height. The bar height follows the text.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Master Frame Rate")
@@ -130,13 +125,14 @@ struct SettingsView: View {
             let info = copyUmaInfo()
             Text("Graphics Adapter").fontWeight(.bold)
             Text(info.name)
-            Text("Unified Memory")
-            Text(info.uma ? "Enabled" : "Not available")
-            Toggle("Use Unified Memory optimization", isOn: Binding(
-                get: { mixer.session.settings.rebarOptimizationEnabled },
-                set: { mixer.session.settings.rebarOptimization = $0 }
-            ))
-            .disabled(!info.available)
+            if info.available {
+                Text("Unified Memory")
+                Text(info.uma ? "Enabled" : "Not available")
+                Toggle("Use Unified Memory optimization", isOn: Binding(
+                    get: { mixer.session.settings.rebarOptimizationEnabled },
+                    set: { mixer.session.settings.rebarOptimization = $0 }
+                ))
+            }
             Toggle("Upload NDI on the ingest thread", isOn: Binding(
                 get: { mixer.session.settings.ndiGpuUploadEnabled },
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
@@ -284,6 +280,23 @@ struct SettingsView: View {
                 Text(layout.name).tag(Optional(layout.id))
             }
             .frame(minHeight: 120)
+            if let index = mixer.session.multiviews.firstIndex(where: { $0.id == selectedMultiviewId }) {
+                Toggle(L10n.t("settings.alwaysOnTop"), isOn: Binding(
+                    get: { mixer.session.multiviews[index].alwaysOnTop },
+                    set: {
+                        mixer.session.multiviews[index].alwaysOnTop = $0
+                        mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
+                    }
+                ))
+                Picker(L10n.t("settings.labelPosition"), selection: Binding(
+                    get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
+                    set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
+                )) {
+                    Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
+                    Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
+                }
+                .frame(width: 168)
+            }
             Text("Default Mixing Unit for new Multiview windows")
             Picker("", selection: $mixer.session.settings.defaultMultiviewUnitId) {
                 ForEach(mixer.session.units) { unit in
@@ -420,19 +433,73 @@ struct SettingsView: View {
         }
     }
 
-    private var about: some View {
-        VStack(alignment: .leading, spacing: 8) {
+}
+
+struct PreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var prefs = AppPrefs.shared
+    @State private var originalLanguage = AppPrefs.shared.language
+    @State private var originalTheme = AppPrefs.shared.theme
+    @State private var reverting = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("prefs.language"))
+            Picker("", selection: $prefs.language) {
+                Text(L10n.t("prefs.english")).tag(AppLanguage.en)
+                Text(L10n.t("prefs.japanese")).tag(AppLanguage.ja)
+            }
+            .frame(width: 220)
+            Text(L10n.t("prefs.theme"))
+            Picker("", selection: $prefs.theme) {
+                Text(L10n.t("prefs.themeDark")).tag(AppThemeMode.dark)
+                Text(L10n.t("prefs.themeLight")).tag(AppThemeMode.light)
+                Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
+            }
+            .frame(width: 220)
             Text("eiviz").font(.title)
             Text("Version \(HostVersion.display)")
-            Text("eiviz is an experimental software switcher developed and maintained by Mikansei Laboratory.")
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Shugo Kawamura")
+            Text(L10n.t("about.blurb")).fixedSize(horizontal: false, vertical: true)
+            Text(L10n.t("about.author"))
             Link("https://github.com/MikanseiLaboratory/eiviz", destination: URL(string: "https://github.com/MikanseiLaboratory/eiviz")!)
             Link("https://mikanseilaboratory.github.io/", destination: URL(string: "https://mikanseilaboratory.github.io/")!)
-            Text("Open source").fontWeight(.bold)
-            Text("eiviz original source is PolyForm Shield License 1.0.0. Third-party crates stay MIT / Apache-2.0 / Zlib. NDI® is a trademark of Vizrt NDI AB.")
+            Text(L10n.t("about.openSource")).fontWeight(.bold)
+            Text(L10n.t("about.license"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button(L10n.t("dialog.ok")) {
+                    prefs.save()
+                    prefs.localeRevision += 1
+                    dismiss()
+                }
+                Button(L10n.t("dialog.cancel")) {
+                    reverting = true
+                    prefs.language = originalLanguage
+                    prefs.theme = originalTheme
+                    prefs.save()
+                    prefs.localeRevision += 1
+                    dismiss()
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 520, minHeight: 420)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear {
+            originalLanguage = prefs.language
+            originalTheme = prefs.theme
+        }
+        .onChange(of: prefs.language) { _, _ in
+            if !reverting {
+                prefs.save()
+                prefs.localeRevision += 1
+            }
+        }
+        .onChange(of: prefs.theme) { _, _ in
+            if !reverting { prefs.save() }
         }
     }
 }
@@ -514,8 +581,10 @@ struct AddInputView: View {
                 .fixedSize(horizontal: false, vertical: true)
         case "Still":
             pathRow($stillPath) { pick(["public.image"], $stillPath) }
+            recentList(AppPrefs.shared.recentStills) { stillPath = $0 }
         case "Video":
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
+            recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
             Picker("Play when", selection: $videoPlayWhen) {
                 Text("Never (manual)").tag(VideoPlayWhen.never)
@@ -568,6 +637,17 @@ struct AddInputView: View {
         HStack {
             mixerTextField(text, placeholder: "Path")
             Button("Browse", action: browse)
+        }
+    }
+
+    @ViewBuilder
+    private func recentList(_ paths: [String], choose: @escaping (String) -> Void) -> some View {
+        if !paths.isEmpty {
+            Text(L10n.t("chrome.openRecent"))
+            List(paths, id: \.self) { path in
+                Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+            }
+            .frame(height: 120)
         }
     }
 
@@ -657,10 +737,12 @@ struct AddInputView: View {
             guard !stillPath.isEmpty else { return }
             input.kind = .still
             input.pathOrAddress = stillPath
+            AppPrefs.shared.rememberStill(stillPath)
         case "Video":
             guard !videoPath.isEmpty else { return }
             input.kind = .video
             input.pathOrAddress = videoPath
+            AppPrefs.shared.rememberVideo(videoPath)
             input.videoLoop = videoLoop
             input.videoPlayWhen = videoPlayWhen
             input.videoRestartWhen = videoRestartWhen
@@ -762,10 +844,13 @@ struct MixingUnitView: View {
 struct MultiviewView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
+    var layoutId: UInt64?
+
+    private var resolvedId: UInt64? { layoutId ?? mixer.openMultiview?.id }
 
     private var layout: MultiviewLayout? {
-        if let open = mixer.openMultiview,
-           let live = mixer.session.multiviews.first(where: { $0.id == open.id })
+        if let id = resolvedId,
+           let live = mixer.session.multiviews.first(where: { $0.id == id })
         {
             return live
         }
@@ -777,6 +862,23 @@ struct MultiviewView: View {
             HStack {
                 Text(layout?.name ?? "Multiview").fontWeight(.bold)
                 Spacer()
+                if let index = mixer.session.multiviews.firstIndex(where: { $0.id == layout?.id }) {
+                    Toggle(L10n.t("settings.alwaysOnTop"), isOn: Binding(
+                        get: { mixer.session.multiviews[index].alwaysOnTop },
+                        set: {
+                            mixer.session.multiviews[index].alwaysOnTop = $0
+                            mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
+                        }
+                    ))
+                    Picker(L10n.t("settings.labelPosition"), selection: Binding(
+                        get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
+                        set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }
+                    )) {
+                        Text(L10n.t("mv.bottom")).tag(MvLabelAnchor.bottom)
+                        Text(L10n.t("mv.top")).tag(MvLabelAnchor.top)
+                    }
+                    .frame(width: 120)
+                }
                 Button("Layout…") {
                     mixer.showMultiviewSlots = true
                 }

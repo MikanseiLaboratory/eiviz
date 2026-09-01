@@ -1,0 +1,42 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Color x:Key="WindowBgColor">#F0F0F0</Color>
+    <Color x:Key="ChromeBgColor">#E4E4E4</Color>
+    <Color x:Key="PanelBgColor">#EAEAEA</Color>
+    <Color x:Key="DialogBgColor">#F5F5F5</Color>
+    <Color x:Key="DialogSideColor">#E8E8E8</Color>
+    <Color x:Key="ListBgColor">#FFFFFF</Color>
+    <Color x:Key="TextColor">#111111</Color>
+    <Color x:Key="DimColor">#666666</Color>
+    <Color x:Key="ButtonBgColor">#DDDDDD</Color>
+    <Color x:Key="ButtonBorderColor">#AAAAAA</Color>
+    <Color x:Key="FieldBgColor">#FFFFFF</Color>
+    <Color x:Key="StatusBarBgColor">#E0E0E0</Color>
+    <Color x:Key="VideoBarBgColor">#E8E8E8</Color>
+    <Color x:Key="StrokeColor">#BBBBBB</Color>
+    <Color x:Key="StatusColor">#2E7D32</Color>
+    <Color x:Key="WarnColor">#E65100</Color>
+    <Color x:Key="HudColor">#558B2F</Color>
+    <Color x:Key="VideoSurfaceColor">#000000</Color>
+    <Color x:Key="ComboFgColor">#111111</Color>
+    <SolidColorBrush x:Key="WindowBackground" Color="{StaticResource WindowBgColor}"/>
+    <SolidColorBrush x:Key="ChromeBackground" Color="{StaticResource ChromeBgColor}"/>
+    <SolidColorBrush x:Key="PanelBackground" Color="{StaticResource PanelBgColor}"/>
+    <SolidColorBrush x:Key="DialogBackground" Color="{StaticResource DialogBgColor}"/>
+    <SolidColorBrush x:Key="DialogSideBackground" Color="{StaticResource DialogSideColor}"/>
+    <SolidColorBrush x:Key="ListBackground" Color="{StaticResource ListBgColor}"/>
+    <SolidColorBrush x:Key="TextForeground" Color="{StaticResource TextColor}"/>
+    <SolidColorBrush x:Key="DimForeground" Color="{StaticResource DimColor}"/>
+    <SolidColorBrush x:Key="ButtonBackground" Color="{StaticResource ButtonBgColor}"/>
+    <SolidColorBrush x:Key="ButtonBorder" Color="{StaticResource ButtonBorderColor}"/>
+    <SolidColorBrush x:Key="FieldBackground" Color="{StaticResource FieldBgColor}"/>
+    <SolidColorBrush x:Key="StatusBarBackground" Color="{StaticResource StatusBarBgColor}"/>
+    <SolidColorBrush x:Key="VideoBarBackground" Color="{StaticResource VideoBarBgColor}"/>
+    <SolidColorBrush x:Key="StrokeBrush" Color="{StaticResource StrokeColor}"/>
+    <SolidColorBrush x:Key="StatusForeground" Color="{StaticResource StatusColor}"/>
+    <SolidColorBrush x:Key="WarnForeground" Color="{StaticResource WarnColor}"/>
+    <SolidColorBrush x:Key="HudForeground" Color="{StaticResource HudColor}"/>
+    <SolidColorBrush x:Key="VideoSurface" Color="{StaticResource VideoSurfaceColor}"/>
+    <SolidColorBrush x:Key="ComboForeground" Color="{StaticResource ComboFgColor}"/>
+    <SolidColorBrush x:Key="PanelBrush" Color="{StaticResource ChromeBgColor}"/>
+</ResourceDictionary>

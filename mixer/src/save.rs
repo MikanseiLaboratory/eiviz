@@ -72,7 +72,7 @@ pub fn want_full(save: LiveSave, roles: SourceRoles) -> bool {
 }
 
 pub fn collect_source_roles(
-    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
     monitor_sources: &[u64],
     outputs: &[(u32, u64)],
@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::abi::{SCENE_BASE, SRC_BLUE, SRC_COLOR};
 
-    fn scene(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>) {
+    fn scene(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle) {
         let overlays: Arc<[OverlayDesc]> = layers
             .iter()
             .map(|source_id| OverlayDesc {
@@ -160,7 +160,7 @@ mod tests {
                 ..OverlayDesc::default()
             })
             .collect();
-        (SCENE_BASE | id, 1920, 1080, overlays)
+        (SCENE_BASE | id, 1920, 1080, overlays, crate::MvLabelStyle::default())
     }
 
     fn unit(program: u64, preview: u64, mix: f32) -> (u64, u32, u32, u32, u32, UnitState) {

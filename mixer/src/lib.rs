@@ -126,10 +126,10 @@ struct BusColors {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct MvLabelStyle {
-    size: f32,
-    percent: bool,
-    top: bool,
+pub(crate) struct MvLabelStyle {
+    pub size: f32,
+    pub percent: bool,
+    pub top: bool,
 }
 
 impl Default for MvLabelStyle {
@@ -157,6 +157,7 @@ struct SceneSpec {
     height: u32,
     layers: Arc<[crate::abi::OverlayDesc]>,
     labels: Arc<[String]>,
+    mv_label: MvLabelStyle,
 }
 
 struct Shared {
@@ -664,13 +665,20 @@ pub unsafe extern "C" fn mixer_define_scene(
         (Arc::from(descs), Arc::from(texts))
     };
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").scenes.insert(
+        let mut shared = mixer.shared.lock().expect("shared");
+        let mv_label = shared
+            .scenes
+            .get(&scene_id)
+            .map(|spec| spec.mv_label)
+            .unwrap_or(shared.mv_label);
+        shared.scenes.insert(
             scene_id,
             SceneSpec {
                 width,
                 height,
                 layers: copied,
                 labels,
+                mv_label,
             },
         );
         OK
@@ -2267,13 +2275,21 @@ pub extern "C" fn mixer_set_bus_colors(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_set_mv_label(size: f32, percent: u32, top: u32) -> i32 {
+pub extern "C" fn mixer_set_mv_label(scene_id: u64, size: f32, percent: u32, top: u32) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").mv_label = MvLabelStyle {
+        let style = MvLabelStyle {
             size: crate::labels::clamp_size(size),
             percent: percent != 0,
             top: top != 0,
         };
+        let mut shared = mixer.shared.lock().expect("shared");
+        if scene_id == 0 {
+            shared.mv_label = style;
+        } else if let Some(spec) = shared.scenes.get_mut(&scene_id) {
+            spec.mv_label = style;
+        } else {
+            shared.mv_label = style;
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2560,10 +2576,10 @@ fn render_loop(
                     )
                 })
                 .collect();
-            let scene_specs: Vec<(u64, u32, u32, Arc<[OverlayDesc]>)> = guard
+            let scene_specs: Vec<(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)> = guard
                 .scenes
                 .iter()
-                .map(|(id, spec)| (*id, spec.width, spec.height, Arc::clone(&spec.layers)))
+                .map(|(id, spec)| (*id, spec.width, spec.height, Arc::clone(&spec.layers), spec.mv_label))
                 .collect();
             let scene_labels: HashMap<u64, Arc<[String]>> = guard
                 .scenes
@@ -2571,7 +2587,6 @@ fn render_loop(
                 .map(|(id, spec)| (*id, Arc::clone(&spec.labels)))
                 .collect();
             let bus_colors = guard.bus_colors;
-            let mv_label = guard.mv_label;
             let generators: Vec<(u64, Generator)> = guard
                 .generators
                 .iter()
@@ -2751,7 +2766,6 @@ fn render_loop(
             frame_delay.consume_display(skip_compose);
             if !skip_compose {
                 composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
-                composer.set_mv_label(mv_label.size, mv_label.percent, mv_label.top);
                 composer.sync_scenes(&device, &scene_specs, &scene_labels);
                 let mut encoder =
                     device
@@ -3039,7 +3053,7 @@ fn interleaved_to_packet(interleaved: &[f32], pts: i64) -> AudioPacket {
 #[allow(dead_code)]
 fn follow_gains(
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
-    scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+    scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
     _uploads: &UploadStore,
 ) -> Vec<(u64, f32)> {
     let spec_map: HashMap<u64, &[OverlayDesc]> = scenes
@@ -3119,7 +3133,7 @@ fn audio_for_source(
 }
 
 fn collect_live_ids(
-    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
     snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
     monitor_sources: &[u64],
     outputs: &[OutputSnap],

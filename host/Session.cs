@@ -399,6 +399,8 @@ public sealed class MultiviewLayout
     public string PreviewLabel { get; set; } = "";
     public bool ProgramLabelFollow { get; set; } = true;
     public string ProgramLabel { get; set; } = "";
+    public MvLabelAnchor? LabelAnchor { get; set; }
+    public bool AlwaysOnTop { get; set; } = true;
     public ulong GpuId => MixerNative.MultiviewBase | Id;
     public override string ToString() => Name;
 
@@ -413,6 +415,18 @@ public sealed class MultiviewLayout
 
     public void PushPresentInterval(SessionSettings settings) =>
         MixerNative.SetMonitorPresentInterval(MonitorId, ResolvedPresentInterval(settings));
+
+    public MvLabelAnchor ResolvedLabelAnchor(SessionSettings settings) =>
+        LabelAnchor ?? settings.MultiviewLabelAnchor;
+
+    public void PushLabelStyle(SessionSettings settings) =>
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetMvLabel(
+                GpuId,
+                settings.MultiviewLabelSize,
+                settings.MultiviewLabelUnit == MvLabelUnit.Percent ? 1u : 0u,
+                ResolvedLabelAnchor(settings) == MvLabelAnchor.Top ? 1u : 0u),
+            "Set Multiview label");
 
     public void EnsureTiles()
     {
@@ -594,6 +608,7 @@ public sealed class SessionSettings
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
+    [System.Text.Json.Serialization.JsonIgnore]
     public string? LastSessionPath { get; set; }
 
     public void ResetBusColors()
@@ -704,7 +719,9 @@ public sealed class Session
             Name = name ?? $"Multiview {NextMultiviewId - 1}",
             MonitorId = NextMonitorId++,
             PreviewUnitId = unit,
-            ProgramUnitId = unit
+            ProgramUnitId = unit,
+            LabelAnchor = Settings.MultiviewLabelAnchor,
+            AlwaysOnTop = true
         };
         layout.EnsureTiles();
         layout.SeedDefaultBuses(unit);

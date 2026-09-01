@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Eiviz.Host.Dialogs;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
 using Eiviz.Host.Preview;
@@ -382,8 +383,47 @@ public partial class MainWindow : Window
         _overlay.Show();
     }
 
-    private void OpenMultiview_Click(object sender, RoutedEventArgs e) =>
-        OpenNewMultiview(_session.Settings.DefaultMultiviewUnitId);
+    private void OpenMultiview_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu();
+        foreach (var layout in _session.Multiviews)
+        {
+            var item = new MenuItem { Header = layout.Name, Tag = layout };
+            item.Click += (_, _) => OpenMultiviewWindow(layout);
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new Separator());
+        var create = new MenuItem { Header = Loc.T("chrome.newMultiview") };
+        create.Click += (_, _) => OpenNewMultiview(_session.Settings.DefaultMultiviewUnitId);
+        menu.Items.Add(create);
+        menu.PlacementTarget = MultiviewButton;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void OpenRecent_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu();
+        var recent = AppPrefs.Current.ExistingSessions().ToList();
+        if (recent.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false });
+        }
+        else
+        {
+            var header = new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false };
+            menu.Items.Add(header);
+            foreach (var path in recent)
+            {
+                var item = new MenuItem { Header = System.IO.Path.GetFileName(path), Tag = path };
+                item.Click += (_, _) => LoadSessionFrom(path);
+                menu.Items.Add(item);
+            }
+        }
+        menu.PlacementTarget = OpenRecentButton;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
 
     internal void OpenNewMultiview(ulong unitId)
     {
@@ -403,10 +443,24 @@ public partial class MainWindow : Window
         }
         var unit = SelectedUnit;
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
-        var window = new MultiviewWindow(_session, layout) { Owner = this };
+        var window = new MultiviewWindow(_session, layout);
+        if (layout.AlwaysOnTop)
+            window.Owner = this;
+        window.Topmost = layout.AlwaysOnTop;
         window.Closed += (_, _) => _multiviews.Remove(window);
         _multiviews.Add(window);
         window.Show();
+    }
+
+    internal void ApplyMultiviewTopmost(MultiviewLayout layout)
+    {
+        foreach (var window in _multiviews)
+        {
+            if (window.LayoutId != layout.Id)
+                continue;
+            window.Topmost = layout.AlwaysOnTop;
+            window.Owner = layout.AlwaysOnTop ? this : null;
+        }
     }
 
     internal void SyncMultiviewPresent(MultiviewLayout layout)
@@ -680,7 +734,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Add Input");
+            MessageBox.Show(this, ex.Message, Loc.T("msg.addInput"));
             return;
         }
         _session.Inputs.Add(input);
@@ -695,7 +749,7 @@ public partial class MainWindow : Window
     {
         if (InputList.SelectedItem is not InputEntry input)
         {
-            MessageBox.Show(this, "Select an Input to edit.");
+            MessageBox.Show(this, Loc.T("msg.selectInputEdit"));
             return;
         }
         var dialog = new AddInputWindow { Owner = this };
@@ -710,7 +764,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Edit Input");
+            MessageBox.Show(this, ex.Message, Loc.T("msg.editInput"));
             return;
         }
         InputList.Items.Refresh();
@@ -725,7 +779,7 @@ public partial class MainWindow : Window
     {
         if (InputList.SelectedItem is not InputEntry input)
         {
-            MessageBox.Show(this, "Select an Input to preview.");
+            MessageBox.Show(this, Loc.T("msg.selectInputPreview"));
             return;
         }
         OpenInputPreview(input);
@@ -868,12 +922,12 @@ public partial class MainWindow : Window
     {
         if (InputList.SelectedItem is not InputEntry input)
         {
-            MessageBox.Show(this, "Select an Input to delete.");
+            MessageBox.Show(this, Loc.T("msg.selectInputDelete"));
             return;
         }
         if (input.IsBuiltin)
         {
-            MessageBox.Show(this, "Built-in generators cannot be deleted.");
+            MessageBox.Show(this, Loc.T("msg.builtinDelete"));
             return;
         }
         CloseInputPreview(input.Id);
@@ -920,7 +974,7 @@ public partial class MainWindow : Window
     {
         if (_selectedScene is null)
         {
-            MessageBox.Show(this, "Select a Scene to delete.");
+            MessageBox.Show(this, Loc.T("msg.selectSceneDelete"));
             return;
         }
         DeleteScene(_selectedScene);
@@ -930,7 +984,7 @@ public partial class MainWindow : Window
     {
         if (_session.Scenes.Count <= 1)
         {
-            MessageBox.Show(this, "At least one Scene is required.");
+            MessageBox.Show(this, Loc.T("msg.oneScene"));
             return;
         }
         CloseInputPreview(removed.GpuId);
@@ -1100,7 +1154,7 @@ public partial class MainWindow : Window
     {
         if (_session.Units.Count <= 1)
         {
-            MessageBox.Show(this, "At least one Mixing Unit is required.");
+            MessageBox.Show(this, Loc.T("msg.oneUnit"));
             return;
         }
         var unit = SelectedUnit;
@@ -1118,24 +1172,29 @@ public partial class MainWindow : Window
 
     private void SaveSession_Click(object sender, RoutedEventArgs e)
     {
+        var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
-            Filter = "eiviz session|*.eiviz.json|JSON|*.json",
-            FileName = string.IsNullOrEmpty(_session.Settings.LastSessionPath)
-                ? "session.eiviz.json"
-                : System.IO.Path.GetFileName(_session.Settings.LastSessionPath)
+            Filter = Loc.T("filter.sessionSave"),
+            FileName = string.IsNullOrEmpty(last) ? "session.eiviz.json" : System.IO.Path.GetFileName(last)
         };
         if (dialog.ShowDialog(this) != true)
             return;
         SessionStore.Save(_session, dialog.FileName);
+        AppPrefs.Current.RememberSession(dialog.FileName);
         UpdateStatus();
     }
 
     private void LoadSession_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "eiviz session|*.eiviz.json;*.json|JSON|*.json" };
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Loc.T("filter.session") };
         if (dialog.ShowDialog(this) != true)
             return;
+        LoadSessionFrom(dialog.FileName);
+    }
+
+    private void LoadSessionFrom(string path)
+    {
         try
         {
             _overlay?.Close();
@@ -1145,7 +1204,8 @@ public partial class MainWindow : Window
             PreviewHost.ReleaseNative();
             ProgramHost.ReleaseNative();
             ScenePanel.Children.Clear();
-            ((App)Application.Current).ReplaceSession(SessionStore.Load(dialog.FileName));
+            ((App)Application.Current).ReplaceSession(SessionStore.Load(path));
+            AppPrefs.Current.RememberSession(path);
             InputList.ItemsSource = _session.Inputs;
             UnitBox.ItemsSource = _session.Units;
             _suppressUnitChange = true;
@@ -1165,8 +1225,13 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Load session");
+            MessageBox.Show(this, ex.Message, Loc.T("msg.loadSession"));
         }
+    }
+
+    private void Preferences_Click(object sender, RoutedEventArgs e)
+    {
+        new PreferencesWindow { Owner = this }.ShowDialog();
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
@@ -1190,7 +1255,7 @@ public partial class MainWindow : Window
         _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
         _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
         _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
-        BusTheme.PushMixer(_session.Settings);
+        BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         foreach (SceneTile tile in ScenePanel.Children)
             tile.SetSelected(tile.Scene?.Id == _selectedScene?.Id, BusTheme.Preview(_session.Settings), BusTheme.Inactive(_session.Settings));
@@ -1272,7 +1337,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Output");
+                MessageBox.Show(this, ex.Message, Loc.T("msg.output"));
             }
         }
         _session.Outputs.Clear();

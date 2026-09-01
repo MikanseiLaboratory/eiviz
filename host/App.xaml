@@ -4,26 +4,30 @@
              StartupUri="MainWindow.xaml"
              DispatcherUnhandledException="App_DispatcherUnhandledException">
     <Application.Resources>
-        <SolidColorBrush x:Key="PanelBrush" Color="#252525"/>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#3A3A3A"/>
-            <Setter Property="Foreground" Value="#EEEEEE"/>
-            <Setter Property="BorderBrush" Value="#555555"/>
-            <Setter Property="Padding" Value="8,4"/>
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#333333"/>
-            <Setter Property="Foreground" Value="#EEEEEE"/>
-            <Setter Property="BorderBrush" Value="#555555"/>
-            <Setter Property="CaretBrush" Value="#EEEEEE"/>
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#333333"/>
-            <Setter Property="Foreground" Value="#111111"/>
-        </Style>
-        <Style TargetType="ListBox">
-            <Setter Property="Background" Value="#222222"/>
-            <Setter Property="Foreground" Value="#EEEEEE"/>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Dark.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="{DynamicResource ButtonBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="Padding" Value="8,4"/>
+            </Style>
+            <Style TargetType="TextBox">
+                <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="CaretBrush" Value="{DynamicResource TextForeground}"/>
+            </Style>
+            <Style TargetType="ComboBox">
+                <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ComboForeground}"/>
+            </Style>
+            <Style TargetType="ListBox">
+                <Setter Property="Background" Value="{DynamicResource ListBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+            </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -25,7 +25,10 @@ public partial class MultiviewWindow : Window
         _layout = layout;
         Title = layout.Name;
         TitleText.Text = layout.Name;
+        Topmost = layout.AlwaysOnTop;
+        OnTopBox.IsChecked = layout.AlwaysOnTop;
         SyncPresentInterval();
+        SyncLabelAnchor();
         SourceInitialized += (_, _) =>
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
@@ -54,6 +57,39 @@ public partial class MultiviewWindow : Window
             }
         }
         _suppressPresent = false;
+    }
+
+    internal void SyncLabelAnchor()
+    {
+        _suppressPresent = true;
+        var tag = _layout.ResolvedLabelAnchor(_session.Settings) == MvLabelAnchor.Top ? "Top" : "Bottom";
+        foreach (ComboBoxItem item in AnchorBox.Items)
+        {
+            if (Equals(item.Tag, tag))
+            {
+                AnchorBox.SelectedItem = item;
+                break;
+            }
+        }
+        _suppressPresent = false;
+    }
+
+    private void OnTop_Click(object sender, RoutedEventArgs e)
+    {
+        _layout.AlwaysOnTop = OnTopBox.IsChecked == true;
+        Topmost = _layout.AlwaysOnTop;
+        Owner = _layout.AlwaysOnTop ? Application.Current.MainWindow : null;
+    }
+
+    private void AnchorBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressPresent)
+            return;
+        if (AnchorBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            _layout.LabelAnchor = tag == "Top" ? MvLabelAnchor.Top : MvLabelAnchor.Bottom;
+            _layout.PushLabelStyle(_session.Settings);
+        }
     }
 
     private void PresentBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

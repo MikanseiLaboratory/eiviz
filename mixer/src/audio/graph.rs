@@ -278,7 +278,7 @@ impl AudioGraph {
         &mut self,
         uploads: &mut UploadStore,
         snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
-        scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>)],
+        scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
         delay: &mut AudioDelay,
         produce: bool,
