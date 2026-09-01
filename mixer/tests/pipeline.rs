@@ -3,16 +3,29 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect,
-    SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
-    mixer_audio_bus_count, mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy,
-    mixer_omt_connect, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
+    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT,
+    OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
+    VideoCaptureInfo, mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
+    mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
+    mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_start,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
 use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
+
+#[test]
+fn video_captures_enum_is_safe() {
+    let mut devices = [VideoCaptureInfo::default(); 8];
+    let n = unsafe { mixer_video_enum_captures(devices.as_mut_ptr(), devices.len() as u32) };
+    assert!(n >= 0);
+    assert!(n as usize <= devices.len());
+    for item in devices.iter().take(n as usize) {
+        assert_ne!(item.id[0], 0);
+        assert_ne!(item.name[0], 0);
+    }
+}
 
 #[test]
 fn ping_and_invalid_clock() {
@@ -20,6 +33,26 @@ fn ping_and_invalid_clock() {
     assert_eq!(mixer_create(0, 60_000, 0), ERR_INVALID_ARGUMENT);
     mixer_destroy();
     assert_eq!(mixer_set_live_save(1, 2, 0), ERR_NOT_CREATED);
+}
+
+#[test]
+fn rebar_info_and_toggle() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let mut info = MixerRebarInfo::default();
+    unsafe {
+        assert_eq!(mixer_copy_rebar_info(&mut info), OK);
+    }
+    assert_eq!(mixer_set_rebar_optimization(0), OK);
+    unsafe {
+        assert_eq!(mixer_copy_rebar_info(&mut info), OK);
+    }
+    assert_eq!(info.active, 0);
+    assert_eq!(mixer_set_rebar_optimization(1), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(1), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(0), OK);
+    assert_eq!(mixer_set_ndi_gpu_upload(1), OK);
+    mixer_destroy();
 }
 
 #[test]

@@ -12,8 +12,12 @@ mod generator_audio;
 mod dxgi;
 #[cfg(windows)]
 mod media;
+#[cfg(windows)]
+pub use media::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod media_macos;
+#[cfg(target_os = "macos")]
+pub use media_macos::enumerate_video_captures;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 #[cfg(target_os = "macos")]
@@ -21,6 +25,7 @@ mod main_thread;
 mod omt;
 mod pool;
 mod present;
+mod rebar;
 mod readback;
 mod save;
 mod session;
@@ -28,11 +33,12 @@ mod upload;
 
 pub use abi::{
     AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
-    GEN_BARS, GEN_SOLID, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc,
-    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
+    GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
+    NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW,
+    OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
+    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
+    VideoCaptureInfo,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 
@@ -61,7 +67,7 @@ use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device}
 use present::Presenters;
 use readback::ReadbackStore;
 use save::{LiveSave, collect_source_roles, want_full};
-use upload::{AUDIO_RATE, AudioPacket, CpuFormat, UploadStore};
+use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, UploadStore};
 
 struct AutoTransition {
     from: f32,
@@ -117,6 +123,7 @@ struct Shared {
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, (u32, u32, Arc<[crate::abi::OverlayDesc]>)>,
     uploads: Arc<Mutex<UploadStore>>,
+    gpu_ingest: GpuIngest,
     #[cfg(windows)]
     gpu_video: Option<GpuVideoContext>,
     omt_gpu: OmtGpu,
@@ -129,6 +136,9 @@ struct Shared {
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     frame_buffer_frames: u32,
+    rebar: crate::rebar::RebarSnapshot,
+    rebar_optimization: bool,
+    ndi_gpu_upload: bool,
     audio: audio::AudioEngine,
 }
 
@@ -436,6 +446,14 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         }
     };
     let omt_gpu = omt_gpu_from_device(&device);
+    let rebar = crate::rebar::probe(&device);
+    let gpu_ingest = GpuIngest {
+        device: device.device.clone(),
+        queue: device.queue.clone(),
+        ndi_gpu: Arc::new(AtomicBool::new(true)),
+        use_rebar: Arc::new(AtomicBool::new(rebar.available)),
+        rebar_available: rebar.available,
+    };
     let uploads = Arc::new(Mutex::new(UploadStore::default()));
     let telemetry = Arc::new(Mutex::new(Telemetry {
         last_error: String::new(),
@@ -450,6 +468,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         units: HashMap::new(),
         scenes: HashMap::new(),
         uploads: Arc::clone(&uploads),
+        gpu_ingest,
         #[cfg(windows)]
         gpu_video,
         omt_gpu: omt_gpu.clone(),
@@ -461,6 +480,9 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         tone_phase: HashMap::new(),
         live_save: HashMap::new(),
         frame_buffer_frames: 3,
+        rebar,
+        rebar_optimization: true,
+        ndi_gpu_upload: true,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
     }));
@@ -1264,6 +1286,34 @@ pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_enum_captures(
+    out: *mut VideoCaptureInfo,
+    cap: u32,
+) -> i32 {
+    if out.is_null() || cap == 0 {
+        return 0;
+    }
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = dest;
+        return 0;
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let devices = enumerate_video_captures();
+        let n = devices.len().min(dest.len());
+        for (slot, (name, id)) in dest.iter_mut().zip(devices).take(n) {
+            *slot = VideoCaptureInfo {
+                id: write_fixed(&id),
+                name: write_fixed(&name),
+            };
+        }
+        n as i32
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1363,18 +1413,19 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let uploads = {
+        let (uploads, gpu) = {
             let mut shared = mixer.shared.lock().expect("shared");
             #[cfg(any(windows, target_os = "macos"))]
             let previous = shared.videos.remove(&id);
             drop(shared.receivers.remove(&id));
             let uploads = shared.uploads.clone();
+            let gpu = shared.gpu_ingest.clone();
             drop(shared);
             #[cfg(any(windows, target_os = "macos"))]
             drop(previous);
-            uploads
+            (uploads, gpu)
         };
-        match NdiReceiver::start(id, address, uploads, depth, low_bandwidth) {
+        match NdiReceiver::start(id, address, uploads, Some(gpu), depth, low_bandwidth) {
             Ok(receiver) => {
                 mixer
                     .shared
@@ -2042,8 +2093,14 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let uploads = shared.uploads.lock().expect("uploads");
+        let (uploads_arc, generator_ids) = {
+            let shared = mixer.shared.lock().expect("shared");
+            (
+                Arc::clone(&shared.uploads),
+                shared.generators.keys().copied().collect::<Vec<_>>(),
+            )
+        };
+        let uploads = uploads_arc.lock().expect("uploads");
         let mut n = 0u32;
         let mut seen = std::collections::HashSet::new();
         for id in uploads.ids() {
@@ -2065,7 +2122,7 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
             }
             n += 1;
         }
-        for id in shared.generators.keys().copied() {
+        for id in generator_ids {
             if n >= cap {
                 break;
             }
@@ -2141,6 +2198,59 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let snap = shared.rebar;
+        let active = snap.available && shared.rebar_optimization;
+        unsafe {
+            *out = MixerRebarInfo {
+                available: u32::from(snap.available),
+                active: u32::from(active),
+                uma: u32::from(snap.uma),
+                gpu_upload_heaps: u32::from(snap.gpu_upload_heaps),
+                bar_bytes: snap.bar_bytes,
+                vram_bytes: snap.vram_bytes,
+                adapter: snap.adapter,
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.rebar_optimization = enabled != 0;
+        shared
+            .gpu_ingest
+            .use_rebar
+            .store(enabled != 0 && shared.rebar.available, Ordering::Relaxed);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_ndi_gpu_upload(enabled: u32) -> i32 {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.ndi_gpu_upload = enabled != 0;
+        shared
+            .gpu_ingest
+            .ndi_gpu
+            .store(enabled != 0, Ordering::Relaxed);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
@@ -2198,6 +2308,7 @@ fn render_loop(
     let mut frame_i = 0u64;
     let mut audio_produced = 0u64;
     let mut audio_carry = 0u64;
+    let mut last_bus: HashMap<u64, (u64, u64, u32)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -2283,11 +2394,16 @@ fn render_loop(
             }
         }
         presenters.reconfigure_pending(&device);
-        let buffer_frames = shared
-            .lock()
-            .expect("shared")
-            .frame_buffer_frames
-            .clamp(1, 8);
+        let (buffer_frames, use_rebar, direct_sample) = {
+            let guard = shared.lock().expect("shared");
+            let use_rebar = guard.rebar.available && guard.rebar_optimization;
+            let direct_sample = use_rebar && cfg!(target_os = "macos");
+            (
+                guard.frame_buffer_frames.clamp(1, 8),
+                use_rebar,
+                direct_sample,
+            )
+        };
         frame_delay.set_depth(buffer_frames);
         shared
             .lock()
@@ -2311,7 +2427,7 @@ fn render_loop(
             thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         let overdue = Instant::now().saturating_duration_since(next);
-        let skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
+        let mut skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
         {
             let mut guard = shared.lock().expect("shared");
             for unit in guard.units.values_mut() {
@@ -2376,6 +2492,21 @@ fn render_loop(
                 .collect();
             let binds: HashMap<u64, (u64, u64)> = guard.multiview_binds.clone();
             drop(guard);
+            let changed_units: Vec<u64> = snapshot
+                .iter()
+                .filter(|(id, .., state)| {
+                    last_bus.get(id).is_none_or(|(program, preview, mix)| {
+                        *program != state.program_source
+                            || *preview != state.preview_source
+                            || *mix != state.mix.to_bits()
+                    })
+                })
+                .map(|(id, ..)| *id)
+                .collect();
+            if !changed_units.is_empty() {
+                skip_compose = false;
+                frame_delay.discard(changed_units);
+            }
             let mut tallies = HashMap::new();
             for (scene_id, (preview_unit, program_unit)) in &binds {
                 let preview_source = snapshot
@@ -2408,7 +2539,6 @@ fn render_loop(
                     receiver.apply_save(want_full(save, role), role.on_program, role.on_preview);
                 }
             }
-            let mut upload_guard = uploads.lock().expect("uploads");
             let frame_begin = Instant::now();
             let pts = (clock_start.elapsed().as_nanos() / 100) as i64;
             let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
@@ -2418,10 +2548,13 @@ fn render_loop(
             composer.ensure_builtins(&device);
             composer.sync_generators(&generators, phase, phase_y);
             if !skip_compose {
-                upload_guard.advance_playout(&used_uploads);
-                composer.upload_sources(&device, &upload_guard, &used_uploads);
+                let snaps = {
+                    let mut upload_guard = uploads.lock().expect("uploads");
+                    upload_guard.advance_playout(&used_uploads);
+                    upload_guard.snapshot(&used_uploads)
+                };
+                composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
             }
-            drop(upload_guard);
             let need_prv = outputs_snap
                 .iter()
                 .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
@@ -2633,6 +2766,12 @@ fn render_loop(
                     pts,
                 );
                 emit_gpu(&gpu_copies, &send_tx, pts);
+                for (id, .., state) in &snapshot {
+                    last_bus.insert(
+                        *id,
+                        (state.program_source, state.preview_source, state.mix.to_bits()),
+                    );
+                }
             }
             if presenters.any_monitor_due(frame_i) {
                 if let Err(error) =
@@ -2650,27 +2789,33 @@ fn render_loop(
             let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;
             audio_carry %= u64::from(fps_num.max(1));
             audio_produced = audio_produced.saturating_add(audio_frames as u64);
-            let audio = {
-                let guard = shared.lock().expect("shared");
-                guard.audio.clone()
+            let (audio, tone_packets) = {
+                let mut guard = shared.lock().expect("shared");
+                let audio = guard.audio.clone();
+                let mut tone_packets = Vec::new();
+                if audio_frames > 0 {
+                    for (id, spec) in &generators {
+                        if spec.tone_hz <= 0.0 {
+                            continue;
+                        }
+                        let phase = guard.tone_phase.entry(*id).or_insert(0.0);
+                        tone_packets.push((
+                            *id,
+                            generator_audio::sine_packet(
+                                phase,
+                                spec.tone_hz,
+                                spec.tone_level_dbfs,
+                                audio_frames,
+                                pts,
+                            ),
+                        ));
+                    }
+                }
+                (audio, tone_packets)
             };
             let mut upload_guard = uploads.lock().expect("uploads");
-            if audio_frames > 0 {
-                let mut guard = shared.lock().expect("shared");
-                for (id, spec) in &generators {
-                    if spec.tone_hz <= 0.0 {
-                        continue;
-                    }
-                    let phase = guard.tone_phase.entry(*id).or_insert(0.0);
-                    let packet = generator_audio::sine_packet(
-                        phase,
-                        spec.tone_hz,
-                        spec.tone_level_dbfs,
-                        audio_frames,
-                        pts,
-                    );
-                    upload_guard.ingest_audio(*id, packet);
-                }
+            for (id, packet) in tone_packets {
+                upload_guard.ingest_audio(id, packet);
             }
             let mixed = audio.mix(
                 &mut upload_guard,

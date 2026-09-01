@@ -449,7 +449,13 @@ struct SessionSettings: Codable {
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
     var internalColorFormat: InternalColorFormat = .uyvy
+    var rebarOptimization: Bool?
+    var rebarDirectSample: Bool?
+    var ndiGpuUpload: Bool?
     var lastSessionPath: String?
+
+    var rebarOptimizationEnabled: Bool { rebarOptimization != false }
+    var ndiGpuUploadEnabled: Bool { ndiGpuUpload != false }
 
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
@@ -571,6 +577,11 @@ enum SessionFile {
 struct AudioDevice: Identifiable, Hashable {
     var kind: UInt32
     var channels: UInt32
+    var id: String
+    var name: String
+}
+
+struct VideoCaptureDevice: Identifiable, Hashable {
     var id: String
     var name: String
 }

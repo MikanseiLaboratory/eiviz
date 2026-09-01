@@ -65,6 +65,12 @@ pub struct SessionSettings {
     pub default_present_interval: u32,
     #[serde(default)]
     pub internal_color_format: InternalColorFormat,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub rebar_optimization: bool,
+    #[serde(default)]
+    pub rebar_direct_sample: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub ndi_gpu_upload: bool,
     pub last_session_path: Option<String>,
 }
 
@@ -80,6 +86,9 @@ impl Default for SessionSettings {
             frame_buffer_frames: 3,
             default_present_interval: 3,
             internal_color_format: InternalColorFormat::Uyvy,
+            rebar_optimization: true,
+            rebar_direct_sample: false,
+            ndi_gpu_upload: true,
             last_session_path: None,
         }
     }
@@ -105,6 +114,10 @@ fn one() -> u64 {
 }
 fn default_true() -> bool {
     true
+}
+
+fn de_bool_null_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
 }
 fn three() -> u32 {
     3
@@ -667,6 +680,9 @@ mod tests {
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(doc.units[0].transitions.len(), 2);
         assert_eq!(doc.units[0].multiview_tiles.len(), 8);
+        assert!(doc.settings.rebar_optimization);
+        assert!(!doc.settings.rebar_direct_sample);
+        assert!(doc.settings.ndi_gpu_upload);
     }
 
     #[test]

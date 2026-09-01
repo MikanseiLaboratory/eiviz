@@ -233,12 +233,14 @@ struct ContentView: View {
                     }
                     .buttonStyle(MixerButtonStyle())
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 176), spacing: 8)], alignment: .leading, spacing: 8) {
+                        WrapFlowLayout(spacing: 8) {
                             ForEach(mixer.session.scenes) { scene in
                                 sceneTile(scene)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .scrollClipDisabled()
                 }
             }
             .frame(maxHeight: .infinity)
@@ -270,11 +272,10 @@ struct ContentView: View {
             .onTapGesture { mixer.previewScene(scene) }
             MetalPreviewRepresentable(
                 role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId),
-                presentInterval: mixer.session.settings.resolvedPresentInterval,
+                presentInterval: 1,
                 onClick: { mixer.previewScene(scene) }
             )
             .frame(width: 176, height: 90)
-            .background(Color.black)
             HStack(spacing: 1) {
                 sceneChip("CUT") { mixer.cutScene(scene) }
                 sceneChip("Loop") { mixer.toggleSceneLoop(scene) }
@@ -294,7 +295,7 @@ struct ContentView: View {
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
-        .overlay(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
+        .background(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
         .contextMenu {
             Button("Edit") {
                 mixer.editingScene = scene
@@ -392,11 +393,9 @@ struct ContentView: View {
                 .background(color)
             MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
-                .background(Color.black)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipped()
-        .overlay(Rectangle().stroke(color, lineWidth: 2))
+        .background(Rectangle().stroke(color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

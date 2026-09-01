@@ -1163,6 +1163,8 @@ public partial class MainWindow : Window
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
         _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
+        _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
+        _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
         _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
         _session.Buses.Clear();
         foreach (var bus in dialog.Buses)
@@ -1171,6 +1173,12 @@ public partial class MainWindow : Window
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),
             "Set frame buffer");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetRebarOptimization(_session.Settings.RebarOptimizationEnabled ? 1u : 0u),
+            "Set ReBAR optimization");
+        MixerNative.ThrowIfFailed(
+            MixerNative.SetNdiGpuUpload(_session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
+            "Set NDI GPU upload");
         foreach (var layout in _session.Multiviews)
             layout.PushPresentInterval(_session.Settings);
         foreach (var window in _multiviews)

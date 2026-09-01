@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Eiviz.Host.Interop;
-using Eiviz.Host.Media;
 using Microsoft.Win32;
 
 namespace Eiviz.Host.Dialogs;
@@ -186,9 +185,13 @@ public partial class AddInputWindow : Window
 
     private void RefreshNdi_Click(object sender, RoutedEventArgs e) => RefreshNdi();
 
-    private void RefreshNdi()
+    private async void RefreshNdi()
     {
-        var text = MixerNative.DiscoverNdiText();
+        if (NdiStatus is not null)
+            NdiStatus.Text = "Discovering…";
+        var text = await Task.Run(MixerNative.DiscoverNdiText);
+        if (!Dispatcher.CheckAccess())
+            return;
         NdiList.ItemsSource = string.IsNullOrWhiteSpace(text)
             ? Array.Empty<string>()
             : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -215,8 +218,8 @@ public partial class AddInputWindow : Window
     {
         try
         {
-            UvcList.ItemsSource = MfFramePump.EnumerateCameras()
-                .Select(item => new CameraItem(item.Name, item.Link))
+            UvcList.ItemsSource = MixerNative.EnumVideoCaptures()
+                .Select(item => new CameraItem(item.Name, item.Id))
                 .ToArray();
         }
         catch (Exception ex)

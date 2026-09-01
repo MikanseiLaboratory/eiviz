@@ -469,6 +469,8 @@ fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame) -> GpuVid
         pts: frame.timestamp,
         width: frame.width.max(2),
         height: frame.height.max(2),
+        packed: false,
+        bgra: false,
         view: frame.texture.create_view(&Default::default()),
         texture: frame.texture,
     }
@@ -519,6 +521,8 @@ fn copy_gpu_frame(
         pts,
         width,
         height,
+        packed: false,
+        bgra: false,
         view: texture.create_view(&Default::default()),
         texture,
     }

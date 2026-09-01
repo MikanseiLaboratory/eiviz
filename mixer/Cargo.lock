@@ -279,6 +279,8 @@ dependencies = [
  "dispatch2",
  "grafton-ndi",
  "image",
+ "objc2",
+ "objc2-metal",
  "openmediatransport",
  "pollster",
  "raw-window-handle",

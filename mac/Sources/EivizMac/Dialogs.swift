@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import EivizMixer
 import SwiftUI
 import UniformTypeIdentifiers
@@ -14,19 +13,21 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             List(selection: $category) {
                 Text("Display").tag(0)
-                Text("Outputs").tag(1)
-                Text("Multiview").tag(2)
-                Text("Audio Auxiliary").tag(3)
-                Text("About").tag(4)
+                Text("Performance").tag(1)
+                Text("Outputs").tag(2)
+                Text("Multiview").tag(3)
+                Text("Audio Auxiliary").tag(4)
+                Text("About").tag(5)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
             VStack(alignment: .leading, spacing: 12) {
                 Group {
                     if category == 0 { display }
-                    else if category == 1 { outputs }
-                    else if category == 2 { multiview }
-                    else if category == 3 { audio }
+                    else if category == 1 { performance }
+                    else if category == 2 { outputs }
+                    else if category == 3 { multiview }
+                    else if category == 4 { audio }
                     else { about }
                 }
                 Spacer()
@@ -34,6 +35,8 @@ struct SettingsView: View {
                     Spacer()
                     Button("OK") {
                         mixer.pushAudio()
+                        _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
+                        _ = mixer_set_ndi_gpu_upload(mixer.session.settings.ndiGpuUploadEnabled ? 1 : 0)
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -76,6 +79,42 @@ struct SettingsView: View {
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var performance: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            let info = copyUmaInfo()
+            Text("Graphics Adapter").fontWeight(.bold)
+            Text(info.name)
+            Text("Unified Memory")
+            Text(info.uma ? "Enabled" : "Not available")
+            Toggle("Use Unified Memory optimization", isOn: Binding(
+                get: { mixer.session.settings.rebarOptimizationEnabled },
+                set: { mixer.session.settings.rebarOptimization = $0 }
+            ))
+            .disabled(!info.available)
+            Toggle("Upload NDI on the ingest thread", isOn: Binding(
+                get: { mixer.session.settings.ndiGpuUploadEnabled },
+                set: { mixer.session.settings.ndiGpuUpload = $0 }
+            ))
+            Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func copyUmaInfo() -> (name: String, uma: Bool, available: Bool) {
+        var info = EivizMixerRebarInfo()
+        guard mixer_copy_rebar_info(&info) == 0 else {
+            return ("Mixer is not running.", false, false)
+        }
+        var name = "—"
+        withUnsafeBytes(of: info.adapter) { raw in
+            if let base = raw.baseAddress?.assumingMemoryBound(to: CChar.self), base.pointee != 0 {
+                name = String(cString: base)
+            }
+        }
+        return (name, info.uma != 0, info.available != 0)
     }
 
     private var outputs: some View {
@@ -366,7 +405,7 @@ struct AddInputView: View {
     @State private var ndiAddress = ""
     @State private var omtList: [String] = []
     @State private var ndiList: [String] = []
-    @State private var uvcList: [AVCaptureDevice] = []
+    @State private var uvcList: [VideoCaptureDevice] = []
     @State private var selectedUvc: String = ""
     @State private var r: Double = 220
     @State private var g: Double = 32
@@ -468,8 +507,8 @@ struct AddInputView: View {
                 .foregroundStyle(EivizTheme.dim)
         default:
             Button("Refresh devices") { refreshUvc() }
-            List(uvcList, id: \.uniqueID, selection: $selectedUvc) { device in
-                Text(device.localizedName).tag(device.uniqueID)
+            List(uvcList, id: \.id, selection: $selectedUvc) { device in
+                Text(device.name).tag(device.id)
             }
         }
     }
@@ -507,12 +546,7 @@ struct AddInputView: View {
     }
 
     private func refreshUvc() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .external],
-            mediaType: .video,
-            position: .unspecified
-        )
-        uvcList = session.devices
+        uvcList = MixerFFI.videoCaptures()
     }
 
     private func loadEditing() {
@@ -559,7 +593,7 @@ struct AddInputView: View {
         case "NDI®":
             return ndiAddress
         default:
-            return uvcList.first { $0.uniqueID == selectedUvc }?.localizedName ?? "Video Capture"
+            return uvcList.first { $0.id == selectedUvc }?.name ?? "Video Capture"
         }
     }
 
@@ -716,7 +750,6 @@ struct MultiviewView: View {
         }
         .padding(12)
         .frame(minWidth: 960, minHeight: 540)
-        .clipped()
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {

@@ -21,6 +21,48 @@ enum EivizTheme {
     static let stroke = Color(white: 0.27)
 }
 
+/// Keeps every child alive (unlike LazyVGrid) so Metal scene tiles stay attached.
+struct WrapFlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(in: proposal.width ?? 176, subviews: subviews).0
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let origins = arrange(in: bounds.width, subviews: subviews).1
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            subview.place(
+                at: CGPoint(x: bounds.minX + origins[index].x, y: bounds.minY + origins[index].y),
+                proposal: ProposedViewSize(size)
+            )
+        }
+    }
+
+    private func arrange(in width: CGFloat, subviews: Subviews) -> (CGSize, [CGPoint]) {
+        let limit = max(176, width)
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > limit {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: max(limit, maxX), height: y + rowHeight), origins)
+    }
+}
+
 struct MixerButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

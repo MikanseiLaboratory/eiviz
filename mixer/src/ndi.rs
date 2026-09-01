@@ -10,10 +10,17 @@ use grafton_ndi::{
 };
 
 use crate::abi::FMT_BGRA;
-use crate::upload::{ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore};
+use crate::upload::{
+    ingest_audio_throttled, write_slot, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
+    GpuVideoFrame, UploadStore,
+};
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
 static FINDER: OnceLock<Result<Finder, String>> = OnceLock::new();
+/// The NDI SDK invalidates `NDIlib_find_get_current_sources` on the next call
+/// to the same instance. grafton-ndi copies immediately but does not serialize
+/// overlapping calls, so we lock around Finder use.
+static FINDER_OP: Mutex<()> = Mutex::new(());
 
 fn runtime() -> Result<&'static NDI, String> {
     match RUNTIME.get_or_init(|| {
@@ -64,18 +71,30 @@ mod macos {
 fn finder() -> Result<&'static Finder, String> {
     match FINDER.get_or_init(|| {
         let ndi = runtime()?;
-        Finder::new(ndi, &FinderOptions::builder().show_local_sources(true).build())
-            .map_err(|error| error.to_string())
+        Finder::new(
+            ndi,
+            &FinderOptions::builder().show_local_sources(true).build(),
+        )
+        .map_err(|error| error.to_string())
     }) {
         Ok(finder) => Ok(finder),
         Err(error) => Err(error.clone()),
     }
 }
 
+fn with_finder<T>(f: impl FnOnce(&Finder) -> Result<T, String>) -> Result<T, String> {
+    let finder = finder()?;
+    let _guard = FINDER_OP
+        .lock()
+        .map_err(|_| "ndi finder lock".to_string())?;
+    f(finder)
+}
+
 pub fn warm_finder() {
-    if let Ok(finder) = finder() {
+    let _ = with_finder(|finder| {
         let _ = finder.wait_for_sources(Duration::from_secs(2));
-    }
+        Ok(())
+    });
 }
 
 pub struct NdiReceiver {
@@ -88,6 +107,7 @@ impl NdiReceiver {
         source_id: u64,
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
+        gpu: Option<GpuIngest>,
         frame_buffer_frames: u32,
         low_bandwidth: u32,
     ) -> Result<Self, String> {
@@ -113,9 +133,23 @@ impl NdiReceiver {
                         depth,
                     );
                 }
+                let mut gpu_ring = GpuUploadRing::new();
+                #[cfg(windows)]
+                let mut rebar_ring: Option<crate::rebar::RebarIngestRing> = None;
+                let mut gpu_warned = false;
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
-                        Ok(Some(frame)) => ingest_video(&uploads, source_id, depth, &frame),
+                        Ok(Some(frame)) => ingest_video(
+                            &uploads,
+                            gpu.as_ref(),
+                            &mut gpu_ring,
+                            #[cfg(windows)]
+                            &mut rebar_ring,
+                            &mut gpu_warned,
+                            source_id,
+                            depth,
+                            &frame,
+                        ),
                         Ok(None) => {}
                         Err(_) => {}
                     }
@@ -236,7 +270,7 @@ fn open_receiver(
     low_bandwidth: bool,
 ) -> Result<Receiver, String> {
     let options = ReceiverOptions::builder(source.clone())
-        .color(ReceiverColorFormat::BGRX_BGRA)
+        .color(ReceiverColorFormat::UYVY_BGRA)
         .bandwidth(if low_bandwidth {
             ReceiverBandwidth::Lowest
         } else {
@@ -249,16 +283,20 @@ fn open_receiver(
 }
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
-    let finder = finder()?;
-    let mut sources = finder.current_sources().unwrap_or_default();
-    if sources.is_empty() {
-        let _ = finder.wait_for_sources(Duration::from_millis(1500));
-        sources = finder
-            .current_sources()
-            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(sources.into_iter().map(|source| source.to_string()).collect())
+    let sources = with_finder(|finder| {
+        let snapshot = finder.current_sources().map_err(|error| error.to_string())?;
+        if !snapshot.is_empty() {
+            return Ok(snapshot);
+        }
+        // mDNS / unicast responders trickle in. A single wait_for_sources
+        // returns on the first change and can miss the rest.
+        finder
+            .find_sources(Duration::from_secs(5))
+            .map_err(|error| error.to_string())
+    })?;
+    let names: Vec<String> = sources.into_iter().map(|source| source.to_string()).collect();
+    eprintln!("eiviz ndi discover count={}", names.len());
+    Ok(names)
 }
 
 fn resolve_source(query: &str) -> Result<Source, String> {
@@ -266,36 +304,21 @@ fn resolve_source(query: &str) -> Result<Source, String> {
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    if let Ok(finder) = finder() {
-        let _ = finder.wait_for_sources(Duration::from_millis(200));
-        if let Ok(sources) = finder
-            .current_sources()
-            .or_else(|_| finder.find_sources(Duration::from_millis(400)))
-        {
-            if let Some(source) = sources
-                .iter()
-                .find(|source| source_key(source).eq_ignore_ascii_case(trimmed))
-            {
-                return Ok(source.clone());
-            }
-            if let Some(source) = sources
-                .iter()
-                .find(|source| source.name.eq_ignore_ascii_case(trimmed))
-            {
-                return Ok(source.clone());
-            }
-            let matches: Vec<_> = sources
-                .iter()
-                .filter(|source| {
-                    let needle = trimmed.to_ascii_lowercase();
-                    source_key(source).to_ascii_lowercase().contains(&needle)
-                        || source.name.to_ascii_lowercase().contains(&needle)
-                })
-                .cloned()
-                .collect();
-            if matches.len() == 1 {
-                return Ok(matches.into_iter().next().expect("len 1"));
-            }
+    if let Ok(sources) = with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
+    {
+        if let Some(source) = sources.iter().find(|source| {
+            source.to_string().eq_ignore_ascii_case(trimmed)
+                || source.name.eq_ignore_ascii_case(trimmed)
+        }) {
+            return Ok(source.clone());
+        }
+        let needle = trimmed.to_ascii_lowercase();
+        let mut matches = sources.into_iter().filter(|source| {
+            source.to_string().to_ascii_lowercase().contains(&needle)
+                || source.name.to_ascii_lowercase().contains(&needle)
+        });
+        if let (Some(only), None) = (matches.next(), matches.next()) {
+            return Ok(only);
         }
     }
     Ok(source_from_query(trimmed))
@@ -323,12 +346,12 @@ pub(crate) fn source_from_query(query: &str) -> Source {
     }
 }
 
-fn source_key(source: &Source) -> String {
-    source.to_string()
-}
-
 fn ingest_video(
     uploads: &Mutex<UploadStore>,
+    gpu: Option<&GpuIngest>,
+    gpu_ring: &mut GpuUploadRing,
+    #[cfg(windows)] rebar_ring: &mut Option<crate::rebar::RebarIngestRing>,
+    gpu_warned: &mut bool,
     source_id: u64,
     depth: u32,
     frame: &VideoFrame,
@@ -349,21 +372,99 @@ fn ingest_video(
         LineStrideOrSize::LineStrideBytes(stride) if stride > 0 => stride as usize,
         _ => width as usize * bpp,
     };
-    let mut opaque = Vec::new();
-    let pixels = if matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX) {
-        opaque = frame.data().to_vec();
-        for chunk in opaque.chunks_exact_mut(4) {
-            if chunk.len() == 4 {
-                chunk[3] = 255;
+    if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
+        #[cfg(windows)]
+        if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
+            if rebar_ring.is_none() {
+                *rebar_ring = crate::rebar::RebarIngestRing::new(&gpu.device, &gpu.queue);
+            }
+            if let Some(ring) = rebar_ring.as_mut().filter(|ring| ring.is_live()) {
+                let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+                let bgra = format == CpuFormat::Bgra;
+                let tex_format = if packed {
+                    wgpu::TextureFormat::Rgba8Unorm
+                } else if bgra {
+                    wgpu::TextureFormat::Bgra8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                };
+                match ring.upload(
+                    frame.data(),
+                    stride,
+                    width as usize * bpp,
+                    width,
+                    height,
+                    packed,
+                    bgra,
+                    tex_format,
+                    frame.timestamp(),
+                ) {
+                    Ok(uploaded) => {
+                        finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "rebar");
+                        return;
+                    }
+                    Err(error) => {
+                        eprintln!("eiviz ndi rebar upload: {error}; falling back to write_texture");
+                    }
+                }
             }
         }
-        opaque.as_slice()
-    } else {
-        frame.data()
+        match gpu_ring.upload(
+            gpu,
+            frame.data(),
+            stride,
+            width,
+            height,
+            format,
+            frame.timestamp(),
+        ) {
+            Ok(uploaded) => {
+                finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "queue");
+                return;
+            }
+            Err(error) if !*gpu_warned => {
+                eprintln!("eiviz ndi gpu upload: {error}; falling back to CPU frames");
+                *gpu_warned = true;
+            }
+            Err(_) => {}
+        }
+    }
+    let opaque_x = matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX);
+    let (mut pixels, format, width, height) = {
+        let mut store = uploads.lock().expect("uploads lock");
+        match store.take_playout_buf(source_id, width, height, format, depth) {
+            Some(ready) => ready,
+            None => return,
+        }
     };
+    write_slot(&mut pixels, frame.data(), stride, width, height, format, opaque_x);
     let mut store = uploads.lock().expect("uploads lock");
-    store.ensure_playout(source_id, width, height, format, depth);
-    let _ = store.push_playout_cpu(source_id, pixels, stride, frame.timestamp());
+    store.finish_playout_cpu(source_id, pixels, frame.timestamp());
+}
+
+fn finish_gpu_frame(
+    uploads: &Mutex<UploadStore>,
+    gpu_warned: &mut bool,
+    source_id: u64,
+    depth: u32,
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+    stride: usize,
+    frame: &VideoFrame,
+    uploaded: GpuVideoFrame,
+    path: &str,
+) {
+    if !*gpu_warned {
+        eprintln!(
+            "ndi gpu {source_id} {width}x{height} {pixel_format:?} stride={stride} bytes={} path={path}",
+            frame.data().len()
+        );
+        *gpu_warned = true;
+    }
+    let mut store = uploads.lock().expect("uploads lock");
+    store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
+    let _ = store.push_playout_gpu(source_id, uploaded);
 }
 
 fn to_audio(frame: &AudioFrame) -> AudioPacket {

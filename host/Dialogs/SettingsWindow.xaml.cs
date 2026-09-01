@@ -27,7 +27,9 @@ public partial class SettingsWindow : Window
             DefaultMultiviewUnitId = session.Settings.DefaultMultiviewUnitId,
             FrameBufferFrames = session.Settings.FrameBufferFrames,
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
-            InternalColorFormat = session.Settings.InternalColorFormat
+            InternalColorFormat = session.Settings.InternalColorFormat,
+            RebarOptimization = session.Settings.RebarOptimizationEnabled,
+            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled
         };
         foreach (var output in session.Outputs)
         {
@@ -53,6 +55,7 @@ public partial class SettingsWindow : Window
         _devices = AudioGraphSync.EnumerateDevices(0);
         RebuildBuses();
         AboutVersion.Text = $"Version {HostVersion.Display}";
+        FillRebar();
     }
 
     public SessionSettings Settings { get; }
@@ -65,14 +68,15 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || MultiviewPanel is null || AudioBusPanel is null || AboutPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AboutPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
-        OutputPanel.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
-        MultiviewPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
-        AudioBusPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
-        AboutPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+        PerformancePanel.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
+        OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
+        MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
+        AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+        AboutPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void AboutLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
@@ -96,6 +100,55 @@ public partial class SettingsWindow : Window
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
         SelectTag(MvPresentBox, "3");
+        RebarOptBox.IsChecked = true;
+        NdiGpuBox.IsChecked = true;
+    }
+
+    private void FillRebar()
+    {
+        unsafe
+        {
+            var info = new MixerRebarInfo();
+            if (MixerNative.CopyRebarInfo(&info) != 0)
+            {
+                AdapterName.Text = "Mixer is not running.";
+                RebarStatus.Text = "Unknown";
+                RebarMemory.Text = "—";
+                RebarOptBox.IsEnabled = false;
+                RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
+                NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
+                return;
+            }
+            AdapterName.Text = ReadZ(info.Adapter, 128);
+            if (info.Uma != 0)
+                RebarStatus.Text = "Not applicable (integrated GPU)";
+            else if (info.Available != 0)
+                RebarStatus.Text = "Enabled";
+            else
+                RebarStatus.Text = "Disabled";
+            var bar = FormatMib(info.BarBytes);
+            var vram = FormatMib(info.VramBytes);
+            var heaps = info.GpuUploadHeaps != 0 ? "Yes" : "No";
+            RebarMemory.Text = $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
+            RebarOptBox.IsEnabled = info.Available != 0;
+            RebarOptBox.IsChecked = Settings.RebarOptimizationEnabled;
+            NdiGpuBox.IsChecked = Settings.NdiGpuUploadEnabled;
+        }
+    }
+
+    private static unsafe string ReadZ(byte* ptr, int cap)
+    {
+        var n = 0;
+        while (n < cap && ptr[n] != 0)
+            n++;
+        return n == 0 ? "—" : System.Text.Encoding.UTF8.GetString(new ReadOnlySpan<byte>(ptr, n));
+    }
+
+    private static string FormatMib(ulong bytes)
+    {
+        if (bytes == 0)
+            return "—";
+        return $"{bytes / (1024.0 * 1024.0):0} MiB";
     }
 
     private void RebuildLayouts()
@@ -484,6 +537,8 @@ public partial class SettingsWindow : Window
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
+        Settings.RebarOptimization = RebarOptBox.IsChecked == true;
+        Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
         DialogResult = true;

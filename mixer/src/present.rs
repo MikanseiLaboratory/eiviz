@@ -33,6 +33,7 @@ pub struct Presenter {
     bind: Option<wgpu::BindGroup>,
     pending: Option<(u32, u32)>,
     ready: bool,
+    occluded_streak: u32,
 }
 
 #[derive(Default)]
@@ -365,6 +366,7 @@ fn presenter_from_prepared(
         bind: None,
         pending: None,
         ready: true,
+        occluded_streak: 0,
     })
 }
 
@@ -483,7 +485,10 @@ fn draw_presenter(
     }
     let texture = match presenter.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            presenter.occluded_streak = 0;
+            texture
+        }
         wgpu::CurrentSurfaceTexture::Outdated
         | wgpu::CurrentSurfaceTexture::Lost
         | wgpu::CurrentSurfaceTexture::Validation => {
@@ -491,7 +496,14 @@ fn draw_presenter(
             presenter.pending = Some((presenter.config.width, presenter.config.height));
             return None;
         }
-        wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+        wgpu::CurrentSurfaceTexture::Timeout => return None,
+        wgpu::CurrentSurfaceTexture::Occluded => {
+            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
+            if presenter.occluded_streak >= 8 {
+                presenter.ready = false;
+                presenter.pending = Some((presenter.config.width, presenter.config.height));
+                presenter.occluded_streak = 0;
+            }
             return None;
         }
     };

@@ -91,6 +91,11 @@ typedef struct EivizVideoInfo {
     int64_t duration_hns;
 } EivizVideoInfo;
 
+typedef struct EivizVideoCaptureInfo {
+    uint8_t id[512];
+    uint8_t name[256];
+} EivizVideoCaptureInfo;
+
 typedef struct EivizAudioPeak {
     uint64_t source_id;
     float left;
@@ -101,6 +106,16 @@ typedef struct EivizMixerStats {
     float render_ms;
     float frame_budget_ms;
 } EivizMixerStats;
+
+typedef struct EivizMixerRebarInfo {
+    uint32_t available;
+    uint32_t active;
+    uint32_t uma;
+    uint32_t gpu_upload_heaps;
+    uint64_t bar_bytes;
+    uint64_t vram_bytes;
+    uint8_t adapter[128];
+} EivizMixerRebarInfo;
 
 typedef struct EivizSourceUsage {
     uint64_t source_id;
@@ -155,6 +170,7 @@ int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint3
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
 int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format);
+int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
 int32_t mixer_video_set_loop(uint64_t id, uint32_t looping);
 int32_t mixer_video_seek(uint64_t id, int64_t hns);
@@ -175,6 +191,9 @@ int32_t mixer_copy_follow_audio(float *out, uint32_t cap);
 int32_t mixer_copy_audio_peaks(EivizAudioPeak *out, uint32_t cap);
 int32_t mixer_copy_source_usage(EivizSourceUsage *out, uint32_t cap);
 int32_t mixer_copy_stats(EivizMixerStats *out);
+int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);
+int32_t mixer_set_rebar_optimization(uint32_t enabled);
+int32_t mixer_set_ndi_gpu_upload(uint32_t enabled);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);

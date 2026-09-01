@@ -6,7 +6,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Media::MediaFoundation::{
-    IMFSample, IMFSourceReader, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+    IMFActivate, IMFSample, IMFSourceReader, MFEnumDeviceSources,
+    MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
     MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
@@ -20,7 +21,7 @@ use windows::Win32::Media::MediaFoundation::{
     MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_NV12, MFVideoFormat_RGB32,
     MFVideoFormat_UYVY, MFVideoFormat_YUY2,
 };
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
 use windows::Win32::System::Variant::VT_I8;
 use windows::core::{GUID, PCWSTR};
 
@@ -347,6 +348,68 @@ fn startup() -> Result<(), String> {
         let _ = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
     });
     Ok(())
+}
+
+pub fn enumerate_video_captures() -> Vec<(String, String)> {
+    if startup().is_err() {
+        return Vec::new();
+    }
+    unsafe {
+        let mut attrs = None;
+        if MFCreateAttributes(&mut attrs, 1).is_err() {
+            return Vec::new();
+        }
+        let Some(attrs) = attrs else {
+            return Vec::new();
+        };
+        if attrs
+            .SetGUID(
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+            )
+            .is_err()
+        {
+            return Vec::new();
+        }
+        let mut devices = std::ptr::null_mut();
+        let mut count = 0u32;
+        if MFEnumDeviceSources(&attrs, &mut devices, &mut count).is_err() || devices.is_null() {
+            return Vec::new();
+        }
+        let slice = std::slice::from_raw_parts_mut(devices, count as usize);
+        let mut out = Vec::new();
+        for slot in slice.iter_mut() {
+            let Some(activate) = slot.take() else {
+                continue;
+            };
+            let name = mf_attr_string(&activate, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
+            let link = mf_attr_string(
+                &activate,
+                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
+            );
+            if let (Some(name), Some(link)) = (name, link)
+                && !name.is_empty()
+                && !link.is_empty()
+            {
+                out.push((name, link));
+            }
+        }
+        CoTaskMemFree(Some(devices.cast()));
+        out
+    }
+}
+
+fn mf_attr_string(activate: &IMFActivate, key: &GUID) -> Option<String> {
+    let mut buf = [0u16; 512];
+    unsafe {
+        activate.GetString(key, &mut buf, None).ok()?;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    if end == 0 {
+        None
+    } else {
+        Some(String::from_utf16_lossy(&buf[..end]))
+    }
 }
 
 fn stream(value: windows::Win32::Media::MediaFoundation::MF_SOURCE_READER_CONSTANTS) -> u32 {

@@ -35,12 +35,52 @@ struct AvSample {
 
 enum AvPump {}
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AvCaptureInfo {
+    id: [u8; 512],
+    name: [u8; 256],
+}
+
 unsafe extern "C" {
     fn eiviz_av_open_file(path: *const c_char, start_hns: i64) -> *mut AvPump;
     fn eiviz_av_open_capture(device_id: *const c_char) -> *mut AvPump;
+    fn eiviz_av_enum_captures(out: *mut AvCaptureInfo, cap: u32) -> i32;
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
+}
+
+fn cstr_field(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    if end == 0 {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&bytes[..end]).into_owned())
+    }
+}
+
+pub fn enumerate_video_captures() -> Vec<(String, String)> {
+    let mut buf = [AvCaptureInfo {
+        id: [0; 512],
+        name: [0; 256],
+    }; 64];
+    let n = unsafe { eiviz_av_enum_captures(buf.as_mut_ptr(), buf.len() as u32) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    buf.into_iter()
+        .take(n as usize)
+        .filter_map(|item| {
+            let name = cstr_field(&item.name)?;
+            let id = cstr_field(&item.id)?;
+            if name.is_empty() || id.is_empty() {
+                None
+            } else {
+                Some((name, id))
+            }
+        })
+        .collect()
 }
 
 struct NativePump {
