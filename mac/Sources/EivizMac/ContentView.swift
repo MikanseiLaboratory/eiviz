@@ -9,9 +9,9 @@ struct ContentView: View {
             topBar
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
-                    bus(title: "PREVIEW", color: EivizTheme.preview, kind: EIVIZ_OUTPUT_PREVIEW)
+                    bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                     transitions
-                    bus(title: "PROGRAM", color: EivizTheme.program, kind: EIVIZ_OUTPUT_PROGRAM)
+                    bus(title: "PROGRAM", color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
                 }
                 .frame(maxHeight: .infinity)
                 lower
@@ -99,7 +99,7 @@ struct ContentView: View {
                     if !editing { mixer.finishTBar() }
                 }
             )
-            .tint(EivizTheme.preview)
+            .tint(mixer.session.settings.previewColor.color)
             .frame(width: 132)
             .frame(maxWidth: .infinity)
         }
@@ -177,7 +177,7 @@ struct ContentView: View {
             }
             .padding(4)
             .overlay(
-                Rectangle().stroke(selected ? EivizTheme.preview : EivizTheme.stroke, lineWidth: 1)
+                Rectangle().stroke(selected ? mixer.session.settings.previewColor.color : EivizTheme.stroke, lineWidth: 1)
             )
             Button("TAKE") { mixer.firePreset(preset, index: index) }
                 .buttonStyle(MixerButtonStyle())
@@ -295,7 +295,7 @@ struct ContentView: View {
         }
         .frame(width: 176)
         .id("scene-\(scene.id)-\(scene.monitorId)")
-        .background(Rectangle().stroke(selected ? EivizTheme.preview : Color(white: 0.33), lineWidth: 2))
+        .background(Rectangle().stroke(selected ? mixer.session.settings.previewColor.color : Color(white: 0.33), lineWidth: 2))
         .contextMenu {
             Button("Edit") {
                 mixer.editingScene = scene
@@ -383,19 +383,19 @@ struct ContentView: View {
         .background(EivizTheme.statusBar)
     }
 
-    private func bus(title: String, color: Color, kind: UInt32) -> some View {
+    private func bus(title: String, color: RgbColor, kind: UInt32) -> some View {
         VStack(spacing: 0) {
             Text(title)
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(title == "PREVIEW" ? Color(red: 0.07, green: 0.07, blue: 0.07) : Color.white)
+                .foregroundStyle(color.headerForeground)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(color)
+                .background(color.color)
             MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .background(Rectangle().stroke(color, lineWidth: 2))
+        .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

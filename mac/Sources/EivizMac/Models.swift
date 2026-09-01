@@ -439,6 +439,15 @@ struct AudioBusEntry: Identifiable, Codable {
     var mute: Bool = false
 }
 
+struct RgbColor: Codable, Equatable, Hashable {
+    var r: UInt8
+    var g: UInt8
+    var b: UInt8
+
+    static let previewDefault = RgbColor(r: 0, g: 255, b: 0)
+    static let programDefault = RgbColor(r: 255, g: 0, b: 0)
+}
+
 struct SessionSettings: Codable {
     var masterFpsNum: UInt32 = 60_000
     var masterFpsDen: UInt32 = 1_001
@@ -452,6 +461,8 @@ struct SessionSettings: Codable {
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
     var ndiGpuUpload: Bool?
+    var previewColor: RgbColor = .previewDefault
+    var programColor: RgbColor = .programDefault
     var lastSessionPath: String?
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
@@ -460,6 +471,27 @@ struct SessionSettings: Codable {
     var resolvedPresentInterval: UInt32 {
         let frames = defaultPresentInterval == 0 ? 3 : defaultPresentInterval
         return max(1, min(8, frames))
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        masterFpsNum = try container.decodeIfPresent(UInt32.self, forKey: .masterFpsNum) ?? 60_000
+        masterFpsDen = try container.decodeIfPresent(UInt32.self, forKey: .masterFpsDen) ?? 1_001
+        defaultWidth = try container.decodeIfPresent(UInt32.self, forKey: .defaultWidth) ?? 1920
+        defaultHeight = try container.decodeIfPresent(UInt32.self, forKey: .defaultHeight) ?? 1080
+        theme = try container.decodeIfPresent(String.self, forKey: .theme) ?? "Charcoal"
+        defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
+        frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
+        defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
+        rebarOptimization = try container.decodeIfPresent(Bool.self, forKey: .rebarOptimization)
+        rebarDirectSample = try container.decodeIfPresent(Bool.self, forKey: .rebarDirectSample)
+        ndiGpuUpload = try container.decodeIfPresent(Bool.self, forKey: .ndiGpuUpload)
+        previewColor = try container.decodeIfPresent(RgbColor.self, forKey: .previewColor) ?? .previewDefault
+        programColor = try container.decodeIfPresent(RgbColor.self, forKey: .programColor) ?? .programDefault
+        lastSessionPath = try container.decodeIfPresent(String.self, forKey: .lastSessionPath)
     }
 }
 

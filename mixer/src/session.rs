@@ -71,6 +71,10 @@ pub struct SessionSettings {
     pub rebar_direct_sample: bool,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub ndi_gpu_upload: bool,
+    #[serde(default = "preview_color", deserialize_with = "de_preview_color")]
+    pub preview_color: RgbColor,
+    #[serde(default = "program_color", deserialize_with = "de_program_color")]
+    pub program_color: RgbColor,
     pub last_session_path: Option<String>,
 }
 
@@ -89,9 +93,37 @@ impl Default for SessionSettings {
             rebar_optimization: true,
             rebar_direct_sample: false,
             ndi_gpu_upload: true,
+            preview_color: preview_color(),
+            program_color: program_color(),
             last_session_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RgbColor {
+    #[serde(default)]
+    pub r: u8,
+    #[serde(default)]
+    pub g: u8,
+    #[serde(default)]
+    pub b: u8,
+}
+
+fn preview_color() -> RgbColor {
+    RgbColor { r: 0, g: 255, b: 0 }
+}
+
+fn program_color() -> RgbColor {
+    RgbColor { r: 255, g: 0, b: 0 }
+}
+
+fn de_preview_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+    Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(preview_color))
+}
+
+fn de_program_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+    Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(program_color))
 }
 
 fn fps_num() -> u32 {
@@ -683,6 +715,26 @@ mod tests {
         assert!(doc.settings.rebar_optimization);
         assert!(!doc.settings.rebar_direct_sample);
         assert!(doc.settings.ndi_gpu_upload);
+        assert_eq!(doc.settings.preview_color, RgbColor { r: 0, g: 255, b: 0 });
+        assert_eq!(doc.settings.program_color, RgbColor { r: 255, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn preview_program_colors_roundtrip() {
+        let src = r#"{
+  "version": 1,
+  "settings": {
+    "previewColor": { "r": 10, "g": 20, "b": 30 },
+    "programColor": { "r": 40, "g": 50, "b": 60 }
+  }
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
+        assert_eq!(doc.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
+        let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(again.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
+        assert_eq!(again.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
     }
 
     #[test]

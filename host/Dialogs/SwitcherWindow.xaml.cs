@@ -27,6 +27,7 @@ public partial class SwitcherWindow : Window
         RebuildTransitions();
         Loaded += (_, _) =>
         {
+            ApplyBusColors();
             PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         };
@@ -52,6 +53,14 @@ public partial class SwitcherWindow : Window
         ProgramAspect.RatioWidth = _unit.Width;
         ProgramAspect.RatioHeight = _unit.Height;
         RebuildScenes();
+        RebuildTransitions();
+        ApplyBusColors();
+    }
+
+    internal void ApplyBusColors()
+    {
+        BusTheme.Apply(Session.Settings, PreviewFrame, PreviewHeader, PreviewHeaderText, preview: true);
+        BusTheme.Apply(Session.Settings, ProgramFrame, ProgramHeader, ProgramHeaderText, preview: false);
         RebuildTransitions();
     }
 
@@ -85,7 +94,7 @@ public partial class SwitcherWindow : Window
             var label = new Border
             {
                 BorderBrush = selected
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x77, 0x22))
+                    ? BusTheme.PreviewBrush(Session.Settings)
                     : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
                 BorderThickness = new Thickness(1),
                 Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),

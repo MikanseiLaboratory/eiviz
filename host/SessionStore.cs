@@ -92,6 +92,8 @@ internal static class SessionStore
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
             session.Settings.RebarOptimization = Settings.RebarOptimization != false;
             session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
+            session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
+            session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

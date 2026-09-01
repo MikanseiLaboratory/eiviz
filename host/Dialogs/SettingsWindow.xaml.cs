@@ -29,7 +29,9 @@ public partial class SettingsWindow : Window
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             InternalColorFormat = session.Settings.InternalColorFormat,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
-            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled
+            NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
+            PreviewColor = RgbColor.FromOrDefault(session.Settings.PreviewColor, RgbColor.PreviewDefault),
+            ProgramColor = RgbColor.FromOrDefault(session.Settings.ProgramColor, RgbColor.ProgramDefault)
         };
         foreach (var output in session.Outputs)
         {
@@ -56,6 +58,7 @@ public partial class SettingsWindow : Window
         RebuildBuses();
         AboutVersion.Text = $"Version {HostVersion.Display}";
         FillRebar();
+        PaintBusColors();
     }
 
     public SessionSettings Settings { get; }
@@ -102,6 +105,40 @@ public partial class SettingsWindow : Window
         SelectTag(MvPresentBox, "3");
         RebarOptBox.IsChecked = true;
         NdiGpuBox.IsChecked = true;
+        Settings.ResetBusColors();
+        PaintBusColors();
+    }
+
+    private void PickPreviewColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Preview color", Settings.PreviewColor) is { } color)
+        {
+            Settings.PreviewColor = color;
+            PaintBusColors();
+        }
+    }
+
+    private void PickProgramColor_Click(object sender, RoutedEventArgs e)
+    {
+        if (PickColor("Program color", Settings.ProgramColor) is { } color)
+        {
+            Settings.ProgramColor = color;
+            PaintBusColors();
+        }
+    }
+
+    private RgbColor? PickColor(string title, RgbColor current)
+    {
+        var dialog = new ColorPickWindow(title, current) { Owner = this };
+        return dialog.ShowDialog() == true ? dialog.Result : null;
+    }
+
+    private void PaintBusColors()
+    {
+        if (PreviewColorSwatch is null || ProgramColorSwatch is null)
+            return;
+        PreviewColorSwatch.Background = BusTheme.PreviewBrush(Settings);
+        ProgramColorSwatch.Background = BusTheme.ProgramBrush(Settings);
     }
 
     private void FillRebar()

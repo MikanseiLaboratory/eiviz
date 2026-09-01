@@ -329,13 +329,36 @@ public sealed class SessionSettings
     public bool? RebarOptimization { get; set; } = true;
     public bool? RebarDirectSample { get; set; } = false;
     public bool? NdiGpuUpload { get; set; } = true;
+    public RgbColor PreviewColor { get; set; } = RgbColor.PreviewDefault;
+    public RgbColor ProgramColor { get; set; } = RgbColor.ProgramDefault;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
     public string? LastSessionPath { get; set; }
 
+    public void ResetBusColors()
+    {
+        PreviewColor = RgbColor.PreviewDefault;
+        ProgramColor = RgbColor.ProgramDefault;
+    }
+
     public uint ResolvedPresentInterval() =>
         MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
+}
+
+public sealed class RgbColor
+{
+    public byte R { get; set; }
+    public byte G { get; set; }
+    public byte B { get; set; }
+
+    public static RgbColor PreviewDefault => new() { R = 0, G = 255, B = 0 };
+    public static RgbColor ProgramDefault => new() { R = 255, G = 0, B = 0 };
+
+    public RgbColor Clone() => new() { R = R, G = G, B = B };
+
+    public static RgbColor FromOrDefault(RgbColor? color, RgbColor fallback) =>
+        color is null ? fallback.Clone() : color.Clone();
 }
 
 public sealed class Session

@@ -15,10 +15,37 @@ enum EivizTheme {
     static let status = Color(red: 124 / 255, green: 252 / 255, blue: 124 / 255)
     static let warn = Color(red: 1, green: 183 / 255, blue: 77 / 255)
     static let hud = Color(red: 156 / 255, green: 204 / 255, blue: 101 / 255)
-    static let preview = Color(red: 232 / 255, green: 119 / 255, blue: 34 / 255)
-    static let program = Color(red: 46 / 255, green: 125 / 255, blue: 50 / 255)
+    static let preview = Color(red: 0, green: 1, blue: 0)
+    static let program = Color(red: 1, green: 0, blue: 0)
     static let button = Color(red: 58 / 255, green: 58 / 255, blue: 58 / 255)
     static let stroke = Color(white: 0.27)
+}
+
+extension RgbColor {
+    var color: Color {
+        Color(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
+    }
+
+    var headerForeground: Color {
+        let luma = 0.299 * Double(r) + 0.587 * Double(g) + 0.114 * Double(b)
+        return luma >= 140
+            ? Color(red: 17 / 255, green: 17 / 255, blue: 17 / 255)
+            : Color.white
+    }
+
+    init(_ color: Color) {
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        ns.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        self.init(
+            r: UInt8(clamping: Int((red * 255).rounded())),
+            g: UInt8(clamping: Int((green * 255).rounded())),
+            b: UInt8(clamping: Int((blue * 255).rounded()))
+        )
+    }
 }
 
 /// Keeps every child alive (unlike LazyVGrid) so Metal scene tiles stay attached.

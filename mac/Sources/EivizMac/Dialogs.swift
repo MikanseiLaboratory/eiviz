@@ -52,6 +52,20 @@ struct SettingsView: View {
 
     private var display: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Preview color")
+            ColorPicker("", selection: Binding(
+                get: { mixer.session.settings.previewColor.color },
+                set: { mixer.session.settings.previewColor = RgbColor($0) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .frame(width: 220, alignment: .leading)
+            Text("Program color")
+            ColorPicker("", selection: Binding(
+                get: { mixer.session.settings.programColor.color },
+                set: { mixer.session.settings.programColor = RgbColor($0) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .frame(width: 220, alignment: .leading)
             Text("Master Frame Rate")
             Picker("", selection: Binding(
                 get: { "\(mixer.session.settings.masterFpsNum)/\(mixer.session.settings.masterFpsDen)" },

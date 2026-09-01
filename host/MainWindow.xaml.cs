@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         };
         Loaded += (_, _) =>
         {
+            ApplyBusColors();
             ApplyAspect();
             AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
@@ -85,7 +86,7 @@ public partial class MainWindow : Window
             tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
             tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
             tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
-            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval());
+            tile.Bind(scene, index++, _selectedScene?.Id == scene.Id, _session.Settings.ResolvedPresentInterval(), BusTheme.Preview(_session.Settings));
             ScenePanel.Children.Add(tile);
         }
         RefreshSceneTiles();
@@ -171,7 +172,7 @@ public partial class MainWindow : Window
         _selectedScene = scene;
         Commands.TryEnqueue(new PreviewSceneCommand(SelectedUnit.Id, scene.GpuId));
         foreach (SceneTile tile in ScenePanel.Children)
-            tile.SetSelected(tile.Scene?.Id == scene.Id);
+            tile.SetSelected(tile.Scene?.Id == scene.Id, BusTheme.Preview(_session.Settings));
     }
 
     private void FirePreset(TransitionPreset preset)
@@ -272,7 +273,7 @@ public partial class MainWindow : Window
                 Foreground = System.Windows.Media.Brushes.White,
                 Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
                 BorderBrush = selected
-                    ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x77, 0x22))
+                    ? BusTheme.PreviewBrush(_session.Settings)
                     : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(2),
@@ -630,6 +631,12 @@ public partial class MainWindow : Window
         PreviewAspect.RatioHeight = unit.Height;
         ProgramAspect.RatioWidth = unit.Width;
         ProgramAspect.RatioHeight = unit.Height;
+    }
+
+    private void ApplyBusColors()
+    {
+        BusTheme.Apply(_session.Settings, PreviewFrame, PreviewHeader, PreviewHeaderText, preview: true);
+        BusTheme.Apply(_session.Settings, ProgramFrame, ProgramHeader, ProgramHeaderText, preview: false);
     }
 
     private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
@@ -1141,6 +1148,7 @@ public partial class MainWindow : Window
                 SelectScene(_session.Scenes[0]);
             PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
+            ApplyBusColors();
             ApplyAspect();
             UpdateStatus();
         }
@@ -1165,6 +1173,14 @@ public partial class MainWindow : Window
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
+        _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
+        _session.Settings.ProgramColor = RgbColor.FromOrDefault(dialog.Settings.ProgramColor, RgbColor.ProgramDefault);
+        ApplyBusColors();
+        foreach (SceneTile tile in ScenePanel.Children)
+            tile.SetSelected(tile.Scene?.Id == _selectedScene?.Id, BusTheme.Preview(_session.Settings));
+        RebuildTransitions();
+        foreach (var window in _switchers.Values)
+            window.ApplyBusColors();
         _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
         _session.Buses.Clear();
         foreach (var bus in dialog.Buses)
