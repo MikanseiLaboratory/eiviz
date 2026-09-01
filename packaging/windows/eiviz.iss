@@ -20,6 +20,7 @@
 
 #define MyAppName "eiviz"
 #define MyAppPublisher "Mikansei Laboratory"
+#define MyAppPublisherDir "MikanseiLaboratory"
 #define MyAppURL "https://github.com/MikanseiLaboratory/eiviz"
 #define MyAppExeName "Eiviz.Host.exe"
 
@@ -31,8 +32,8 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
-DefaultGroupName={#MyAppPublisher}
+DefaultDirName={autopf}\{#MyAppPublisherDir}\{#MyAppName}
+DefaultGroupName={#MyAppPublisherDir}
 DisableProgramGroupPage=yes
 LicenseFile={#SourceDir}\LICENSE
 OutputDir={#OutputDir}
