@@ -10,6 +10,8 @@ internal sealed partial class SwapchainHost : HwndHost
 {
     private nint _hwnd;
     private bool _attached;
+    private uint _attachedWidth;
+    private uint _attachedHeight;
 
     public ulong UnitId { get; set; } = 1;
     public uint OutputKind { get; set; } = MixerNative.OutputProgram;
@@ -30,7 +32,7 @@ internal sealed partial class SwapchainHost : HwndHost
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
     {
         _hwnd = CreateWindowEx(
-            0,
+            WsExNoRedirectionBitmap,
             "STATIC",
             null,
             WsChild | WsVisible | WsClipSiblings | WsClipChildren,
@@ -46,6 +48,18 @@ internal sealed partial class SwapchainHost : HwndHost
 
     protected override nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
+        if (msg == WmEraseBkgnd)
+        {
+            handled = true;
+            return 1;
+        }
+        if (msg == WmPaint)
+        {
+            _ = BeginPaint(hwnd, out var paint);
+            EndPaint(hwnd, in paint);
+            handled = true;
+            return 0;
+        }
         if (msg == WmLButtonUp)
             SurfaceClicked?.Invoke(this, EventArgs.Empty);
         else if (msg == WmLButtonDblClk)
@@ -108,6 +122,10 @@ internal sealed partial class SwapchainHost : HwndHost
         if (_hwnd == nint.Zero)
             return;
         var (width, height) = PixelSize();
+        if (_attached
+            && Dist(width, _attachedWidth) <= 2
+            && Dist(height, _attachedHeight) <= 2)
+            return;
         MoveWindow(_hwnd, 0, 0, (int)width, (int)height, true);
         if (!_attached)
         {
@@ -123,6 +141,8 @@ internal sealed partial class SwapchainHost : HwndHost
                     MixerNative.AttachOutput(UnitId, _hwnd, width, height, OutputKind),
                     "Attach DX12 surface");
             _attached = true;
+            _attachedWidth = width;
+            _attachedHeight = height;
             return;
         }
 
@@ -130,6 +150,8 @@ internal sealed partial class SwapchainHost : HwndHost
             MixerNative.ResizeMonitor(MonitorId, width, height);
         else
             MixerNative.ResizeOutput(UnitId, OutputKind, _hwnd, width, height);
+        _attachedWidth = width;
+        _attachedHeight = height;
     }
 
     private void DetachNative()
@@ -141,7 +163,12 @@ internal sealed partial class SwapchainHost : HwndHost
         else
             MixerNative.DetachOutput(UnitId, OutputKind, _hwnd);
         _attached = false;
+        _attachedWidth = 0;
+        _attachedHeight = 0;
     }
+
+    private static uint Dist(uint left, uint right) =>
+        left >= right ? left - right : right - left;
 
     private (uint Width, uint Height) PixelSize()
     {
@@ -151,12 +178,32 @@ internal sealed partial class SwapchainHost : HwndHost
         return (width, height);
     }
 
+    private const int WsExNoRedirectionBitmap = 0x00200000;
     private const int WsChild = 0x40000000;
     private const int WsVisible = 0x10000000;
     private const int WsClipSiblings = 0x04000000;
     private const int WsClipChildren = 0x02000000;
+    private const int WmPaint = 0x000F;
+    private const int WmEraseBkgnd = 0x0014;
     private const int WmLButtonUp = 0x0202;
     private const int WmLButtonDblClk = 0x0203;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PaintStruct
+    {
+        public nint Dc;
+        public int Erase;
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+        public int Restore;
+        public int IncUpdate;
+        public long Pad0;
+        public long Pad1;
+        public long Pad2;
+        public long Pad3;
+    }
 
     [LibraryImport("user32.dll", EntryPoint = "CreateWindowExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint CreateWindowEx(
@@ -171,4 +218,11 @@ internal sealed partial class SwapchainHost : HwndHost
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool DestroyWindow(nint hwnd);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint BeginPaint(nint hwnd, out PaintStruct paint);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool EndPaint(nint hwnd, in PaintStruct paint);
 }

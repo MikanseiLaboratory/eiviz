@@ -136,6 +136,7 @@ struct Shared {
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     frame_buffer_frames: u32,
+    compose_needed: bool,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
     ndi_gpu_upload: bool,
@@ -480,6 +481,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         tone_phase: HashMap::new(),
         live_save: HashMap::new(),
         frame_buffer_frames: 3,
+        compose_needed: true,
         rebar,
         rebar_optimization: true,
         ndi_gpu_upload: true,
@@ -611,12 +613,9 @@ pub unsafe extern "C" fn mixer_define_scene(
         Arc::from(unsafe { std::slice::from_raw_parts(layers, count as usize) })
     };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .scenes
-            .insert(scene_id, (width, height, copied));
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.scenes.insert(scene_id, (width, height, copied));
+        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -637,6 +636,11 @@ pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
             .expect("shared")
             .multiview_binds
             .remove(&scene_id);
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -798,6 +802,7 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
         };
         unit.state = state;
         unit.auto = None;
+        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -824,6 +829,7 @@ pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32) -> i32 {
             return ERR_INVALID_ARGUMENT;
         };
         take_cut(unit, swap != 0);
+        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -843,6 +849,7 @@ pub extern "C" fn mixer_unit_auto(unit_id: u64, duration_ms: u32, swap: u32) -> 
             duration: Duration::from_millis(u64::from(duration_ms.max(1))),
             swap: swap != 0,
         });
+        shared.compose_needed = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2306,8 +2313,11 @@ fn render_loop(
     let mut next = Instant::now();
     let clock_start = Instant::now();
     let mut frame_i = 0u64;
+    let mut skipped_compose = 0u32;
+    let mut hold_compose = 0u32;
     let mut audio_produced = 0u64;
     let mut audio_carry = 0u64;
+    let mut last_bus: HashMap<u64, (u64, u64, u32)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -2426,9 +2436,17 @@ fn render_loop(
             thread::sleep(next.saturating_duration_since(Instant::now()));
         }
         let overdue = Instant::now().saturating_duration_since(next);
-        let skip_compose = overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
+        let mut skip_compose = buffer_frames > 1
+            && skipped_compose < buffer_frames
+            && overdue > frame_dt.saturating_mul(buffer_frames.saturating_sub(1));
         {
             let mut guard = shared.lock().expect("shared");
+            if guard.compose_needed || guard.units.values().any(|unit| unit.auto.is_some()) {
+                skip_compose = false;
+            }
+            if !skip_compose {
+                guard.compose_needed = false;
+            }
             for unit in guard.units.values_mut() {
                 if let Some(auto) = unit.auto.take() {
                     let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
@@ -2491,6 +2509,25 @@ fn render_loop(
                 .collect();
             let binds: HashMap<u64, (u64, u64)> = guard.multiview_binds.clone();
             drop(guard);
+            let bus_changed = snapshot.iter().any(|(id, .., state)| {
+                last_bus.get(id).is_none_or(|(program, preview, mix)| {
+                    *program != state.program_source
+                        || *preview != state.preview_source
+                        || *mix != state.mix.to_bits()
+                })
+            });
+            if bus_changed {
+                skip_compose = false;
+                hold_compose = buffer_frames;
+            } else if hold_compose > 0 {
+                skip_compose = false;
+                hold_compose = hold_compose.saturating_sub(1);
+            }
+            if skip_compose {
+                skipped_compose = skipped_compose.saturating_add(1);
+            } else {
+                skipped_compose = 0;
+            }
             let mut tallies = HashMap::new();
             for (scene_id, (preview_unit, program_unit)) in &binds {
                 let preview_source = snapshot
@@ -2546,14 +2583,16 @@ fn render_loop(
                 .iter()
                 .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
-            if let Err(error) =
-                presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
-                    frame_delay
-                        .view(unit_id, kind)
-                        .or_else(|| composer.unit_view(unit_id, kind))
-                })
-            {
-                set_error(&telemetry, error);
+            if !bus_changed {
+                if let Err(error) =
+                    presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                        frame_delay
+                            .view(unit_id, kind)
+                            .or_else(|| composer.unit_view(unit_id, kind))
+                    })
+                {
+                    set_error(&telemetry, error);
+                }
             }
             {
                 let mut encoder =
@@ -2750,6 +2789,22 @@ fn render_loop(
                     pts,
                 );
                 emit_gpu(&gpu_copies, &send_tx, pts);
+                for (id, .., state) in &snapshot {
+                    last_bus.insert(
+                        *id,
+                        (state.program_source, state.preview_source, state.mix.to_bits()),
+                    );
+                }
+            }
+            if bus_changed {
+                let switch_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
+                if let Err(error) =
+                    presenters.present_unit_buses(&device, switch_epoch, |unit_id, kind| {
+                        composer.unit_view(unit_id, kind)
+                    })
+                {
+                    set_error(&telemetry, error);
+                }
             }
             if presenters.any_monitor_due(frame_i) {
                 if let Err(error) =

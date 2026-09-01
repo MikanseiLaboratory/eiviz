@@ -437,6 +437,15 @@ fn configure_surface(
 }
 
 fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    // WPF child HWNDs go through DWM. Immediate/Mailbox can report Occluded
+    // or flip into a stale redirection surface on Intel / hybrid GPUs.
+    #[cfg(windows)]
+    const PREFERRED: [wgpu::PresentMode; 3] = [
+        wgpu::PresentMode::FifoRelaxed,
+        wgpu::PresentMode::Fifo,
+        wgpu::PresentMode::AutoVsync,
+    ];
+    #[cfg(not(windows))]
     const PREFERRED: [wgpu::PresentMode; 4] = [
         wgpu::PresentMode::Mailbox,
         wgpu::PresentMode::Immediate,
@@ -472,6 +481,62 @@ fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMo
         .unwrap_or(wgpu::CompositeAlphaMode::Auto)
 }
 
+fn acquire_surface(
+    device: &GpuDevice,
+    presenter: &mut Presenter,
+) -> Option<wgpu::SurfaceTexture> {
+    match presenter.surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            presenter.occluded_streak = 0;
+            Some(texture)
+        }
+        wgpu::CurrentSurfaceTexture::Outdated
+        | wgpu::CurrentSurfaceTexture::Lost
+        | wgpu::CurrentSurfaceTexture::Validation => {
+            presenter.ready = false;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+            None
+        }
+        wgpu::CurrentSurfaceTexture::Timeout => None,
+        wgpu::CurrentSurfaceTexture::Occluded => {
+            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
+            #[cfg(windows)]
+            {
+                // WPF HwndHost children are often DXGI-occluded while visible,
+                // especially on Intel / hybrid adapters. Recreate the swapchain
+                // and try once more so Cut/Preview keep updating.
+                if presenter.occluded_streak == 1 || presenter.occluded_streak.is_multiple_of(30) {
+                    presenter.ready = false;
+                    presenter.pending = Some((presenter.config.width, presenter.config.height));
+                    apply_pending_size(device, presenter);
+                    if presenter.ready {
+                        match presenter.surface.get_current_texture() {
+                            wgpu::CurrentSurfaceTexture::Success(texture)
+                            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                                presenter.occluded_streak = 0;
+                                return Some(texture);
+                            }
+                            _ => {
+                                presenter.ready = true;
+                            }
+                        }
+                    } else {
+                        presenter.ready = true;
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            if presenter.occluded_streak >= 8 {
+                presenter.ready = false;
+                presenter.pending = Some((presenter.config.width, presenter.config.height));
+                presenter.occluded_streak = 0;
+            }
+            None
+        }
+    }
+}
+
 fn draw_presenter(
     device: &GpuDevice,
     presenter: &mut Presenter,
@@ -483,30 +548,7 @@ fn draw_presenter(
     if !presenter.ready {
         return None;
     }
-    let texture = match presenter.surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-            presenter.occluded_streak = 0;
-            texture
-        }
-        wgpu::CurrentSurfaceTexture::Outdated
-        | wgpu::CurrentSurfaceTexture::Lost
-        | wgpu::CurrentSurfaceTexture::Validation => {
-            presenter.ready = false;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-            return None;
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => return None,
-        wgpu::CurrentSurfaceTexture::Occluded => {
-            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
-            if presenter.occluded_streak >= 8 {
-                presenter.ready = false;
-                presenter.pending = Some((presenter.config.width, presenter.config.height));
-                presenter.occluded_streak = 0;
-            }
-            return None;
-        }
-    };
+    let texture = acquire_surface(device, presenter)?;
     let dest = texture.texture.create_view(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -526,36 +568,33 @@ fn draw_presenter(
             multiview_mask: None,
         });
         if let Some(src) = src {
-            if presenter.bind_key != cache_key || presenter.bind.is_none() {
-                let params = BlitParams {
-                    dst: [0.0, 0.0, 1.0, 1.0],
-                    opacity: 1.0,
-                    pad: [0.0; 3],
-                };
-                device
-                    .queue
-                    .write_buffer(&presenter.params, 0, bytemuck::bytes_of(&params));
-                presenter.bind =
-                    Some(device.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("present bg"),
-                        layout: &presenter.layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(src),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&presenter.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: presenter.params.as_entire_binding(),
-                            },
-                        ],
-                    }));
-                presenter.bind_key = cache_key;
-            }
+            let params = BlitParams {
+                dst: [0.0, 0.0, 1.0, 1.0],
+                opacity: 1.0,
+                pad: [0.0; 3],
+            };
+            device
+                .queue
+                .write_buffer(&presenter.params, 0, bytemuck::bytes_of(&params));
+            presenter.bind = Some(device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("present bg"),
+                layout: &presenter.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&presenter.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: presenter.params.as_entire_binding(),
+                    },
+                ],
+            }));
+            presenter.bind_key = cache_key;
             pass.set_pipeline(if packed {
                 &presenter.uyvy
             } else {
