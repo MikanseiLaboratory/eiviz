@@ -20,18 +20,24 @@ struct SceneEditorView: View {
                 Text("Layers").fontWeight(.bold)
                 List(selection: $selectedLayer) {
                     ForEach(layers) { layer in
-                        HStack {
-                            Text(label(layer))
-                                .foregroundStyle(layer.hidden ? EivizTheme.dim : EivizTheme.text)
-                            Spacer()
+                        HStack(spacing: 4) {
                             Button(layer.hidden ? "–" : "👁") {
                                 toggleLayer(layer.id, \.hidden)
+                            }
+                            .buttonStyle(.plain)
+                            Button(layer.audioFollow ? "🔊" : "🔇") {
+                                toggleLayer(layer.id, \.audioFollow)
                             }
                             .buttonStyle(.plain)
                             Button(layer.locked ? "🔒" : "🔓") {
                                 toggleLayer(layer.id, \.locked)
                             }
                             .buttonStyle(.plain)
+                            Text(label(layer))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .foregroundStyle(layer.hidden ? EivizTheme.dim : EivizTheme.text)
+                            Spacer(minLength: 0)
                         }
                         .tag(Optional(layer.id))
                     }
@@ -282,7 +288,6 @@ struct SceneEditorView: View {
                 }
             }
             .disabled(locked)
-            Toggle("Audio Follow", isOn: boolBinding(index, \.audioFollow))
             Button("Reset") {
                 mutate { scene in
                     guard scene.layers.indices.contains(index), !scene.layers[index].locked else { return }

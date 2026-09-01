@@ -191,19 +191,34 @@ public partial class SceneEditorWindow : Window
             Tag = layer,
             ToolTip = "Lock"
         };
+        var audio = new Button
+        {
+            Content = layer.AudioFollow ? "🔊" : "🔇",
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            Tag = layer,
+            ToolTip = "Audio Follow"
+        };
         hide.Click += LayerHide_Click;
         lockBtn.Click += LayerLock_Click;
-        DockPanel.SetDock(lockBtn, Dock.Right);
-        DockPanel.SetDock(hide, Dock.Right);
+        audio.Click += LayerAudioFollow_Click;
+        DockPanel.SetDock(hide, Dock.Left);
+        DockPanel.SetDock(audio, Dock.Left);
+        DockPanel.SetDock(lockBtn, Dock.Left);
         var name = new TextBlock
         {
             Text = LayerLabel(layer),
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = layer.Hidden ? new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)) : Brushes.White
         };
-        var row = new DockPanel { Tag = layer };
-        row.Children.Add(lockBtn);
+        var row = new DockPanel { Tag = layer, LastChildFill = true };
         row.Children.Add(hide);
+        row.Children.Add(audio);
+        row.Children.Add(lockBtn);
         row.Children.Add(name);
         return row;
     }
@@ -302,7 +317,6 @@ public partial class SceneEditorWindow : Window
         CropWBox.Text = ((layer?.CropWidth ?? 1) * _width).ToString("0.#");
         CropHBox.Text = ((layer?.CropHeight ?? 1) * _height).ToString("0.#");
         OpBox.Text = (layer?.Opacity ?? 1).ToString("0.###");
-        AudioFollowBox.IsChecked = layer?.AudioFollow ?? true;
         LinkBox.IsChecked = layer?.SizeLinked ?? true;
         _suppress = true;
         LayerInputBox.SelectedItem = layer is null
@@ -473,12 +487,15 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private void AudioFollow_Click(object sender, RoutedEventArgs e)
+    private void LayerAudioFollow_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null)
+        if (sender is not Button { Tag: SceneLayer layer })
             return;
-        _selected.AudioFollow = AudioFollowBox.IsChecked == true;
+        layer.AudioFollow = !layer.AudioFollow;
+        _selected = layer;
+        RefreshLayers();
         PushGpu();
+        e.Handled = true;
     }
 
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

@@ -72,7 +72,6 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
                     <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
@@ -99,10 +98,7 @@
                     <ComboBox x:Name="LayerInputBox" Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="4"
                               Margin="0,0,0,6" DisplayMemberPath="Name"
                               SelectionChanged="LayerInput_SelectionChanged"/>
-                    <CheckBox x:Name="AudioFollowBox" Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="5"
-                              Content="Audio Follow" VerticalAlignment="Center" Foreground="#EEEEEE"
-                              Click="AudioFollow_Click"/>
-                    <Button Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
+                    <Button Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
                             Height="26" Margin="0,8,0,0" Click="ResetLayer_Click"/>
                 </Grid>
                 <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,0">
