@@ -756,7 +756,6 @@ struct MultiviewView: View {
         }
         .padding(12)
         .frame(minWidth: 960, minHeight: 540)
-        .clipped()
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {

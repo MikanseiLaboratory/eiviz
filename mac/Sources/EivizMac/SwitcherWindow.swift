@@ -155,11 +155,9 @@ struct SwitcherView: View {
                 .background(color)
             MetalPreviewRepresentable(role: .unit(unitId: unitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
-                .background(Color.black)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipped()
-        .overlay(Rectangle().stroke(color, lineWidth: 2))
+        .background(Rectangle().stroke(color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

@@ -5,7 +5,11 @@ import SwiftUI
 final class MetalSurfaceView: NSView {
     var presentInterval: UInt32 = 1
     var role: SurfaceRole = .unit(unitId: 1, kind: EIVIZ_OUTPUT_PROGRAM) {
-        didSet { attachIfNeeded() }
+        didSet {
+            if role != oldValue {
+                attachIfNeeded()
+            }
+        }
     }
     private var attached = false
     private var attachedWidth: UInt32 = 0
@@ -30,7 +34,7 @@ final class MetalSurfaceView: NSView {
     }
 
     private func configureLayer() {
-        wantsLayer = true
+        // Do not pre-create a generic CALayer. wgpu attaches CAMetalLayer to this NSView.
         layerContentsRedrawPolicy = .never
         clipsToBounds = true
         autoresizingMask = [.width, .height]
@@ -111,7 +115,9 @@ final class MetalSurfaceView: NSView {
             }
             return
         }
-        if width != attachedWidth || height != attachedHeight {
+        // Meter ticks reflow SwiftUI by a point or two; ignore that so Metal
+        // is not reconfigured every 50 ms (Outdated / Lost looks frozen).
+        if abs(Int(width) - Int(attachedWidth)) > 2 || abs(Int(height) - Int(attachedHeight)) > 2 {
             switch role {
             case .unit(let unitId, let kind):
                 _ = mixer_unit_resize_native(unitId, kind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle, width, height)
@@ -150,6 +156,30 @@ final class PreviewHostView: NSView {
     var onClick: (() -> Void)?
     var onDoubleClick: (() -> Void)?
 
+    override var isOpaque: Bool { true }
+
+    // SwiftUI will try to layer-back a representable and then snapshot it,
+    // covering the child CAMetalLayer. Refuse that so Metal can keep presenting.
+    override var wantsLayer: Bool {
+        get { false }
+        set {}
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.setFill()
+        bounds.fill()
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeKeyAndOrderFront(nil)
+    }
+
     override func mouseUp(with event: NSEvent) {
         if event.clickCount >= 2, onDoubleClick != nil {
             onDoubleClick?()
@@ -175,13 +205,9 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> PreviewHostView {
-        // Host must not be layer-backed: SwiftUI paints layer-backed representable
-        // views and covers the child CAMetalLayer. Clicks stay in AppKit
-        // (same as WPF SurfaceClicked) so Metal can keep presenting.
         context.coordinator.onClick = onClick
         context.coordinator.onDoubleClick = onDoubleClick
         let host = PreviewHostView(frame: .zero)
-        host.wantsLayer = false
         host.onClick = { context.coordinator.onClick?() }
         host.onDoubleClick = { context.coordinator.onDoubleClick?() }
         let surface = MetalSurfaceView(frame: .zero)
@@ -195,13 +221,18 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: PreviewHostView, context: Context) {
         context.coordinator.onClick = onClick
         context.coordinator.onDoubleClick = onDoubleClick
-        nsView.wantsLayer = false
         nsView.onClick = { context.coordinator.onClick?() }
         nsView.onDoubleClick = { context.coordinator.onDoubleClick?() }
         guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
-        surface.frame = nsView.bounds
-        surface.presentInterval = presentInterval
-        surface.role = role
+        if surface.frame != nsView.bounds {
+            surface.frame = nsView.bounds
+        }
+        if surface.presentInterval != presentInterval {
+            surface.presentInterval = presentInterval
+        }
+        if surface.role != role {
+            surface.role = role
+        }
         surface.attachIfNeeded()
     }
 }
