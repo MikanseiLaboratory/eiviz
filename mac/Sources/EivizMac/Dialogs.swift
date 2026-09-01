@@ -516,7 +516,9 @@ struct AddInputView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button("OK") { commit(); dismiss() }
+                    Button("OK") {
+                        if commit() { dismiss() }
+                    }
                     Button("Cancel") { dismiss() }
                 }
             }
@@ -691,7 +693,7 @@ struct AddInputView: View {
         }
     }
 
-    private func commit() {
+    private func commit() -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         var input = InputEntry(id: editing?.id ?? 0, name: trimmed.isEmpty ? defaultName() : trimmed, kind: .still)
         switch category {
@@ -704,19 +706,19 @@ struct AddInputView: View {
             input.toneHz = toneHz
             input.toneLevelDbfs = toneHz > 0 ? -20 : 0
         case "Still":
-            guard !stillPath.isEmpty else { return }
+            guard !stillPath.isEmpty else { return false }
             guard FileManager.default.fileExists(atPath: stillPath) else {
-                mixer.errorText = L10n.missingFile("Still load")
-                return
+                mixer.presentInputError(L10n.missingFile("Still load"), editing: editing != nil)
+                return false
             }
             input.kind = .still
             input.pathOrAddress = stillPath
             AppPrefs.shared.rememberStill(stillPath)
         case "Video":
-            guard !videoPath.isEmpty else { return }
+            guard !videoPath.isEmpty else { return false }
             guard FileManager.default.fileExists(atPath: videoPath) else {
-                mixer.errorText = L10n.missingFile("Video start")
-                return
+                mixer.presentInputError(L10n.missingFile("Video start"), editing: editing != nil)
+                return false
             }
             input.kind = .video
             input.pathOrAddress = videoPath
@@ -726,7 +728,7 @@ struct AddInputView: View {
             input.videoRestartWhen = videoRestartWhen
             input.videoPauseWhen = videoPauseWhen
         case "OMT":
-            guard !omtAddress.isEmpty else { return }
+            guard !omtAddress.isEmpty else { return false }
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
@@ -738,18 +740,19 @@ struct AddInputView: View {
             default: .default
             }
         case "NDI®":
-            guard !ndiAddress.isEmpty else { return }
+            guard !ndiAddress.isEmpty else { return false }
             input.kind = .ndi
             input.pathOrAddress = ndiAddress
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
             input.useGpu = false
         default:
-            guard !selectedUvc.isEmpty else { return }
+            guard !selectedUvc.isEmpty else { return false }
             input.kind = .uvc
             input.pathOrAddress = selectedUvc
         }
         mixer.upsertInput(input, replacing: editing?.id)
+        return true
     }
 }
 

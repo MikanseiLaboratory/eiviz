@@ -840,7 +840,7 @@ final class MixerController: ObservableObject {
 
     private func startVideoInput(id: UInt64, path: String, capture: UInt32, loop: Bool, playing: Bool) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
-            errorText = L10n.missingFile("Video start")
+            presentInputError(L10n.missingFile("Video start"))
             return
         }
         MixerFFI.withCString(path) { cstr in
@@ -904,7 +904,7 @@ final class MixerController: ObservableObject {
         case .still:
             if let path = input.pathOrAddress {
                 guard FileManager.default.fileExists(atPath: path) else {
-                    errorText = L10n.missingFile("Still load")
+                    presentInputError(L10n.missingFile("Still load"))
                     return
                 }
                 MixerFFI.withCString(path) { cstr in
@@ -1198,9 +1198,26 @@ final class MixerController: ObservableObject {
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
     }
 
+    func presentError(_ message: String, title: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+    }
+
+    func presentInputError(_ message: String, editing: Bool = false) {
+        presentError(message, title: L10n.t(editing ? "msg.editInput" : "msg.addInput"))
+    }
+
     private func fail(_ code: Int32, _ action: String) {
         if let message = MixerFFI.check(code, action) {
-            errorText = message
+            if action == "Still load" || action == "Video start" {
+                presentInputError(message)
+            } else {
+                errorText = message
+            }
         }
     }
 }
