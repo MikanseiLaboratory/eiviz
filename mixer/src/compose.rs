@@ -6,7 +6,8 @@ use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    TRANSITION_CUSTOM, TRANSITION_STINGER,
+    TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN,
+    TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
@@ -73,6 +74,11 @@ struct BlitParams {
     pad: [f32; 3],
 }
 
+enum Fx2Kind {
+    Flow,
+    Bloom,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MixParams {
@@ -104,6 +110,12 @@ pub struct UnitTargets {
     pub preview: wgpu::Texture,
     pub mixed: wgpu::Texture,
     pub prev: wgpu::Texture,
+    sort_a: wgpu::Texture,
+    sort_b: wgpu::Texture,
+    flow: wgpu::Texture,
+    bloom_a: wgpu::Texture,
+    bloom_b: wgpu::Texture,
+    aux: wgpu::Texture,
     pub packed: Option<wgpu::Texture>,
     pub packed_mv: Option<wgpu::Texture>,
     pub packed_prv: Option<wgpu::Texture>,
@@ -112,6 +124,12 @@ pub struct UnitTargets {
     preview_view: wgpu::TextureView,
     mixed_view: wgpu::TextureView,
     prev_view: wgpu::TextureView,
+    sort_a_view: wgpu::TextureView,
+    sort_b_view: wgpu::TextureView,
+    flow_view: wgpu::TextureView,
+    bloom_a_view: wgpu::TextureView,
+    bloom_b_view: wgpu::TextureView,
+    aux_view: wgpu::TextureView,
     prev_seeded: bool,
     packed_view: Option<wgpu::TextureView>,
     multiview_view: Option<wgpu::TextureView>,
@@ -167,6 +185,14 @@ pub struct Composer {
     mix_groups: HashMap<u64, wgpu::BindGroup>,
     custom_mix: HashMap<u64, wgpu::RenderPipeline>,
     custom_mix_src: HashMap<u64, String>,
+    custom_compute: HashMap<u64, wgpu::ComputePipeline>,
+    sort_cs: wgpu::ComputePipeline,
+    flow_cs: wgpu::ComputePipeline,
+    bloom_cs: wgpu::ComputePipeline,
+    bloom_blur_cs: wgpu::ComputePipeline,
+    fx1_layout: wgpu::BindGroupLayout,
+    fx2_layout: wgpu::BindGroupLayout,
+    user_cs_layout: wgpu::BindGroupLayout,
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
@@ -195,6 +221,37 @@ impl Composer {
                 uniform_dyn(3),
                 sampled(4),
                 sampler_entry(5),
+                sampled(6),
+                sampled(7),
+                sampled(8),
+                sampled(9),
+            ],
+        });
+        let fx1_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fx1"),
+            entries: &[sampled_compute(0), storage_write(1), uniform_dyn(2)],
+        });
+        let fx2_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("fx2"),
+            entries: &[
+                sampled_compute(0),
+                sampled_compute(1),
+                storage_write(2),
+                uniform_dyn(3),
+            ],
+        });
+        let user_cs_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("user-cs"),
+            entries: &[
+                sampled_compute(0),
+                sampled_compute(1),
+                sampler_compute(2),
+                uniform_dyn(3),
+                sampled_compute(4),
+                sampler_compute(5),
+                sampled_compute(6),
+                sampled_compute(7),
+                storage_write(8),
             ],
         });
         let pack_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -219,6 +276,10 @@ impl Composer {
         let uyvy = pipeline(device, "uyvy", include_str!("../shaders/uyvy_to_rgba.wgsl"), &blit_bg_layout, wgpu::TextureFormat::Rgba8Unorm, true)?;
         let mix = pipeline(device, "mix", include_str!("../shaders/mix.wgsl"), &mix_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
         let pack = pipeline(device, "pack", include_str!("../shaders/rgba_to_uyvy.wgsl"), &pack_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
+        let sort_cs = compute_pipeline(device, "sort", include_str!("../shaders/sort.wgsl"), &fx1_layout, "cs_main")?;
+        let flow_cs = compute_pipeline(device, "flow", include_str!("../shaders/flow.wgsl"), &fx2_layout, "cs_main")?;
+        let bloom_cs = compute_pipeline(device, "bloom", include_str!("../shaders/bloom.wgsl"), &fx2_layout, "cs_main")?;
+        let bloom_blur_cs = compute_pipeline(device, "bloom-blur", include_str!("../shaders/bloom_blur.wgsl"), &fx1_layout, "cs_main")?;
         let pool = UniformPool::new(device);
         let color_group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("color pool"),
@@ -264,6 +325,14 @@ impl Composer {
             mix_groups: HashMap::new(),
             custom_mix: HashMap::new(),
             custom_mix_src: HashMap::new(),
+            custom_compute: HashMap::new(),
+            sort_cs,
+            flow_cs,
+            bloom_cs,
+            bloom_blur_cs,
+            fx1_layout,
+            fx2_layout,
+            user_cs_layout,
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
@@ -869,6 +938,7 @@ impl Composer {
         if trimmed.is_empty() {
             self.custom_mix.remove(&unit_id);
             self.custom_mix_src.remove(&unit_id);
+            self.custom_compute.remove(&unit_id);
             return Ok(());
         }
         if self.custom_mix_src.get(&unit_id).map(String::as_str) == Some(trimmed) {
@@ -883,6 +953,15 @@ impl Composer {
             wgpu::TextureFormat::Rgba8Unorm,
             false,
         )?;
+        if trimmed.contains("fn user_compute") {
+            let cs = custom_compute_source(user_wgsl);
+            self.custom_compute.insert(
+                unit_id,
+                compute_pipeline(device, "mix-custom-cs", &cs, &self.user_cs_layout, "cs_user")?,
+            );
+        } else {
+            self.custom_compute.remove(&unit_id);
+        }
         self.custom_mix_src.insert(unit_id, trimmed.to_string());
         self.custom_mix.insert(unit_id, pipeline);
         Ok(())
@@ -898,6 +977,10 @@ impl Composer {
         }
         let source = custom_mix_source(user_wgsl);
         naga::front::wgsl::parse_str(&source).map_err(|error| error.to_string())?;
+        if trimmed.contains("fn user_compute") {
+            naga::front::wgsl::parse_str(&custom_compute_source(user_wgsl))
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -1113,6 +1196,309 @@ impl Composer {
         );
     }
 
+    fn mix_params(state: &UnitState, mix_time: f32, width: f32, height: f32, direction: Option<u32>) -> MixParams {
+        MixParams {
+            mix: state.mix,
+            kind: if state.transition_kind == TRANSITION_STINGER {
+                crate::abi::TRANSITION_FADE
+            } else {
+                state.transition_kind
+            },
+            direction: direction.unwrap_or(state.transition_direction),
+            softness: state.softness,
+            dip: [
+                state.dip_r,
+                state.dip_g,
+                state.dip_b,
+                if state.dip_a <= 0.0 { 1.0 } else { state.dip_a },
+            ],
+            param: state.param,
+            time: mix_time,
+            resolution: [width, height],
+        }
+    }
+
+    fn prepare_mix_fx(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        unit_id: u64,
+        state: &UnitState,
+        width: f32,
+        height: f32,
+    ) -> Result<(), String> {
+        let kind = state.transition_kind;
+        let custom = kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
+        let need_sort = false;
+        let need_flow = matches!(kind, TRANSITION_DATAMOSH | TRANSITION_OPTICAL_FLOW) || custom;
+        let need_bloom = matches!(kind, TRANSITION_BLOOM | TRANSITION_FILM_BURN) || custom;
+        let need_user = custom && self.custom_compute.contains_key(&unit_id);
+        if !need_sort && !need_flow && !need_bloom && !need_user {
+            return Ok(());
+        }
+        let half_w = (width * 0.5).max(1.0);
+        let half_h = (height * 0.5).max(1.0);
+        if need_sort {
+            let offset = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, width, height, None),
+            );
+            let lines = if state.transition_direction <= 1 {
+                height as u32
+            } else {
+                width as u32
+            };
+            let gx = lines.div_ceil(64);
+            self.dispatch_fx1(device, encoder, true, unit_id, offset, gx, 1);
+            self.dispatch_fx1(device, encoder, false, unit_id, offset, gx, 1);
+        }
+        if need_flow {
+            let offset = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, half_w, half_h, None),
+            );
+            self.dispatch_fx2(device, encoder, Fx2Kind::Flow, unit_id, offset, half_w, half_h);
+        }
+        if need_bloom {
+            let extract = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, half_w, half_h, None),
+            );
+            self.dispatch_fx2(device, encoder, Fx2Kind::Bloom, unit_id, extract, half_w, half_h);
+            let blur_h = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, half_w, half_h, Some(0)),
+            );
+            self.dispatch_bloom_blur(device, encoder, unit_id, true, blur_h, half_w, half_h);
+            let blur_v = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, half_w, half_h, Some(1)),
+            );
+            self.dispatch_bloom_blur(device, encoder, unit_id, false, blur_v, half_w, half_h);
+        }
+        if need_user {
+            let offset = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, width, height, None),
+            );
+            self.dispatch_user_compute(device, encoder, unit_id, offset, width, height);
+        }
+        Ok(())
+    }
+
+    fn dispatch_fx1(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        program: bool,
+        unit_id: u64,
+        offset: u32,
+        gx: u32,
+        gy: u32,
+    ) {
+        let Some(unit) = self.units.get(&unit_id) else {
+            return;
+        };
+        let (src, dst) = if program {
+            (&unit.program_view, &unit.aux_view)
+        } else {
+            (&unit.preview_view, &unit.sort_b_view)
+        };
+        let group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fx1"),
+            layout: &self.fx1_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(dst),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.pool.slot_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("fx1"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.sort_cs);
+        pass.set_bind_group(0, &group, &[offset]);
+        pass.dispatch_workgroups(gx.max(1), gy.max(1), 1);
+    }
+
+    fn dispatch_fx2(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        kind: Fx2Kind,
+        unit_id: u64,
+        offset: u32,
+        width: f32,
+        height: f32,
+    ) {
+        let Some(unit) = self.units.get(&unit_id) else {
+            return;
+        };
+        let dst = match kind {
+            Fx2Kind::Flow => &unit.flow_view,
+            Fx2Kind::Bloom => &unit.bloom_a_view,
+        };
+        let group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fx2"),
+            layout: &self.fx2_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&unit.program_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&unit.preview_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(dst),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.pool.slot_binding(),
+                },
+            ],
+        });
+        let gx = (width as u32).div_ceil(8).max(1);
+        let gy = (height as u32).div_ceil(8).max(1);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("fx2"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(match kind {
+            Fx2Kind::Flow => &self.flow_cs,
+            Fx2Kind::Bloom => &self.bloom_cs,
+        });
+        pass.set_bind_group(0, &group, &[offset]);
+        pass.dispatch_workgroups(gx, gy, 1);
+    }
+
+    fn dispatch_bloom_blur(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        unit_id: u64,
+        horizontal: bool,
+        offset: u32,
+        width: f32,
+        height: f32,
+    ) {
+        let Some(unit) = self.units.get(&unit_id) else {
+            return;
+        };
+        let (src, dst) = if horizontal {
+            (&unit.bloom_a_view, &unit.bloom_b_view)
+        } else {
+            (&unit.bloom_b_view, &unit.bloom_a_view)
+        };
+        let group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom-blur"),
+            layout: &self.fx1_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(dst),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.pool.slot_binding(),
+                },
+            ],
+        });
+        let gx = (width as u32).div_ceil(8).max(1);
+        let gy = (height as u32).div_ceil(8).max(1);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("bloom-blur"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.bloom_blur_cs);
+        pass.set_bind_group(0, &group, &[offset]);
+        pass.dispatch_workgroups(gx, gy, 1);
+    }
+
+    fn dispatch_user_compute(
+        &self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        unit_id: u64,
+        offset: u32,
+        width: f32,
+        height: f32,
+    ) {
+        let Some(pipeline) = self.custom_compute.get(&unit_id) else {
+            return;
+        };
+        let Some(unit) = self.units.get(&unit_id) else {
+            return;
+        };
+        let group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("user-cs"),
+            layout: &self.user_cs_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&unit.program_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&unit.preview_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.pool.slot_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&unit.prev_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.nearest),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&unit.flow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&unit.bloom_a_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&unit.aux_view),
+                },
+            ],
+        });
+        let gx = (width as u32).div_ceil(8).max(1);
+        let gy = (height as u32).div_ceil(8).max(1);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("user-cs"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &group, &[offset]);
+        pass.dispatch_workgroups(gx, gy, 1);
+    }
+
     fn draw_mix(
         &mut self,
         device: &GpuDevice,
@@ -1126,6 +1512,7 @@ impl Composer {
             .get(&unit_id)
             .map(|unit| (unit.width as f32, unit.height as f32))
             .unwrap_or((1920.0, 1080.0));
+        self.prepare_mix_fx(device, encoder, unit_id, state, width, height)?;
         let offset = self.pool.push(
             &device.queue,
             &MixParams {
@@ -1407,6 +1794,22 @@ impl Composer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::Sampler(&self.nearest),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&unit.flow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&unit.bloom_a_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&unit.aux_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&unit.sort_b_view),
                 },
             ],
         });
@@ -1769,6 +2172,17 @@ impl UnitTargets {
         let preview = make_texture(device, width, height, usage);
         let mixed = make_texture(device, width, height, usage);
         let prev = make_texture(device, width, height, usage);
+        let fx = wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_DST;
+        let sort_a = make_texture(device, width, height, fx);
+        let sort_b = make_texture(device, width, height, fx);
+        let aux = make_texture(device, width, height, fx);
+        let half_w = (width / 2).max(1);
+        let half_h = (height / 2).max(1);
+        let flow = make_texture(device, half_w, half_h, fx);
+        let bloom_a = make_texture(device, half_w, half_h, fx);
+        let bloom_b = make_texture(device, half_w, half_h, fx);
         Self {
             width,
             height,
@@ -1776,6 +2190,12 @@ impl UnitTargets {
             preview_view: preview.create_view(&Default::default()),
             mixed_view: mixed.create_view(&Default::default()),
             prev_view: prev.create_view(&Default::default()),
+            sort_a_view: sort_a.create_view(&Default::default()),
+            sort_b_view: sort_b.create_view(&Default::default()),
+            flow_view: flow.create_view(&Default::default()),
+            bloom_a_view: bloom_a.create_view(&Default::default()),
+            bloom_b_view: bloom_b.create_view(&Default::default()),
+            aux_view: aux.create_view(&Default::default()),
             prev_seeded: false,
             packed_view: None,
             multiview_view: None,
@@ -1783,6 +2203,12 @@ impl UnitTargets {
             preview,
             mixed,
             prev,
+            sort_a,
+            sort_b,
+            flow,
+            bloom_a,
+            bloom_b,
+            aux,
             packed: None,
             packed_mv: None,
             packed_prv: None,
@@ -1791,10 +2217,57 @@ impl UnitTargets {
     }
 }
 
+fn stub_named_fn(src: &str, name: &str, stub: &str) -> String {
+    let needle = format!("fn {name}");
+    let Some(start) = src.find(&needle) else {
+        return src.to_string();
+    };
+    let rest = &src[start..];
+    let Some(brace) = rest.find('{') else {
+        return src.to_string();
+    };
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, ch) in rest[brace..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + brace + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else {
+        return src.to_string();
+    };
+    format!("{}{}{}", &src[..start], stub, &src[end..])
+}
+
 fn custom_mix_source(user_wgsl: &str) -> String {
+    let body = stub_named_fn(
+        user_wgsl,
+        "user_compute",
+        "fn user_compute(id: vec3<u32>, dim: vec2<u32>) {}",
+    );
     format!(
         "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    if params.mix <= 0.001 {{\n        return textureSample(pgm_tex, src_samp, in.uv);\n    }}\n    if params.mix >= 0.999 {{\n        return textureSample(pvw_tex, src_samp, in.uv);\n    }}\n    return user_transition(in.uv, params.mix);\n}}\n",
-        CUSTOM_MIX_PREAMBLE, user_wgsl
+        CUSTOM_MIX_PREAMBLE, body
+    )
+}
+
+fn custom_compute_source(user_wgsl: &str) -> String {
+    let body = stub_named_fn(
+        user_wgsl,
+        "user_transition",
+        "fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> { return vec4<f32>(0.0); }",
+    );
+    format!(
+        "{}\n{}\n@compute @workgroup_size(8, 8)\nfn cs_user(@builtin(global_invocation_id) id: vec3<u32>) {{\n    let dim = vec2<u32>(textureDimensions(aux_out));\n    if id.x >= dim.x || id.y >= dim.y {{ return; }}\n    user_compute(id, dim);\n}}\n",
+        USER_COMPUTE_PREAMBLE, body
     )
 }
 
@@ -1819,6 +2292,10 @@ struct MixParams {
 @group(0) @binding(3) var<uniform> params: MixParams;
 @group(0) @binding(4) var prev_tex: texture_2d<f32>;
 @group(0) @binding(5) var src_samp_n: sampler;
+@group(0) @binding(6) var flow_tex: texture_2d<f32>;
+@group(0) @binding(7) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(8) var aux_tex: texture_2d<f32>;
+@group(0) @binding(9) var aux2_tex: texture_2d<f32>;
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     var positions = array<vec2<f32>, 3>(
@@ -1831,6 +2308,31 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     out.clip = vec4<f32>(pos, 0.0, 1.0);
     out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
     return out;
+}
+"#;
+
+const USER_COMPUTE_PREAMBLE: &str = r#"
+struct MixParams {
+    mix: f32,
+    kind: u32,
+    direction: u32,
+    softness: f32,
+    dip: vec4<f32>,
+    param: f32,
+    time: f32,
+    resolution: vec2<f32>,
+}
+@group(0) @binding(0) var pgm_tex: texture_2d<f32>;
+@group(0) @binding(1) var pvw_tex: texture_2d<f32>;
+@group(0) @binding(2) var src_samp: sampler;
+@group(0) @binding(3) var<uniform> params: MixParams;
+@group(0) @binding(4) var prev_tex: texture_2d<f32>;
+@group(0) @binding(5) var src_samp_n: sampler;
+@group(0) @binding(6) var flow_tex: texture_2d<f32>;
+@group(0) @binding(7) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(8) var aux_out: texture_storage_2d<rgba8unorm, write>;
+fn user_store(p: vec2<i32>, c: vec4<f32>) {
+    textureStore(aux_out, p, c);
 }
 "#;
 
@@ -1917,6 +2419,32 @@ fn pipeline(
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
+        cache: None,
+    }))
+}
+
+fn compute_pipeline(
+    device: &GpuDevice,
+    label: &str,
+    source: &str,
+    layout: &wgpu::BindGroupLayout,
+    entry: &str,
+) -> Result<wgpu::ComputePipeline, String> {
+    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline_layout = device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    Ok(device.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
         cache: None,
     }))
 }
@@ -2042,6 +2570,41 @@ fn begin<'a>(encoder: &'a mut wgpu::CommandEncoder, view: &'a wgpu::TextureView)
         timestamp_writes: None,
         multiview_mask: None,
     })
+}
+
+fn sampled_compute(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn storage_write(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    }
+}
+
+fn sampler_compute(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
 }
 
 fn sampled(binding: u32) -> wgpu::BindGroupLayoutEntry {

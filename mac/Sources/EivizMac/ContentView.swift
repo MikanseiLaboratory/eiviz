@@ -206,6 +206,11 @@ struct ContentView: View {
                             $0.kind = item.kind
                             $0.softness = TransitionCatalog.defaultSoftness(item.kind)
                             $0.param = TransitionCatalog.defaultParam(item.kind)
+                            let duration = TransitionCatalog.defaultDurationValue(item.kind)
+                            if duration > 0 { $0.durationValue = duration }
+                            if let direction = TransitionCatalog.defaultDirection(item.kind) {
+                                $0.direction = direction
+                            }
                             if item.kind == EIVIZ_TRANSITION_CUSTOM && ($0.customWgsl ?? "").isEmpty {
                                 $0.customWgsl = CustomWgslEditor.template
                             }

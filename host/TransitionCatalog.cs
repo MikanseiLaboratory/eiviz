@@ -66,6 +66,8 @@ internal static class TransitionCatalog
         new(MixerNative.TransitionPixelSort, "PixelSort", TransitionGroup.Shader, true, false, true, true, "Threshold", "Span"),
         new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, true, false, false, true, "", "Intensity"),
         new(MixerNative.TransitionVisualDissolve, "VisualDissolve", TransitionGroup.Shader, false, false, true, true, "Edge", "Flow"),
+        new(MixerNative.TransitionOpticalFlow, "OpticalFlow", TransitionGroup.Shader, false, false, false, true, "", "Amount"),
+        new(MixerNative.TransitionBloom, "Bloom", TransitionGroup.Shader, false, false, true, true, "Threshold", "Intensity"),
     ];
 
     internal static TransitionInfo Info(uint kind) =>
@@ -87,19 +89,34 @@ internal static class TransitionCatalog
 
     internal static float DefaultSoftness(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.3f,
+        MixerNative.TransitionPixelSort => 0.4f,
+        MixerNative.TransitionBloom => 0.45f,
         _ => 0.02f
     };
 
     internal static float DefaultParam(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.4f,
+        MixerNative.TransitionPixelSort => 0.25f,
         MixerNative.TransitionDatamosh => 1f,
         MixerNative.TransitionMetamix => 8f,
         MixerNative.TransitionTile => 8f,
         MixerNative.TransitionParts => 6f,
         MixerNative.TransitionVisualDissolve => 0.42f,
+        MixerNative.TransitionOpticalFlow => 1f,
+        MixerNative.TransitionBloom => 0.85f,
         _ => 0f
+    };
+
+    internal static uint DefaultDurationValue(uint kind) => kind switch
+    {
+        MixerNative.TransitionPixelSort => 45,
+        _ => 0
+    };
+
+    internal static uint? DefaultDirection(uint kind) => kind switch
+    {
+        MixerNative.TransitionPixelSort => 3u,
+        _ => null
     };
 
     internal static bool ShowsSoftness(uint kind)
@@ -112,10 +129,20 @@ internal static class TransitionCatalog
     {
         if (preset.Kind == MixerNative.TransitionPixelSort)
         {
+            var oldPair = Math.Abs(preset.Softness - 0.3f) < 0.0005f && Math.Abs(preset.Param - 0.4f) < 0.0005f;
+            if (oldPair)
+            {
+                preset.Softness = DefaultSoftness(preset.Kind);
+                preset.Param = DefaultParam(preset.Kind);
+                if (preset.DurationUnit == 0 && preset.DurationValue == 30)
+                    preset.DurationValue = DefaultDurationValue(preset.Kind);
+                if (preset.Direction == 0)
+                    preset.Direction = DefaultDirection(preset.Kind) ?? 3u;
+            }
             if (preset.Softness <= 0.021f)
-                preset.Softness = 0.3f;
+                preset.Softness = DefaultSoftness(preset.Kind);
             if (preset.Param <= 0f)
-                preset.Param = 0.4f;
+                preset.Param = DefaultParam(preset.Kind);
         }
     }
 }

@@ -74,6 +74,8 @@ enum TransitionCatalog {
         .init(kind: EIVIZ_TRANSITION_PIXEL_SORT, label: "PixelSort", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Threshold", paramLabel: "Span"),
         .init(kind: EIVIZ_TRANSITION_DATAMOSH, label: "Datamosh", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
         .init(kind: EIVIZ_TRANSITION_VISUAL_DISSOLVE, label: "VisualDissolve", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Edge", paramLabel: "Flow"),
+        .init(kind: EIVIZ_TRANSITION_OPTICAL_FLOW, label: "OpticalFlow", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Amount"),
+        .init(kind: EIVIZ_TRANSITION_BLOOM, label: "Bloom", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Threshold", paramLabel: "Intensity"),
     ]
 
     static func info(_ kind: UInt32) -> TransitionInfo {
@@ -94,25 +96,50 @@ enum TransitionCatalog {
     }
 
     static func defaultSoftness(_ kind: UInt32) -> Float {
-        kind == EIVIZ_TRANSITION_PIXEL_SORT ? 0.3 : 0.02
+        switch kind {
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.4
+        case EIVIZ_TRANSITION_BLOOM: return 0.45
+        default: return 0.02
+        }
     }
 
     static func defaultParam(_ kind: UInt32) -> Float {
         switch kind {
-        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.4
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.25
         case EIVIZ_TRANSITION_DATAMOSH: return 1
         case EIVIZ_TRANSITION_METAMIX: return 8
         case EIVIZ_TRANSITION_TILE: return 8
         case EIVIZ_TRANSITION_PARTS: return 6
         case EIVIZ_TRANSITION_VISUAL_DISSOLVE: return 0.42
+        case EIVIZ_TRANSITION_OPTICAL_FLOW: return 1
+        case EIVIZ_TRANSITION_BLOOM: return 0.85
         default: return 0
         }
     }
 
+    static func defaultDurationValue(_ kind: UInt32) -> UInt32 {
+        kind == EIVIZ_TRANSITION_PIXEL_SORT ? 45 : 0
+    }
+
+    static func defaultDirection(_ kind: UInt32) -> UInt32? {
+        kind == EIVIZ_TRANSITION_PIXEL_SORT ? 3 : nil
+    }
+
     static func applyKindDefaults(_ preset: inout TransitionPreset) {
         if preset.kind == EIVIZ_TRANSITION_PIXEL_SORT {
-            if preset.softness <= 0.021 { preset.softness = 0.3 }
-            if preset.param <= 0 { preset.param = 0.4 }
+            let oldPair = abs(preset.softness - 0.3) < 0.0005 && abs(preset.param - 0.4) < 0.0005
+            if oldPair {
+                preset.softness = defaultSoftness(preset.kind)
+                preset.param = defaultParam(preset.kind)
+                if preset.durationUnit == 0 && preset.durationValue == 30 {
+                    preset.durationValue = defaultDurationValue(preset.kind)
+                }
+                if preset.direction == 0 {
+                    preset.direction = defaultDirection(preset.kind) ?? 3
+                }
+            }
+            if preset.softness <= 0.021 { preset.softness = defaultSoftness(preset.kind) }
+            if preset.param <= 0 { preset.param = defaultParam(preset.kind) }
         }
     }
 }

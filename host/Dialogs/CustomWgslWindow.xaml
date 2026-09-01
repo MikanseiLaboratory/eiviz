@@ -6,7 +6,7 @@
         Background="#2B2B2B" Foreground="#EEEEEE">
     <DockPanel Margin="12">
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"
-                   Text="Provide fn user_transition(uv: vec2&lt;f32&gt;, t: f32) -&gt; vec4&lt;f32&gt;. Bound: pgm_tex, pvw_tex, prev_tex, src_samp, src_samp_n, params (mix/direction/softness/dip/param/time/resolution)."/>
+                   Text="fn user_transition(uv, t). Optional fn user_compute(id, dim) writes aux via user_store. Bound: pgm/pvw/prev/flow/bloom/aux/aux2, src_samp, src_samp_n, params. Compute uses textureSampleLevel."/>
         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
             <TextBlock x:Name="StatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"/>
             <Button DockPanel.Dock="Right" Content="Cancel" Width="88" IsCancel="True"/>

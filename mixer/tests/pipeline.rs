@@ -16,7 +16,7 @@ use eiviz_mixer::{
     TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
     TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
-    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
+    TRANSITION_BLOOM, TRANSITION_OPTICAL_FLOW, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -509,6 +509,8 @@ fn shader_transitions_emit_frames() {
         TRANSITION_PIXEL_SORT,
         TRANSITION_DATAMOSH,
         TRANSITION_VISUAL_DISSOLVE,
+        TRANSITION_OPTICAL_FLOW,
+        TRANSITION_BLOOM,
     ];
     for kind in kinds {
         let state = UnitState {
@@ -532,10 +534,18 @@ fn shader_transitions_emit_frames() {
 #[test]
 fn custom_wgsl_can_sample_prev_and_time() {
     let src = r#"
+fn user_compute(id: vec3<u32>, dim: vec2<u32>) {
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dim);
+    let c = textureSampleLevel(pgm_tex, src_samp, uv, 0.0);
+    user_store(vec2<i32>(id.xy), c);
+}
 fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
     let a = textureSample(pgm_tex, src_samp, uv);
     let p = textureSample(prev_tex, src_samp_n, uv);
-    return mix(a, p, fract(params.time) * t);
+    let flow = textureSample(flow_tex, src_samp, uv);
+    let bloom = textureSample(bloom_tex, src_samp, uv);
+    let aux = textureSample(aux_tex, src_samp, uv);
+    return mix(mix(a, p, fract(params.time) * t), aux + bloom * 0.1 + flow, 0.0);
 }
 "#;
     let cstr = CString::new(src).unwrap();

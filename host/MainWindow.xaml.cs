@@ -580,6 +580,12 @@ public partial class MainWindow : Window
                 preset.Kind = kind;
                 preset.Softness = TransitionCatalog.DefaultSoftness(kind);
                 preset.Param = TransitionCatalog.DefaultParam(kind);
+                var duration = TransitionCatalog.DefaultDurationValue(kind);
+                if (duration > 0)
+                    preset.DurationValue = duration;
+                var direction = TransitionCatalog.DefaultDirection(kind);
+                if (direction.HasValue)
+                    preset.Direction = direction.Value;
                 _kindMenuGroup[index] = item.Group;
                 if (kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(preset.CustomWgsl))
                 {

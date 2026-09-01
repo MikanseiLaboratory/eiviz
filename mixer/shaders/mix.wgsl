@@ -20,6 +20,10 @@ struct MixParams {
 @group(0) @binding(3) var<uniform> params: MixParams;
 @group(0) @binding(4) var prev_tex: texture_2d<f32>;
 @group(0) @binding(5) var src_samp_n: sampler;
+@group(0) @binding(6) var flow_tex: texture_2d<f32>;
+@group(0) @binding(7) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(8) var aux_tex: texture_2d<f32>;
+@group(0) @binding(9) var aux2_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
 
@@ -51,6 +55,16 @@ fn sample_prev(uv: vec2<f32>) -> vec4<f32> {
 
 fn sample_prev_n(uv: vec2<f32>) -> vec4<f32> {
     return textureSample(prev_tex, src_samp_n, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+}
+
+fn flow_offset(uv: vec2<f32>) -> vec2<f32> {
+    let enc = textureSample(flow_tex, src_samp, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0))).xy;
+    let n = enc * 2.0 - 1.0;
+    return n * 8.0 / max(params.resolution, vec2<f32>(1.0));
+}
+
+fn sample_bloom(uv: vec2<f32>) -> vec4<f32> {
+    return textureSample(bloom_tex, src_samp, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
 
 fn in_bounds(uv: vec2<f32>) -> bool {
@@ -445,123 +459,90 @@ fn axis_offset(amount: f32, dir: u32) -> vec2<f32> {
     return dir_sign(dir) * amount;
 }
 
-fn load_bus(p: vec2<i32>, dims: vec2<i32>, incoming: bool) -> vec4<f32> {
-    let q = clamp(p, vec2<i32>(0), dims - vec2<i32>(1));
-    if incoming {
-        return textureLoad(pvw_tex, q, 0);
+fn pixel_sort_swap(me: vec4<f32>, nei: vec4<f32>, n_uv: vec2<f32>, side: i32, descending: bool, thresh: f32) -> vec4<f32> {
+    let me_l = luma(me);
+    let nei_l = luma(nei);
+    if !in_bounds(n_uv) || me_l < thresh || nei_l < thresh {
+        return me;
     }
-    return textureLoad(pgm_tex, q, 0);
-}
-
-fn sort_luma(colors: ptr<function, array<vec4<f32>, 25>>, n: i32, descending: bool) {
-    for (var i = 1; i < 25; i = i + 1) {
-        if i >= n {
-            break;
+    let want_brighter = (side > 0) != descending;
+    if want_brighter {
+        if nei_l > me_l {
+            return nei;
         }
-        let key = (*colors)[i];
-        let key_l = luma(key);
-        var j = i - 1;
-        loop {
-            if j < 0 {
-                break;
-            }
-            let left = luma((*colors)[j]);
-            let should_shift = select(left > key_l, left < key_l, descending);
-            if !should_shift {
-                break;
-            }
-            (*colors)[j + 1] = (*colors)[j];
-            j = j - 1;
-        }
-        (*colors)[j + 1] = key;
+    } else if nei_l < me_l {
+        return nei;
     }
+    return me;
 }
 
 fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(pgm_tex));
-    let p = vec2<i32>(
-        i32(clamp(uv.x, 0.0, 0.99999) * f32(dims.x)),
-        i32(clamp(uv.y, 0.0, 0.99999) * f32(dims.y))
-    );
-    let a = load_bus(p, dims, false);
-    let b = load_bus(p, dims, true);
+    let a = sample_pgm(uv);
+    let b = sample_pvw(uv);
     if t <= 0.001 {
         return a;
     }
     if t >= 0.999 {
         return b;
     }
+    let thresh = params.softness;
     let horiz = dir == 0u || dir == 1u;
     let descending = dir == 1u || dir == 3u;
-    let thresh = max(params.softness, 0.001);
-    let step = max(1, i32(round(1.0 + 4.0 * clamp(params.param, 0.0, 1.0))));
-    let axis = select(p.x, p.y, !horiz);
-    let axis_max = select(dims.x, dims.y, !horiz) - 1;
-    if luma(a) < thresh {
-        if t < 0.9 {
-            return a;
-        }
-        return b;
+    let res = max(params.resolution, vec2<f32>(1.0));
+    let pix = select(vec2<f32>(1.0, 0.0) / res.x, vec2<f32>(0.0, 1.0) / res.y, !horiz);
+    let axis = i32(select(uv.x * res.x, uv.y * res.y, !horiz));
+    let jump = max(1, i32(round(1.0 + 5.0 * clamp(params.param, 0.0, 1.0))));
+    let frame = i32(floor(params.time * 60.0));
+    let seeded = t > 0.02;
+    let cell = floor(uv * res);
+    let gate = hash21(cell + vec2<f32>(f32(dir) + 0.7, 4.1));
+    let take_b = gate < saturate((t - 0.08) / 0.76);
+    let src = select(a, b, take_b);
+    var me = select(src, sample_prev_n(uv), seeded);
+    if seeded && min(distance(me.rgb, a.rgb), distance(me.rgb, b.rgb)) < 0.1 {
+        me = src;
     }
-    var colors_a: array<vec4<f32>, 25>;
-    var colors_b: array<vec4<f32>, 25>;
-    colors_a[0] = a;
-    colors_b[0] = b;
-    var n = 1;
-    var start = axis;
-    var end = axis;
-    for (var i = 1; i <= 12; i = i + 1) {
-        let coord = axis - i * step;
-        if coord < 0 {
-            break;
-        }
-        var q = p;
-        if horiz {
-            q.x = coord;
-        } else {
-            q.y = coord;
-        }
-        let ca = load_bus(q, dims, false);
-        if luma(ca) < thresh {
-            break;
-        }
-        start = coord;
-        colors_a[n] = ca;
-        colors_b[n] = load_bus(q, dims, true);
-        n = n + 1;
+    let side1 = select(-1, 1, (axis & 1) == (frame & 1));
+    let n1 = uv + pix * f32(side1);
+    let nei1 = select(sample_pgm(n1), sample_prev_n(n1), seeded);
+    var field = pixel_sort_swap(me, nei1, n1, side1, descending, thresh);
+    if jump > 1 {
+        let pair = axis / jump;
+        let side_j = select(-1, 1, (pair & 1) == (frame & 1));
+        let nj = uv + pix * f32(jump * side_j);
+        let nei_j = select(sample_pgm(nj), sample_prev_n(nj), seeded);
+        field = pixel_sort_swap(field, nei_j, nj, side_j, descending, thresh);
     }
-    for (var i = 1; i <= 12; i = i + 1) {
-        let coord = axis + i * step;
-        if coord > axis_max {
-            break;
-        }
-        var q = p;
-        if horiz {
-            q.x = coord;
-        } else {
-            q.y = coord;
-        }
-        let ca = load_bus(q, dims, false);
-        if luma(ca) < thresh {
-            break;
-        }
-        end = coord;
-        colors_a[n] = ca;
-        colors_b[n] = load_bus(q, dims, true);
-        n = n + 1;
-    }
-    sort_luma(&colors_a, n, descending);
-    sort_luma(&colors_b, n, descending);
-    let local = clamp(f32(axis - start) / f32(max(end - start, 1)), 0.0, 1.0);
-    let idx = clamp(i32(local * f32(n - 1) + 0.5), 0, n - 1);
-    let sorted_a = colors_a[idx];
-    let sorted_b = colors_b[idx];
-    let show_a = mix(a, sorted_a, smoothstep(0.0, 0.28, t));
-    let show_b = mix(sorted_b, b, smoothstep(0.72, 1.0, t));
-    if local < smoothstep(0.24, 0.76, t) {
-        return show_b;
-    }
-    return show_a;
+    let fade = pow(saturate((t - 0.88) / 0.12), 1.5);
+    let effect = saturate(t / 0.05) * (1.0 - fade);
+    let plate = mix(src, b, fade);
+    return mix(plate, field, effect);
+}
+
+fn optical_flow_mix(uv: vec2<f32>, t: f32) -> vec4<f32> {
+    let f = flow_offset(uv) * pval(1.0);
+    let ua = uv + f * (1.0 - t);
+    let ub = uv - f * t;
+    return mix(sample_pgm(ua), sample_pvw(ub), t);
+}
+
+fn bloom_mix(uv: vec2<f32>, t: f32) -> vec4<f32> {
+    let a = sample_pgm(uv);
+    let b = sample_pvw(uv);
+    let peak = pow(max(1.0 - abs(t * 2.0 - 1.0), 0.0), 0.45);
+    let glow = sample_bloom(uv);
+    let cheap = (
+        sample_pgm(uv + vec2<f32>(0.008, 0.0)).rgb +
+        sample_pgm(uv - vec2<f32>(0.008, 0.0)).rgb +
+        sample_pvw(uv + vec2<f32>(0.0, 0.008)).rgb +
+        sample_pvw(uv - vec2<f32>(0.0, 0.008)).rgb
+    ) * 0.25;
+    let haze = max(glow.rgb, cheap) * pval(1.15);
+    let blow_a = a.rgb + haze * (0.35 + peak * 1.6) * (1.0 - t * 0.35);
+    let blow_b = b.rgb + haze * (0.35 + peak * 1.6) * (0.65 + t * 0.35);
+    let body = mix(blow_a, blow_b, smoothstep(0.18, 0.82, t));
+    let flash = vec3<f32>(1.0) * peak * 0.28 * pval(1.0);
+    return vec4<f32>(min(body + haze * peak * 1.1 + flash, vec3<f32>(1.0)), 1.0);
 }
 
 fn datamosh(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
@@ -572,7 +553,8 @@ fn datamosh(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let tick = floor(params.time * 10.0);
     let h = hash21(cell + vec2<f32>(tick * 0.15, 1.7));
     let h2 = hash21(cell.yx + vec2<f32>(3.1, 4.4));
-    var flow = vec2<f32>((h - 0.5) * 0.14, (h2 - 0.5) * 0.06) * mix(0.15, 1.0, chaos);
+    var flow = flow_offset(uv) * mix(0.35, 1.25, chaos);
+    flow = flow + vec2<f32>((h - 0.5) * 0.04, (h2 - 0.5) * 0.02) * chaos;
     if dir == 2u || dir == 3u {
         flow = flow.yx;
     }
@@ -819,7 +801,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let w = smoothstep(t - s - 0.08, t + s, edge);
         let glow = smoothstep(0.0, 0.12, abs(edge - t));
         let burn = mix(a, params.dip, (1.0 - glow) * pval(1.0));
-        return mix(b, burn, w);
+        return min(mix(b, burn, w) + sample_bloom(in.uv) * (1.0 - glow) * 0.45, vec4<f32>(1.0));
     }
     if kind == 33u {
         let center = vec2<f32>(0.5);
@@ -864,6 +846,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     if kind == 41u {
         return visual_dissolve(in.uv, t);
+    }
+    if kind == 42u {
+        return optical_flow_mix(in.uv, t);
+    }
+    if kind == 43u {
+        return bloom_mix(in.uv, t);
     }
     return mix(a, b, t);
 }

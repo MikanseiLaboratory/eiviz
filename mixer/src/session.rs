@@ -589,6 +589,8 @@ fn transition_label(kind: u32) -> &'static str {
         39 => "PixelSort",
         40 => "Datamosh",
         41 => "VisualDissolve",
+        42 => "OpticalFlow",
+        43 => "Bloom",
         50 => "Custom",
         100 => "Stinger",
         _ => "Fade",

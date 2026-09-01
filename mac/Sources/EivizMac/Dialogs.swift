@@ -1464,7 +1464,7 @@ struct CustomWgslEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Custom WGSL").fontWeight(.bold)
-            Text("Provide fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>. Bound: pgm_tex, pvw_tex, prev_tex, src_samp, src_samp_n, params (mix/direction/softness/dip/param/time/resolution).")
+            Text("fn user_transition(uv, t). Optional fn user_compute(id, dim) writes aux via user_store. Bound: pgm/pvw/prev/flow/bloom/aux/aux2, src_samp, src_samp_n, params. Compute uses textureSampleLevel.")
                 .font(.system(size: 11))
                 .foregroundStyle(EivizTheme.dim)
             TextEditor(text: $text)

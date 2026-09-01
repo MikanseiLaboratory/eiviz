@@ -63,6 +63,8 @@ internal static partial class MixerNative
     internal const uint TransitionPixelSort = 39;
     internal const uint TransitionDatamosh = 40;
     internal const uint TransitionVisualDissolve = 41;
+    internal const uint TransitionOpticalFlow = 42;
+    internal const uint TransitionBloom = 43;
     internal const uint TransitionCustom = 50;
     internal const uint TransitionStinger = 100;
     internal const uint DurationFrames = 0;
