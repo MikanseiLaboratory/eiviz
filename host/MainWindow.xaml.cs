@@ -144,9 +144,11 @@ public partial class MainWindow : Window
         else
             programId = _lastProgramId;
         _shownProgramId = programId;
-        _shownPreviewId = _selectedScene?.Id ?? 0;
+        var previewGpuId = CurrentPreviewSceneGpuId();
+        var previewScene = _session.Scenes.FirstOrDefault(item => item.GpuId == previewGpuId);
+        _shownPreviewId = previewScene?.Id ?? 0;
         var programName = _session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
-        var previewName = _selectedScene?.Name;
+        var previewName = previewScene?.Name;
         PreviewHeaderText.Text = string.IsNullOrEmpty(previewName) ? Loc.T("chrome.preview") : $"{Loc.T("chrome.preview")} — {previewName}";
         ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? Loc.T("chrome.program") : $"{Loc.T("chrome.program")} — {programName}";
         foreach (SceneTile tile in ScenePanel.Children)
@@ -155,7 +157,7 @@ public partial class MainWindow : Window
                 continue;
             RefreshSceneTransport(tile, scene);
             tile.SetBusRoles(
-                _selectedScene?.Id == scene.Id && scene.GpuId != programId,
+                scene.GpuId == previewGpuId && scene.GpuId != programId,
                 scene.GpuId == programId,
                 BusTheme.Preview(_session.Settings),
                 BusTheme.Program(_session.Settings),
@@ -185,6 +187,24 @@ public partial class MainWindow : Window
                 return state.ProgramSource;
         }
         return 0;
+    }
+
+    private ulong CurrentPreviewSceneGpuId()
+    {
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
+                return state.PreviewSource;
+        }
+        return 0;
+    }
+
+    private void SyncSelectedSceneFromMixer()
+    {
+        var previewGpuId = CurrentPreviewSceneGpuId();
+        if (_session.Scenes.FirstOrDefault(item => item.GpuId == previewGpuId) is { } scene)
+            _selectedScene = scene;
     }
 
     private InputEntry? SceneVideo(SceneEntry scene) =>
@@ -1474,6 +1494,8 @@ public partial class MainWindow : Window
         RebuildTransitions();
         RebuildOverlayToggles();
         MixerNative.AudioSetHeadphoneCue(unit.Id);
+        SyncSelectedSceneFromMixer();
+        RefreshSceneTiles();
     }
 
     private void OpenSwitcher_Click(object sender, RoutedEventArgs e) =>

@@ -906,7 +906,7 @@ public sealed class Session
         var session = new Session();
         session.EnsureDefaultBuses();
         session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1 });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000 });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000, Scroll = true });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };

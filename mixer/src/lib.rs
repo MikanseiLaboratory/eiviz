@@ -864,6 +864,7 @@ pub extern "C" fn mixer_define_generator(
                 tone_level_dbfs: previous.map(|item| item.tone_level_dbfs).unwrap_or(-20.0),
             },
         );
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)

@@ -352,7 +352,7 @@ final class MixerController: ObservableObject {
     }
 
     func previewingSceneId(for unitId: UInt64) -> UInt64? {
-        guard let gpuId = previewByUnit[unitId] else { return selectedSceneId }
+        guard let gpuId = previewByUnit[unitId] else { return nil }
         return session.scenes.first { $0.gpuId == gpuId }?.id
     }
 

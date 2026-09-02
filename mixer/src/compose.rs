@@ -26,7 +26,7 @@ struct ColorParams {
     pad: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Generator {
     pub kind: u32,
     pub color: [f32; 4],
@@ -45,6 +45,10 @@ impl Default for Generator {
             tone_level_dbfs: -20.0,
         }
     }
+}
+
+fn generator_needs_rebake(spec: &Generator, last: Option<&Generator>, size_ok: bool) -> bool {
+    spec.scroll || !size_ok || last != Some(spec)
 }
 
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -181,6 +185,7 @@ pub struct Composer {
     units: HashMap<u64, UnitTargets>,
     scenes: HashMap<u64, SceneGpu>,
     generators: HashMap<u64, Generator>,
+    generator_bake: HashMap<u64, Generator>,
     input_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
     scroll_phase_y: f32,
@@ -321,6 +326,7 @@ impl Composer {
             units: HashMap::new(),
             scenes: HashMap::new(),
             generators: HashMap::new(),
+            generator_bake: HashMap::new(),
             input_packed: HashMap::new(),
             scroll_phase: 0.0,
             scroll_phase_y: 0.0,
@@ -1935,7 +1941,7 @@ impl Composer {
                 .sources
                 .get(&id)
                 .is_some_and(|source| source.width == width && source.height == height);
-            if !spec.scroll && size_ok {
+            if !generator_needs_rebake(&spec, self.generator_bake.get(&id), size_ok) {
                 continue;
             }
             if !size_ok {
@@ -1971,6 +1977,7 @@ impl Composer {
                 spec.kind == GEN_BARS,
                 spec.scroll,
             );
+            self.generator_bake.insert(id, spec);
         }
     }
 
@@ -2796,6 +2803,40 @@ mod tests {
         assert_eq!(dest, [0.2, 0.0, 0.8, 1.0]);
         assert_eq!(uv[0], 0.2);
         assert_eq!(uv[2], 0.8);
+    }
+
+    #[test]
+    fn static_generator_skips_identical_rebake() {
+        let spec = super::Generator {
+            kind: crate::abi::GEN_SOLID,
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..super::Generator::default()
+        };
+        assert!(!super::generator_needs_rebake(&spec, Some(&spec), true));
+    }
+
+    #[test]
+    fn static_generator_rebakes_on_color_change() {
+        let prev = super::Generator {
+            kind: crate::abi::GEN_SOLID,
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..super::Generator::default()
+        };
+        let next = super::Generator {
+            color: [0.0, 0.0, 1.0, 1.0],
+            ..prev
+        };
+        assert!(super::generator_needs_rebake(&next, Some(&prev), true));
+    }
+
+    #[test]
+    fn scrolling_generator_always_rebakes() {
+        let spec = super::Generator {
+            kind: crate::abi::GEN_BARS,
+            scroll: true,
+            ..super::Generator::default()
+        };
+        assert!(super::generator_needs_rebake(&spec, Some(&spec), true));
     }
 }
 
