@@ -12,7 +12,7 @@
     <Copyright>Copyright 2026 Shugo Kawamura / Mikansei Laboratory</Copyright>
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
     <Version>0.2.0</Version>
-    <InformationalVersion>0.2.0-alpha.35</InformationalVersion>
+    <InformationalVersion>0.2.0-alpha.36</InformationalVersion>
     <MixerProject>$(MSBuildThisFileDirectory)..\mixer</MixerProject>
     <MixerLibrary>$(MixerProject)\target\release\eiviz_mixer.dll</MixerLibrary>
   </PropertyGroup>
