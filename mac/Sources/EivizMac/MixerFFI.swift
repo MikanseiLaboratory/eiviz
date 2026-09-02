@@ -2,8 +2,18 @@ import EivizMixer
 import Foundation
 
 enum MixerFFI {
+    static func lastErrorText() -> String {
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_last_error(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0 else { return "" }
+        return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
+    }
+
     static func lastError(_ action: String) -> String {
-        L10n.error(action, -1)
+        let detail = lastErrorText()
+        return detail.isEmpty ? L10n.error(action, -1) : "\(L10n.error(action, -1)): \(detail)"
     }
 
     static func check(_ code: Int32, _ action: String) -> String? {
@@ -39,6 +49,28 @@ enum MixerFFI {
         guard (0..<16).contains(index) else { return }
         withUnsafeMutableBytes(of: &state.mv_slots) { raw in
             raw.bindMemory(to: UInt64.self)[index] = id
+        }
+    }
+
+    static func videoCaptureModes(deviceId: String) -> [CaptureMode] {
+        var buffer = [EivizVideoCaptureMode](repeating: zeroed(), count: 64)
+        let n = withCString(deviceId) { cstr in
+            buffer.withUnsafeMutableBufferPointer { ptr in
+                mixer_video_enum_capture_modes(cstr, ptr.baseAddress, UInt32(ptr.count))
+            }
+        }
+        guard n > 0 else { return [] }
+        var seen = Set<String>()
+        return buffer.prefix(Int(n)).compactMap { mode in
+            guard mode.width > 0, mode.height > 0, mode.fps_den > 0 else { return nil }
+            let item = CaptureMode(
+                width: mode.width,
+                height: mode.height,
+                fpsNum: mode.fps_num,
+                fpsDen: mode.fps_den,
+                format: mode.format
+            )
+            return seen.insert(item.id).inserted ? item : nil
         }
     }
 

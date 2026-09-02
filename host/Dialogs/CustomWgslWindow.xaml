@@ -1,0 +1,21 @@
+<Window x:Class="Eiviz.Host.Dialogs.CustomWgslWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Custom WGSL" Height="520" Width="720"
+        WindowStartupLocation="CenterOwner"
+        Background="#2B2B2B" Foreground="#EEEEEE">
+    <DockPanel Margin="12">
+        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"
+                   Text="fn user_transition(uv, t). Optional fn user_compute(id, dim) writes aux via user_store. Bound: pgm/pvw/prev/flow/bloom/aux/aux2, src_samp, src_samp_n, params. Compute uses textureSampleLevel."/>
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <TextBlock x:Name="StatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <Button DockPanel.Dock="Right" Content="Cancel" Width="88" IsCancel="True"/>
+            <Button DockPanel.Dock="Right" Content="Save" Width="88" Margin="0,0,8,0" IsDefault="True" Click="Save_Click"/>
+            <Button DockPanel.Dock="Right" Content="Validate" Width="88" Margin="0,0,8,0" Click="Validate_Click"/>
+            <Button Content="Load file…" Width="96" Click="Load_Click"/>
+        </DockPanel>
+        <TextBox x:Name="Editor" AcceptsReturn="True" AcceptsTab="True" TextWrapping="Wrap"
+                 FontFamily="Consolas" VerticalScrollBarVisibility="Auto" Background="#1A1A1A"
+                 Foreground="#EEE" CaretBrush="#EEE"/>
+    </DockPanel>
+</Window>

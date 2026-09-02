@@ -8,18 +8,50 @@ struct SwitcherView: View {
     @State private var mix: Float = 0
     @State private var tbarLocked = false
     @State private var tbarLatching = false
+    @State private var tbarDragging = false
     @State private var tbarPresetIndex = 0
 
     private var unit: MixingUnitEntry {
         mixer.session.units.first { $0.id == unitId } ?? mixer.selectedUnit
     }
 
+    private var previewTitle: String {
+        if let id = mixer.previewingSceneId(for: unitId),
+           let scene = mixer.session.scenes.first(where: { $0.id == id }) {
+            return "PREVIEW — \(scene.name)"
+        }
+        return "PREVIEW"
+    }
+
+    private var displayedMix: Float {
+        if tbarLocked || tbarDragging || tbarLatching {
+            return mix
+        }
+        return mixer.mixByUnit[unitId] ?? mix
+    }
+
+    private var programTitle: String {
+        if let id = mixer.programmingSceneId(for: unitId),
+           let scene = mixer.session.scenes.first(where: { $0.id == id }) {
+            return "PROGRAM — \(scene.name)"
+        }
+        return "PROGRAM"
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                bus(title: "PREVIEW", color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+            HStack {
+                Spacer()
+                Toggle(L10n.t("settings.alwaysOnTop"), isOn: Binding(
+                    get: { unit.alwaysOnTop },
+                    set: { mixer.setSwitcherAlwaysOnTop(unitId, $0) }
+                ))
+                .toggleStyle(.checkbox)
+            }
+            HStack(spacing: 16) {
+                bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
                 transitions
-                bus(title: "PROGRAM", color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
             }
             .frame(maxHeight: .infinity)
             scenes
@@ -36,7 +68,7 @@ struct SwitcherView: View {
                 VStack(spacing: 4) {
                     ForEach(Array(unit.transitions.enumerated()), id: \.element.id) { index, preset in
                         HStack {
-                            Text("\(preset.label)  \(preset.durationFrames)f")
+                            Text("\(preset.label)  \(preset.durationLabel)")
                                 .font(.system(size: 12, weight: .semibold))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(4)
@@ -50,7 +82,6 @@ struct SwitcherView: View {
                             Button("TAKE") {
                                 tbarPresetIndex = index
                                 mixer.firePreset(preset, unitId: unitId)
-                                mix = 0
                                 tbarLocked = false
                             }
                             .buttonStyle(MixerButtonStyle())
@@ -58,71 +89,73 @@ struct SwitcherView: View {
                     }
                 }
             }
+            .frame(minHeight: 80)
+            .frame(maxHeight: .infinity)
             Slider(
                 value: Binding(
-                    get: { Double(mix) },
+                    get: { Double(displayedMix) },
                     set: { setMix(Float($0)) }
                 ),
                 in: 0 ... 1,
                 onEditingChanged: { editing in
+                    tbarDragging = editing
                     if !editing { finishTBar() }
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
-            .frame(width: 132)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
         }
-        .frame(width: 168)
+        .padding(.horizontal, 12)
+        .frame(width: 260)
     }
 
     private var scenes: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Scenes").fontWeight(.bold)
-            ScrollView {
-                VStack(spacing: 2) {
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 8) {
                     ForEach(mixer.session.scenes) { scene in
-                        sceneRow(scene)
+                        switcherSceneThumb(scene)
                     }
                 }
                 .padding(4)
             }
             .background(EivizTheme.list)
         }
-        .frame(height: 160)
+        .frame(height: 200)
     }
 
-    private func sceneRow(_ scene: SceneEntry) -> some View {
+    private func switcherSceneThumb(_ scene: SceneEntry) -> some View {
         let preview = isPreviewing(scene)
         let program = isProgramming(scene)
-        return HStack(spacing: 6) {
+        return VStack(spacing: 4) {
+            MetalPreviewRepresentable(
+                role: .monitor(
+                    monitorId: mixer.monitorIdForSwitcherScene(unitId: unitId, sceneId: scene.id),
+                    sourceId: scene.gpuId
+                ),
+                presentInterval: mixer.session.settings.resolvedPresentInterval,
+                onClick: { mixer.previewScene(scene, unitId: unitId) }
+            )
+            .frame(width: 142, height: 80)
+            .background(Color.black)
             Text(scene.name)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if program {
-                tally("PGM", mixer.session.settings.programColor)
-            }
-            if preview {
-                tally("PRV", mixer.session.settings.previewColor)
-            }
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .frame(width: 142)
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .padding(4)
         .background(rowFill(preview: preview, program: program))
         .overlay(
-            Rectangle().stroke(rowStroke(preview: preview, program: program), lineWidth: 1)
+            Rectangle().stroke(rowStroke(preview: preview, program: program), lineWidth: 2)
         )
         .contentShape(Rectangle())
         .onTapGesture {
             mixer.previewScene(scene, unitId: unitId)
         }
-    }
-
-    private func tally(_ title: String, _ color: RgbColor) -> some View {
-        Text(title)
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(color.headerForeground)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(color.color)
     }
 
     private func rowFill(preview: Bool, program: Bool) -> Color {
@@ -132,8 +165,8 @@ struct SwitcherView: View {
     }
 
     private func rowStroke(preview: Bool, program: Bool) -> Color {
-        if preview { return mixer.session.settings.previewColor.color }
         if program { return mixer.session.settings.programColor.color }
+        if preview { return mixer.session.settings.previewColor.color }
         return mixer.session.settings.inactiveColor.color
     }
 
@@ -156,7 +189,10 @@ struct SwitcherView: View {
             MetalPreviewRepresentable(role: .unit(unitId: unitId, kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .aspectRatio(
+            CGFloat(unit.width) / max(1, CGFloat(unit.height)),
+            contentMode: .fit
+        )
         .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

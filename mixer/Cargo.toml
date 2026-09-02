@@ -21,6 +21,7 @@ serde_json = "1"
 thiserror = "2"
 vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
+naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
 [target.'cfg(windows)'.dependencies]
 grafton-ndi = { version = "1.0", default-features = false }

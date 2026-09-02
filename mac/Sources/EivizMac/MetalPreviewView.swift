@@ -75,6 +75,9 @@ final class MetalSurfaceView: NSView {
 
     func attachIfNeeded() {
         guard window != nil else { return }
+        if case .monitor(let monitorId, let sourceId) = role, monitorId == 0 || sourceId == 0 {
+            return
+        }
         let (width, height) = pixelSize()
         guard width >= 16, height >= 16 else { return }
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())

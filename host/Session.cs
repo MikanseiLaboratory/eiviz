@@ -296,6 +296,7 @@ public sealed class MvSlot
 public sealed class InputEntry
 {
     public ulong Id { get; init; }
+    public string Guid { get; set; } = System.Guid.NewGuid().ToString();
     public required string Name { get; set; }
     public InputKind Kind { get; set; }
     public string? PathOrAddress { get; set; }
@@ -318,6 +319,10 @@ public sealed class InputEntry
     public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+    public uint CaptureWidth { get; set; }
+    public uint CaptureHeight { get; set; }
+    public uint CaptureFpsNum { get; set; }
+    public uint CaptureFpsDen { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
@@ -338,6 +343,70 @@ internal static class InputKindNames
     };
 }
 
+public enum CropEdit
+{
+    All,
+    Left,
+    Up,
+    Right,
+    Down
+}
+
+internal static class CropInsets
+{
+    public static void FromRect(float x, float y, float w, float h, out float left, out float up, out float right, out float down)
+    {
+        left = x;
+        up = y;
+        right = 1f - x - w;
+        down = 1f - y - h;
+    }
+
+    public static void Apply(ref float x, ref float y, ref float w, ref float h, CropEdit edit, float? value = null)
+    {
+        FromRect(x, y, w, h, out var left, out var up, out var right, out var down);
+        if (value is float inset)
+        {
+            switch (edit)
+            {
+                case CropEdit.Left: left = inset; break;
+                case CropEdit.Up: up = inset; break;
+                case CropEdit.Right: right = inset; break;
+                case CropEdit.Down: down = inset; break;
+            }
+        }
+        left = Math.Max(0, left);
+        up = Math.Max(0, up);
+        right = Math.Max(0, right);
+        down = Math.Max(0, down);
+        switch (edit)
+        {
+            case CropEdit.Left:
+                left = Math.Clamp(left, 0, Math.Max(0, 1 - right));
+                break;
+            case CropEdit.Up:
+                up = Math.Clamp(up, 0, Math.Max(0, 1 - down));
+                break;
+            case CropEdit.Right:
+                right = Math.Clamp(right, 0, Math.Max(0, 1 - left));
+                break;
+            case CropEdit.Down:
+                down = Math.Clamp(down, 0, Math.Max(0, 1 - up));
+                break;
+            default:
+                left = Math.Clamp(left, 0, 1);
+                up = Math.Clamp(up, 0, 1);
+                right = Math.Clamp(right, 0, Math.Max(0, 1 - left));
+                down = Math.Clamp(down, 0, Math.Max(0, 1 - up));
+                break;
+        }
+        x = left;
+        y = up;
+        w = Math.Max(0, 1 - left - right);
+        h = Math.Max(0, 1 - up - down);
+    }
+}
+
 public sealed class SceneLayer
 {
     public ulong InputId { get; set; }
@@ -348,11 +417,64 @@ public sealed class SceneLayer
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
     public bool AudioFollow { get; set; } = true;
+    public bool Locked { get; set; }
+    public bool Hidden { get; set; }
+    public bool SizeLinked { get; set; } = true;
+    public float CropX { get; set; }
+    public float CropY { get; set; }
+    public float CropWidth { get; set; } = 1;
+    public float CropHeight { get; set; } = 1;
+
+    public void SetCropInset(CropEdit edit, float value)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit, value);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
+    public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
+    public void ResetLayout()
+    {
+        X = 0;
+        Y = 0;
+        Width = 1;
+        Height = 1;
+        SizeLinked = true;
+        ResetLayoutExtras();
+    }
+
+    public void ResetLayoutExtras()
+    {
+        Opacity = 1;
+        CropX = 0;
+        CropY = 0;
+        CropWidth = 1;
+        CropHeight = 1;
+    }
 }
 
 public sealed class SceneEntry
 {
     public ulong Id { get; set; }
+    public string Guid { get; set; } = System.Guid.NewGuid().ToString();
     public required string Name { get; set; }
     public ulong MonitorId { get; set; }
     public List<SceneLayer> Layers { get; } = [];
@@ -363,18 +485,61 @@ public sealed class SceneEntry
 public sealed class TransitionPreset
 {
     public uint Kind { get; set; } = MixerNative.TransitionFade;
-    public uint DurationFrames { get; set; } = 30;
+    public uint DurationValue { get; set; } = 30;
+    public uint DurationUnit { get; set; }
     public bool Swap { get; set; } = true;
-    public string Label => Kind switch
-    {
-        0 => "Cut",
-        2 => "Dip",
-        _ => "Fade"
-    };
+    public bool KeepPreview { get; set; } = true;
+    public uint Easing { get; set; }
+    public uint Direction { get; set; }
+    public float DipR { get; set; }
+    public float DipG { get; set; }
+    public float DipB { get; set; }
+    public float DipA { get; set; } = 1;
+    public float Softness { get; set; } = 0.02f;
+    public float Param { get; set; }
+    public string? CustomWgsl { get; set; }
+    public string Label => MixerNative.TransitionLabel(Kind);
+
+    public bool HasDuration => Kind != MixerNative.TransitionCut;
+    public bool HasEasing => HasDuration;
+    public bool HasDirection => TransitionCatalog.Info(Kind).HasDirection;
+    public bool HasDipColor => TransitionCatalog.Info(Kind).HasDipColor;
+    public bool HasSoftness => TransitionCatalog.ShowsSoftness(Kind);
+    public bool HasParam => TransitionCatalog.Info(Kind).HasParam;
+    public bool HasCustomWgsl => Kind == MixerNative.TransitionCustom;
+
+    public uint DurationMsFor(MixingUnitEntry unit) =>
+        DurationUnit == MixerNative.DurationMs
+            ? Math.Max(1, DurationValue)
+            : unit.DurationMs(DurationValue);
+
+    internal AutoCommand ToAuto(ulong unitId, MixingUnitEntry unit) =>
+        new(
+            unitId,
+            Kind,
+            DurationMsFor(unit),
+            Swap,
+            KeepPreview,
+            Easing,
+            Direction,
+            DipR,
+            DipG,
+            DipB,
+            DipA,
+            CustomWgsl,
+            Softness,
+            Param);
+}
+
+public enum OverlaySourceKind
+{
+    Scene,
+    Input
 }
 
 public sealed class OverlaySlot
 {
+    public OverlaySourceKind SourceKind { get; set; }
     public ulong SceneGpuId { get; set; }
     public float X { get; set; } = 0.62f;
     public float Y { get; set; } = 0.08f;
@@ -382,7 +547,69 @@ public sealed class OverlaySlot
     public float Height { get; set; } = 0.32f;
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; }
+    public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
+    public uint DurationValue { get; set; } = 15;
+    public uint DurationUnit { get; set; }
+    public bool AudioFollow { get; set; } = true;
+    public bool Locked { get; set; }
+    public bool Hidden { get; set; }
+    public bool SizeLinked { get; set; } = true;
+    public float CropX { get; set; }
+    public float CropY { get; set; }
+    public float CropWidth { get; set; } = 1;
+    public float CropHeight { get; set; } = 1;
+
+    public string DisplayName(Session session) =>
+        SourceKind == OverlaySourceKind.Input
+            ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.Name ?? "Input"
+            : session.Scenes.FirstOrDefault(item => item.GpuId == SceneGpuId)?.Name ?? "Scene";
+
+    public void SetCropInset(CropEdit edit, float value)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit, value);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
+    public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
+    public void ResetLayout()
+    {
+        X = 0.62f;
+        Y = 0.08f;
+        Width = 0.32f;
+        Height = 0.32f;
+        SizeLinked = true;
+        Opacity = 1;
+        CropX = 0;
+        CropY = 0;
+        CropWidth = 1;
+        CropHeight = 1;
+    }
+}
+
+public sealed class SceneLayoutPreset
+{
+    public required string Name { get; set; }
+    public List<SceneLayer> Layers { get; set; } = [];
 }
 
 public sealed class MultiviewLayout
@@ -505,6 +732,7 @@ public sealed class MixingUnitEntry
     public List<OverlaySlot> Overlays { get; } = [];
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
+    public bool AlwaysOnTop { get; set; } = true;
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
 
     public string FormatFps()
@@ -523,8 +751,8 @@ public sealed class MixingUnitEntry
     {
         if (Transitions.Count > 0)
             return;
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true, KeepPreview = true });
     }
 
 }
@@ -661,6 +889,7 @@ public sealed class Session
     public List<OutputEntry> Outputs { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
     public List<AudioBusEntry> Buses { get; } = [];
+    public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
@@ -680,8 +909,8 @@ public sealed class Session
         session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
         session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
         var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationFrames = 1, Swap = true });
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationFrames = 30, Swap = true });
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true });
         session.Units.Add(unit);
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);

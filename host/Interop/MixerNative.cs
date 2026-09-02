@@ -12,6 +12,8 @@ internal static partial class MixerNative
     internal const ulong Bars = 2;
     internal const ulong Black = 3;
     internal const ulong Blue = 4;
+    internal const ulong IncomingPreview = 0;
+    internal const ulong IncomingProgram = unchecked((ulong)-1);
     internal const ulong SceneBase = 0x0001_0000;
     internal const ulong MultiviewBase = 0x0002_0000;
     internal const ulong LabelBase = 0x0003_0000;
@@ -22,6 +24,58 @@ internal static partial class MixerNative
     internal const uint TransitionCut = 0;
     internal const uint TransitionFade = 1;
     internal const uint TransitionDip = 2;
+    internal const uint TransitionWipe = 3;
+    internal const uint TransitionSlide = 4;
+    internal const uint TransitionPush = 5;
+    internal const uint TransitionIris = 6;
+    internal const uint TransitionBlinds = 7;
+    internal const uint TransitionZoom = 8;
+    internal const uint TransitionAdditive = 9;
+    internal const uint TransitionCube = 10;
+    internal const uint TransitionCrossZoom = 11;
+    internal const uint TransitionFlyRotate = 12;
+    internal const uint TransitionBarnDoor = 13;
+    internal const uint TransitionClock = 14;
+    internal const uint TransitionLorez = 15;
+    internal const uint TransitionMetamix = 16;
+    internal const uint TransitionTile = 17;
+    internal const uint TransitionFlip = 18;
+    internal const uint TransitionGlitch = 19;
+    internal const uint TransitionSwirl = 20;
+    internal const uint TransitionLumaMorph = 21;
+    internal const uint TransitionParts = 22;
+    internal const uint TransitionStatic = 23;
+    internal const uint TransitionShiftRgb = 24;
+    internal const uint TransitionDisplace = 25;
+    internal const uint TransitionRipple = 26;
+    internal const uint TransitionGridDissolve = 27;
+    internal const uint TransitionCubeZoom = 28;
+    internal const uint TransitionPageCurl = 29;
+    internal const uint TransitionKaleidoscope = 30;
+    internal const uint TransitionPolar = 31;
+    internal const uint TransitionFilmBurn = 32;
+    internal const uint TransitionZoomBlur = 33;
+    internal const uint TransitionMultitask = 34;
+    internal const uint TransitionHeart = 35;
+    internal const uint TransitionDiamond = 36;
+    internal const uint TransitionStar = 37;
+    internal const uint TransitionRollerDoor = 38;
+    internal const uint TransitionPixelSort = 39;
+    internal const uint TransitionDatamosh = 40;
+    internal const uint TransitionVisualDissolve = 41;
+    internal const uint TransitionOpticalFlow = 42;
+    internal const uint TransitionBloom = 43;
+    internal const uint TransitionCustom = 50;
+    internal const uint TransitionStinger = 100;
+    internal const uint DurationFrames = 0;
+    internal const uint DurationMs = 1;
+    internal const uint EasingLinear = 0;
+    internal const uint EasingIn = 1;
+    internal const uint EasingOut = 2;
+    internal const uint EasingInOut = 3;
+    internal const uint EasingSmoothstep = 4;
+
+    internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
@@ -97,10 +151,33 @@ internal static partial class MixerNative
     internal static unsafe partial int GetUnitState(ulong unitId, UnitState* state);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_cut")]
-    internal static partial int Cut(ulong unitId, uint swap);
+    internal static partial int Cut(ulong unitId, uint swap, ulong incomingSource);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_auto")]
-    internal static partial int Auto(ulong unitId, uint durationMs, uint swap);
+    internal static partial int Auto(
+        ulong unitId,
+        uint kind,
+        uint durationMs,
+        uint swap,
+        uint keepPreview,
+        uint easing,
+        uint direction,
+        float dipR,
+        float dipG,
+        float dipB,
+        float dipA,
+        ulong incomingSource,
+        float softness,
+        float param);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_unit_overlay_auto")]
+    internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationMs, OverlayDesc* desc);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_unit_set_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int SetCustomWgsl(ulong unitId, string? wgsl);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_validate_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ValidateCustomWgsl(string? wgsl);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_register_source")]
     internal static partial int RegisterSource(ulong id, uint width, uint height, uint format);
@@ -163,10 +240,13 @@ internal static partial class MixerNative
     internal static partial int LoadStill(ulong id, string path);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_start", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int VideoStart(ulong id, string path, uint capture, uint format);
+    internal static partial int VideoStart(ulong id, string path, uint capture, uint format, uint width, uint height, uint fpsNum, uint fpsDen);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_enum_captures")]
     internal static unsafe partial int VideoEnumCaptures(MixerVideoCaptureInfo* devices, uint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_enum_capture_modes", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int VideoEnumCaptureModes(string deviceId, MixerVideoCaptureMode* modes, uint capacity);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_set_playing")]
     internal static partial int VideoSetPlaying(ulong id, uint playing);
@@ -356,6 +436,22 @@ internal static partial class MixerNative
         return list;
     }
 
+    internal static List<MixerVideoCaptureMode> EnumVideoCaptureModes(string deviceId)
+    {
+        var list = new List<MixerVideoCaptureMode>();
+        var buffer = new MixerVideoCaptureMode[64];
+        unsafe
+        {
+            fixed (MixerVideoCaptureMode* ptr = buffer)
+            {
+                var n = VideoEnumCaptureModes(deviceId, ptr, (uint)buffer.Length);
+                for (var i = 0; i < n && i < buffer.Length; i++)
+                    list.Add(buffer[i]);
+            }
+        }
+        return list;
+    }
+
     private static unsafe string ReadFixedUtf8(byte* ptr, int cap)
     {
         var n = 0;
@@ -413,10 +509,11 @@ internal struct OverlayDesc
 {
     public ulong SourceId;
     public Rect Rect;
+    public Rect Crop;
     public float Opacity;
     public int Z;
     public uint AudioFollow;
-    public uint Pad;
+    public uint Hidden;
     public nint Label;
 }
 
@@ -490,6 +587,27 @@ internal struct UnitState
     public ulong Mv13;
     public ulong Mv14;
     public ulong Mv15;
+    public uint TransitionEasing;
+    public uint TransitionDirection;
+    public uint KeepPreview;
+    public uint Pad;
+    public float DipR;
+    public float DipG;
+    public float DipB;
+    public float DipA;
+    public ulong IncomingSource;
+    public float Softness;
+    public float Param;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerVideoCaptureMode
+{
+    public uint Width;
+    public uint Height;
+    public uint FpsNum;
+    public uint FpsDen;
+    public uint Format;
 }
 
 [StructLayout(LayoutKind.Sequential)]

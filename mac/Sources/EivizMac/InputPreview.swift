@@ -1,8 +1,7 @@
 import AppKit
 
 func makeInputPreviewContent(monitorId: UInt64, sourceId: UInt64, frame: NSRect) -> NSView {
-    let content = InputPreviewContentView(frame: frame)
-    content.wantsLayer = false
+    let content = PreviewHostView(frame: frame)
     content.autoresizingMask = [.width, .height]
     let surface = MetalSurfaceView(frame: content.bounds)
     surface.autoresizingMask = [.width, .height]
@@ -10,10 +9,6 @@ func makeInputPreviewContent(monitorId: UInt64, sourceId: UInt64, frame: NSRect)
     surface.role = .monitor(monitorId: monitorId, sourceId: sourceId)
     content.addSubview(surface)
     return content
-}
-
-final class InputPreviewContentView: NSView {
-    override var isOpaque: Bool { true }
 }
 
 final class InputPreviewHostWindow: NSWindow {

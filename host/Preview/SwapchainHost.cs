@@ -78,8 +78,13 @@ internal sealed partial class SwapchainHost : HwndHost
         ApplySize();
     }
 
+    public bool HasMonitor(ulong monitorId, ulong sourceId) =>
+        _attached && IsMonitor && MonitorId == monitorId && SourceId == sourceId;
+
     public void RetargetMonitor(ulong monitorId, ulong sourceId)
     {
+        if (HasMonitor(monitorId, sourceId))
+            return;
         DetachNative();
         IsMonitor = true;
         MonitorId = monitorId;
@@ -113,6 +118,8 @@ internal sealed partial class SwapchainHost : HwndHost
         {
             if (IsMonitor)
             {
+                if (MonitorId == 0 || SourceId == 0)
+                    return;
                 MixerNative.ThrowIfFailed(
                     MixerNative.AttachMonitor(MonitorId, SourceId, _hwnd, width, height),
                     "Attach source monitor");

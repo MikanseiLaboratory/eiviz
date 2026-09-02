@@ -5,6 +5,7 @@ struct VsOut {
 
 struct BlitParams {
     dst: vec4<f32>,
+    src: vec4<f32>,
     opacity: f32,
     _pad0: f32,
     _pad1: f32,
