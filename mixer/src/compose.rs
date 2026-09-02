@@ -6,6 +6,7 @@ use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SourceUsage,
     TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN,
     TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
 };
@@ -215,6 +216,7 @@ pub struct Composer {
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
+    scene_gpu_pct: HashMap<u64, f32>,
     #[cfg(windows)]
     rebar: Option<crate::rebar::RebarUploader>,
     #[cfg(target_os = "macos")]
@@ -356,6 +358,7 @@ impl Composer {
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
+            scene_gpu_pct: HashMap::new(),
             #[cfg(windows)]
             rebar: crate::rebar::RebarUploader::new(device),
             #[cfg(target_os = "macos")]
@@ -741,8 +744,16 @@ impl Composer {
             self.visit_scene(*id, used, &mut visited, &mut order);
         }
         self.bake_generators(device, encoder);
+        let mut weights = Vec::with_capacity(order.len());
         for id in order {
-            self.draw_scene(device, encoder, id, tallies)?;
+            let weight = self.draw_scene(device, encoder, id, tallies)?;
+            weights.push((id, weight));
+        }
+        let total = weights.iter().map(|(_, weight)| *weight).sum::<u64>().max(1);
+        self.scene_gpu_pct.clear();
+        for (id, weight) in weights {
+            self.scene_gpu_pct
+                .insert(id, 100.0 * weight as f32 / total as f32);
         }
         Ok(())
     }
@@ -773,7 +784,7 @@ impl Composer {
         encoder: &mut wgpu::CommandEncoder,
         scene_id: u64,
         tallies: &[(u64, u64)],
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let (width, height, mut layers, labels, view, label_size, label_percent, label_top) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
             (
@@ -826,7 +837,12 @@ impl Composer {
                 self.draw_mv_tally_pass(device, &mut pass, &layers, tallies, width, height);
             }
         }
-        Ok(())
+        let visible = layers
+            .iter()
+            .filter(|layer| layer.hidden == 0)
+            .count()
+            .max(1) as u64;
+        Ok(u64::from(width) * u64::from(height) * visible)
     }
 
     fn draw_mv_label_pass(
@@ -1978,7 +1994,23 @@ impl Composer {
                 spec.scroll,
             );
             self.generator_bake.insert(id, spec);
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
         }
+    }
+
+    pub fn generators_need_rebake(&self) -> bool {
+        self.generators.iter().any(|(id, spec)| {
+            let (width, height) = if spec.kind == GEN_BARS {
+                (1920, 1080)
+            } else {
+                (128, 72)
+            };
+            let size_ok = self
+                .sources
+                .get(id)
+                .is_some_and(|source| source.width == width && source.height == height);
+            generator_needs_rebake(spec, self.generator_bake.get(id), size_ok)
+        })
     }
 
     pub fn sync_generators(&mut self, generators: &[(u64, Generator)], phase: f32, phase_y: f32) {
@@ -2028,6 +2060,26 @@ impl Composer {
 
     pub fn source_is_packed(&self, source_id: u64) -> bool {
         self.sources.get(&source_id).is_some_and(|gpu| gpu.packed)
+    }
+
+    pub fn scene_usages(&self) -> Vec<SourceUsage> {
+        self.scenes
+            .iter()
+            .map(|(id, scene)| {
+                let mut vram = texture_bytes(&scene.texture);
+                if let Some(packed) = &scene.packed {
+                    vram += texture_bytes(packed);
+                }
+                SourceUsage {
+                    source_id: *id,
+                    width: scene.width,
+                    height: scene.height,
+                    ram_bytes: 0,
+                    vram_bytes: vram,
+                    gpu_pct: self.scene_gpu_pct.get(id).copied().unwrap_or(0.0),
+                }
+            })
+            .collect()
     }
 
     pub fn vram_bytes(&self) -> u64 {

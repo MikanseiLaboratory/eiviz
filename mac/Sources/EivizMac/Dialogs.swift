@@ -499,7 +499,6 @@ struct AddInputView: View {
     @State private var useGpu = true
     @State private var buffer: UInt32 = 1
     @State private var mediaBuffer: UInt32 = 3
-    @State private var videoPreloadRam = false
     @State private var quality: UInt32 = 0
     @State private var ndiLow = false
     @State private var videoLoop = true
@@ -568,8 +567,7 @@ struct AddInputView: View {
             recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
             frameBufferPicker($mediaBuffer)
-            Toggle("Preload into RAM", isOn: $videoPreloadRam)
-            Text("Frame buffer (1–8) absorbs decode jitter. Preload decodes the clip into system RAM (not VRAM). If it will not fit, an error is shown and the file streams.")
+            Text("Frame buffer (1–8) absorbs decode jitter.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             Picker("Play when", selection: $videoPlayWhen) {
@@ -727,7 +725,6 @@ struct AddInputView: View {
         useGpu = editing.useGpu
         buffer = editing.frameBufferFrames
         mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
-        videoPreloadRam = editing.videoPreloadRam
         ndiLow = editing.ndiBandwidth == .lowest
         quality = editing.omtQuality.rawUInt
         videoLoop = editing.videoLoop
@@ -791,7 +788,6 @@ struct AddInputView: View {
             input.videoRestartWhen = videoRestartWhen
             input.videoPauseWhen = videoPauseWhen
             input.frameBufferFrames = max(1, min(8, mediaBuffer))
-            input.videoPreloadRam = videoPreloadRam
         case "OMT":
             guard !omtAddress.isEmpty else { return false }
             input.kind = .omt
@@ -1258,7 +1254,7 @@ struct ResourcesView: View {
                 .foregroundStyle(EivizTheme.hud)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
-                    Text("Input").fontWeight(.bold)
+                    Text("Name").fontWeight(.bold)
                     Text("Kind").fontWeight(.bold)
                     Text("Size").fontWeight(.bold)
                     Text("CPU").fontWeight(.bold)
@@ -1298,7 +1294,7 @@ struct ResourcesView: View {
     }
 
     private func load() {
-        var buffer = [EivizSourceUsage](repeating: MixerFFI.zeroed(), count: 64)
+        var buffer = [EivizSourceUsage](repeating: MixerFFI.zeroed(), count: 128)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_source_usage(ptr.baseAddress, UInt32(ptr.count))
         }
@@ -1320,9 +1316,7 @@ struct ResourcesView: View {
         }
         if totalRam == 0 { totalRam = 1 }
         if totalVram == 0 { totalVram = 1 }
-        let gpuLoad = stats.frame_budget_ms > 0.1
-            ? min(100, stats.render_ms / stats.frame_budget_ms * 100)
-            : 0
+        let gpuLoad = HostResources.gpuPercent()
         rows = mixer.session.inputs.map { input in
             let usage = usages[input.id]
             let ram = usage?.ram_bytes ?? 0
@@ -1336,15 +1330,31 @@ struct ResourcesView: View {
                 kind: input.kind.rawValue,
                 size: width == 0 ? "—" : "\(width)x\(height)",
                 cpu: live ? "live" : "—",
-                gpu: vram == 0 ? "—" : String(format: "%.0f%%", Double(vram) / Double(totalVram) * Double(gpuLoad)),
+                gpu: "—",
                 ram: formatBytes(ram),
                 vram: formatBytes(vram)
             )
         }
+        rows.append(contentsOf: mixer.session.scenes.map { scene in
+            let usage = usages[scene.gpuId]
+            let width = usage?.width ?? 0
+            let height = usage?.height ?? 0
+            let pct = usage?.gpu_pct ?? 0
+            return ResourceRow(
+                id: scene.gpuId,
+                name: scene.name,
+                kind: "Scene",
+                size: width == 0 ? "—" : "\(width)x\(height)",
+                cpu: "—",
+                gpu: pct > 0 ? String(format: "%.0f%%", pct) : "—",
+                ram: "—",
+                vram: formatBytes(usage?.vram_bytes ?? 0)
+            )
+        })
         let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
             ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
             : ""
-        summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        summary = "Inputs \(mixer.session.inputs.count)    GPU \(String(format: "%.0f", gpuLoad))%    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
 

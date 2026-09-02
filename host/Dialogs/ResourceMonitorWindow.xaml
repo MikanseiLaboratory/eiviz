@@ -8,7 +8,7 @@
         <ListView x:Name="UsageList" Background="#222" Foreground="#EEE" BorderBrush="#444">
             <ListView.View>
                 <GridView>
-                    <GridViewColumn Header="Input" Width="180" DisplayMemberBinding="{Binding Name}"/>
+                    <GridViewColumn Header="Name" Width="180" DisplayMemberBinding="{Binding Name}"/>
                     <GridViewColumn Header="Kind" Width="80" DisplayMemberBinding="{Binding Kind}"/>
                     <GridViewColumn Header="Size" Width="100" DisplayMemberBinding="{Binding Size}"/>
                     <GridViewColumn Header="CPU" Width="70" DisplayMemberBinding="{Binding Cpu}"/>

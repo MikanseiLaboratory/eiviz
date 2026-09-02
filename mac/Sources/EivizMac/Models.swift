@@ -211,7 +211,6 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var videoPlayWhen: VideoPlayWhen = .never
     var videoRestartWhen: VideoTriggerWhen = .never
     var videoPauseWhen: VideoTriggerWhen = .never
-    var videoPreloadRam: Bool = false
     var guid: String = UUID().uuidString
     var captureWidth: UInt32 = 0
     var captureHeight: UInt32 = 0
@@ -224,7 +223,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
         case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
         case keepFullOnMultiview, omtQuality, ndiBandwidth
-        case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen, videoPreloadRam
+        case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen
     }
 
@@ -251,8 +250,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         videoLoop: Bool = true,
         videoPlayWhen: VideoPlayWhen = .never,
         videoRestartWhen: VideoTriggerWhen = .never,
-        videoPauseWhen: VideoTriggerWhen = .never,
-        videoPreloadRam: Bool = false
+        videoPauseWhen: VideoTriggerWhen = .never
     ) {
         self.id = id
         self.name = name
@@ -277,7 +275,6 @@ struct InputEntry: Identifiable, Codable, Hashable {
         self.videoPlayWhen = videoPlayWhen
         self.videoRestartWhen = videoRestartWhen
         self.videoPauseWhen = videoPauseWhen
-        self.videoPreloadRam = videoPreloadRam
     }
 
     init(from decoder: Decoder) throws {
@@ -305,7 +302,6 @@ struct InputEntry: Identifiable, Codable, Hashable {
         videoPlayWhen = try container.decodeIfPresent(VideoPlayWhen.self, forKey: .videoPlayWhen) ?? .never
         videoRestartWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoRestartWhen) ?? .never
         videoPauseWhen = try container.decodeIfPresent(VideoTriggerWhen.self, forKey: .videoPauseWhen) ?? .never
-        videoPreloadRam = try container.decodeIfPresent(Bool.self, forKey: .videoPreloadRam) ?? false
         guid = try container.decodeIfPresent(String.self, forKey: .guid) ?? UUID().uuidString
         captureWidth = try container.decodeIfPresent(UInt32.self, forKey: .captureWidth) ?? 0
         captureHeight = try container.decodeIfPresent(UInt32.self, forKey: .captureHeight) ?? 0

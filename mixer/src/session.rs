@@ -387,8 +387,6 @@ pub struct InputDto {
     pub capture_fps_num: u32,
     #[serde(default)]
     pub capture_fps_den: u32,
-    #[serde(default)]
-    pub video_preload_ram: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

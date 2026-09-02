@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "b5a025b9682a30f420a6401b291a0d03a9b35691", features = ["wgpu"] }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "2873431961ae222996c2125047ec9c7e9f635fe0", features = ["wgpu"] }
 pollster = "0.4"
 raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }

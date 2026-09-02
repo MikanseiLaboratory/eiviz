@@ -272,7 +272,6 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
-        let _guard = crate::device::lock_gpu_queue();
         self.sender
             .send_video_texture(ctx, texture, meta)
             .map_err(|e| e.to_string())

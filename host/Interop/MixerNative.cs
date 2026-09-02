@@ -240,7 +240,7 @@ internal static partial class MixerNative
     internal static partial int LoadStill(ulong id, string path);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_start", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int VideoStart(ulong id, string path, uint capture, uint format, uint width, uint height, uint fpsNum, uint fpsDen, uint frameBufferFrames, uint preloadRam);
+    internal static partial int VideoStart(ulong id, string path, uint capture, uint format, uint width, uint height, uint fpsNum, uint fpsDen, uint frameBufferFrames);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_enum_captures")]
     internal static unsafe partial int VideoEnumCaptures(MixerVideoCaptureInfo* devices, uint capacity);
@@ -346,13 +346,6 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_canonicalize")]
     internal static unsafe partial int SessionCanonicalize(byte* json, nuint length, byte* buffer, nuint capacity);
-
-    internal static string? PreloadRamWarning() => LastErrorText() switch
-    {
-        "preload-ram-overflow" => Loc.T("error.videoPreloadRam"),
-        "preload-ram-failed" => Loc.T("error.videoPreloadFailed"),
-        _ => null
-    };
 
     internal static string LastErrorText()
     {
@@ -579,6 +572,7 @@ internal struct SourceUsage
     public uint Height;
     public ulong RamBytes;
     public ulong VramBytes;
+    public float GpuPct;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -58,7 +58,6 @@ public partial class AddInputWindow : Window
     public VideoPlayWhen ResultVideoPlayWhen { get; private set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen ResultVideoRestartWhen { get; private set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen ResultVideoPauseWhen { get; private set; } = VideoTriggerWhen.Never;
-    public bool ResultVideoPreloadRam { get; private set; }
     public uint ResultCaptureWidth { get; private set; }
     public uint ResultCaptureHeight { get; private set; }
     public uint ResultCaptureFpsNum { get; private set; } = 60;
@@ -90,7 +89,6 @@ public partial class AddInputWindow : Window
         var mediaBuffer = Math.Clamp(input.FrameBufferFrames == 0 ? 3 : input.FrameBufferFrames, 1u, 8u).ToString();
         SelectTag(VideoBufferBox, mediaBuffer);
         SelectTag(UvcBufferBox, mediaBuffer);
-        VideoPreloadBox.IsChecked = input.VideoPreloadRam;
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
@@ -307,7 +305,6 @@ public partial class AddInputWindow : Window
                 ResultVideoRestartWhen = ReadVideoTriggerWhen(VideoRestartBox);
                 ResultVideoPauseWhen = ReadVideoTriggerWhen(VideoPauseBox);
                 ResultFrameBufferFrames = ReadBuffer(VideoBufferBox, 3);
-                ResultVideoPreloadRam = VideoPreloadBox.IsChecked == true;
                 Remember(VideoHistory, ResultPath);
                 break;
             case InputKind.Omt:

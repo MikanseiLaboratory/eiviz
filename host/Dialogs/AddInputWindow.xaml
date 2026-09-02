@@ -79,9 +79,8 @@
                         <ComboBoxItem Content="6" Tag="6"/>
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
-                    <CheckBox x:Name="VideoPreloadBox" Content="Preload into RAM" Foreground="#EEE" Margin="0,0,0,8"/>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA" Margin="0,0,0,8"
-                               Text="Frame buffer (1–8) absorbs decode jitter. Preload decodes the clip into system RAM (not VRAM). If it will not fit, an error is shown and the file streams."/>
+                               Text="Frame buffer (1–8) absorbs decode jitter."/>
                     <TextBlock Text="Play when" Margin="0,0,0,4"/>
                     <ComboBox x:Name="VideoPlayBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
                         <ComboBoxItem Content="Never (manual)" Tag="0" IsSelected="True"/>

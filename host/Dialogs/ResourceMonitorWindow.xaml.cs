@@ -25,7 +25,7 @@ public partial class ResourceMonitorWindow : Window
         var app = (App)Application.Current;
         var session = app.Session;
         var usages = new Dictionary<ulong, SourceUsage>();
-        var buffer = new SourceUsage[64];
+        var buffer = new SourceUsage[128];
         unsafe
         {
             fixed (SourceUsage* ptr = buffer)
@@ -53,9 +53,7 @@ public partial class ResourceMonitorWindow : Window
         }
         if (totalRam == 0) totalRam = 1;
         if (totalVram == 0) totalVram = 1;
-        var gpuLoad = stats.FrameBudgetMs > 0.1f
-            ? Math.Min(100f, stats.RenderMs / stats.FrameBudgetMs * 100f)
-            : 0f;
+        var gpuLoad = GpuUtilization.Percent();
 
         var rows = new List<Row>();
         foreach (var input in session.Inputs)
@@ -64,15 +62,26 @@ public partial class ResourceMonitorWindow : Window
             var ram = usage.RamBytes;
             var vram = usage.VramBytes;
             var cpu = input.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Uvc or InputKind.Video ? "live" : "—";
-            var gpu = vram == 0 ? "—" : $"{vram / (double)totalVram * gpuLoad:0}%";
             rows.Add(new Row(
                 input.Name,
                 input.Kind.ToString(),
                 usage.Width == 0 ? "—" : $"{usage.Width}x{usage.Height}",
                 cpu,
-                gpu,
+                "—",
                 FormatBytes(ram),
                 FormatBytes(vram)));
+        }
+        foreach (var scene in session.Scenes)
+        {
+            usages.TryGetValue(scene.GpuId, out var usage);
+            rows.Add(new Row(
+                scene.Name,
+                "Scene",
+                usage.Width == 0 ? "—" : $"{usage.Width}x{usage.Height}",
+                "—",
+                usage.GpuPct > 0 ? $"{usage.GpuPct:0}%" : "—",
+                "—",
+                FormatBytes(usage.VramBytes)));
         }
         UsageList.ItemsSource = rows;
         var ramText = FormatBytes(totalRam == 1 ? 0 : totalRam);
@@ -80,7 +89,7 @@ public partial class ResourceMonitorWindow : Window
         var extra = stats.ComposeVramBytes > 0 || stats.DelayVramBytes > 0
             ? $"    Compose {FormatBytes(stats.ComposeVramBytes)}    Delay {FormatBytes(stats.DelayVramBytes)}"
             : "";
-        SummaryText.Text = $"Inputs {session.Inputs.Count}    RAM {ramText}    VRAM {vramText}{extra}    Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
+        SummaryText.Text = $"Inputs {session.Inputs.Count}    GPU {gpuLoad:0}%    RAM {ramText}    VRAM {vramText}{extra}    Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
     }
 
     private static string FormatBytes(ulong bytes)

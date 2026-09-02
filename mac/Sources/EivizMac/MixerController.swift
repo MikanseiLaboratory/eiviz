@@ -996,7 +996,6 @@ final class MixerController: ObservableObject {
         loop: Bool,
         playing: Bool,
         frameBuffer: UInt32 = 3,
-        preloadRam: Bool = false
     ) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
             presentInputError(L10n.missingFile("Video start"))
@@ -1013,17 +1012,13 @@ final class MixerController: ObservableObject {
                     height,
                     fpsNum,
                     fpsDen,
-                    max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer)),
-                    preloadRam && capture == 0 ? 1 : 0
+                    max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer))
                 ),
                 capture == 0 ? "Video start" : "UVC start"
             )
         }
         _ = mixer_video_set_loop(id, loop ? 1 : 0)
         _ = mixer_video_set_playing(id, playing ? 1 : 0)
-        if preloadRam && capture == 0, let warning = MixerFFI.preloadRamWarning() {
-            presentInputError(warning)
-        }
     }
 
     func videoPlayToggle() {
@@ -1060,20 +1055,18 @@ final class MixerController: ObservableObject {
     private func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
-            if !(input.isBuiltin && !input.scroll) {
-                fail(
-                    mixer_define_generator(
-                        input.id,
-                        input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
-                        input.colorR,
-                        input.colorG,
-                        input.colorB,
-                        1,
-                        input.scroll ? 1 : 0
-                    ),
-                    "Define colour generator"
-                )
-            }
+            fail(
+                mixer_define_generator(
+                    input.id,
+                    input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
+                    input.colorR,
+                    input.colorG,
+                    input.colorB,
+                    1,
+                    input.scroll ? 1 : 0
+                ),
+                "Define colour generator"
+            )
             _ = mixer_generator_set_tone(input.id, input.toneHz, input.toneLevelDbfs)
         case .black:
             break
@@ -1095,8 +1088,7 @@ final class MixerController: ObservableObject {
                     capture: 0,
                     loop: input.videoLoop,
                     playing: input.videoStartsPlaying,
-                    frameBuffer: input.frameBufferFrames,
-                    preloadRam: input.videoPreloadRam
+                    frameBuffer: input.frameBufferFrames
                 )
                 videoTitle = input.name
                 videoPlaying = input.videoStartsPlaying
@@ -1157,7 +1149,6 @@ final class MixerController: ObservableObject {
                 loop: false,
                 playing: true,
                 frameBuffer: input.frameBufferFrames,
-                preloadRam: false
             )
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {

@@ -346,4 +346,5 @@ pub struct SourceUsage {
     pub height: u32,
     pub ram_bytes: u64,
     pub vram_bytes: u64,
+    pub gpu_pct: f32,
 }

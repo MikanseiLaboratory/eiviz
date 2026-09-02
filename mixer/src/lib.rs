@@ -8,10 +8,10 @@ mod convert;
 mod delay;
 mod device;
 mod diag;
-mod labels;
-mod generator_audio;
 #[cfg(windows)]
 mod dxgi;
+mod generator_audio;
+mod labels;
 #[cfg(windows)]
 mod media;
 #[cfg(windows)]
@@ -20,41 +20,40 @@ pub use media::enumerate_video_captures;
 mod media_macos;
 #[cfg(target_os = "macos")]
 pub use media_macos::enumerate_video_captures;
-#[cfg(any(windows, target_os = "macos"))]
-mod ndi;
 #[cfg(target_os = "macos")]
 mod main_thread;
+#[cfg(any(windows, target_os = "macos"))]
+mod ndi;
 mod omt;
 mod pool;
 mod present;
-mod rebar;
 mod readback;
+mod rebar;
 mod save;
 mod session;
 mod upload;
-mod video_cache;
 
 pub use abi::{
-    AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
-    GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
-    NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW,
-    OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
-    INCOMING_PREVIEW, INCOMING_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
-    TRANSITION_BARN_DOOR, TRANSITION_BLINDS, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM,
-    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DIAMOND,
-    TRANSITION_DIP, TRANSITION_DISPLACE, TRANSITION_FADE, TRANSITION_FILM_BURN, TRANSITION_FLIP,
-    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_GRID_DISSOLVE, TRANSITION_HEART,
-    TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE, TRANSITION_LOREZ, TRANSITION_LUMA_MORPH,
-    TRANSITION_BLOOM, TRANSITION_DATAMOSH, TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_VISUAL_DISSOLVE,
+    AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
+    EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
+    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MixerRebarInfo,
+    MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
+    OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
+    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
+    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
+    TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
+    TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
+    TRANSITION_FILM_BURN, TRANSITION_FLIP, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
+    TRANSITION_GRID_DISSOLVE, TRANSITION_HEART, TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE,
+    TRANSITION_LOREZ, TRANSITION_LUMA_MORPH, TRANSITION_METAMIX, TRANSITION_MULTITASK,
+    TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
     TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE, TRANSITION_ROLLER_DOOR,
     TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_STATIC, TRANSITION_STINGER,
-    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR,
-    TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT, TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP,
-    DURATION_FRAMES, DURATION_MS, EASING_IN,
-    EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP, UnitState, UnitSnap,
-    VideoCaptureInfo, VideoCaptureMode,
+    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
+    TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 
@@ -228,6 +227,7 @@ struct Telemetry {
     last_vram_bytes: u64,
     last_compose_vram: u64,
     last_delay_vram: u64,
+    scene_usage: Vec<SourceUsage>,
 }
 
 enum LiveReceiver {
@@ -517,12 +517,6 @@ fn set_error(telemetry: &Mutex<Telemetry>, message: impl Into<String>) {
     telemetry.lock().expect("telemetry").last_error = message.into();
 }
 
-pub(crate) fn report_user_warning(message: impl Into<String>) {
-    let message = message.into();
-    crate::diag::error(&message);
-    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
-}
-
 fn with_uploads<T>(mixer: &Mixer, f: impl FnOnce(&mut UploadStore) -> T) -> T {
     f(&mut mixer.uploads.lock().expect("uploads"))
 }
@@ -540,7 +534,10 @@ fn report_session_error(message: impl Into<String>) {
 
 fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
     if src.len() > cap {
-        report_session_error(format!("session buffer too small (need {} bytes)", src.len()));
+        report_session_error(format!(
+            "session buffer too small (need {} bytes)",
+            src.len()
+        ));
         return -1;
     }
     if !src.is_empty() {
@@ -624,6 +621,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         last_vram_bytes: 0,
         last_compose_vram: 0,
         last_delay_vram: 0,
+        scene_usage: Vec::new(),
     }));
     let audio = audio::AudioEngine::new();
     let shared = Arc::new(Mutex::new(Shared {
@@ -995,12 +993,20 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
                 return ERR_INVALID_ARGUMENT;
             };
             let keep = state.keep_preview != 0
-                || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
+                || unit
+                    .auto
+                    .as_ref()
+                    .is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
             if unit.auto.is_some() && keep {
                 let mix = unit.state.mix;
                 let program = unit.state.program_source;
                 let keep_preview = unit.state.keep_preview;
-                let dip = (unit.state.dip_r, unit.state.dip_g, unit.state.dip_b, unit.state.dip_a);
+                let dip = (
+                    unit.state.dip_r,
+                    unit.state.dip_g,
+                    unit.state.dip_b,
+                    unit.state.dip_a,
+                );
                 let look = (unit.state.softness, unit.state.param);
                 let frozen = unit.frozen_preview;
                 unit.state = state;
@@ -1022,13 +1028,15 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
                 }
             }
             unit.state.incoming_source = 0;
-            if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked) {
-                unit.frozen_preview
-                    .get_or_insert(unit.state.preview_source);
+            if unit
+                .auto
+                .as_ref()
+                .is_some_and(|auto| auto.keep_preview || auto.incoming_locked)
+            {
+                unit.frozen_preview.get_or_insert(unit.state.preview_source);
             } else if unit.state.mix > 0.001 {
                 if unit.state.keep_preview != 0 {
-                    unit.frozen_preview
-                        .get_or_insert(unit.state.preview_source);
+                    unit.frozen_preview.get_or_insert(unit.state.preview_source);
                 } else {
                     unit.frozen_preview = None;
                 }
@@ -1114,8 +1122,7 @@ fn live_incoming(unit: &LiveUnit) -> u64 {
     {
         return auto.frozen_preview;
     }
-    unit.frozen_preview
-        .unwrap_or(unit.state.preview_source)
+    unit.frozen_preview.unwrap_or(unit.state.preview_source)
 }
 
 fn resolve_incoming(requested: u64, preview: u64, program: u64) -> u64 {
@@ -1260,9 +1267,18 @@ pub unsafe extern "C" fn mixer_unit_overlay_auto(
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        let from = if target_enabled != 0 { 0.0 } else { desc.opacity.max(0.001) };
-        let to = if target_enabled != 0 { desc.opacity.max(0.001) } else { 0.0 };
-        unit.overlay_autos.retain(|item| item.desc.source_id != desc.source_id);
+        let from = if target_enabled != 0 {
+            0.0
+        } else {
+            desc.opacity.max(0.001)
+        };
+        let to = if target_enabled != 0 {
+            desc.opacity.max(0.001)
+        } else {
+            0.0
+        };
+        unit.overlay_autos
+            .retain(|item| item.desc.source_id != desc.source_id);
         unit.overlay_autos.push(OverlayAuto {
             desc,
             from,
@@ -1638,7 +1654,6 @@ pub unsafe extern "C" fn mixer_video_start(
     fps_num: u32,
     fps_den: u32,
     frame_buffer_frames: u32,
-    preload_ram: u32,
 ) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1649,9 +1664,6 @@ pub unsafe extern "C" fn mixer_video_start(
         .to_string();
     if path.is_empty() {
         return ERR_INVALID_ARGUMENT;
-    }
-    if preload_ram != 0 {
-        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, ""));
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
@@ -1665,7 +1677,6 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_num,
             fps_den,
             frame_buffer_frames,
-            preload_ram,
         );
         return with_mixer(|mixer| {
             set_error(&mixer.telemetry, "Video ingest is not available");
@@ -1707,7 +1718,6 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_den,
             uploads,
             depth,
-            preload_ram != 0 && capture == 0,
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -1749,7 +1759,6 @@ pub unsafe extern "C" fn mixer_video_start(
             uploads,
             gpu,
             depth,
-            preload_ram != 0 && capture == 0,
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -1815,10 +1824,7 @@ pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_video_enum_captures(
-    out: *mut VideoCaptureInfo,
-    cap: u32,
-) -> i32 {
+pub unsafe extern "C" fn mixer_video_enum_captures(out: *mut VideoCaptureInfo, cap: u32) -> i32 {
     if out.is_null() || cap == 0 {
         return 0;
     }
@@ -2062,7 +2068,10 @@ pub unsafe extern "C" fn mixer_output_add(
     crate::diag::info(&format!("output_add id={output_id} transport={transport}"));
     if transport == OUT_DECKLINK {
         let _ = with_mixer(|mixer| {
-            set_error(&mixer.telemetry, "DeckLink output is not linked in this build");
+            set_error(
+                &mixer.telemetry,
+                "DeckLink output is not linked in this build",
+            );
         });
         return ERR_IO;
     }
@@ -2232,7 +2241,14 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    let error = match with_mixer(|mixer| mixer.telemetry.lock().expect("telemetry").last_error.clone()) {
+    let error = match with_mixer(|mixer| {
+        mixer
+            .telemetry
+            .lock()
+            .expect("telemetry")
+            .last_error
+            .clone()
+    }) {
         Ok(error) if !error.is_empty() => error,
         _ => session_error_slot().lock().expect("session error").clone(),
     };
@@ -2662,11 +2678,13 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let (uploads_arc, generator_ids) = {
+        let (uploads_arc, generator_ids, scenes) = {
             let shared = mixer.shared.lock().expect("shared");
+            let tel = mixer.telemetry.lock().expect("telemetry");
             (
                 Arc::clone(&shared.uploads),
                 shared.generators.keys().copied().collect::<Vec<_>>(),
+                tel.scene_usage.clone(),
             )
         };
         let uploads = uploads_arc.lock().expect("uploads");
@@ -2687,6 +2705,7 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
                     height: ring.height,
                     ram_bytes: ring.ram_bytes(),
                     vram_bytes: ring.vram_bytes(),
+                    gpu_pct: 0.0,
                 };
             }
             n += 1;
@@ -2705,6 +2724,7 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
                     height: 1080,
                     ram_bytes: 0,
                     vram_bytes: 1920 * 1080 * 4,
+                    gpu_pct: 0.0,
                 };
             }
             n += 1;
@@ -2716,7 +2736,11 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
             if !seen.insert(id) {
                 continue;
             }
-            let (width, height) = if id == SRC_BARS { (1920u32, 1080u32) } else { (128, 72) };
+            let (width, height) = if id == SRC_BARS {
+                (1920u32, 1080u32)
+            } else {
+                (128, 72)
+            };
             unsafe {
                 *out.add(n as usize) = SourceUsage {
                     source_id: id,
@@ -2724,7 +2748,20 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
                     height,
                     ram_bytes: 0,
                     vram_bytes: u64::from(width) * u64::from(height) * 4,
+                    gpu_pct: 0.0,
                 };
+            }
+            n += 1;
+        }
+        for usage in scenes {
+            if n >= cap {
+                break;
+            }
+            if !seen.insert(usage.source_id) {
+                continue;
+            }
+            unsafe {
+                *out.add(n as usize) = usage;
             }
             n += 1;
         }
@@ -2950,15 +2987,9 @@ fn render_loop(
                     prepared,
                     reply,
                 } => {
-                    let code = match presenters.attach(
-                        &device,
-                        unit_id,
-                        kind,
-                        surface,
-                        width,
-                        height,
-                        prepared,
-                    ) {
+                    let code = match presenters
+                        .attach(&device, unit_id, kind, surface, width, height, prepared)
+                    {
                         Ok(()) => OK,
                         Err(error) => {
                             set_error(&telemetry, error);
@@ -2990,13 +3021,7 @@ fn render_loop(
                     reply,
                 } => {
                     let code = match presenters.attach_monitor(
-                        &device,
-                        monitor_id,
-                        source_id,
-                        surface,
-                        width,
-                        height,
-                        prepared,
+                        &device, monitor_id, source_id, surface, width, height, prepared,
                     ) {
                         Ok(()) => OK,
                         Err(error) => {
@@ -3101,7 +3126,15 @@ fn render_loop(
             let scene_specs: Vec<(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)> = guard
                 .scenes
                 .iter()
-                .map(|(id, spec)| (*id, spec.width, spec.height, Arc::clone(&spec.layers), spec.mv_label))
+                .map(|(id, spec)| {
+                    (
+                        *id,
+                        spec.width,
+                        spec.height,
+                        Arc::clone(&spec.layers),
+                        spec.mv_label,
+                    )
+                })
                 .collect();
             let scene_labels: HashMap<u64, Arc<[String]>> = guard
                 .scenes
@@ -3142,12 +3175,14 @@ fn render_loop(
             let changed_units: Vec<u64> = snapshot
                 .iter()
                 .filter(|(id, _, _, _, _, state, mix_preview, _)| {
-                    last_bus.get(id).is_none_or(|(program, preview, mix, incoming)| {
-                        *program != state.program_source
-                            || *preview != state.preview_source
-                            || *mix != state.mix.to_bits()
-                            || *incoming != *mix_preview
-                    })
+                    last_bus
+                        .get(id)
+                        .is_none_or(|(program, preview, mix, incoming)| {
+                            *program != state.program_source
+                                || *preview != state.preview_source
+                                || *mix != state.mix.to_bits()
+                                || *incoming != *mix_preview
+                        })
                 })
                 .map(|(id, ..)| *id)
                 .collect();
@@ -3164,23 +3199,14 @@ fn render_loop(
                 .collect();
             frame_i = frame_i.wrapping_add(1);
             let monitor_due = presenters.any_monitor_due(frame_i);
-            let skip_units = skip_compose;
-            let skip_scenes = skip_compose && !monitor_due;
-            if skip_units {
-                skip_units_streak = skip_units_streak.saturating_add(1);
-                if skip_units_streak == 1 || skip_units_streak.is_multiple_of(120) {
-                    crate::diag::warn(&format!(
-                        "skip unit compose streak={skip_units_streak} scenes={}",
-                        if skip_scenes { "skip" } else { "keep" }
-                    ));
-                }
-            } else if skip_units_streak > 0 {
-                crate::diag::info(&format!("skip unit compose ended after {skip_units_streak}"));
-                skip_units_streak = 0;
-            }
             let monitor_sources = presenters.attached_monitor_sources();
-            let (used_scenes, used_uploads) =
+            let (mut used_scenes, used_uploads) =
                 collect_live_ids(&scene_specs, &snapshot, &monitor_sources, &outputs_snap);
+            if compose_dirty {
+                for (id, ..) in &scene_specs {
+                    used_scenes.insert(*id);
+                }
+            }
             let output_refs: Vec<(u32, u64)> = outputs_snap
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
@@ -3204,7 +3230,13 @@ fn render_loop(
                 composer.begin_frame();
                 composer.ensure_builtins(&device);
                 composer.sync_generators(&generators, phase, phase_y);
-                if !skip_units || !skip_scenes {
+                let need_bake = composer.generators_need_rebake();
+                if need_bake {
+                    for (id, ..) in &scene_specs {
+                        used_scenes.insert(*id);
+                    }
+                }
+                if !skip_compose || monitor_due || need_bake {
                     let snaps = {
                         let mut upload_guard = uploads.lock().expect("uploads");
                         upload_guard.advance_playout(&used_uploads);
@@ -3212,11 +3244,35 @@ fn render_loop(
                     };
                     composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
                 }
+                need_bake
             }));
-            if composed.is_err() {
-                crate::diag::error("compose panicked");
-                set_error(&telemetry, "compose panicked");
-                presenters.invalidate_all();
+            let need_gen_bake = match composed {
+                Ok(need_bake) => need_bake,
+                Err(_) => {
+                    crate::diag::error("compose panicked");
+                    set_error(&telemetry, "compose panicked");
+                    presenters.invalidate_all();
+                    false
+                }
+            };
+            if need_gen_bake {
+                skip_compose = false;
+            }
+            let skip_units = skip_compose;
+            let skip_scenes = skip_compose && !monitor_due;
+            if skip_units {
+                skip_units_streak = skip_units_streak.saturating_add(1);
+                if skip_units_streak == 1 || skip_units_streak.is_multiple_of(120) {
+                    crate::diag::warn(&format!(
+                        "skip unit compose streak={skip_units_streak} scenes={}",
+                        if skip_scenes { "skip" } else { "keep" }
+                    ));
+                }
+            } else if skip_units_streak > 0 {
+                crate::diag::info(&format!(
+                    "skip unit compose ended after {skip_units_streak}"
+                ));
+                skip_units_streak = 0;
             }
             let need_prv = outputs_snap
                 .iter()
@@ -3323,7 +3379,11 @@ fn render_loop(
             }
             frame_delay.consume_display(skip_units);
             if !skip_units || !skip_scenes {
-                composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
+                composer.set_bus_colors(
+                    bus_colors.preview,
+                    bus_colors.program,
+                    bus_colors.inactive,
+                );
                 composer.sync_scenes(&device, &scene_specs, &scene_labels);
                 let mut encoder =
                     device
@@ -3344,9 +3404,11 @@ fn render_loop(
                 if !skip_units {
                     for (unit_id, width, height, _, _, state, mix_preview, custom) in &snapshot {
                         composer.ensure_unit(&device, *unit_id, *width, *height);
-                        if let Err(error) =
-                            composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
-                        {
+                        if let Err(error) = composer.set_custom_mix(
+                            &device,
+                            *unit_id,
+                            custom.as_deref().unwrap_or(""),
+                        ) {
                             crate::diag::error(&format!("custom wgsl: {error}"));
                         }
                         let pack_pgm = outputs_snap.iter().any(|item| {
@@ -3543,6 +3605,7 @@ fn render_loop(
                 guard.last_compose_vram = compose_vram;
                 guard.last_delay_vram = delay_vram;
                 guard.last_vram_bytes = adapter.max(accounted);
+                guard.scene_usage = composer.scene_usages();
             }
             if audio_frames > 0 {
                 let packet = interleaved_to_packet(&mixed, pts);
@@ -3930,7 +3993,10 @@ mod tests {
 
     #[test]
     fn take_fatal_rejects_null() {
-        assert_eq!(unsafe { mixer_take_fatal(std::ptr::null_mut(), 8) }, ERR_INVALID_ARGUMENT);
+        assert_eq!(
+            unsafe { mixer_take_fatal(std::ptr::null_mut(), 8) },
+            ERR_INVALID_ARGUMENT
+        );
     }
 
     #[test]
