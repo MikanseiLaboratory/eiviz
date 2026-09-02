@@ -41,12 +41,12 @@ internal sealed class ResourceMonitor : IDisposable
         try
         {
             SampleVideoMemory(out _vram);
-            _gpu = _budgetMs > 0 ? Math.Min(100f, _renderMs / _budgetMs * 100f) : 0;
+            _gpu = GpuUtilization.Percent();
         }
         catch
         {
             _vram = 0;
-            _gpu = _budgetMs > 0 ? Math.Min(100f, _renderMs / _budgetMs * 100f) : 0;
+            _gpu = GpuUtilization.Percent();
         }
     }
 

@@ -398,7 +398,7 @@ fn missing_video_file_returns_io_error() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     let path = CString::new(r"C:\eiviz-missing-file-does-not-exist.mp4").unwrap();
     unsafe {
-        assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0), ERR_IO);
+        assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0, 0), ERR_IO);
     }
     mixer_destroy();
 }

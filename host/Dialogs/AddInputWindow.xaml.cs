@@ -86,6 +86,9 @@ public partial class AddInputWindow : Window
         SelectTag(VideoPlayBox, ((int)input.VideoPlayWhen).ToString());
         SelectTag(VideoRestartBox, ((int)input.VideoRestartWhen).ToString());
         SelectTag(VideoPauseBox, ((int)input.VideoPauseWhen).ToString());
+        var mediaBuffer = Math.Clamp(input.FrameBufferFrames == 0 ? 3 : input.FrameBufferFrames, 1u, 8u).ToString();
+        SelectTag(VideoBufferBox, mediaBuffer);
+        SelectTag(UvcBufferBox, mediaBuffer);
         OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
@@ -301,6 +304,7 @@ public partial class AddInputWindow : Window
                 ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);
                 ResultVideoRestartWhen = ReadVideoTriggerWhen(VideoRestartBox);
                 ResultVideoPauseWhen = ReadVideoTriggerWhen(VideoPauseBox);
+                ResultFrameBufferFrames = ReadBuffer(VideoBufferBox, 3);
                 Remember(VideoHistory, ResultPath);
                 break;
             case InputKind.Omt:
@@ -309,10 +313,7 @@ public partial class AddInputWindow : Window
                 ResultPath = OmtAddress.Text.Trim();
                 ResultName = ResultPath;
                 ResultUseGpu = OmtPathBox.SelectedItem is ComboBoxItem { Tag: "gpu" };
-                ResultFrameBufferFrames = 1;
-                if (OmtBufferBox.SelectedItem is ComboBoxItem buffer && buffer.Tag is string tag
-                    && uint.TryParse(tag, out var frames))
-                    ResultFrameBufferFrames = Math.Clamp(frames, 1u, 8u);
+                ResultFrameBufferFrames = ReadBuffer(OmtBufferBox, 1);
                 ResultSaveMode = ReadSaveMode(OmtSaveBox);
                 ResultKeepFullOnMultiview = OmtMvBox.IsChecked == true;
                 ResultOmtQuality = ReadOmtQuality(OmtQualityBox);
@@ -323,10 +324,7 @@ public partial class AddInputWindow : Window
                 ResultPath = NdiAddress.Text.Trim();
                 ResultName = ResultPath;
                 ResultUseGpu = false;
-                ResultFrameBufferFrames = 1;
-                if (NdiBufferBox.SelectedItem is ComboBoxItem ndiBuffer && ndiBuffer.Tag is string ndiTag
-                    && uint.TryParse(ndiTag, out var ndiFrames))
-                    ResultFrameBufferFrames = Math.Clamp(ndiFrames, 1u, 8u);
+                ResultFrameBufferFrames = ReadBuffer(NdiBufferBox, 1);
                 ResultNdiBandwidth = ReadNdiBandwidth(NdiBandwidthBox);
                 break;
             case InputKind.Uvc:
@@ -340,6 +338,7 @@ public partial class AddInputWindow : Window
                 ResultCaptureHeight = mode.Height;
                 ResultCaptureFpsNum = mode.FpsNum;
                 ResultCaptureFpsDen = mode.FpsDen == 0 ? 1 : mode.FpsDen;
+                ResultFrameBufferFrames = ReadBuffer(UvcBufferBox, 3);
                 break;
             default:
                 return;
@@ -347,6 +346,13 @@ public partial class AddInputWindow : Window
         if (!string.IsNullOrWhiteSpace(NameBox.Text))
             ResultName = NameBox.Text.Trim();
         DialogResult = true;
+    }
+
+    private static uint ReadBuffer(ComboBox box, uint fallback)
+    {
+        if (box.SelectedItem is ComboBoxItem item && item.Tag is string tag && uint.TryParse(tag, out var frames))
+            return Math.Clamp(frames, 1u, 8u);
+        return fallback;
     }
 
     private static NdiBandwidth ReadNdiBandwidth(ComboBox box)

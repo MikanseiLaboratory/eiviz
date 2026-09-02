@@ -21,6 +21,7 @@ pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
     GpuVideoContext {
         device: Arc::new(device.device.clone()),
         queue: Arc::new(device.queue.clone()),
+        gpu_lock: Some(crate::device::gpu_queue_lock_handle()),
     }
 }
 
@@ -87,7 +88,8 @@ impl OmtReceiver {
                 }
                 let mut sent: Option<(bool, bool, bool, u32)> = None;
                 let mut drop_full_at: Option<Instant> = None;
-                while !stop_thread.load(Ordering::Relaxed) {
+                let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
                     let full = debounce_want_full(
                         want_full_thread.load(Ordering::Relaxed),
                         &mut drop_full_at,
@@ -151,6 +153,10 @@ impl OmtReceiver {
                     }
                 }
                 session.disconnect();
+                }));
+                if run.is_err() {
+                    crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
+                }
             })
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -366,6 +372,14 @@ impl GpuSendStore {
             return Some((texture, width, height, busy));
         }
         None
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.rings
+            .values()
+            .flat_map(|ring| ring.slots.iter())
+            .map(|slot| crate::upload::texture_bytes(&slot.texture))
+            .sum()
     }
 }
 

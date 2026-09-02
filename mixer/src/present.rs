@@ -34,6 +34,7 @@ pub struct Presenter {
     pending: Option<(u32, u32)>,
     ready: bool,
     occluded_streak: u32,
+    acquire_panics: u32,
 }
 
 #[derive(Default)]
@@ -355,7 +356,7 @@ pub(crate) fn prepare_surface(
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
     crate::diag::info(&format!("surface present_mode={:?}", config.present_mode));
-    configure_surface(device, &surface, &config)?;
+    let config = configure_or_fifo(device, &surface, config)?;
     Ok(PreparedSurface { surface, config })
 }
 
@@ -383,6 +384,7 @@ fn presenter_from_prepared(
         pending: None,
         ready: true,
         occluded_streak: 0,
+        acquire_panics: 0,
     })
 }
 
@@ -409,12 +411,20 @@ fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
     let mut config = presenter.config.clone();
     config.width = width;
     config.height = height;
-    if configure_surface(&device.device, &presenter.surface, &config).is_ok() {
-        presenter.config = config;
-        presenter.bind = None;
-        presenter.bind_key = 0;
-        presenter.pending = None;
-        presenter.ready = true;
+    match configure_or_fifo(&device.device, &presenter.surface, config) {
+        Ok(config) => {
+            presenter.config = config;
+            presenter.bind = None;
+            presenter.bind_key = 0;
+            presenter.pending = None;
+            presenter.ready = true;
+        }
+        Err(error) => {
+            crate::diag::error(&format!("surface reconfigure failed: {error}"));
+            if presenter.acquire_panics >= 1 {
+                crate::diag::mark_fatal(format!("surface reconfigure failed: {error}"));
+            }
+        }
     }
 }
 
@@ -431,6 +441,27 @@ fn wait_gpu_idle(device: &wgpu::Device) {
     }
 }
 
+fn configure_or_fifo(
+    device: &wgpu::Device,
+    surface: &wgpu::Surface,
+    mut config: wgpu::SurfaceConfiguration,
+) -> Result<wgpu::SurfaceConfiguration, String> {
+    if configure_surface(device, surface, &config).is_ok() {
+        return Ok(config);
+    }
+    if config.present_mode != wgpu::PresentMode::Fifo {
+        crate::diag::warn(&format!(
+            "surface configure failed present_mode={:?}; retrying Fifo",
+            config.present_mode
+        ));
+        config.present_mode = wgpu::PresentMode::Fifo;
+        configure_surface(device, surface, &config)?;
+        crate::diag::info("surface present_mode=Fifo (fallback)");
+        return Ok(config);
+    }
+    Err("surface configure failed".into())
+}
+
 fn configure_surface(
     device: &wgpu::Device,
     surface: &wgpu::Surface,
@@ -442,6 +473,10 @@ fn configure_surface(
             wait_gpu_idle(device);
             let (_, failed) = device::with_surface_configure(|| {
                 surface.configure(device, config);
+                // Flush deferred DX12 validation while the configure error
+                // scope is still open. Otherwise configure looks successful
+                // and get_current_texture later panics.
+                wait_gpu_idle(device);
             });
             if !failed {
                 return Ok(());
@@ -462,6 +497,14 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
         .into_iter()
         .find(|mode| modes.contains(mode))
         .unwrap_or(wgpu::PresentMode::Fifo)
+}
+
+fn fallback_present_mode(mode: wgpu::PresentMode) -> wgpu::PresentMode {
+    if mode == wgpu::PresentMode::Fifo {
+        mode
+    } else {
+        wgpu::PresentMode::Fifo
+    }
 }
 
 fn pick_surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
@@ -500,7 +543,14 @@ fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTex
         Err(_) => {
             crate::diag::error("surface get_current_texture panicked");
             presenter.ready = false;
-            presenter.pending = None;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+            presenter.acquire_panics = presenter.acquire_panics.saturating_add(1);
+            presenter.config.present_mode = fallback_present_mode(presenter.config.present_mode);
+            if presenter.acquire_panics >= 2 {
+                crate::diag::mark_fatal(
+                    "surface get_current_texture panicked after reconfigure",
+                );
+            }
             return None;
         }
     };
@@ -508,6 +558,7 @@ fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTex
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
             presenter.occluded_streak = 0;
+            presenter.acquire_panics = 0;
             Some(texture)
         }
         wgpu::CurrentSurfaceTexture::Outdated
@@ -770,5 +821,13 @@ mod tests {
             wgpu::PresentMode::Immediate,
         ];
         assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Mailbox);
+    }
+
+    #[test]
+    fn acquire_panic_keeps_pending_for_reconfigure() {
+        let pending = Some((1920, 1080));
+        assert!(pending.is_some());
+        assert_eq!(super::fallback_present_mode(wgpu::PresentMode::Mailbox), wgpu::PresentMode::Fifo);
+        assert_eq!(super::fallback_present_mode(wgpu::PresentMode::Fifo), wgpu::PresentMode::Fifo);
     }
 }

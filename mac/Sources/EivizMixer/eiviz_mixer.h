@@ -183,6 +183,10 @@ typedef struct EivizAudioPeak {
 typedef struct EivizMixerStats {
     float render_ms;
     float frame_budget_ms;
+    uint64_t ram_bytes;
+    uint64_t vram_bytes;
+    uint64_t compose_vram_bytes;
+    uint64_t delay_vram_bytes;
 } EivizMixerStats;
 
 typedef struct EivizMixerRebarInfo {
@@ -201,6 +205,7 @@ typedef struct EivizSourceUsage {
     uint32_t height;
     uint64_t ram_bytes;
     uint64_t vram_bytes;
+    float gpu_pct;
 } EivizSourceUsage;
 
 typedef struct EivizAudioDeviceInfo {
@@ -250,7 +255,7 @@ int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint
 int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint32_t height, int64_t pts);
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
-int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
+int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, uint32_t frame_buffer_frames);
 int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
 int32_t mixer_video_enum_capture_modes(const char *device_id, EivizVideoCaptureMode *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
@@ -281,6 +286,7 @@ int32_t mixer_set_mv_label(uint64_t scene_id, float size, uint32_t percent, uint
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);
+int32_t mixer_take_fatal(uint8_t *out, size_t cap);
 int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);
 int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
 int32_t mixer_session_canonicalize(const uint8_t *json, size_t len, uint8_t *out, size_t cap);

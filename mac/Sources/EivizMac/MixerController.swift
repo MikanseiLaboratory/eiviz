@@ -45,6 +45,7 @@ final class MixerController: ObservableObject {
     @Published private(set) var surfaceEpoch: UInt64 = 0
 
     private var booted = false
+    private var fatalHandled = false
     private var tbarLatching = false
     private var meterTimer: Timer?
     private var mixTimer: Timer?
@@ -351,7 +352,7 @@ final class MixerController: ObservableObject {
     }
 
     func previewingSceneId(for unitId: UInt64) -> UInt64? {
-        guard let gpuId = previewByUnit[unitId] else { return selectedSceneId }
+        guard let gpuId = previewByUnit[unitId] else { return nil }
         return session.scenes.first { $0.gpuId == gpuId }?.id
     }
 
@@ -993,7 +994,8 @@ final class MixerController: ObservableObject {
         fpsNum: UInt32 = 0,
         fpsDen: UInt32 = 0,
         loop: Bool,
-        playing: Bool
+        playing: Bool,
+        frameBuffer: UInt32 = 3,
     ) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
             presentInputError(L10n.missingFile("Video start"))
@@ -1001,7 +1003,17 @@ final class MixerController: ObservableObject {
         }
         MixerFFI.withCString(path) { cstr in
             fail(
-                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA, width, height, fpsNum, fpsDen),
+                mixer_video_start(
+                    id,
+                    cstr,
+                    capture,
+                    EIVIZ_FMT_BGRA,
+                    width,
+                    height,
+                    fpsNum,
+                    fpsDen,
+                    max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer))
+                ),
                 capture == 0 ? "Video start" : "UVC start"
             )
         }
@@ -1043,20 +1055,18 @@ final class MixerController: ObservableObject {
     private func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
-            if !(input.isBuiltin && !input.scroll) {
-                fail(
-                    mixer_define_generator(
-                        input.id,
-                        input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
-                        input.colorR,
-                        input.colorG,
-                        input.colorB,
-                        1,
-                        input.scroll ? 1 : 0
-                    ),
-                    "Define colour generator"
-                )
-            }
+            fail(
+                mixer_define_generator(
+                    input.id,
+                    input.kind == .bars ? EIVIZ_GEN_BARS : EIVIZ_GEN_SOLID,
+                    input.colorR,
+                    input.colorG,
+                    input.colorB,
+                    1,
+                    input.scroll ? 1 : 0
+                ),
+                "Define colour generator"
+            )
             _ = mixer_generator_set_tone(input.id, input.toneHz, input.toneLevelDbfs)
         case .black:
             break
@@ -1077,7 +1087,8 @@ final class MixerController: ObservableObject {
                     path: path,
                     capture: 0,
                     loop: input.videoLoop,
-                    playing: input.videoStartsPlaying
+                    playing: input.videoStartsPlaying,
+                    frameBuffer: input.frameBufferFrames
                 )
                 videoTitle = input.name
                 videoPlaying = input.videoStartsPlaying
@@ -1136,7 +1147,8 @@ final class MixerController: ObservableObject {
                 fpsNum: input.captureFpsNum,
                 fpsDen: input.captureFpsDen,
                 loop: false,
-                playing: true
+                playing: true,
+                frameBuffer: input.frameBufferFrames,
             )
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -1253,6 +1265,7 @@ final class MixerController: ObservableObject {
     }
 
     private func tick() {
+        if handleMixerFatal() { return }
         var buffer = [EivizAudioPeak](repeating: MixerFFI.zeroed(), count: 32)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_audio_peaks(ptr.baseAddress, UInt32(ptr.count))
@@ -1264,7 +1277,7 @@ final class MixerController: ObservableObject {
             }
             peaks = next
         }
-        var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
+        var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         if stats.frame_budget_ms > 0 {
             let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
@@ -1407,6 +1420,48 @@ final class MixerController: ObservableObject {
     private func updateStatus() {
         let unit = selectedUnit
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+    }
+
+    private func handleMixerFatal() -> Bool {
+        if fatalHandled { return true }
+        let fatal = MixerFFI.takeFatalText()
+        guard !fatal.isEmpty else { return false }
+        fatalHandled = true
+        meterTimer?.invalidate()
+        saveRecoveredSession()
+        let alert = NSAlert()
+        alert.messageText = L10n.t("error.mixerFatal")
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+        NSApplication.shared.terminate(nil)
+        return true
+    }
+
+    private func saveRecoveredSession() {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/eiviz", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("recovered-session.eiviz.json")
+            session.selectedUnitId = selectedUnitId
+            session.settings.lastSessionPath = nil
+            let json = try SessionFile.encode(session)
+            let saved = MixerFFI.withCString(url.path) { path in
+                json.withUnsafeBytes { ptr in
+                    mixer_session_save(
+                        path,
+                        ptr.bindMemory(to: UInt8.self).baseAddress,
+                        json.count
+                    )
+                }
+            }
+            if saved != EIVIZ_OK {
+                HostLog.write("ERROR", "recovered session save failed: \(saved)")
+            }
+        } catch {
+            HostLog.write("ERROR", "recovered session save failed: \(error)")
+        }
     }
 
     func presentError(_ message: String, title: String) {

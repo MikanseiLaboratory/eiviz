@@ -1186,7 +1186,7 @@ struct MixerSessionData: Codable {
         var session = MixerSessionData()
         session.inputs = [
             InputEntry(id: EIVIZ_SRC_COLOR, name: "Color Red", kind: .color, colorR: 1),
-            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE HD Bars", kind: .bars, toneHz: 1000),
+            InputEntry(id: EIVIZ_SRC_BARS, name: "SMPTE HD Bars", kind: .bars, scroll: true, toneHz: 1000),
             InputEntry(id: EIVIZ_SRC_BLACK, name: "Black", kind: .black, colorR: 0, colorG: 0, colorB: 0),
             InputEntry(id: EIVIZ_SRC_BLUE, name: "Blue", kind: .color, colorR: 0, colorG: 0, colorB: 1)
         ]

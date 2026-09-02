@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use thiserror::Error;
 
@@ -8,12 +8,21 @@ thread_local! {
     static SURFACE_CONFIGURE_FAILED: Cell<bool> = const { Cell::new(false) };
 }
 
-static GPU_QUEUE_LOCK: Mutex<()> = Mutex::new(());
+static GPU_QUEUE_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
+
+fn gpu_queue_lock_arc() -> &'static Arc<Mutex<()>> {
+    GPU_QUEUE_LOCK.get_or_init(|| Arc::new(Mutex::new(())))
+}
+
+/// Same mutex as [`lock_gpu_queue`], for OMT decode/encode on other threads.
+pub fn gpu_queue_lock_handle() -> Arc<Mutex<()>> {
+    Arc::clone(gpu_queue_lock_arc())
+}
 
 /// Serializes `Queue::submit` against `Surface::configure`.
 /// wgpu treats a submit during configure's wait-idle as a validation error.
 pub fn lock_gpu_queue() -> MutexGuard<'static, ()> {
-    GPU_QUEUE_LOCK.lock().expect("gpu queue lock")
+    gpu_queue_lock_arc().lock().expect("gpu queue lock")
 }
 
 pub fn with_surface_configure<R>(f: impl FnOnce() -> R) -> (R, bool) {

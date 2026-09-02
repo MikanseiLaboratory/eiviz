@@ -1,7 +1,7 @@
 //! File / UVC ingest on macOS. The host passes a path or device id;
 //! AVFoundation lives in the mixer, matching Windows Media Foundation.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::abi::MixerVideoInfo;
 use crate::upload::{
-    ingest_audio_clocked, ingest_audio_throttled, AudioPacket, CpuFormat, UploadStore,
+    AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked, ingest_audio_throttled,
 };
 
 const KIND_VIDEO: i32 = 1;
@@ -99,7 +99,8 @@ pub fn enumerate_capture_modes(device_id: &str) -> Vec<crate::abi::VideoCaptureM
         return Vec::new();
     };
     let mut buf = [crate::abi::VideoCaptureMode::default(); 64];
-    let n = unsafe { eiviz_av_enum_capture_modes(c_id.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    let n =
+        unsafe { eiviz_av_enum_capture_modes(c_id.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
     if n <= 0 {
         return Vec::new();
     }
@@ -122,7 +123,13 @@ impl NativePump {
         Ok(Self { ptr })
     }
 
-    fn open_capture(device_id: &str, width: u32, height: u32, fps_num: u32, fps_den: u32) -> Result<Self, String> {
+    fn open_capture(
+        device_id: &str,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> Result<Self, String> {
         let c_id = CString::new(device_id).map_err(|_| "invalid capture id".to_string())?;
         let ptr = unsafe { eiviz_av_open_capture(c_id.as_ptr(), width, height, fps_num, fps_den) };
         if ptr.is_null() {
@@ -188,6 +195,7 @@ impl VideoPump {
         fps_num: u32,
         fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
+        frame_buffer_frames: u32,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -204,20 +212,21 @@ impl VideoPump {
         let seek_t = Arc::clone(&seek_hns);
         let pos_t = Arc::clone(&position_hns);
         let dur_t = Arc::clone(&duration_hns);
+        let depth = frame_buffer_frames.clamp(1, 8);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let join = thread::Builder::new()
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, width, height, fps_num, fps_den, uploads, stop_t, playing_t, looping_t, seek_t, pos_t,
-                    dur_t, ready_tx,
+                    source_id, path, capture, width, height, fps_num, fps_den, uploads, depth,
+                    stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
             })
             .map_err(|error| error.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_millis(400)) {
-            Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(Self {
+        match wait_ready(ready_rx) {
+            Ok(()) => Ok(Self {
                 stop,
                 playing,
                 looping,
@@ -227,15 +236,10 @@ impl VideoPump {
                 is_file: !capture,
                 join: Some(join),
             }),
-            Ok(Err(error)) => {
+            Err(error) => {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
                 Err(error)
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop.store(true, Ordering::Relaxed);
-                let _ = join.join();
-                Err("video thread exited before the source opened".into())
             }
         }
     }
@@ -263,6 +267,17 @@ impl VideoPump {
     }
 }
 
+fn wait_ready(ready_rx: mpsc::Receiver<Result<(), String>>) -> Result<(), String> {
+    let result = ready_rx.recv_timeout(Duration::from_millis(400));
+    match result {
+        Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("video thread exited before the source opened".into())
+        }
+    }
+}
+
 impl Drop for VideoPump {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -282,6 +297,7 @@ fn run_loop(
     fps_num: u32,
     fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
+    depth: u32,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -310,6 +326,9 @@ fn run_loop(
         };
         duration_hns.store(native.duration_hns(), Ordering::Relaxed);
         send_ready(&mut ready, Ok(()));
+        let live_depth = depth;
+        let file_prefetch = depth.max(3) as usize;
+        let mut prefetch = std::collections::VecDeque::new();
         let mut clock_pts = -1i64;
         let mut seek_base = 0i64;
         let mut clock_start = Instant::now();
@@ -326,7 +345,12 @@ fn run_loop(
                     Err(error) => return Err(error),
                 };
                 duration_hns.store(native.duration_hns(), Ordering::Relaxed);
-                uploads.lock().expect("uploads").flush_audio(source_id);
+                prefetch.clear();
+                {
+                    let mut store = uploads.lock().expect("uploads");
+                    store.flush_audio(source_id);
+                    store.flush_video(source_id);
+                }
                 clock_pts = -1;
                 seek_base = seek;
                 position_hns.store(seek, Ordering::Relaxed);
@@ -340,8 +364,35 @@ fn run_loop(
                 clock_start = Instant::now();
             }
             was_playing = is_playing;
+            if !capture {
+                present_due_file(
+                    &uploads,
+                    source_id,
+                    &mut prefetch,
+                    &mut clock_pts,
+                    &mut clock_start,
+                    seek_base,
+                    &position_hns,
+                    need_frame,
+                    is_playing,
+                );
+                if need_frame && uploads.lock().expect("uploads").has_video_frame(source_id) {
+                    need_frame = false;
+                }
+            }
             if !is_playing && !need_frame {
                 thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            if !capture && prefetch.len() >= file_prefetch && !need_frame {
+                if let Some(front) = prefetch.front() {
+                    let wait = pts_wait(front.pts, clock_pts, clock_start);
+                    if wait > Duration::ZERO && wait < Duration::from_secs(2) {
+                        thread::sleep(wait.min(Duration::from_millis(8)));
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(2));
+                }
                 continue;
             }
             let sample = match native.next() {
@@ -384,17 +435,31 @@ fn run_loop(
                         clock_start = Instant::now();
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
-                    if is_playing && !preview && !capture {
-                        let wait = Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100)
-                            .saturating_sub(clock_start.elapsed());
-                        if wait > Duration::ZERO && wait < Duration::from_secs(2) {
-                            thread::sleep(wait.min(Duration::from_millis(40)));
+                    match copy_video(&sample) {
+                        Ok(frame) => {
+                            if capture {
+                                push_live_cpu(&uploads, source_id, &frame, live_depth);
+                                need_frame = false;
+                            } else {
+                                prefetch.push_back(frame);
+                                if preview {
+                                    present_due_file(
+                                        &uploads,
+                                        source_id,
+                                        &mut prefetch,
+                                        &mut clock_pts,
+                                        &mut clock_start,
+                                        seek_base,
+                                        &position_hns,
+                                        true,
+                                        is_playing,
+                                    );
+                                    need_frame = false;
+                                }
+                            }
                         }
+                        Err(error) => eprintln!("eiviz video cpu: {error}"),
                     }
-                    if let Err(error) = push_video(&uploads, source_id, &sample) {
-                        eprintln!("eiviz video cpu: {error}");
-                    }
-                    need_frame = false;
                 }
                 _ => {}
             }
@@ -430,23 +495,83 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
     })
 }
 
-fn push_video(
+struct CpuFrame {
+    pixels: Vec<u8>,
+    stride: usize,
+    width: u32,
+    height: u32,
+    pts: i64,
+}
+
+fn frame_due(pts: i64, clock_pts: i64, elapsed: Duration) -> bool {
+    if clock_pts < 0 {
+        return true;
+    }
+    let due = Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100);
+    elapsed >= due
+}
+
+fn pts_wait(pts: i64, clock_pts: i64, clock_start: Instant) -> Duration {
+    Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100)
+        .saturating_sub(clock_start.elapsed())
+}
+
+fn present_due_file(
     uploads: &Mutex<UploadStore>,
     source_id: u64,
-    sample: &AvSample,
-) -> Result<(), String> {
+    prefetch: &mut std::collections::VecDeque<CpuFrame>,
+    clock_pts: &mut i64,
+    clock_start: &mut Instant,
+    seek_base: i64,
+    position_hns: &AtomicI64,
+    force: bool,
+    is_playing: bool,
+) {
+    if prefetch.is_empty() || (!force && !is_playing) {
+        return;
+    }
+    while let Some(front) = prefetch.front() {
+        let pts = front.pts;
+        if *clock_pts < 0 {
+            *clock_pts = pts;
+            *clock_start = Instant::now();
+        }
+        if !force && !frame_due(pts, *clock_pts, clock_start.elapsed()) {
+            break;
+        }
+        let frame = prefetch.pop_front().expect("front");
+        position_hns.store(seek_base + (pts - *clock_pts).max(0), Ordering::Relaxed);
+        push_file_cpu(uploads, source_id, &frame);
+        if force {
+            break;
+        }
+    }
+}
+
+fn copy_video(sample: &AvSample) -> Result<CpuFrame, String> {
     if sample.data.is_null() || sample.width <= 0 || sample.height <= 0 || sample.stride <= 0 {
         return Err("empty video sample".into());
     }
     let height = sample.height as u32;
     let stride = sample.stride as usize;
     let src = unsafe { std::slice::from_raw_parts(sample.data, stride * height as usize) };
+    Ok(CpuFrame {
+        pixels: src.to_vec(),
+        stride,
+        width: (sample.width as u32).max(2),
+        height: height.max(2),
+        pts: sample.pts_hns,
+    })
+}
+
+fn push_live_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame, depth: u32) {
     let mut store = uploads.lock().expect("uploads");
-    store.ensure(
-        source_id,
-        (sample.width as u32).max(2),
-        height.max(2),
-        CpuFormat::Bgra,
-    );
-    store.push(source_id, src, stride, sample.pts_hns)
+    store.ensure_playout(source_id, frame.width, frame.height, CpuFormat::Bgra, depth);
+    let _ = store.push_playout_cpu(source_id, &frame.pixels, frame.stride, frame.pts);
+}
+
+fn push_file_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame) {
+    let mut store = uploads.lock().expect("uploads");
+    store.ensure_playout(source_id, frame.width, frame.height, CpuFormat::Bgra, 1);
+    let _ = store.push(source_id, &frame.pixels, frame.stride, frame.pts);
 }

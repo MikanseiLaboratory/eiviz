@@ -1,6 +1,125 @@
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 
-use crate::upload::GpuVideoFrame;
+use crate::upload::{texture_bytes, GpuVideoFrame};
+
+/// Reused NV12/BGRA destinations so file and capture ingest do not allocate every frame.
+pub struct VideoGpuRing {
+    dests: Vec<DestSlot>,
+    y: Option<wgpu::Texture>,
+    uv: Option<wgpu::Texture>,
+    plane_w: u32,
+    plane_h: u32,
+    next: usize,
+    cap: usize,
+}
+
+struct DestSlot {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+impl VideoGpuRing {
+    pub fn new(cap: u32) -> Self {
+        Self {
+            dests: Vec::new(),
+            y: None,
+            uv: None,
+            plane_w: 0,
+            plane_h: 0,
+            next: 0,
+            cap: cap.clamp(2, 8) as usize,
+        }
+    }
+
+    fn acquire_dest(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let width = width.max(2);
+        let height = height.max(2);
+        if self.dests.iter().any(|slot| {
+            slot.width != width || slot.height != height || slot.format != format
+        }) {
+            self.dests.clear();
+            self.next = 0;
+        }
+        while self.dests.len() < self.cap {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("eiviz video gpu"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            self.dests.push(DestSlot {
+                texture,
+                view,
+                width,
+                height,
+                format,
+            });
+        }
+        let slot = &self.dests[self.next];
+        let out = (slot.texture.clone(), slot.view.clone());
+        self.next = (self.next + 1) % self.cap;
+        out
+    }
+
+    fn acquire_planes(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::Texture) {
+        if self.plane_w != width || self.plane_h != height {
+            self.y = None;
+            self.uv = None;
+            self.plane_w = width;
+            self.plane_h = height;
+        }
+        if self.y.is_none() {
+            self.y = Some(owned_plane(device, wgpu::TextureFormat::R8Unorm, width, height));
+        }
+        if self.uv.is_none() {
+            self.uv = Some(owned_plane(
+                device,
+                wgpu::TextureFormat::Rg8Unorm,
+                width / 2,
+                height / 2,
+            ));
+        }
+        (
+            self.y.as_ref().expect("y plane").clone(),
+            self.uv.as_ref().expect("uv plane").clone(),
+        )
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        let mut total = self.dests.iter().map(|slot| texture_bytes(&slot.texture)).sum();
+        if let Some(y) = &self.y {
+            total += texture_bytes(y);
+        }
+        if let Some(uv) = &self.uv {
+            total += texture_bytes(uv);
+        }
+        total
+    }
+}
 
 pub struct Nv12Converter {
     layout: wgpu::BindGroupLayout,
@@ -91,6 +210,7 @@ impl Nv12Converter {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        ring: &mut VideoGpuRing,
         resource: ID3D12Resource,
         width: u32,
         height: u32,
@@ -112,25 +232,16 @@ impl Nv12Converter {
             height / 2,
             1,
         )?;
-        let y = owned_plane(device, wgpu::TextureFormat::R8Unorm, width, height);
-        let uv = owned_plane(device, wgpu::TextureFormat::Rg8Unorm, width / 2, height / 2);
-        let dest = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("eiviz gpu rgba"),
-            size: wgpu::Extent3d {
-                width: width.max(2),
-                height: height.max(2),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
+        let (y, uv) = ring.acquire_planes(device, width, height);
+        let (dest, dest_view) = ring.acquire_dest(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let dest_view = dest.create_view(&Default::default());
+        );
         let y_view = y.create_view(&Default::default());
         let uv_view = uv.create_view(&Default::default());
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -203,8 +314,6 @@ impl Nv12Converter {
         });
         drop(y_src);
         drop(uv_src);
-        drop(y);
-        drop(uv);
         Ok(GpuVideoFrame {
             pts,
             width,
@@ -220,6 +329,7 @@ impl Nv12Converter {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        ring: &mut VideoGpuRing,
         resource: ID3D12Resource,
         width: u32,
         height: u32,
@@ -232,22 +342,15 @@ impl Nv12Converter {
             wgpu::TextureFormat::Bgra8Unorm
         };
         let src = import_plane(device, resource, format, width, height, 0)?;
-        let dest = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("eiviz gpu bgra"),
-            size: wgpu::Extent3d {
-                width: width.max(2),
-                height: height.max(2),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+        let (dest, dest_view) = ring.acquire_dest(
+            device,
+            width,
+            height,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
+            wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bgra gpu copy"),
         });
@@ -269,7 +372,6 @@ impl Nv12Converter {
             timeout: None,
         });
         drop(src);
-        let view = dest.create_view(&Default::default());
         Ok(GpuVideoFrame {
             pts,
             width,
@@ -277,7 +379,7 @@ impl Nv12Converter {
             packed: false,
             bgra: !rgba,
             texture: dest,
-            view,
+            view: dest_view,
         })
     }
 }

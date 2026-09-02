@@ -498,6 +498,7 @@ struct AddInputView: View {
     @State private var toneHz: Float = 1000
     @State private var useGpu = true
     @State private var buffer: UInt32 = 1
+    @State private var mediaBuffer: UInt32 = 3
     @State private var quality: UInt32 = 0
     @State private var ndiLow = false
     @State private var videoLoop = true
@@ -565,6 +566,10 @@ struct AddInputView: View {
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
             recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
+            frameBufferPicker($mediaBuffer)
+            Text("Frame buffer (1–8) absorbs decode jitter.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Picker("Play when", selection: $videoPlayWhen) {
                 Text("Never (manual)").tag(VideoPlayWhen.never)
                 Text("Active (Program)").tag(VideoPlayWhen.onActive)
@@ -589,12 +594,14 @@ struct AddInputView: View {
             List(omtList, id: \.self, selection: $omtAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("GPU decode", isOn: $useGpu)
+            frameBufferPicker($buffer)
         case "NDI®":
             mixerTextField($ndiAddress, placeholder: "NDI® source")
             Button("Refresh discovery") { refreshNdi() }
             List(ndiList, id: \.self, selection: $ndiAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("Lowest bandwidth", isOn: $ndiLow)
+            frameBufferPicker($buffer)
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
         default:
@@ -610,6 +617,20 @@ struct AddInputView: View {
                     Text(mode.label).tag(Optional(mode))
                 }
             }
+            frameBufferPicker($mediaBuffer)
+            Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func frameBufferPicker(_ selection: Binding<UInt32>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Frame buffer (frames)")
+            Picker("", selection: selection) {
+                ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { Text("\($0)").tag($0) }
+            }
+            .frame(width: 220)
         }
     }
 
@@ -703,6 +724,7 @@ struct AddInputView: View {
         toneHz = editing.toneHz
         useGpu = editing.useGpu
         buffer = editing.frameBufferFrames
+        mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
         ndiLow = editing.ndiBandwidth == .lowest
         quality = editing.omtQuality.rawUInt
         videoLoop = editing.videoLoop
@@ -765,6 +787,7 @@ struct AddInputView: View {
             input.videoPlayWhen = videoPlayWhen
             input.videoRestartWhen = videoRestartWhen
             input.videoPauseWhen = videoPauseWhen
+            input.frameBufferFrames = max(1, min(8, mediaBuffer))
         case "OMT":
             guard !omtAddress.isEmpty else { return false }
             input.kind = .omt
@@ -792,6 +815,7 @@ struct AddInputView: View {
             input.captureHeight = mode.height
             input.captureFpsNum = mode.fpsNum
             input.captureFpsDen = mode.fpsDen
+            input.frameBufferFrames = max(1, min(8, mediaBuffer))
         }
         if let editing {
             input.guid = editing.guid
@@ -1230,7 +1254,7 @@ struct ResourcesView: View {
                 .foregroundStyle(EivizTheme.hud)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
-                    Text("Input").fontWeight(.bold)
+                    Text("Name").fontWeight(.bold)
                     Text("Kind").fontWeight(.bold)
                     Text("Size").fontWeight(.bold)
                     Text("CPU").fontWeight(.bold)
@@ -1270,7 +1294,7 @@ struct ResourcesView: View {
     }
 
     private func load() {
-        var buffer = [EivizSourceUsage](repeating: MixerFFI.zeroed(), count: 64)
+        var buffer = [EivizSourceUsage](repeating: MixerFFI.zeroed(), count: 128)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_source_usage(ptr.baseAddress, UInt32(ptr.count))
         }
@@ -1280,19 +1304,19 @@ struct ResourcesView: View {
                 usages[usage.source_id] = usage
             }
         }
-        var totalRam: UInt64 = 0
-        var totalVram: UInt64 = 0
-        for usage in usages.values {
-            totalRam += usage.ram_bytes
-            totalVram += usage.vram_bytes
+        var stats = MixerFFI.zeroed() as EivizMixerStats
+        _ = mixer_copy_stats(&stats)
+        var totalRam = stats.ram_bytes
+        var totalVram = stats.vram_bytes
+        if totalRam == 0 && totalVram == 0 {
+            for usage in usages.values {
+                totalRam += usage.ram_bytes
+                totalVram += usage.vram_bytes
+            }
         }
         if totalRam == 0 { totalRam = 1 }
         if totalVram == 0 { totalVram = 1 }
-        var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
-        _ = mixer_copy_stats(&stats)
-        let gpuLoad = stats.frame_budget_ms > 0.1
-            ? min(100, stats.render_ms / stats.frame_budget_ms * 100)
-            : 0
+        let gpuLoad = HostResources.gpuPercent()
         rows = mixer.session.inputs.map { input in
             let usage = usages[input.id]
             let ram = usage?.ram_bytes ?? 0
@@ -1306,12 +1330,31 @@ struct ResourcesView: View {
                 kind: input.kind.rawValue,
                 size: width == 0 ? "—" : "\(width)x\(height)",
                 cpu: live ? "live" : "—",
-                gpu: vram == 0 ? "—" : String(format: "%.0f%%", Double(vram) / Double(totalVram) * Double(gpuLoad)),
+                gpu: "—",
                 ram: formatBytes(ram),
                 vram: formatBytes(vram)
             )
         }
-        summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        rows.append(contentsOf: mixer.session.scenes.map { scene in
+            let usage = usages[scene.gpuId]
+            let width = usage?.width ?? 0
+            let height = usage?.height ?? 0
+            let pct = usage?.gpu_pct ?? 0
+            return ResourceRow(
+                id: scene.gpuId,
+                name: scene.name,
+                kind: "Scene",
+                size: width == 0 ? "—" : "\(width)x\(height)",
+                cpu: "—",
+                gpu: pct > 0 ? String(format: "%.0f%%", pct) : "—",
+                ram: "—",
+                vram: formatBytes(usage?.vram_bytes ?? 0)
+            )
+        })
+        let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
+            ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
+            : ""
+        summary = "Inputs \(mixer.session.inputs.count)    GPU \(String(format: "%.0f", gpuLoad))%    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
 

@@ -118,19 +118,16 @@ public partial class App : Application
                 case InputKind.Bars:
                     if (network)
                         return;
-                    if (input.Id > MixerNative.Blue)
-                    {
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.DefineGenerator(
-                                input.Id,
-                                input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
-                                input.ColorR,
-                                input.ColorG,
-                                input.ColorB,
-                                1,
-                                input.Scroll ? 1u : 0u),
-                            "Define colour generator");
-                    }
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.DefineGenerator(
+                            input.Id,
+                            input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
+                            input.ColorR,
+                            input.ColorG,
+                            input.ColorB,
+                            1,
+                            input.Scroll ? 1u : 0u),
+                        "Define colour generator");
                     MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
                     break;
                 case InputKind.Still when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
@@ -141,10 +138,11 @@ public partial class App : Application
                         input.Id,
                         input.PathOrAddress,
                         input.VideoLoop,
-                        input.VideoStartsPlaying));
+                        input.VideoStartsPlaying,
+                        input.FrameBufferFrames));
                     break;
                 case InputKind.Uvc when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
+                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
                     break;
                 case InputKind.Omt when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     Commands.TryEnqueue(new ConnectOmtCommand(

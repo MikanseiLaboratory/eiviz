@@ -35,8 +35,8 @@ internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool Us
 internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames, NdiBandwidth Bandwidth) : MixerCommand;
 internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality? OmtQuality = null) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
-internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true) : MixerCommand;
-internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink, uint Width, uint Height, uint FpsNum, uint FpsDen) : MixerCommand;
+internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true, uint FrameBufferFrames = 3) : MixerCommand;
+internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink, uint Width, uint Height, uint FpsNum, uint FpsDen, uint FrameBufferFrames = 3) : MixerCommand;
 internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : MixerCommand;
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
@@ -376,14 +376,32 @@ internal sealed class CommandQueue : IAsyncDisposable
                 if (!File.Exists(video.Path))
                     throw new InvalidOperationException(Loc.MissingFile("Video start"));
                 MixerNative.ThrowIfFailed(
-                    MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat, 0, 0, 0, 0),
+                    MixerNative.VideoStart(
+                        video.SourceId,
+                        video.Path,
+                        0,
+                        MixerNative.VideoFormat,
+                        0,
+                        0,
+                        0,
+                        0,
+                        Math.Clamp(video.FrameBufferFrames == 0 ? 3u : video.FrameBufferFrames, 1u, 8u)),
                     "Video start");
                 MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
                 MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
                 break;
             case StartUvcCommand uvc:
                 MixerNative.ThrowIfFailed(
-                    MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat, uvc.Width, uvc.Height, uvc.FpsNum, uvc.FpsDen),
+                    MixerNative.VideoStart(
+                        uvc.SourceId,
+                        uvc.SymbolicLink,
+                        1,
+                        MixerNative.VideoFormat,
+                        uvc.Width,
+                        uvc.Height,
+                        uvc.FpsNum,
+                        uvc.FpsDen,
+                        Math.Clamp(uvc.FrameBufferFrames == 0 ? 3u : uvc.FrameBufferFrames, 1u, 8u)),
                     "UVC start");
                 break;
             case AddOutputCommand add:

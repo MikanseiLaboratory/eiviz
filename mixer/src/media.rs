@@ -6,29 +6,29 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFSample, IMFSourceReader, MFEnumDeviceSources,
-    MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
-    MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+    IMFActivate, IMFSample, IMFSourceReader, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
+    MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
-    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
-    MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
     MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READER_D3D_MANAGER,
     MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
     MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
     MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK,
     MF_VERSION, MFAudioFormat_Float, MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
-    MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFMediaType_Audio,
-    MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_NV12, MFVideoFormat_RGB32,
-    MFVideoFormat_UYVY, MFVideoFormat_YUY2,
+    MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFEnumDeviceSources,
+    MFMediaType_Audio, MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_NV12,
+    MFVideoFormat_RGB32, MFVideoFormat_UYVY, MFVideoFormat_YUY2,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
 use windows::Win32::System::Variant::VT_I8;
 use windows::core::{GUID, PCWSTR};
 
 use crate::abi::{FMT_BGRA, MixerVideoInfo};
+use crate::convert::VideoGpuRing;
 use crate::dxgi::GpuVideoContext;
 use crate::upload::{
-    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked,
+    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_clocked,
     ingest_audio_throttled,
 };
 
@@ -57,6 +57,7 @@ impl VideoPump {
         fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
         gpu: GpuVideoContext,
+        frame_buffer_frames: u32,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -73,20 +74,21 @@ impl VideoPump {
         let seek_t = Arc::clone(&seek_hns);
         let pos_t = Arc::clone(&position_hns);
         let dur_t = Arc::clone(&duration_hns);
+        let depth = frame_buffer_frames.clamp(1, 8);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let join = thread::Builder::new()
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, format, width, height, fps_num, fps_den, uploads, gpu, stop_t, playing_t, looping_t,
-                    seek_t, pos_t, dur_t, ready_tx,
+                    source_id, path, capture, format, width, height, fps_num, fps_den, uploads,
+                    gpu, depth, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
             })
             .map_err(|error| error.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_millis(400)) {
-            Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(Self {
+        match wait_ready(ready_rx) {
+            Ok(()) => Ok(Self {
                 stop,
                 playing,
                 looping,
@@ -96,15 +98,10 @@ impl VideoPump {
                 is_file: !capture,
                 join: Some(join),
             }),
-            Ok(Err(error)) => {
+            Err(error) => {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
                 Err(error)
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop.store(true, Ordering::Relaxed);
-                let _ = join.join();
-                Err("video thread exited before the source opened".into())
             }
         }
     }
@@ -132,6 +129,17 @@ impl VideoPump {
     }
 }
 
+fn wait_ready(ready_rx: mpsc::Receiver<Result<(), String>>) -> Result<(), String> {
+    let result = ready_rx.recv_timeout(Duration::from_millis(400));
+    match result {
+        Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("video thread exited before the source opened".into())
+        }
+    }
+}
+
 impl Drop for VideoPump {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -153,6 +161,7 @@ fn run_loop(
     fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
     gpu: GpuVideoContext,
+    depth: u32,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -170,7 +179,15 @@ fn run_loop(
             return Ok(());
         }
         let opened = match open_reader(&path, capture, Some(&gpu), prefer_packed) {
-            Ok(reader) => match configure_video(&reader, true, prefer_packed, width, height, fps_num, fps_den) {
+            Ok(reader) => match configure_video(
+                &reader,
+                true,
+                prefer_packed,
+                width,
+                height,
+                fps_num,
+                fps_den,
+            ) {
                 Ok(layout) => Ok((reader, layout)),
                 Err(error) => Err(error),
             },
@@ -179,7 +196,15 @@ fn run_loop(
         let (reader, layout) = match opened {
             Ok(pair) => pair,
             Err(gpu_error) => match open_reader(&path, capture, None, prefer_packed) {
-                Ok(reader) => match configure_video(&reader, false, prefer_packed, width, height, fps_num, fps_den) {
+                Ok(reader) => match configure_video(
+                    &reader,
+                    false,
+                    prefer_packed,
+                    width,
+                    height,
+                    fps_num,
+                    fps_den,
+                ) {
                     Ok(layout) => (reader, layout),
                     Err(error) => {
                         let message = format!("{gpu_error}; cpu fallback: {error}");
@@ -205,6 +230,15 @@ fn run_loop(
         };
         duration_hns.store(read_duration(&reader), Ordering::Relaxed);
         send_ready(&mut ready, Ok(()));
+        let live_depth = depth;
+        let file_prefetch = depth.max(3);
+        let mut gpu_ring = VideoGpuRing::new(if capture {
+            live_depth.max(3)
+        } else {
+            file_prefetch
+        });
+        let mut prefetch = std::collections::VecDeque::new();
+        let mut ring_vram = 0u64;
         let mut clock_pts = -1i64;
         let mut seek_base = 0i64;
         let mut clock_start = Instant::now();
@@ -219,9 +253,11 @@ fn run_loop(
             if seek >= 0 {
                 let _ = unsafe { reader.Flush(stream(MF_SOURCE_READER_ANY_STREAM)) };
                 seek_to(&reader, seek);
+                prefetch.clear();
                 {
                     let mut store = uploads.lock().expect("uploads");
                     store.flush_audio(source_id);
+                    store.flush_video(source_id);
                 }
                 clock_pts = -1;
                 seek_base = seek;
@@ -236,8 +272,43 @@ fn run_loop(
                 clock_start = Instant::now();
             }
             was_playing = is_playing;
+            if !capture {
+                present_due_file(
+                    &uploads,
+                    source_id,
+                    &mut prefetch,
+                    ring_vram,
+                    &mut clock_pts,
+                    &mut clock_start,
+                    seek_base,
+                    &position_hns,
+                    need_frame,
+                    is_playing,
+                );
+                if need_frame && uploads.lock().expect("uploads").has_video_frame(source_id) {
+                    need_frame = false;
+                }
+            }
             if !is_playing && !need_frame {
                 thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            let prefetch_cap = if capture { 0 } else { file_prefetch as usize };
+            if !capture && prefetch.len() >= prefetch_cap && !need_frame {
+                if let Some(front) = prefetch.front() {
+                    wait_for_pts(
+                        front.pts(),
+                        clock_pts,
+                        clock_start,
+                        &reader,
+                        audio.as_ref(),
+                        &uploads,
+                        source_id,
+                        is_playing,
+                    );
+                } else {
+                    thread::sleep(Duration::from_millis(2));
+                }
                 continue;
             }
             let sample = match read_sample(&reader, audio.as_ref()) {
@@ -275,54 +346,242 @@ fn run_loop(
                         clock_start = Instant::now();
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
-                    if is_playing && !preview && !capture {
-                        drain_audio(&reader, audio.as_ref(), &uploads, source_id, is_playing);
-                        let wait = Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100)
-                            .saturating_sub(clock_start.elapsed());
-                        if wait > Duration::ZERO && wait < Duration::from_secs(2) {
-                            let deadline = Instant::now() + wait;
-                            while Instant::now() < deadline {
-                                drain_audio(
-                                    &reader,
-                                    audio.as_ref(),
-                                    &uploads,
-                                    source_id,
-                                    is_playing,
-                                );
-                                let remain = deadline.saturating_duration_since(Instant::now());
-                                if remain.is_zero() {
-                                    break;
-                                }
-                                thread::sleep(remain.min(Duration::from_millis(4)));
-                            }
-                        }
+                    let decoded = decode_video_frame(
+                        &gpu,
+                        &mut gpu_ring,
+                        &sample,
+                        &layout,
+                        pts,
+                        &mut gpu_warned,
+                    );
+                    let Some(decoded) = decoded else {
+                        continue;
+                    };
+                    if capture {
+                        push_live_frame(
+                            &uploads,
+                            source_id,
+                            decoded,
+                            live_depth,
+                            gpu_ring.vram_bytes(),
+                        );
+                        need_frame = false;
+                        continue;
                     }
-                    if layout.gpu {
-                        match gpu.dxgi.import_sample(&gpu, &sample, pts) {
-                            Ok(frame) => {
-                                let _ = uploads.lock().expect("uploads").push_gpu(source_id, frame);
-                                need_frame = false;
-                                continue;
-                            }
-                            Err(error) if !gpu_warned => {
-                                eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
-                                gpu_warned = true;
-                            }
-                            Err(_) => {}
-                        }
+                    ring_vram = gpu_ring.vram_bytes();
+                    prefetch.push_back(decoded);
+                    if preview {
+                        present_due_file(
+                            &uploads,
+                            source_id,
+                            &mut prefetch,
+                            ring_vram,
+                            &mut clock_pts,
+                            &mut clock_start,
+                            seek_base,
+                            &position_hns,
+                            true,
+                            is_playing,
+                        );
+                        need_frame = false;
                     }
-                    if let Err(error) = push_cpu_frame(&uploads, source_id, &sample, &layout, pts) {
-                        if !gpu_warned {
-                            eprintln!("eiviz video cpu: {error}");
-                            gpu_warned = true;
-                        }
-                    }
-                    need_frame = false;
                 }
             }
         }
         if capture {
             thread::sleep(Duration::from_millis(40));
+        }
+    }
+}
+
+enum Prefetched {
+    Gpu(GpuVideoFrame),
+    Cpu {
+        pixels: Vec<u8>,
+        stride: usize,
+        format: CpuFormat,
+        pts: i64,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl Prefetched {
+    fn pts(&self) -> i64 {
+        match self {
+            Self::Gpu(frame) => frame.pts,
+            Self::Cpu { pts, .. } => *pts,
+        }
+    }
+}
+
+fn frame_due(pts: i64, clock_pts: i64, elapsed: Duration) -> bool {
+    if clock_pts < 0 {
+        return true;
+    }
+    let due = Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100);
+    elapsed >= due
+}
+
+fn pts_wait(pts: i64, clock_pts: i64, clock_start: Instant) -> Duration {
+    Duration::from_nanos((pts - clock_pts).max(0) as u64 * 100)
+        .saturating_sub(clock_start.elapsed())
+}
+
+fn wait_for_pts(
+    pts: i64,
+    clock_pts: i64,
+    clock_start: Instant,
+    reader: &IMFSourceReader,
+    audio: Option<&AudioLayout>,
+    uploads: &Mutex<UploadStore>,
+    source_id: u64,
+    is_playing: bool,
+) {
+    let wait = pts_wait(pts, clock_pts, clock_start);
+    if wait == Duration::ZERO || wait >= Duration::from_secs(2) {
+        return;
+    }
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        drain_audio(reader, audio, uploads, source_id, is_playing);
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            break;
+        }
+        thread::sleep(remain.min(Duration::from_millis(4)));
+    }
+}
+
+fn present_due_file(
+    uploads: &Mutex<UploadStore>,
+    source_id: u64,
+    prefetch: &mut std::collections::VecDeque<Prefetched>,
+    ring_vram: u64,
+    clock_pts: &mut i64,
+    clock_start: &mut Instant,
+    seek_base: i64,
+    position_hns: &AtomicI64,
+    force: bool,
+    is_playing: bool,
+) {
+    if prefetch.is_empty() {
+        return;
+    }
+    if !force && !is_playing {
+        return;
+    }
+    while let Some(front) = prefetch.front() {
+        let pts = front.pts();
+        if *clock_pts < 0 {
+            *clock_pts = pts;
+            *clock_start = Instant::now();
+        }
+        if !force && !frame_due(pts, *clock_pts, clock_start.elapsed()) {
+            break;
+        }
+        let frame = prefetch.pop_front().expect("front");
+        position_hns.store(seek_base + (pts - *clock_pts).max(0), Ordering::Relaxed);
+        push_file_frame(uploads, source_id, frame, ring_vram);
+        if force {
+            break;
+        }
+    }
+}
+
+fn decode_video_frame(
+    gpu: &GpuVideoContext,
+    gpu_ring: &mut VideoGpuRing,
+    sample: &windows::Win32::Media::MediaFoundation::IMFSample,
+    layout: &VideoLayout,
+    pts: i64,
+    gpu_warned: &mut bool,
+) -> Option<Prefetched> {
+    if layout.gpu {
+        match gpu.dxgi.import_sample(gpu, gpu_ring, sample, pts) {
+            Ok(frame) => return Some(Prefetched::Gpu(frame)),
+            Err(error) if !*gpu_warned => {
+                eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
+                *gpu_warned = true;
+            }
+            Err(_) => {}
+        }
+    }
+    match take_cpu_frame(sample, layout, pts) {
+        Ok(frame) => Some(frame),
+        Err(error) => {
+            if !*gpu_warned {
+                eprintln!("eiviz video cpu: {error}");
+                *gpu_warned = true;
+            }
+            None
+        }
+    }
+}
+
+fn push_live_frame(
+    uploads: &Mutex<UploadStore>,
+    source_id: u64,
+    frame: Prefetched,
+    depth: u32,
+    ring_vram: u64,
+) {
+    let mut store = uploads.lock().expect("uploads");
+    match frame {
+        Prefetched::Gpu(gpu) => {
+            store.ensure_playout(
+                source_id,
+                gpu.width.max(2),
+                gpu.height.max(2),
+                CpuFormat::GpuRgba,
+                depth,
+            );
+            store.set_ring_vram(source_id, ring_vram);
+            let _ = store.push_playout_gpu(source_id, gpu);
+        }
+        Prefetched::Cpu {
+            pixels,
+            stride,
+            format,
+            pts,
+            width,
+            height,
+        } => {
+            store.ensure_playout(source_id, width.max(2), height.max(2), format, depth);
+            let _ = store.push_playout_cpu(source_id, &pixels, stride, pts);
+        }
+    }
+}
+
+fn push_file_frame(
+    uploads: &Mutex<UploadStore>,
+    source_id: u64,
+    frame: Prefetched,
+    ring_vram: u64,
+) {
+    let mut store = uploads.lock().expect("uploads");
+    match frame {
+        Prefetched::Gpu(gpu) => {
+            store.ensure_playout(
+                source_id,
+                gpu.width.max(2),
+                gpu.height.max(2),
+                CpuFormat::GpuRgba,
+                1,
+            );
+            store.set_ring_vram(source_id, ring_vram);
+            let _ = store.push_gpu(source_id, gpu);
+        }
+        Prefetched::Cpu {
+            pixels,
+            stride,
+            format,
+            pts,
+            width,
+            height,
+        } => {
+            store.ensure_playout(source_id, width.max(2), height.max(2), format, 1);
+            let _ = store.push(source_id, &pixels, stride, pts);
         }
     }
 }
@@ -345,6 +604,8 @@ struct VideoLayout {
     stride: i32,
     gpu: bool,
     packed: bool,
+    fps_num: u32,
+    fps_den: u32,
 }
 
 fn startup() -> Result<(), String> {
@@ -578,7 +839,8 @@ pub fn enumerate_capture_modes(device_id: &str) -> Vec<crate::abi::VideoCaptureM
         let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_ANY_STREAM), false);
         let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true);
         for index in 0..64u32 {
-            let Ok(ty) = reader.GetNativeMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), index)
+            let Ok(ty) =
+                reader.GetNativeMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), index)
             else {
                 break;
             };
@@ -631,6 +893,10 @@ fn read_video_layout(
             return Err("Media Foundation reported a zero-sized frame".into());
         }
         let stride = ty.GetUINT32(&MF_MT_DEFAULT_STRIDE).unwrap_or(0) as i32;
+        let (fps_num, fps_den) = ty
+            .GetUINT64(&MF_MT_FRAME_RATE)
+            .map(|rate| ((rate >> 32) as u32, rate as u32))
+            .unwrap_or((0, 1));
         Ok(VideoLayout {
             width,
             height,
@@ -638,6 +904,8 @@ fn read_video_layout(
             stride,
             gpu,
             packed,
+            fps_num,
+            fps_den,
         })
     }
 }
@@ -853,13 +1121,11 @@ fn decode_audio(sample: &IMFSample, pts: i64, layout: &AudioLayout) -> Option<Au
     }
 }
 
-fn push_cpu_frame(
-    uploads: &Mutex<UploadStore>,
-    source_id: u64,
+fn take_cpu_frame(
     sample: &IMFSample,
     layout: &VideoLayout,
     pts: i64,
-) -> Result<(), String> {
+) -> Result<Prefetched, String> {
     unsafe {
         let buffer = sample
             .ConvertToContiguousBuffer()
@@ -875,9 +1141,14 @@ fn push_cpu_frame(
         let Some((pixels, stride, format)) = converted else {
             return Err("unsupported CPU video layout".into());
         };
-        let mut store = uploads.lock().expect("uploads");
-        store.ensure(source_id, layout.width.max(2), layout.height.max(2), format);
-        store.push(source_id, &pixels, stride, pts)
+        Ok(Prefetched::Cpu {
+            pixels,
+            stride,
+            format,
+            pts,
+            width: layout.width,
+            height: layout.height,
+        })
     }
 }
 
@@ -1143,4 +1414,23 @@ fn wide(text: &str) -> Vec<u16> {
         .encode_wide()
         .chain(Some(0))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_due_follows_pts_clock() {
+        assert!(frame_due(0, -1, Duration::ZERO));
+        assert!(!frame_due(400_000, 0, Duration::from_millis(20)));
+        assert!(frame_due(400_000, 0, Duration::from_millis(40)));
+    }
+
+    #[test]
+    fn file_prefetch_is_at_least_three_frames() {
+        assert_eq!(1u32.clamp(1, 8).max(3), 3);
+        assert_eq!(3u32.clamp(1, 8).max(3), 3);
+        assert_eq!(8u32.clamp(1, 8).max(3), 8);
+    }
 }

@@ -143,6 +143,7 @@ impl DxgiVideo {
     pub fn import_sample(
         &self,
         gpu: &GpuVideoContext,
+        ring: &mut crate::convert::VideoGpuRing,
         sample: &IMFSample,
         pts: i64,
     ) -> Result<crate::upload::GpuVideoFrame, String> {
@@ -167,6 +168,7 @@ impl DxgiVideo {
                 DXGI_FORMAT_NV12 => gpu.convert.convert_nv12(
                     &gpu.device,
                     &gpu.queue,
+                    ring,
                     resource12,
                     desc.Width,
                     desc.Height,
@@ -176,6 +178,7 @@ impl DxgiVideo {
                     gpu.convert.copy_bgra(
                         &gpu.device,
                         &gpu.queue,
+                        ring,
                         resource12,
                         desc.Width,
                         desc.Height,

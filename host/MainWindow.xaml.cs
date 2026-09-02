@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private ulong _lastProgramId;
     private ulong _shownProgramId;
     private ulong _shownPreviewId;
+    private bool _fatalHandled;
 
     public MainWindow()
     {
@@ -143,9 +144,11 @@ public partial class MainWindow : Window
         else
             programId = _lastProgramId;
         _shownProgramId = programId;
-        _shownPreviewId = _selectedScene?.Id ?? 0;
+        var previewGpuId = CurrentPreviewSceneGpuId();
+        var previewScene = _session.Scenes.FirstOrDefault(item => item.GpuId == previewGpuId);
+        _shownPreviewId = previewScene?.Id ?? 0;
         var programName = _session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
-        var previewName = _selectedScene?.Name;
+        var previewName = previewScene?.Name;
         PreviewHeaderText.Text = string.IsNullOrEmpty(previewName) ? Loc.T("chrome.preview") : $"{Loc.T("chrome.preview")} — {previewName}";
         ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? Loc.T("chrome.program") : $"{Loc.T("chrome.program")} — {programName}";
         foreach (SceneTile tile in ScenePanel.Children)
@@ -154,7 +157,7 @@ public partial class MainWindow : Window
                 continue;
             RefreshSceneTransport(tile, scene);
             tile.SetBusRoles(
-                _selectedScene?.Id == scene.Id && scene.GpuId != programId,
+                scene.GpuId == previewGpuId && scene.GpuId != programId,
                 scene.GpuId == programId,
                 BusTheme.Preview(_session.Settings),
                 BusTheme.Program(_session.Settings),
@@ -184,6 +187,24 @@ public partial class MainWindow : Window
                 return state.ProgramSource;
         }
         return 0;
+    }
+
+    private ulong CurrentPreviewSceneGpuId()
+    {
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
+                return state.PreviewSource;
+        }
+        return 0;
+    }
+
+    private void SyncSelectedSceneFromMixer()
+    {
+        var previewGpuId = CurrentPreviewSceneGpuId();
+        if (_session.Scenes.FirstOrDefault(item => item.GpuId == previewGpuId) is { } scene)
+            _selectedScene = scene;
     }
 
     private InputEntry? SceneVideo(SceneEntry scene) =>
@@ -853,6 +874,8 @@ public partial class MainWindow : Window
 
     private void TickMeters()
     {
+        if (HandleMixerFatal())
+            return;
         var peaks = new Dictionary<ulong, (float L, float R)>();
         var buffer = new AudioPeak[64];
         unsafe
@@ -883,6 +906,32 @@ public partial class MainWindow : Window
         TickVideo();
         RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
+    }
+
+    private bool HandleMixerFatal()
+    {
+        if (_fatalHandled)
+            return true;
+        var fatal = MixerNative.TakeFatalText();
+        if (string.IsNullOrEmpty(fatal))
+            return false;
+        _fatalHandled = true;
+        _meterTimer.Stop();
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "eiviz");
+            Directory.CreateDirectory(dir);
+            SessionStore.Save(_session, Path.Combine(dir, "recovered-session.eiviz.json"));
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+        }
+        MessageBox.Show(this, Loc.T("error.mixerFatal"), Loc.T("app.title"));
+        Application.Current.Shutdown();
+        return true;
     }
 
     private void SyncTBarsFromMixer()
@@ -1186,7 +1235,16 @@ public partial class MainWindow : Window
         var keepLive = replacing
             && input.Kind == dialog.Kind
             && (
-                (dialog.Kind == InputKind.Video && input.PathOrAddress == dialog.ResultPath)
+                (dialog.Kind == InputKind.Video
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
+                || (dialog.Kind == InputKind.Uvc
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.CaptureWidth == dialog.ResultCaptureWidth
+                    && input.CaptureHeight == dialog.ResultCaptureHeight
+                    && input.CaptureFpsNum == dialog.ResultCaptureFpsNum
+                    && input.CaptureFpsDen == dialog.ResultCaptureFpsDen
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
                 || (dialog.Kind is InputKind.Omt or InputKind.Ndi
                     && input.PathOrAddress == dialog.ResultPath
                     && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
@@ -1207,7 +1265,7 @@ public partial class MainWindow : Window
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
+        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Video or InputKind.Uvc
             ? dialog.ResultFrameBufferFrames
             : 1;
         input.BandwidthSave = dialog.Kind == InputKind.Omt
@@ -1261,7 +1319,8 @@ public partial class MainWindow : Window
                     input.Id,
                     dialog.ResultPath!,
                     input.VideoLoop,
-                    input.VideoStartsPlaying));
+                    input.VideoStartsPlaying,
+                    input.FrameBufferFrames));
                 break;
             case InputKind.Omt:
                 Commands.TryEnqueue(new ConnectOmtCommand(
@@ -1285,7 +1344,7 @@ public partial class MainWindow : Window
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen));
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames));
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
@@ -1432,6 +1491,8 @@ public partial class MainWindow : Window
         RebuildTransitions();
         RebuildOverlayToggles();
         MixerNative.AudioSetHeadphoneCue(unit.Id);
+        SyncSelectedSceneFromMixer();
+        RefreshSceneTiles();
     }
 
     private void OpenSwitcher_Click(object sender, RoutedEventArgs e) =>
@@ -1699,9 +1760,10 @@ public partial class MainWindow : Window
                     input.Id,
                     input.PathOrAddress,
                     input.VideoLoop,
-                    input.VideoStartsPlaying));
+                    input.VideoStartsPlaying,
+                    input.FrameBufferFrames));
             else if (input.Kind == InputKind.Uvc)
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
         }
     }
 

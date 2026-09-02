@@ -6,12 +6,13 @@ use crate::abi::{
     is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
     mixing_unit_preview, mixing_unit_source, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
     OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SourceUsage,
     TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN,
     TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
-use crate::upload::{CpuFormat, CpuFrameSnap};
+use crate::upload::{texture_bytes, CpuFormat, CpuFrameSnap};
 
 const KEY_TALLY_RED: u64 = LABEL_BASE + 0xFF01;
 const KEY_TALLY_GREEN: u64 = LABEL_BASE + 0xFF02;
@@ -26,7 +27,7 @@ struct ColorParams {
     pad: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Generator {
     pub kind: u32,
     pub color: [f32; 4],
@@ -45,6 +46,10 @@ impl Default for Generator {
             tone_level_dbfs: -20.0,
         }
     }
+}
+
+fn generator_needs_rebake(spec: &Generator, last: Option<&Generator>, size_ok: bool) -> bool {
+    spec.scroll || !size_ok || last != Some(spec)
 }
 
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -114,6 +119,7 @@ struct SourceGpu {
     bgra: bool,
     uploaded_pts: i64,
     direct: bool,
+    owned: bool,
 }
 
 pub struct UnitTargets {
@@ -180,6 +186,7 @@ pub struct Composer {
     units: HashMap<u64, UnitTargets>,
     scenes: HashMap<u64, SceneGpu>,
     generators: HashMap<u64, Generator>,
+    generator_bake: HashMap<u64, Generator>,
     input_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
     scroll_phase_y: f32,
@@ -209,6 +216,7 @@ pub struct Composer {
     pack_groups: HashMap<u64, wgpu::BindGroup>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
+    scene_gpu_pct: HashMap<u64, f32>,
     #[cfg(windows)]
     rebar: Option<crate::rebar::RebarUploader>,
     #[cfg(target_os = "macos")]
@@ -320,6 +328,7 @@ impl Composer {
             units: HashMap::new(),
             scenes: HashMap::new(),
             generators: HashMap::new(),
+            generator_bake: HashMap::new(),
             input_packed: HashMap::new(),
             scroll_phase: 0.0,
             scroll_phase_y: 0.0,
@@ -349,6 +358,7 @@ impl Composer {
             pack_groups: HashMap::new(),
             color_group,
             gpu_epoch: 1,
+            scene_gpu_pct: HashMap::new(),
             #[cfg(windows)]
             rebar: crate::rebar::RebarUploader::new(device),
             #[cfg(target_os = "macos")]
@@ -487,6 +497,7 @@ impl Composer {
                             bgra: frame.bgra,
                             uploaded_pts: frame.pts,
                             direct: false,
+                            owned: false,
                         },
                     );
                 }
@@ -545,6 +556,7 @@ impl Composer {
                                 bgra,
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
+                                owned: true,
                             },
                         );
                         continue;
@@ -578,6 +590,7 @@ impl Composer {
                         bgra,
                         uploaded_pts: i64::MIN,
                         direct: false,
+                        owned: true,
                     },
                 );
             }
@@ -731,8 +744,16 @@ impl Composer {
             self.visit_scene(*id, used, &mut visited, &mut order);
         }
         self.bake_generators(device, encoder);
+        let mut weights = Vec::with_capacity(order.len());
         for id in order {
-            self.draw_scene(device, encoder, id, tallies)?;
+            let weight = self.draw_scene(device, encoder, id, tallies)?;
+            weights.push((id, weight));
+        }
+        let total = weights.iter().map(|(_, weight)| *weight).sum::<u64>().max(1);
+        self.scene_gpu_pct.clear();
+        for (id, weight) in weights {
+            self.scene_gpu_pct
+                .insert(id, 100.0 * weight as f32 / total as f32);
         }
         Ok(())
     }
@@ -763,7 +784,7 @@ impl Composer {
         encoder: &mut wgpu::CommandEncoder,
         scene_id: u64,
         tallies: &[(u64, u64)],
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let (width, height, mut layers, labels, view, label_size, label_percent, label_top) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
             (
@@ -816,7 +837,12 @@ impl Composer {
                 self.draw_mv_tally_pass(device, &mut pass, &layers, tallies, width, height);
             }
         }
-        Ok(())
+        let visible = layers
+            .iter()
+            .filter(|layer| layer.hidden == 0)
+            .count()
+            .max(1) as u64;
+        Ok(u64::from(width) * u64::from(height) * visible)
     }
 
     fn draw_mv_label_pass(
@@ -1081,6 +1107,17 @@ impl Composer {
         } else {
             self.units[&unit_id].preview_view.clone()
         };
+        if let Some(spec) = self.generators.get(&source_id).copied() {
+            self.fill_target(
+                device,
+                encoder,
+                &target_view,
+                spec.color,
+                spec.kind == GEN_BARS,
+                spec.scroll,
+            );
+            return Ok(());
+        }
         let mut pass = begin_clear(encoder, &target_view);
         self.draw_source_pass(device, &mut pass, source_id, [0.0, 0.0, 1.0, 1.0], 1.0, FULL_UV)?;
         drop(pass);
@@ -1626,7 +1663,11 @@ impl Composer {
             }
         }
         if self.generators.contains_key(&source_id) {
-            self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
+            if self.sources.contains_key(&source_id) {
+                self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
+            } else {
+                self.blit_builtin_uv(device, pass, SRC_BLACK, dst, crop, opacity);
+            }
             return Ok(());
         }
         match source_id {
@@ -1660,12 +1701,6 @@ impl Composer {
     ) {
         let key = if self.sources.contains_key(&source_id) {
             source_id
-        } else if self.generators.contains_key(&source_id) {
-            if self.generators[&source_id].kind == GEN_BARS {
-                SRC_BARS
-            } else {
-                SRC_COLOR
-            }
         } else {
             SRC_BLACK
         };
@@ -1686,12 +1721,6 @@ impl Composer {
     ) {
         let key = if self.sources.contains_key(&source_id) {
             source_id
-        } else if self.generators.contains_key(&source_id) {
-            if self.generators[&source_id].kind == GEN_BARS {
-                SRC_BARS
-            } else {
-                SRC_COLOR
-            }
         } else {
             SRC_BLACK
         };
@@ -1917,6 +1946,7 @@ impl Composer {
                     bgra: false,
                     uploaded_pts: i64::MIN,
                     direct: false,
+                    owned: true,
                 },
             );
         }
@@ -1930,7 +1960,7 @@ impl Composer {
                 .sources
                 .get(&id)
                 .is_some_and(|source| source.width == width && source.height == height);
-            if !spec.scroll && size_ok {
+            if !generator_needs_rebake(&spec, self.generator_bake.get(&id), size_ok) {
                 continue;
             }
             if !size_ok {
@@ -1952,6 +1982,7 @@ impl Composer {
                         bgra: false,
                         uploaded_pts: i64::MIN,
                         direct: false,
+                        owned: true,
                     },
                 );
                 self.blit_groups.remove(&id);
@@ -1965,7 +1996,24 @@ impl Composer {
                 spec.kind == GEN_BARS,
                 spec.scroll,
             );
+            self.generator_bake.insert(id, spec);
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
         }
+    }
+
+    pub fn generators_need_rebake(&self) -> bool {
+        self.generators.iter().any(|(id, spec)| {
+            let (width, height) = if spec.kind == GEN_BARS {
+                (1920, 1080)
+            } else {
+                (128, 72)
+            };
+            let size_ok = self
+                .sources
+                .get(id)
+                .is_some_and(|source| source.width == width && source.height == height);
+            generator_needs_rebake(spec, self.generator_bake.get(id), size_ok)
+        })
     }
 
     pub fn sync_generators(&mut self, generators: &[(u64, Generator)], phase: f32, phase_y: f32) {
@@ -2015,6 +2063,54 @@ impl Composer {
 
     pub fn source_is_packed(&self, source_id: u64) -> bool {
         self.sources.get(&source_id).is_some_and(|gpu| gpu.packed)
+    }
+
+    pub fn scene_usages(&self) -> Vec<SourceUsage> {
+        self.scenes
+            .iter()
+            .map(|(id, scene)| {
+                let mut vram = texture_bytes(&scene.texture);
+                if let Some(packed) = &scene.packed {
+                    vram += texture_bytes(packed);
+                }
+                SourceUsage {
+                    source_id: *id,
+                    width: scene.width,
+                    height: scene.height,
+                    ram_bytes: 0,
+                    vram_bytes: vram,
+                    gpu_pct: self.scene_gpu_pct.get(id).copied().unwrap_or(0.0),
+                }
+            })
+            .collect()
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        let mut total = self.units.values().map(UnitTargets::vram_bytes).sum::<u64>();
+        for source in self.sources.values() {
+            if source.owned {
+                total += texture_bytes(&source.texture);
+            }
+        }
+        for scene in self.scenes.values() {
+            total += texture_bytes(&scene.texture);
+            if let Some(packed) = &scene.packed {
+                total += texture_bytes(packed);
+            }
+        }
+        for texture in self.input_packed.values() {
+            total += texture_bytes(texture);
+        }
+        for (texture, _) in self.label_cache.values() {
+            total += texture_bytes(texture);
+        }
+        if let Some((texture, _)) = &self.tally_red {
+            total += texture_bytes(texture);
+        }
+        if let Some((texture, _)) = &self.tally_green {
+            total += texture_bytes(texture);
+        }
+        total
     }
 
     pub fn packed_texture(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {
@@ -2235,6 +2331,32 @@ impl UnitTargets {
             packed_prv: None,
             multiview: None,
         }
+    }
+
+    fn vram_bytes(&self) -> u64 {
+        let mut total = texture_bytes(&self.program)
+            + texture_bytes(&self.preview)
+            + texture_bytes(&self.mixed)
+            + texture_bytes(&self.prev)
+            + texture_bytes(&self.sort_a)
+            + texture_bytes(&self.sort_b)
+            + texture_bytes(&self.flow)
+            + texture_bytes(&self.bloom_a)
+            + texture_bytes(&self.bloom_b)
+            + texture_bytes(&self.aux);
+        if let Some(tex) = &self.packed {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_mv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_prv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.multiview {
+            total += texture_bytes(tex);
+        }
+        total
     }
 }
 
@@ -2736,6 +2858,40 @@ mod tests {
         assert_eq!(dest, [0.2, 0.0, 0.8, 1.0]);
         assert_eq!(uv[0], 0.2);
         assert_eq!(uv[2], 0.8);
+    }
+
+    #[test]
+    fn static_generator_skips_identical_rebake() {
+        let spec = super::Generator {
+            kind: crate::abi::GEN_SOLID,
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..super::Generator::default()
+        };
+        assert!(!super::generator_needs_rebake(&spec, Some(&spec), true));
+    }
+
+    #[test]
+    fn static_generator_rebakes_on_color_change() {
+        let prev = super::Generator {
+            kind: crate::abi::GEN_SOLID,
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..super::Generator::default()
+        };
+        let next = super::Generator {
+            color: [0.0, 0.0, 1.0, 1.0],
+            ..prev
+        };
+        assert!(super::generator_needs_rebake(&next, Some(&prev), true));
+    }
+
+    #[test]
+    fn scrolling_generator_always_rebakes() {
+        let spec = super::Generator {
+            kind: crate::abi::GEN_BARS,
+            scroll: true,
+            ..super::Generator::default()
+        };
+        assert!(super::generator_needs_rebake(&spec, Some(&spec), true));
     }
 }
 

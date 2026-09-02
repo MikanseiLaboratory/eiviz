@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::abi::{mixing_unit_bus, mixing_unit_from_source, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW};
 use crate::compose::{Composer, UnitTargets};
 use crate::device::GpuDevice;
+use crate::upload::texture_bytes;
 
 struct DelaySlot {
     mixed: wgpu::Texture,
@@ -53,6 +54,14 @@ impl FrameDelay {
 
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.units
+            .values()
+            .flat_map(|ring| ring.slots.iter())
+            .map(DelaySlot::vram_bytes)
+            .sum()
     }
 
     /// Drop queued display frames so present falls back to the current compose
@@ -251,6 +260,23 @@ impl DelaySlot {
             slot.multiview = Some(tex);
         }
         slot
+    }
+
+    fn vram_bytes(&self) -> u64 {
+        let mut total = texture_bytes(&self.mixed) + texture_bytes(&self.preview);
+        if let Some(tex) = &self.packed {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_prv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_mv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.multiview {
+            total += texture_bytes(tex);
+        }
+        total
     }
 }
 
