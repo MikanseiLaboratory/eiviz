@@ -3,7 +3,7 @@ title: System architecture
 description: Mixer versus host, the compose pipeline, and how GPU and audio move
 ---
 
-A map for implementers. It deliberately avoids file and function names. Concepts live under [Concepts](/concepts/inputs/). Stack choices live in [About eiviz](/introduction/about/).
+A map for implementers. It deliberately avoids file and function names. Concepts live under [Concepts](/eiviz/en/concepts/inputs/). Stack choices live in [About eiviz](/eiviz/en/introduction/about/).
 
 ## Shape
 
@@ -142,4 +142,4 @@ The document holds settings, inputs, scenes, Mixing Units, outputs, multiviews, 
 
 Windows uses a child HWND as the preview surface. macOS passes an NSView; wgpu attaches a Metal layer. Layout matches across the two.
 
-Linux has neither a GPU backend nor a UI yet. The intended stack is in [About eiviz](/introduction/about/).
+Linux has neither a GPU backend nor a UI yet. The intended stack is in [About eiviz](/eiviz/en/introduction/about/).

@@ -3,7 +3,7 @@ title: システム要件とサポートするハードウェア
 description: eivizが必要とする環境とサポートするハードウェア
 ---
 
-2026年9月現在の想定環境です。SKUの網羅リストではなく、アップロード経路が成立する世代の下限です。なぜこの経路が必要かは[システムアーキテクチャ](/introduction/architecture/)を、技術選定は[eivizについて](/introduction/about/)を見てください。
+2026年9月現在の想定環境です。SKUの網羅リストではなく、アップロード経路が成立する世代の下限です。なぜこの経路が必要かは[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)を、技術選定は[eivizについて](/eiviz/ja/introduction/about/)を見てください。
 
 本番配信での利用は非推奨です。
 

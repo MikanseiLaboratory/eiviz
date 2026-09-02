@@ -3,7 +3,7 @@ title: System requirements and supported hardware
 description: What eiviz needs to run, and which hardware is supported
 ---
 
-This is the intended environment as of September 2026. It is a generation floor for the upload path, not a SKU catalog. Why that path exists is in [System architecture](/introduction/architecture/). Stack choices are in [About eiviz](/introduction/about/).
+This is the intended environment as of September 2026. It is a generation floor for the upload path, not a SKU catalog. Why that path exists is in [System architecture](/eiviz/en/introduction/architecture/). Stack choices are in [About eiviz](/eiviz/en/introduction/about/).
 
 eiviz is not recommended for production.
 

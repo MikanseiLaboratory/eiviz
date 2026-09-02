@@ -7,8 +7,8 @@ description: Official eiviz documentation
 
 This site covers how to use eiviz, why it exists, and how it is meant to be run in the field.
 
-- [About eiviz](/introduction/about/) — motivation and technology choices
-- [Mikansei Laboratory](/introduction/mikansei-laboratory/) — the community behind eiviz
-- [System requirements](/introduction/requirements/) — supported environments and hardware
-- [Inputs](/concepts/inputs/) — Input, Scene, and Output
-- [System architecture](/introduction/architecture/) — mixer core and UI hosts
+- [About eiviz](/eiviz/en/introduction/about/) — motivation and technology choices
+- [Mikansei Laboratory](/eiviz/en/introduction/mikansei-laboratory/) — the community behind eiviz
+- [System requirements](/eiviz/en/introduction/requirements/) — supported environments and hardware
+- [Inputs](/eiviz/en/concepts/inputs/) — Input, Scene, and Output
+- [System architecture](/eiviz/en/introduction/architecture/) — mixer core and UI hosts

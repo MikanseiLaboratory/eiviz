@@ -15,4 +15,4 @@ Multiview Busは複数のInput、SceneやPreview/Programをアサインするこ
 
 ## Input/Output re-route
 
-PreviewとProgramにはSceneとInputを載せられます。OutputのソースはInput、Scene、MU Preview、MU Program、Multiviewです。流れは[Inputs](/concepts/inputs/)です。
+PreviewとProgramにはSceneとInputを載せられます。OutputのソースはInput、Scene、MU Preview、MU Program、Multiviewです。流れは[Inputs](/eiviz/ja/concepts/inputs/)です。

@@ -3,7 +3,7 @@ title: システムアーキテクチャ
 description: Mixerとホストの責務分担、合成パイプライン、GPUと音声の流れ
 ---
 
-実装者向けの概観です。ファイル名や関数名は意図的に書いていません。概念の定義は[eiviz上の概念](/concepts/inputs/)、技術選定は[eivizについて](/introduction/about/)です。
+実装者向けの概観です。ファイル名や関数名は意図的に書いていません。概念の定義は[eiviz上の概念](/eiviz/ja/concepts/inputs/)、技術選定は[eivizについて](/eiviz/ja/introduction/about/)です。
 
 ## 全体像
 
@@ -135,4 +135,4 @@ OMT受信は、Preview/Programに乗っているときだけフル品質、外�
 
 Windowsは子ウィンドウ（HWND）をプレビュー面にします。macOSはNSViewを渡し、wgpuがMetalレイヤを付けます。レイアウトは両OSで揃えています。
 
-LinuxはGPUバックエンドもUIもまだありません。予定スタックは[eivizについて](/introduction/about/)です。
+LinuxはGPUバックエンドもUIもまだありません。予定スタックは[eivizについて](/eiviz/ja/introduction/about/)です。

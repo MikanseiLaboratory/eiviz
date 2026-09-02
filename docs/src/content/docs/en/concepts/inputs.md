@@ -33,4 +33,4 @@ Add them from Inputs in the main window.
 
 Use an Input as a Scene layer, a Mixing Unit bus, a Multiview tile, or an Output source.
 
-[Scenes](/concepts/scenes/) · [Mixing Unit](/concepts/mixing-unit/) · [Outputs](/concepts/outputs/)
+[Scenes](/eiviz/en/concepts/scenes/) · [Mixing Unit](/eiviz/en/concepts/mixing-unit/) · [Outputs](/eiviz/en/concepts/outputs/)

@@ -17,4 +17,4 @@ A Multiview bus assigns Inputs, Scenes, and Preview/Program into one mosaic. Up 
 
 ## Input/Output re-route
 
-Preview and Program can take a Scene or an Input. An Output’s source is Input, Scene, MU Preview, MU Program, or Multiview. Signal flow is [Inputs](/concepts/inputs/).
+Preview and Program can take a Scene or an Input. An Output’s source is Input, Scene, MU Preview, MU Program, or Multiview. Signal flow is [Inputs](/eiviz/en/concepts/inputs/).

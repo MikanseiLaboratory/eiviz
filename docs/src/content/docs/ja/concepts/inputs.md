@@ -33,4 +33,4 @@ OutputのソースはInput、Scene、Mixing UnitのPreview/Program、Multiview�
 
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。
 
-[Scenes](/concepts/scenes/) · [Mixing Unit](/concepts/mixing-unit/) · [Outputs](/concepts/outputs/)
+[Scenes](/eiviz/ja/concepts/scenes/) · [Mixing Unit](/eiviz/ja/concepts/mixing-unit/) · [Outputs](/eiviz/ja/concepts/outputs/)

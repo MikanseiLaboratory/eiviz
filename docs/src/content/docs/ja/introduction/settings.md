@@ -15,7 +15,7 @@ Preview色、Program色、非アクティブ色は、ボタンやシーンタイ
 
 Mixing Unitの既定サイズは、これから足すユニットの解像度です。既定は1920x1080。既にあるユニットは変わりません。この項目はWindowsの表示タブにあります。
 
-フレームバッファは、完成したフレームを何枚持つかです。1〜8、既定は3。合成が一瞬遅れても出力が止まらないための逃げで、音声も同じフレーム数だけ遅れます。空になると、クロックが追いつくまで合成を飛ばします。仕組みは[システムアーキテクチャ](/introduction/architecture/)です。
+フレームバッファは、完成したフレームを何枚持つかです。1〜8、既定は3。合成が一瞬遅れても出力が止まらないための逃げで、音声も同じフレーム数だけ遅れます。空になると、クロックが追いつくまで合成を飛ばします。仕組みは[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)です。
 
 内部カラーフォーマットは、RAM上とGPUへ上げるときの画素の持ち方です。既定のUYVY 4:2:2はBGRAの半分のサイズで、実際に合成するフレームだけRGBへ変換します。BGRA 8-bit 4:4:4は変換を省きたいとき用です。変えるとファイル入力などのポンプを作り直します。この項目もWindowsの表示タブにあります。
 
@@ -23,7 +23,7 @@ Mixing Unitの既定サイズは、これから足すユニットの解像度で
 
 いま使っているグラフィックスアダプター名が出ます。Mixerが落ちていると出せません。
 
-WindowsではResizable BARの可否と、BAR窓/VRAM、GPU upload heapの有無を出します。「ReBAR最適化を使う」は、wgpuのシステムメモリステージングではなく、D3D12のGPU upload heap（VRAM）へ書きます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやデバイスリセットが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/introduction/about/)です。
+WindowsではResizable BARの可否と、BAR窓/VRAM、GPU upload heapの有無を出します。「ReBAR最適化を使う」は、wgpuのシステムメモリステージングではなく、D3D12のGPU upload heap（VRAM）へ書きます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやデバイスリセットが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/eiviz/ja/introduction/about/)です。
 
 macOS（Apple Silicon）ではUnified Memory最適化です。ライブ入力を`MTLStorageModeShared`のテクスチャへ書き、そのままサンプルします。オフにすると通常のMetalアップロードに戻ります。
 
@@ -31,7 +31,7 @@ macOS（Apple Silicon）ではUnified Memory最適化です。ライブ入力を
 
 ## 出力
 
-OMTとNDI®はMixerから送ります。送出の中身は[NDI/OMT](/features/outputs/ndi-omt/)です。
+OMTとNDI®はMixerから送ります。送出の中身は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)です。
 
 各行は名前、輸送、Enabled、ソースです。輸送はOMTとNDI。WindowsはDeckLinkも出ますが、このビルドではSDKを繋いでいないのですぐ失敗します。ソースはInput、Scene、MU PRV、MU PGM、Multiviewから選びます。
 
@@ -41,7 +41,7 @@ Windowsは設定をOKしたときにMixerへ渡し、macOSは行のApplyでも�
 
 ## Multiview
 
-モザイクの定義とウィンドウの追加です。概念は[Multiviews](/concepts/multiviews/)。`+`で足し、開く、レイアウト、削除があります。フルスクリーンはF11です。
+モザイクの定義とウィンドウの追加です。概念は[Multiviews](/eiviz/ja/concepts/multiviews/)。`+`で足し、開く、レイアウト、削除があります。フルスクリーンはF11です。
 
 「新規Multiviewの既定Mixing Unit」は、新しいモザイクがどのユニットのPreview/Programを見るかです。
 
@@ -49,7 +49,7 @@ Windowsは設定をOKしたときにMixerへ渡し、macOSは行のApplyでも�
 
 ## 音声AUX
 
-内部ミックスは48 kHzステレオです。MasterとHeadphoneは消せません。A〜HのAUXを最大8本足せます。バスの意味は[Audio Auxs](/concepts/audio-auxs/)、デバイス側は[音声、ASIOなど](/features/outputs/audio/)です。
+内部ミックスは48 kHzステレオです。MasterとHeadphoneは消せません。A〜HのAUXを最大8本足せます。バスの意味は[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)、デバイス側は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)です。
 
 Enabledは、ハードウェアなしでバスをミックスに残します。実機へ出すときは、WindowsがWASAPIとASIO、macOSがCore Audioです。Left/Rightをデバイスのチャンネル番号へ割り当てます。WASAPIはExclusiveを持てます。
 

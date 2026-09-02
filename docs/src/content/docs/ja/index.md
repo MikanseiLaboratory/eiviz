@@ -7,8 +7,8 @@ description: eiviz公式ドキュメント
 
 このサイトでは、使い方、開発目的、現場での運用までをまとめています。
 
-- [eivizについて](/introduction/about/) — 開発動機と技術選定
-- [未完成成果物研究所](/introduction/mikansei-laboratory/) — 開発コミュニティ
-- [システム要件](/introduction/requirements/) — 対応環境とハードウェア
-- [Inputs](/concepts/inputs/) — Input・Scene・Outputの関係
-- [システムアーキテクチャ](/introduction/architecture/) — MixerとUIの構成
+- [eivizについて](/eiviz/ja/introduction/about/) — 開発動機と技術選定
+- [未完成成果物研究所](/eiviz/ja/introduction/mikansei-laboratory/) — 開発コミュニティ
+- [システム要件](/eiviz/ja/introduction/requirements/) — 対応環境とハードウェア
+- [Inputs](/eiviz/ja/concepts/inputs/) — Input・Scene・Outputの関係
+- [システムアーキテクチャ](/eiviz/ja/introduction/architecture/) — MixerとUIの構成
