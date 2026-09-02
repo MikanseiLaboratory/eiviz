@@ -3,8 +3,17 @@ title: Multiviews
 description: A monitor mosaic of several sources
 ---
 
-Several sources on one picture, for monitoring. Same job as an ATEM Multiview or a TriCaster multiview. It is not the switcher.
+<img src="/eiviz/concepts/multiview.jpg" alt="Multiview example" style="max-width: 100%; height: auto;" />
 
-Templates are Preview+Program plus a grid, or 2×2 / 3×3 / 4×4 and similar. A tile can be an Input, a Scene, or Mixing Unit Preview/Program. It can also be an [Output](/eiviz/en/concepts/outputs/) source.
+Several sources on one picture, for monitoring. Same job as an ATEM Multiview or a TriCaster multiview.  
+Like Mixing Units, you can add as many as the machine will take.
 
-Add one under [Settings](/eiviz/en/introduction/settings/) → Multiview. F11 is fullscreen. Preview refresh can be thinned. Program, Preview, and network output stay on the master frame rate.
+## Layout and tiles
+
+Templates are Preview+Program plus a grid, or 2×2 / 3×3 / 4×4 and similar.  
+A tile can be an Input, a Scene, or Mixing Unit Preview/Program.
+
+## Add and refresh interval
+
+Add one under [Settings](/eiviz/en/introduction/settings/), or from Multiview at the bottom right of the main UI.  
+Preview refresh can be thinned. Lower it on a weaker PC so monitoring does not hurt performance.

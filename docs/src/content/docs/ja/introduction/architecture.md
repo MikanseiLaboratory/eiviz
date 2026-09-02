@@ -3,13 +3,15 @@ title: システムアーキテクチャ
 description: Mixerとホストの責務分担、合成パイプライン、GPUと音声の流れ
 ---
 
-実装者向けの概観です。ファイル名や関数名は意図的に書いていません。概念の定義は[eiviz上の概念](/eiviz/ja/concepts/inputs/)、技術選定は[eivizについて](/eiviz/ja/introduction/about/)です。
+eivizのシステムアーキテクチャです。 プラットフォームを問わずある程度共通です。
 
 ## 全体像
 
-プロセスは1つです。映像と音声の状態機械はMixer（Rust + wgpu）にあり、OSごとのUIホストがC ABIでそれを操作します。WindowsはWPF、macOSはSwiftUIです。Linuxホストは未実装です。
+eivizは1プロセスで動作します。  
+映像と音声の状態機械はMixer（Rust + wgpu）にあり、OSごとのUIホストがC ABIでそれを操作します。WindowsはWPF、macOSはSwiftUIです。Linuxホストは未実装です。
 
-ホストはウィンドウ・操作・プレビュー面の提供などを含むUI表示と操作面の提供を担当します。合成、入力の取り込み、出力の送出、セッションJSONの正規化はcore/Mixerが担当することで、高いパフォーマンスとクロスプラットフォームを両立しています。
+ホストはウィンドウ、操作、プレビュー面など、UI表示と操作を担当します。  
+映像合成、音声処理、入出力の管理、セッションデータはMixerが担当し、根幹の処理をアーキテクチャ上UIから完全に分離することで高いパフォーマンスとクロスプラットフォームを両立しています。
 
 ```mermaid
 flowchart TB
@@ -39,18 +41,17 @@ flowchart TB
 | 合成・トランジション | 担当 | 操作を伝える |
 | GPUと音声デバイス | 担当 | 設定を渡す |
 | プレビュー表示 | ネイティブ面へ描く | 面（HWND / NSView）を用意する |
-| セッションファイル | 正。読み書きと正規化 | 編集用の写しを持つ。開いたあとに状態を打ち直す |
-| ウィンドウとテーマ | 知らない | 担当 |
 
 Mixerはプロセスに1つです。プレビュー以外、ホストへGPUポインタは渡しません。入力・シーン・Mixing Unitは整数IDで指します。
 
 ## 並行性
 
-UIスレッドは操作と面の寿命だけを扱います。ミックスクロックはマスターFPSで合成とプレビュー提示を回します。入力（ファイル、UVC、NDI、OMT）は別経路でフレームを溜め、クロックはそれを拾います。ネットワーク送出と音声デバイスI/Oもクロックから切り離します。
+UIスレッドは、操作と映像の表示を扱います。  
+ファイル、UVC、NDI、OMTなどの入力は別経路でフレームを溜め、一定間隔ごとにMixerがフレームを処理します。
 
-遅れが大きいときは合成を飛ばし、音声だけ進めて時計を戻します。プレビューが止まっても本線の音が貯まらないようにするためです。映像は数フレーム遅らせて音声と揃えます。
+処理が遅れた場合は合成をスキップし、音声だけ進めることでリアルタイムに復帰します。
+映像は数フレームバッファーを持たせて音声と揃えます。
 
-Windowsでは重い操作をUIから外すキューがあります。Tバーのように毎フレーム追従するものは同期です。macOSではプレビュー面の作成だけAppKitのmainに載せます。
 
 ```mermaid
 flowchart LR
@@ -65,7 +66,8 @@ flowchart LR
 
 ## ソースの指し方
 
-カラーやバーなどのジェネレータ、ユーザーが足した入力、シーンの合成結果、Mixing UnitのPreview/Program/Multiviewは、同じ「ソースID」空間に載ります。あるユニットのProgramを別ユニットの入力にできるのはそのためです。
+単色InputやColour Barなどのジェネレータや、セッションに追加した映像入力、シーンの合成結果、Mixing UnitのPreview/Program/Multiviewは、全て同じ**ソースID空間**に載ります。  
+このため、Mixing UnitのProgramを別Mixing Unitの映像入力として処理することが可能です。
 
 ```mermaid
 flowchart LR
@@ -74,13 +76,19 @@ flowchart LR
   scene["シーン"] --> id
   mu["Mixing UnitのPVW/PGM/MV"] --> id
   id --> compose["合成"]
+  compose --> mu
 ```
 
 ## 1フレーム
 
-入力スレッドが最新フレームを置く → Mixing UnitごとにPreviewとProgramを描き、TバーやAUTOのmixで混ぜ、オーバーレイとマルチビューを載せる → プレビュー面へ出す → 必要なら送出用にパックまたはGPUのまま渡す → 同じ刻みで音声バスを混ぜる。
+1フレームの流れは次のとおりです。
 
-CUTは即入れ替え、AUTOは時間でmixを動かす、Tバーはホストがmixを書きます。FADEとDIPはそのmixをシェーダで解釈します。
+1. 入力スレッドが最新フレームを置く
+2. Mixing UnitごとにPreviewとProgramを描き、TバーやAUTOのmixで混ぜ、オーバーレイとマルチビューを載せる
+3. 映像合成バスへ送信する
+4. 必要なら送出用に圧縮する。またはGPUテキスチャのまま渡す
+5. 同じタイミングで音声バスを混ぜる
+
 
 ```mermaid
 sequenceDiagram
@@ -98,12 +106,15 @@ sequenceDiagram
 
 ## GPU
 
-合成はwgpuの上で、WindowsはDirect3D 12、macOSはMetalです。CPUからの映像はシステムメモリ経由でアップロードされます。
+映像合成はwgpuを利用した抽象化レイヤーでGPU処理を呼び出しています。WindowsはDirect3D 12、macOSはMetalです。  
+CPUからの映像は、通常はシステムメモリ経由でアップロードされます。
 
-外部GPUでResizable BARが使えるWindowsでは、CPUからVRAMへ直接アップロードすることで高いパフォーマンスを実現しています。Apple SiliconはUnified Memoryで類似の機能が実装されています。
+外部GPUでResizable BARが使えるWindows環境では、wgpuのハードウェア抽象化を抽出し、DX12のローレベルAPIに直接アクセスすることでCPUからVRAMへ直接書き込み高いパフォーマンスを実現しています。  
+Apple SiliconはUnified Memoryで類似の経路を使います。
 
 ファイルやUVCは、可能な場合GPU上でデコードして合成フォーマットへ変換します。  
-NDIなどCPUヘビーな処理にCPUを割くため、可能な限りGPUを活用しています。この挙動は設定で変更が可能です。
+NDIなどCPU負荷の高い処理にCPUを割くため、可能な限りGPUを活用しています。  
+この挙動は[設定](/eiviz/ja/introduction/settings/)から変更できます。
 
 ```mermaid
 flowchart TB
@@ -117,9 +128,10 @@ flowchart TB
 
 ## 音声
 
-48 kHzのグラフです。MasterとHeadphoneが固定で、AUXを追加可能です。入力はバスマスクとゲイン、Mixing UnitはProgram/Previewに追従してバスへ送れます。オーバーレイはAudio Followを持てます。
+内部ミックスは48 kHzのグラフです。MasterとHeadphoneが固定で、AUXを追加できます。  
+入力はバスマスクとゲインを持ち、Mixing UnitはProgramに追従した音声(Audio Follow)をバスへ送れます。オーバーレイも同様にAudio Followを設定可能です。
 
-ライブ入力は取り込みを抑え、ファイルは絵より音が先行しないように同期します。
+詳細は[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)をご参照ください。
 
 ## 出力
 
@@ -127,12 +139,16 @@ flowchart TB
 | --- | --- | --- |
 | OMT | GPUに載せたまま送るか、CPUへ戻してエンコードするか選べる | 実装済み |
 | NDI | CPU経路 | 実装済み |
-| DeckLink | — | UIにあるが、このビルドでは未接続 |
+| DeckLink | — | 現在実装中 |
 
-OMT受信は、Preview/Programに乗っているときだけフル品質、外れたら帯域を落とします。TAKEやTバーで受信を作り直さないよう、外れてもしばらくフルを維持します。
+OMT受信は、Preview/Programに乗っているときだけフル品質、外れたら帯域を落とします。  
+TAKEやTバーで受信を作り直さないよう、外れてもしばらくフル品質を維持します。
+
+詳細は[設定](/eiviz/ja/introduction/settings/)の出力と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
 
 ## ホスト
 
-Windowsは子ウィンドウ（HWND）をプレビュー面にします。macOSはNSViewを渡し、wgpuがMetalレイヤを付けます。レイアウトは両OSで揃えています。
+Windowsは映像テキスチャを子ウィンドウ（HWND）に紐付けることで映像表示を実現しています。  
+macOSはNSViewを作成し、wgpuがMetalレイヤから同様にテキスチャを紐付けます。
 
-LinuxはGPUバックエンドもUIもまだありません。予定スタックは[eivizについて](/eiviz/ja/introduction/about/)です。
+

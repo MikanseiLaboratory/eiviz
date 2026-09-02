@@ -3,10 +3,12 @@ title: Mixing Unit
 description: PreviewとProgramでSceneを切り替える単位
 ---
 
-他スイッチャーのM/Eです。vMixのMix Input、TriCasterやATEMのM/E、Kairosのシーンに相当します。Previewに次の絵、Programに本線を載せ、CUT、AUTO、Tバーで入れ替えます。
+他スイッチャーのM/Eに該当する機能です。vMixのMix Input、TriCasterやATEMのM/E、Kairosのシーンに相当します。  
+メインの映像スイッチングオペレーションを担う根幹機能です。 Previewに次の絵、Programに現在使用する映像が表示されます。
 
-セッションあたりの数に上限はありません。マシンが持つだけ足せます。解像度と出力フレームレートはユニットごとに持てます。セッション全体の時計は[設定](/eiviz/ja/introduction/settings/)のマスターフレームレートです。
+セッションあたりの数に上限はありません。マシンの性能が許す限り上限なしで追加可能です。  
+解像度と出力フレームレートはユニットごとに持てます。  
 
-[Overlay](/eiviz/ja/concepts/overlays/)はこのユニットのProgramに載ります。あるユニットのProgramを、別ユニットの入力にもできます。
+[Overlay](/eiviz/ja/concepts/overlays/)はこのユニットのProgramに載ります。あるユニットのProgramを、別ユニットの入力やOutputのソースにもできます。
 
-バスの本数と操作は[Vision Mixing](/eiviz/ja/features/vision-mixing/)です。
+切替用の映像バスはPreviewとProgramです。
