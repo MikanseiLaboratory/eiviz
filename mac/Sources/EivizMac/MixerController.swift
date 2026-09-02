@@ -54,6 +54,7 @@ final class MixerController: ObservableObject {
     private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
     private let inputPreviewCloser = InputPreviewCloser()
     private var switcherWindows: [UInt64: NSWindow] = [:]
+    private var switcherSceneMonitors: [UInt64: [UInt64: UInt64]] = [:]
     private let switcherCloser = SwitcherCloser()
     private var multiviewWindows: [UInt64: NSWindow] = [:]
     private let multiviewCloser = SwitcherCloser()
@@ -561,8 +562,15 @@ final class MixerController: ObservableObject {
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name
+            window.level = unit.alwaysOnTop ? .floating : .normal
         }
         updateStatus()
+    }
+
+    func setSwitcherAlwaysOnTop(_ unitId: UInt64, _ on: Bool) {
+        guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
+        session.units[index].alwaysOnTop = on
+        switcherWindows[unitId]?.level = on ? .floating : .normal
     }
 
     func toggleOverlay(_ slot: OverlaySlot) {
@@ -651,6 +659,7 @@ final class MixerController: ObservableObject {
         let unit = unit(for: unitId)
         if let existing = switcherWindows[unit.id] {
             existing.makeKeyAndOrderFront(nil)
+            existing.level = unit.alwaysOnTop ? .floating : .normal
             return
         }
         let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self))
@@ -666,10 +675,12 @@ final class MixerController: ObservableObject {
         window.isReleasedWhenClosed = false
         window.backgroundColor = NSColor(calibratedWhite: 26 / 255, alpha: 1)
         window.tabbingMode = .disallowed
+        window.level = unit.alwaysOnTop ? .floating : .normal
         window.center()
         switcherCloser.onClose = { [weak self] closedId in
             Task { @MainActor in
                 self?.switcherWindows.removeValue(forKey: closedId)
+                self?.switcherSceneMonitors.removeValue(forKey: closedId)
             }
         }
         window.delegate = switcherCloser
@@ -681,6 +692,17 @@ final class MixerController: ObservableObject {
         let window = switcherWindows.removeValue(forKey: unitId)
         window?.delegate = nil
         window?.close()
+        switcherSceneMonitors.removeValue(forKey: unitId)
+    }
+
+    func monitorIdForSwitcherScene(unitId: UInt64, sceneId: UInt64) -> UInt64 {
+        if let existing = switcherSceneMonitors[unitId]?[sceneId] {
+            return existing
+        }
+        let monitorId = session.nextMonitorId
+        session.nextMonitorId += 1
+        switcherSceneMonitors[unitId, default: [:]][sceneId] = monitorId
+        return monitorId
     }
 
     func closeAllSwitchers() {

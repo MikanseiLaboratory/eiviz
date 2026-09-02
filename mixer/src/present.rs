@@ -565,6 +565,7 @@ fn draw_presenter(
             if presenter.bind_key != cache_key || presenter.bind.is_none() {
                 let params = BlitParams {
                     dst: [0.0, 0.0, 1.0, 1.0],
+                    src: [0.0, 0.0, 1.0, 1.0],
                     opacity: 1.0,
                     pad: [0.0; 3],
                 };
@@ -624,6 +625,7 @@ fn submit_presents(
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitParams {
     dst: [f32; 4],
+    src: [f32; 4],
     opacity: f32,
     pad: [f32; 3],
 }
@@ -746,7 +748,13 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::pick_present_mode;
+    use super::{pick_present_mode, BlitParams};
+
+    #[test]
+    fn present_params_match_uyvy_shader() {
+        assert_eq!(std::mem::size_of::<BlitParams>(), 48);
+        assert_eq!(std::mem::offset_of!(BlitParams, src), 16);
+    }
 
     #[test]
     fn prefers_fifo_over_immediate() {

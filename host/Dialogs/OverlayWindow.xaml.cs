@@ -12,7 +12,6 @@ public partial class OverlayWindow : Window
 {
     private readonly Session _session;
     private MixingUnitEntry _unit;
-    private readonly ulong _monitorId;
     private OverlaySlot? _selected;
     private bool _dragging;
     private bool _resizing;
@@ -27,7 +26,6 @@ public partial class OverlayWindow : Window
         InitializeComponent();
         _session = session;
         _unit = unit;
-        _monitorId = session.NextMonitorId++;
         AddKindBox.SelectedIndex = 0;
         FillAddSources();
         Title = $"Overlays — {unit.Name}";
@@ -36,6 +34,7 @@ public partial class OverlayWindow : Window
         WireCanvas.Width = unit.Width;
         WireCanvas.Height = unit.Height;
         WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
+        PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         Loaded += (_, _) =>
         {
             _unit.Overlays.Sort((a, b) => b.Z.CompareTo(a.Z));
@@ -55,6 +54,7 @@ public partial class OverlayWindow : Window
         WireCanvas.Width = unit.Width;
         WireCanvas.Height = unit.Height;
         WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
+        PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         _selected = unit.Overlays.FirstOrDefault();
         RefreshList();
     }
@@ -173,14 +173,24 @@ public partial class OverlayWindow : Window
 
     private DockPanel BuildSlotRow(OverlaySlot slot)
     {
-        var onBtn = new Button
+        var hide = new Button
         {
-            Content = slot.Enabled ? "ON" : "OFF",
-            Width = 36,
+            Content = slot.Enabled ? "👁" : "–",
+            Width = 26,
             Height = 22,
             Padding = new Thickness(0),
             Tag = slot,
             ToolTip = "On/Off"
+        };
+        var audio = new Button
+        {
+            Content = slot.AudioFollow ? "🔊" : "🔇",
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(4, 0, 0, 0),
+            Tag = slot,
+            ToolTip = "Audio Follow"
         };
         var lockBtn = new Button
         {
@@ -192,20 +202,24 @@ public partial class OverlayWindow : Window
             Tag = slot,
             ToolTip = "Lock"
         };
-        onBtn.Click += SlotOn_Click;
+        hide.Click += SlotOn_Click;
+        audio.Click += SlotAudio_Click;
         lockBtn.Click += SlotLock_Click;
-        DockPanel.SetDock(lockBtn, Dock.Right);
-        DockPanel.SetDock(onBtn, Dock.Right);
-        var dim = !slot.Enabled;
+        DockPanel.SetDock(hide, Dock.Left);
+        DockPanel.SetDock(audio, Dock.Left);
+        DockPanel.SetDock(lockBtn, Dock.Left);
         var name = new TextBlock
         {
             Text = $"{_unit.Overlays.IndexOf(slot) + 1}. {slot.DisplayName(_session)}",
+            Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = dim ? new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)) : Brushes.White
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = slot.Enabled ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
         };
-        var row = new DockPanel { Tag = slot };
+        var row = new DockPanel { Tag = slot, LastChildFill = true };
+        row.Children.Add(hide);
+        row.Children.Add(audio);
         row.Children.Add(lockBtn);
-        row.Children.Add(onBtn);
         row.Children.Add(name);
         return row;
     }
@@ -292,7 +306,6 @@ public partial class OverlayWindow : Window
         CropHBox.Text = (_selected.CropHeight * HeightPx).ToString("0.#");
         OpBox.Text = _selected.Opacity.ToString("0.###");
         LinkBox.IsChecked = _selected.SizeLinked;
-        AudioFollowBox.IsChecked = _selected.AudioFollow;
         KindBox.SelectedIndex = _selected.TransitionKind == MixerNative.TransitionCut ? 0 : 1;
         DurationBox.Text = _selected.DurationValue.ToString();
         DurationUnitBox.SelectedIndex = _selected.DurationUnit == MixerNative.DurationMs ? 1 : 0;
@@ -336,15 +349,7 @@ public partial class OverlayWindow : Window
             : _session.Scenes.FirstOrDefault(item => item.GpuId == _selected.SceneGpuId);
     }
 
-    private void UpdatePreview()
-    {
-        if (_selected is null)
-            return;
-        if (PreviewHost.MonitorId == 0)
-            PreviewHost.RetargetMonitor(_monitorId, _selected.SceneGpuId);
-        else
-            PreviewHost.UpdateMonitorSource(_selected.SceneGpuId);
-    }
+    private void UpdatePreview() => PreviewHost.RefreshSize();
 
     private void Add_Click(object sender, RoutedEventArgs e)
     {
@@ -403,15 +408,17 @@ public partial class OverlayWindow : Window
             return;
         DrawWireframe();
         FillFields();
-        UpdatePreview();
     }
 
-    private void AudioFollow_Changed(object sender, RoutedEventArgs e)
+    private void SlotAudio_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppress || _selected is null)
+        if (sender is not Button { Tag: OverlaySlot slot })
             return;
-        _selected.AudioFollow = AudioFollowBox.IsChecked == true;
+        slot.AudioFollow = !slot.AudioFollow;
+        _selected = slot;
+        RefreshList();
         Push();
+        e.Handled = true;
     }
 
     private void Link_Click(object sender, RoutedEventArgs e)

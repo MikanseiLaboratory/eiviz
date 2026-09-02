@@ -3803,6 +3803,14 @@ mod tests {
     }
 
     #[test]
+    fn collect_live_ids_keeps_input_monitors() {
+        let (scenes, uploads) = collect_live_ids(&[], &[], &[SRC_COLOR, 20], &[]);
+        assert!(scenes.is_empty());
+        assert!(uploads.contains(&SRC_COLOR));
+        assert!(uploads.contains(&20));
+    }
+
+    #[test]
     fn rejects_invalid_framerate() {
         assert_eq!(mixer_create(0, 60_000, 0), ERR_INVALID_ARGUMENT);
     }

@@ -632,6 +632,7 @@ struct MixingUnitEntry: Identifiable, Codable {
     var overlays: [OverlaySlot] = []
     var audioBusId: UInt64 = 1
     var audioLink: AudioLinkMode = .follow
+    var alwaysOnTop: Bool = true
     var displayName: String { "\(name)  \(width)x\(height) \(fpsLabel)" }
     var fpsLabel: String {
         if fpsNum == 60_000 && fpsDen == 1_001 { return "59.94p" }
@@ -644,6 +645,30 @@ struct MixingUnitEntry: Identifiable, Codable {
 
     func durationMs(for preset: TransitionPreset) -> UInt32 {
         preset.durationUnit == 1 ? max(1, preset.durationValue) : durationMs(preset.durationValue)
+    }
+
+    init(id: UInt64, name: String) {
+        self.id = id
+        self.name = name
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, width, height, fpsNum, fpsDen, transitions, overlays, audioBusId, audioLink, alwaysOnTop
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 1920
+        height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 1080
+        fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 60_000
+        fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 1_001
+        transitions = try container.decodeIfPresent([TransitionPreset].self, forKey: .transitions) ?? []
+        overlays = try container.decodeIfPresent([OverlaySlot].self, forKey: .overlays) ?? []
+        audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
+        audioLink = try container.decodeIfPresent(AudioLinkMode.self, forKey: .audioLink) ?? .follow
+        alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
     }
 }
 

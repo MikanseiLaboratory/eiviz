@@ -50,78 +50,78 @@
         </DockPanel>
         <DockPanel Grid.Column="2">
             <TextBlock DockPanel.Dock="Top" Text="Live preview" FontWeight="Bold" Margin="0,0,0,6"/>
-            <StackPanel DockPanel.Dock="Bottom">
-                <TextBlock Text="Source" Margin="0,8,0,0"/>
-                <ComboBox x:Name="SourceKindBox" Margin="0,4,0,6" SelectionChanged="SourceKind_SelectionChanged">
-                    <ComboBoxItem Content="Scene"/>
-                    <ComboBoxItem Content="Input"/>
-                </ComboBox>
-                <ComboBox x:Name="SourceBox" Margin="0,0,0,8" DisplayMemberPath="Name"
-                          SelectionChanged="SourceBox_SelectionChanged"/>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="56"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="48"/>
-                        <ColumnDefinition Width="56"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
-                    <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y" VerticalAlignment="Center"/>
-                    <TextBox x:Name="YBox" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
-                    <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,4,6" LostFocus="Numeric_LostFocus"/>
-                    <CheckBox x:Name="LinkBox" Grid.Row="1" Grid.Column="2"
-                              Content="Link" VerticalAlignment="Center" Margin="0,0,4,6" Foreground="#EEEEEE"
-                              Click="Link_Click"/>
-                    <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
-                    <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Crop X" VerticalAlignment="Center"/>
-                    <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Crop Y" VerticalAlignment="Center"/>
-                    <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Crop W" VerticalAlignment="Center"/>
-                    <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Crop H" VerticalAlignment="Center"/>
-                    <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
-                    <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                </Grid>
-                <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,8">
-                    <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>
-                    <Slider x:Name="MeterSlider" Height="18"
-                            ValueChanged="MeterSlider_ValueChanged"
-                            PreviewMouseLeftButtonUp="MeterSlider_MouseUp"/>
-                </StackPanel>
-                <CheckBox x:Name="AudioFollowBox" Content="Audio Follow" Foreground="#EEE" Margin="0,8,0,8"
-                          Checked="AudioFollow_Changed" Unchecked="AudioFollow_Changed"/>
-                <Button Content="Reset" Height="26" Margin="0,0,0,8" Click="Reset_Click"/>
-                <TextBlock Text="On/Off" Margin="0,8,0,4"/>
-                <ComboBox x:Name="KindBox" Margin="0,0,0,8" SelectionChanged="KindBox_SelectionChanged">
-                    <ComboBoxItem Content="Cut" Tag="0"/>
-                    <ComboBoxItem Content="Fade" Tag="1"/>
-                </ComboBox>
-                <TextBlock Text="Duration"/>
-                <DockPanel Margin="0,4,0,8">
-                    <ComboBox x:Name="DurationUnitBox" DockPanel.Dock="Right" Width="110"
-                              SelectionChanged="DurationUnit_Changed">
-                        <ComboBoxItem Content="Frames" Tag="0"/>
-                        <ComboBoxItem Content="Milliseconds" Tag="1"/>
+            <ScrollViewer DockPanel.Dock="Bottom" MaxHeight="360" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="Source" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="SourceKindBox" Margin="0,4,0,6" SelectionChanged="SourceKind_SelectionChanged">
+                        <ComboBoxItem Content="Scene"/>
+                        <ComboBoxItem Content="Input"/>
                     </ComboBox>
-                    <TextBox x:Name="DurationBox" Margin="0,0,8,0" LostFocus="Duration_LostFocus"/>
-                </DockPanel>
-            </StackPanel>
-            <Border Background="#111" BorderBrush="#555" BorderThickness="1" Margin="0,0,0,12">
+                    <ComboBox x:Name="SourceBox" Margin="0,0,0,8" DisplayMemberPath="Name"
+                              SelectionChanged="SourceBox_SelectionChanged"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="56"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="48"/>
+                            <ColumnDefinition Width="56"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
+                        <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y" VerticalAlignment="Center"/>
+                        <TextBox x:Name="YBox" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
+                        <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,4,6" LostFocus="Numeric_LostFocus"/>
+                        <CheckBox x:Name="LinkBox" Grid.Row="1" Grid.Column="2"
+                                  Content="Link" VerticalAlignment="Center" Margin="0,0,4,6" Foreground="#EEEEEE"
+                                  Click="Link_Click"/>
+                        <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
+                        <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Crop X" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Crop Y" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Crop W" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Crop H" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
+                        <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                    </Grid>
+                    <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,8">
+                        <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>
+                        <Slider x:Name="MeterSlider" Height="18"
+                                ValueChanged="MeterSlider_ValueChanged"
+                                PreviewMouseLeftButtonUp="MeterSlider_MouseUp"/>
+                    </StackPanel>
+                    <Button Content="Reset" Height="26" Margin="0,0,0,8" Click="Reset_Click"/>
+                    <TextBlock Text="On/Off" Margin="0,8,0,4"/>
+                    <ComboBox x:Name="KindBox" Margin="0,0,0,8" SelectionChanged="KindBox_SelectionChanged">
+                        <ComboBoxItem Content="Cut" Tag="0"/>
+                        <ComboBoxItem Content="Fade" Tag="1"/>
+                    </ComboBox>
+                    <TextBlock Text="Duration"/>
+                    <DockPanel Margin="0,4,0,8">
+                        <ComboBox x:Name="DurationUnitBox" DockPanel.Dock="Right" Width="110"
+                                  SelectionChanged="DurationUnit_Changed">
+                            <ComboBoxItem Content="Frames" Tag="0"/>
+                            <ComboBoxItem Content="Milliseconds" Tag="1"/>
+                        </ComboBox>
+                        <TextBox x:Name="DurationBox" Margin="0,0,8,0" LostFocus="Duration_LostFocus"/>
+                    </DockPanel>
+                </StackPanel>
+            </ScrollViewer>
+            <Border Background="#111" BorderBrush="#555" BorderThickness="1" Margin="0,0,0,12" MinHeight="160">
                 <preview:AspectBox x:Name="PreviewAspect" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True"/>
+                    <preview:SwapchainHost x:Name="PreviewHost"/>
                 </preview:AspectBox>
             </Border>
         </DockPanel>

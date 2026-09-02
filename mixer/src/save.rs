@@ -193,6 +193,13 @@ mod tests {
     }
 
     #[test]
+    fn input_monitor_counts_as_preview() {
+        let roles = collect_source_roles(&[], &[], &[20, SRC_COLOR], &[]);
+        assert!(roles.get(&20).is_some_and(|item| item.on_preview && !item.on_program));
+        assert!(roles.get(&SRC_COLOR).is_some_and(|item| item.on_preview));
+    }
+
+    #[test]
     fn tbar_mix_puts_preview_on_program() {
         let snapshot = [unit(SRC_COLOR, 20, 0.4)];
         let roles = collect_source_roles(&[], &snapshot, &[], &[]);

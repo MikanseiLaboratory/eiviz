@@ -675,6 +675,7 @@ public sealed class MixingUnitEntry
     public List<OverlaySlot> Overlays { get; } = [];
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
+    public bool AlwaysOnTop { get; set; } = true;
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
 
     public string FormatFps()

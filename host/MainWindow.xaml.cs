@@ -1423,7 +1423,10 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
-        var window = new SwitcherWindow(unit) { Owner = this };
+        var window = new SwitcherWindow(unit);
+        if (unit.AlwaysOnTop)
+            window.Owner = this;
+        window.Topmost = unit.AlwaysOnTop;
         window.Closed += (_, _) => _switchers.Remove(unit.Id);
         _switchers[unit.Id] = window;
         window.Show();

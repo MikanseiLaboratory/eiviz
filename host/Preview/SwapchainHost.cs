@@ -118,6 +118,8 @@ internal sealed partial class SwapchainHost : HwndHost
         {
             if (IsMonitor)
             {
+                if (MonitorId == 0 || SourceId == 0)
+                    return;
                 MixerNative.ThrowIfFailed(
                     MixerNative.AttachMonitor(MonitorId, SourceId, _hwnd, width, height),
                     "Attach source monitor");

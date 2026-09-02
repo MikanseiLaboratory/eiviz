@@ -287,6 +287,7 @@ internal static class SessionStore
         public List<OverlaySlot> Overlays { get; set; } = [];
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
+        public bool? AlwaysOnTop { get; set; }
 
         public static UnitDto From(MixingUnitEntry unit) => new()
         {
@@ -299,7 +300,8 @@ internal static class SessionStore
             Transitions = [.. unit.Transitions],
             Overlays = [.. unit.Overlays],
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
-            AudioLink = unit.AudioLink
+            AudioLink = unit.AudioLink,
+            AlwaysOnTop = unit.AlwaysOnTop
         };
 
         public MixingUnitEntry ToEntry()
@@ -313,7 +315,8 @@ internal static class SessionStore
                 FpsNum = FpsNum == 0 ? 60_000 : FpsNum,
                 FpsDen = FpsDen == 0 ? 1_001 : FpsDen,
                 AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
-                AudioLink = AudioLink
+                AudioLink = AudioLink,
+                AlwaysOnTop = AlwaysOnTop ?? true
             };
             foreach (var preset in Transitions)
                 unit.Transitions.Add(preset);

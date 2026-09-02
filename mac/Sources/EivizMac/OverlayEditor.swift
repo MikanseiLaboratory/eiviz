@@ -5,7 +5,6 @@ struct OverlayView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
     @State private var selected: UUID?
-    @State private var previewMonitor: UInt64 = 0
     @State private var lastGpuPush = Date.distantPast
     @State private var addKind: OverlaySourceKind = .scene
     @State private var addSourceId: UInt64 = 0
@@ -21,8 +20,6 @@ struct OverlayView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
-            previewMonitor = mixer.session.nextMonitorId
-            mixer.session.nextMonitorId += 1
             selected = unit.overlays.first?.id
             addSourceId = mixer.session.scenes.first?.gpuId ?? 0
             reindexOverlays()
@@ -59,9 +56,13 @@ struct OverlayView: View {
                 OverlayListRow(
                     title: rowTitle(pair.offset, pair.element),
                     enabled: pair.element.enabled,
+                    audioFollow: pair.element.audioFollow,
                     locked: pair.element.locked,
                     onToggleEnabled: {
                         mixer.setOverlayEnabled(pair.element.id, enabled: !pair.element.enabled)
+                    },
+                    onToggleAudio: {
+                        toggleOverlay(pair.element.id, \.audioFollow)
                     },
                     onToggleLock: {
                         toggleOverlay(pair.element.id, \.locked)
@@ -132,14 +133,17 @@ struct OverlayView: View {
         VStack(alignment: .leading) {
             Text("Live preview").fontWeight(.bold)
             overlayLivePreview
-            if let slot = current {
-                overlaySourcePickers(slot)
-                    .disabled(slot.locked)
-                overlayFollowAndReset(slot)
-                overlayTransform
-                overlayFields
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let slot = current {
+                        overlaySourcePickers(slot)
+                            .disabled(slot.locked)
+                        overlayReset(slot)
+                        overlayTransform
+                        overlayFields
+                    }
+                }
             }
-            Spacer()
             HStack {
                 Spacer()
                 Button("Close") { dismiss() }
@@ -150,16 +154,13 @@ struct OverlayView: View {
     }
 
     private var overlayLivePreview: some View {
-        MetalPreviewRepresentable(role: .monitor(
-            monitorId: previewMonitor,
-            sourceId: current?.sceneGpuId ?? mixer.session.scenes.first?.gpuId ?? 0
-        ))
-        .aspectRatio(
-            CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
-            contentMode: .fit
-        )
-        .frame(maxWidth: .infinity)
-        .background(Color.black)
+        MetalPreviewRepresentable(role: .unit(unitId: unit.id, kind: EIVIZ_OUTPUT_PROGRAM))
+            .aspectRatio(
+                CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+                contentMode: .fit
+            )
+            .frame(maxWidth: .infinity, minHeight: 160)
+            .background(Color.black)
     }
 
     @ViewBuilder
@@ -198,20 +199,11 @@ struct OverlayView: View {
         }
     }
 
-    private func overlayFollowAndReset(_ slot: OverlaySlot) -> some View {
-        Group {
-            Toggle("Audio Follow", isOn: Binding(
-                get: { slot.audioFollow },
-                set: { value in
-                    mutate { $0.audioFollow = value }
-                    mixer.pushOverlays()
-                }
-            ))
-            Button("Reset") {
-                guard slot.locked == false else { return }
-                mutate { $0.resetLayout() }
-                mixer.pushOverlays()
-            }
+    private func overlayReset(_ slot: OverlaySlot) -> some View {
+        Button("Reset") {
+            guard slot.locked == false else { return }
+            mutate { $0.resetLayout() }
+            mixer.pushOverlays()
         }
     }
 
@@ -416,19 +408,25 @@ struct OverlayView: View {
 private struct OverlayListRow: View {
     let title: String
     let enabled: Bool
+    let audioFollow: Bool
     let locked: Bool
     let onToggleEnabled: () -> Void
+    let onToggleAudio: () -> Void
     let onToggleLock: () -> Void
 
     var body: some View {
-        HStack {
-            Text(title)
-                .foregroundStyle(enabled ? EivizTheme.text : EivizTheme.dim)
-            Spacer()
-            Button(enabled ? "ON" : "OFF", action: onToggleEnabled)
+        HStack(spacing: 4) {
+            Button(enabled ? "👁" : "–", action: onToggleEnabled)
+                .buttonStyle(.plain)
+            Button(audioFollow ? "🔊" : "🔇", action: onToggleAudio)
                 .buttonStyle(.plain)
             Button(locked ? "🔒" : "🔓", action: onToggleLock)
                 .buttonStyle(.plain)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(enabled ? EivizTheme.text : EivizTheme.dim)
+            Spacer(minLength: 0)
         }
     }
 }
