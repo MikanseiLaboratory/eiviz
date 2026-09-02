@@ -1101,12 +1101,17 @@ fn decode_audio(sample: &IMFSample, pts: i64, layout: &AudioLayout) -> Option<Au
             let _ = buffer.Unlock();
             return None;
         }
-        let mut planar = Vec::with_capacity(frames * channels * 4);
+        let mut planar = Vec::with_capacity(frames * channels);
         for ch in 0..channels {
             for i in 0..frames {
                 let o = (i * channels + ch) * 4;
                 if o + 4 <= bytes.len() {
-                    planar.extend_from_slice(&bytes[o..o + 4]);
+                    planar.push(f32::from_le_bytes([
+                        bytes[o],
+                        bytes[o + 1],
+                        bytes[o + 2],
+                        bytes[o + 3],
+                    ]));
                 }
             }
         }
@@ -1266,21 +1271,7 @@ fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize) -> (Vec<u8>,
     let h = height as usize;
     let dst_stride = w * 2;
     let mut dst = vec![0u8; dst_stride * h];
-    for y in 0..h {
-        let s = y * stride;
-        let d = y * dst_stride;
-        for x in (0..w).step_by(2) {
-            let i = s + x * 2;
-            let o = d + x * 2;
-            if i + 3 >= src.len() {
-                break;
-            }
-            dst[o] = src[i + 1];
-            dst[o + 1] = src[i];
-            dst[o + 2] = src[i + 3];
-            dst[o + 3] = src[i + 2];
-        }
-    }
+    crate::simd::yuy2_to_uyvy(src, width, height, stride, &mut dst);
     (dst, dst_stride, CpuFormat::Uyvy)
 }
 
@@ -1303,47 +1294,8 @@ fn packed_yuv_to_bgra(
     let h = height as usize;
     let dst_stride = w * 4;
     let mut dst = vec![0u8; dst_stride * h];
-    for y in 0..h {
-        let s = y * stride;
-        for x in (0..w).step_by(2) {
-            let i = s + x * 2;
-            if i + 3 >= src.len() {
-                break;
-            }
-            let (u, y0, v, y1) = if uyvy {
-                (
-                    src[i] as f32,
-                    src[i + 1] as f32,
-                    src[i + 2] as f32,
-                    src[i + 3] as f32,
-                )
-            } else {
-                (
-                    src[i + 1] as f32,
-                    src[i] as f32,
-                    src[i + 3] as f32,
-                    src[i + 2] as f32,
-                )
-            };
-            write_yuv_bgra(&mut dst, y * dst_stride + x * 4, y0, u - 128.0, v - 128.0);
-            write_yuv_bgra(
-                &mut dst,
-                y * dst_stride + (x + 1) * 4,
-                y1,
-                u - 128.0,
-                v - 128.0,
-            );
-        }
-    }
+    crate::simd::yuv422_to_bgra(src, width, height, stride, uyvy, &mut dst);
     (dst, dst_stride, CpuFormat::Bgra)
-}
-
-fn write_yuv_bgra(dst: &mut [u8], o: usize, luma: f32, u: f32, v: f32) {
-    let yv = (luma - 16.0) * (255.0 / 219.0);
-    dst[o] = (yv + 1.8556 * u).clamp(0.0, 255.0) as u8;
-    dst[o + 1] = (yv - 0.1873 * u - 0.4681 * v).clamp(0.0, 255.0) as u8;
-    dst[o + 2] = (yv + 1.5748 * v).clamp(0.0, 255.0) as u8;
-    dst[o + 3] = 255;
 }
 
 fn copy_packed(
@@ -1356,13 +1308,7 @@ fn copy_packed(
 ) -> (Vec<u8>, usize, CpuFormat) {
     let row = width as usize * bpp;
     let mut dst = vec![0u8; row * height as usize];
-    for y in 0..height as usize {
-        let s = y * stride;
-        if s + row > src.len() {
-            break;
-        }
-        dst[y * row..y * row + row].copy_from_slice(&src[s..s + row]);
-    }
+    crate::simd::copy_rows(src, stride, &mut dst, row, row, height as usize);
     (dst, row, format)
 }
 
@@ -1382,9 +1328,7 @@ fn copy_bgra(
             break;
         }
         dst[y * row..y * row + row].copy_from_slice(&src[s..s + row]);
-        for px in dst[y * row..y * row + row].chunks_exact_mut(4) {
-            px[3] = 255;
-        }
+        crate::simd::or_opaque_bgra(&mut dst[y * row..y * row + row]);
     }
     (dst, row, CpuFormat::Bgra)
 }

@@ -175,11 +175,20 @@ fn dxgi_vram(device_id: u32) -> u64 {
 /// Process GPU memory on this adapter (dedicated + shared), matching Task Manager.
 #[cfg(windows)]
 pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
     use windows::core::Interface;
-    use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-        DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
-    };
+    use windows::Win32::Foundation::LUID;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1};
+
+    struct Cache {
+        luid: LUID,
+        adapter: IDXGIAdapter3,
+        last: Instant,
+        usage: u64,
+    }
+
+    static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
     let Some(luid) = (unsafe {
         device
@@ -188,6 +197,23 @@ pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
     }) else {
         return 0;
     };
+
+    let mut guard = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    let same = guard.as_ref().is_some_and(|cache| {
+        cache.luid.LowPart == luid.LowPart && cache.luid.HighPart == luid.HighPart
+    });
+    if same {
+        if let Some(cache) = guard.as_mut() {
+            if cache.last.elapsed() < Duration::from_millis(500) {
+                return cache.usage;
+            }
+            let usage = query_usage(&cache.adapter);
+            cache.usage = usage;
+            cache.last = Instant::now();
+            return usage;
+        }
+    }
+
     let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
         return 0;
     };
@@ -206,21 +232,30 @@ pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
         let Ok(adapter3) = adapter.cast::<IDXGIAdapter3>() else {
             continue;
         };
-        let mut local = Default::default();
-        let mut shared = Default::default();
-        let _ = unsafe {
-            adapter3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local)
-        };
-        let _ = unsafe {
-            adapter3.QueryVideoMemoryInfo(
-                0,
-                DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
-                &mut shared,
-            )
-        };
-        return local.CurrentUsage.saturating_add(shared.CurrentUsage);
+        let usage = query_usage(&adapter3);
+        *guard = Some(Cache {
+            luid,
+            adapter: adapter3,
+            last: Instant::now(),
+            usage,
+        });
+        return usage;
     }
     0
+}
+
+#[cfg(windows)]
+fn query_usage(adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter3) -> u64 {
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+    };
+    let mut local = Default::default();
+    let mut shared = Default::default();
+    let _ = unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local) };
+    let _ = unsafe {
+        adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut shared)
+    };
+    local.CurrentUsage.saturating_add(shared.CurrentUsage)
 }
 
 #[cfg(not(windows))]

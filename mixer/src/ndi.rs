@@ -232,17 +232,13 @@ impl NdiSender {
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
         let channels = audio.channels.max(1);
         let samples = audio.samples_per_channel.max(1);
-        let floats: Vec<f32> = audio
-            .pcm_planar_f32
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
+        let floats = &audio.pcm_planar_f32;
         if floats.is_empty() {
             return Ok(());
         }
         let expected = channels as usize * samples as usize;
         let data = if floats.len() == expected {
-            floats
+            floats.clone()
         } else {
             let n = floats.len().min(expected);
             let mut trimmed = vec![0.0f32; expected];
@@ -498,10 +494,7 @@ fn finish_gpu_frame(
 fn to_audio(frame: &AudioFrame) -> AudioPacket {
     let channels = frame.num_channels().max(1);
     let samples = frame.num_samples().max(1);
-    let mut pcm = Vec::with_capacity(frame.data().len() * 4);
-    for sample in frame.data() {
-        pcm.extend_from_slice(&sample.to_le_bytes());
-    }
+    let pcm = frame.data().to_vec();
     AudioPacket {
         timestamp: frame.timestamp(),
         sample_rate: frame.sample_rate().max(1),
@@ -517,14 +510,14 @@ fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
     let packed_stride = width.saturating_mul(2) as usize;
     let src_stride = stride.max(packed_stride as u32) as usize;
     let mut packed = vec![0u8; packed_stride * height as usize];
-    for y in 0..height as usize {
-        let src = y * src_stride;
-        let dst = y * packed_stride;
-        let end = src.saturating_add(packed_stride);
-        if end <= pixels.len() {
-            packed[dst..dst + packed_stride].copy_from_slice(&pixels[src..end]);
-        }
-    }
+    crate::simd::copy_rows(
+        pixels,
+        src_stride,
+        &mut packed,
+        packed_stride,
+        packed_stride,
+        height as usize,
+    );
     packed
 }
 

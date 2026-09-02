@@ -31,6 +31,7 @@ mod readback;
 mod rebar;
 mod save;
 mod session;
+pub mod simd;
 mod upload;
 
 pub use abi::{
@@ -2975,6 +2976,15 @@ fn render_loop(
     let mut audio_carry = 0u64;
     let mut last_bus: HashMap<u64, (u64, u64, u32, u64)> = HashMap::new();
     let mut skip_units_streak = 0u32;
+    let mut snapshot = Vec::new();
+    let mut scene_specs = Vec::new();
+    let mut scene_labels = HashMap::new();
+    let mut generators = Vec::new();
+    let mut outputs_snap = Vec::new();
+    let mut cached_mem = (0u64, 0u64);
+    let mut mem_at = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -3104,71 +3114,61 @@ fn render_loop(
             for unit in guard.units.values_mut() {
                 tick_unit_transitions(unit);
             }
-            let snapshot: Vec<(u64, u32, u32, u32, u32, UnitState, u64, Option<String>)> = guard
-                .units
-                .iter()
-                .map(|(id, unit)| {
-                    let mix_preview = snapshot_mix_preview(unit);
-                    let mut state = unit.state;
-                    state.incoming_source = mix_preview;
-                    (
-                        *id,
-                        unit.width,
-                        unit.height,
-                        unit.fps_num,
-                        unit.fps_den,
-                        state,
-                        mix_preview,
-                        unit.custom_wgsl.clone(),
-                    )
-                })
-                .collect();
-            let scene_specs: Vec<(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)> = guard
-                .scenes
-                .iter()
-                .map(|(id, spec)| {
-                    (
-                        *id,
-                        spec.width,
-                        spec.height,
-                        Arc::clone(&spec.layers),
-                        spec.mv_label,
-                    )
-                })
-                .collect();
-            let scene_labels: HashMap<u64, Arc<[String]>> = guard
-                .scenes
-                .iter()
-                .map(|(id, spec)| (*id, Arc::clone(&spec.labels)))
-                .collect();
+            snapshot.clear();
+            snapshot.extend(guard.units.iter().map(|(id, unit)| {
+                let mix_preview = snapshot_mix_preview(unit);
+                let mut state = unit.state;
+                state.incoming_source = mix_preview;
+                (
+                    *id,
+                    unit.width,
+                    unit.height,
+                    unit.fps_num,
+                    unit.fps_den,
+                    state,
+                    mix_preview,
+                    unit.custom_wgsl.clone(),
+                )
+            }));
+            scene_specs.clear();
+            scene_specs.extend(guard.scenes.iter().map(|(id, spec)| {
+                (
+                    *id,
+                    spec.width,
+                    spec.height,
+                    Arc::clone(&spec.layers),
+                    spec.mv_label,
+                )
+            }));
+            scene_labels.clear();
+            scene_labels.extend(
+                guard
+                    .scenes
+                    .iter()
+                    .map(|(id, spec)| (*id, Arc::clone(&spec.labels))),
+            );
             let bus_colors = guard.bus_colors;
-            let generators: Vec<(u64, Generator)> = guard
-                .generators
-                .iter()
-                .map(|(id, spec)| (*id, *spec))
-                .collect();
-            let outputs_snap: Vec<OutputSnap> = guard
-                .outputs
-                .iter()
-                .map(|(id, output)| OutputSnap {
-                    output_id: *id,
-                    source_kind: output.source_kind,
-                    source_id: output.source_id,
-                    unit_id: output.unit_id,
-                    fps_n: guard
-                        .units
-                        .get(&output.unit_id)
-                        .map(|u| u.fps_num)
-                        .unwrap_or(fps_num),
-                    fps_d: guard
-                        .units
-                        .get(&output.unit_id)
-                        .map(|u| u.fps_den)
-                        .unwrap_or(fps_den),
-                    video_sub: Arc::clone(&output.video_sub),
-                    use_gpu: output.use_gpu,
-                })
-                .collect();
+            generators.clear();
+            generators.extend(guard.generators.iter().map(|(id, spec)| (*id, *spec)));
+            outputs_snap.clear();
+            outputs_snap.extend(guard.outputs.iter().map(|(id, output)| OutputSnap {
+                output_id: *id,
+                source_kind: output.source_kind,
+                source_id: output.source_id,
+                unit_id: output.unit_id,
+                fps_n: guard
+                    .units
+                    .get(&output.unit_id)
+                    .map(|u| u.fps_num)
+                    .unwrap_or(fps_num),
+                fps_d: guard
+                    .units
+                    .get(&output.unit_id)
+                    .map(|u| u.fps_den)
+                    .unwrap_or(fps_den),
+                video_sub: Arc::clone(&output.video_sub),
+                use_gpu: output.use_gpu,
+            }));
             let compose_dirty = guard.compose_dirty;
             guard.compose_dirty = false;
             drop(guard);
@@ -3585,7 +3585,11 @@ fn render_loop(
             let compose_vram = composer.vram_bytes();
             let delay_vram = frame_delay.vram_bytes();
             let send_vram = gpu_sends.vram_bytes();
-            let (ram, source_vram) = uploads.lock().expect("uploads").memory_bytes();
+            if mem_at.elapsed() >= Duration::from_millis(500) {
+                cached_mem = uploads.lock().expect("uploads").memory_bytes();
+                mem_at = Instant::now();
+            }
+            let (ram, source_vram) = cached_mem;
             let accounted = source_vram
                 .saturating_add(compose_vram)
                 .saturating_add(delay_vram)
@@ -3695,12 +3699,12 @@ fn emit_gpu(
 
 fn interleaved_to_packet(interleaved: &[f32], pts: i64) -> AudioPacket {
     let frames = interleaved.len() / 2;
-    let mut planar = Vec::with_capacity(frames * 2 * 4);
+    let mut planar = Vec::with_capacity(frames * 2);
     for sample in interleaved.iter().step_by(2) {
-        planar.extend_from_slice(&sample.to_le_bytes());
+        planar.push(*sample);
     }
     for sample in interleaved.iter().skip(1).step_by(2) {
-        planar.extend_from_slice(&sample.to_le_bytes());
+        planar.push(*sample);
     }
     AudioPacket {
         timestamp: pts,

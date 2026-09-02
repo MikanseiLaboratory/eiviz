@@ -49,7 +49,11 @@ impl Default for Generator {
 }
 
 fn generator_needs_rebake(spec: &Generator, last: Option<&Generator>, size_ok: bool) -> bool {
-    spec.scroll || !size_ok || last != Some(spec)
+    !size_ok || last != Some(spec)
+}
+
+fn generator_needs_draw_update(spec: &Generator, last: Option<&Generator>, size_ok: bool) -> bool {
+    spec.scroll || generator_needs_rebake(spec, last, size_ok)
 }
 
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -1960,7 +1964,7 @@ impl Composer {
                 .sources
                 .get(&id)
                 .is_some_and(|source| source.width == width && source.height == height);
-            if !generator_needs_rebake(&spec, self.generator_bake.get(&id), size_ok) {
+            if !generator_needs_draw_update(&spec, self.generator_bake.get(&id), size_ok) {
                 continue;
             }
             if !size_ok {
@@ -2885,13 +2889,14 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_generator_always_rebakes() {
+    fn scrolling_generator_skips_rebake_but_still_redraws() {
         let spec = super::Generator {
             kind: crate::abi::GEN_BARS,
             scroll: true,
             ..super::Generator::default()
         };
-        assert!(super::generator_needs_rebake(&spec, Some(&spec), true));
+        assert!(!super::generator_needs_rebake(&spec, Some(&spec), true));
+        assert!(super::generator_needs_draw_update(&spec, Some(&spec), true));
     }
 }
 

@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::abi::{OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
-use crate::upload::{AUDIO_FIFO_FRAMES, UploadStore};
+use crate::upload::{AUDIO_FIFO_FRAMES, SampleRing, UploadStore};
 
 use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
@@ -24,7 +23,7 @@ pub const LINK_FOLLOW: u32 = 0;
 pub const LINK_INDEPENDENT: u32 = 1;
 
 pub struct BusRing {
-    pcm: Mutex<VecDeque<f32>>,
+    pcm: Mutex<SampleRing>,
     primed: AtomicBool,
     last: Mutex<(f32, f32)>,
 }
@@ -32,7 +31,7 @@ pub struct BusRing {
 impl BusRing {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            pcm: Mutex::new(VecDeque::new()),
+            pcm: Mutex::new(SampleRing::new(AUDIO_FIFO_FRAMES * 2)),
             primed: AtomicBool::new(false),
             last: Mutex::new((0.0, 0.0)),
         })
@@ -41,10 +40,6 @@ impl BusRing {
     pub fn push(&self, interleaved: &[f32]) {
         let mut pcm = self.pcm.lock().expect("bus ring");
         pcm.extend(interleaved.iter().copied());
-        let cap = AUDIO_FIFO_FRAMES * 2;
-        while pcm.len() > cap {
-            pcm.pop_front();
-        }
         if pcm.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.primed.store(true, Ordering::Relaxed);
         }
@@ -72,16 +67,25 @@ impl BusRing {
         let mut pcm = self.pcm.lock().expect("bus ring");
         let n = frames.saturating_mul(2).min(pcm.len());
         if n > 0 {
-            pcm.drain(..n);
+            pcm.drain_front(n);
         }
     }
 
     pub fn pop_interleaved(&self, frames: usize) -> Vec<f32> {
         let mut out = Vec::with_capacity(frames * 2);
-        for _ in 0..frames {
-            let (left, right) = self.pop_stereo();
-            out.push(left);
-            out.push(right);
+        if !self.primed.load(Ordering::Relaxed) {
+            out.resize(frames * 2, 0.0);
+            return out;
+        }
+        let mut pcm = self.pcm.lock().expect("bus ring");
+        pcm.pop_into(frames * 2, &mut out);
+        let hold = *self.last.lock().expect("bus last");
+        while out.len() < frames * 2 {
+            out.push(hold.0);
+            out.push(hold.1);
+        }
+        if out.len() >= 2 {
+            *self.last.lock().expect("bus last") = (out[out.len() - 2], out[out.len() - 1]);
         }
         out
     }
@@ -123,6 +127,9 @@ pub struct AudioGraph {
     pub headphone_cue_unit: u64,
     pub headphone_copy_master: bool,
     pub master_peak: (f32, f32),
+    scratch_master: Vec<f32>,
+    scratch_mixed: Vec<f32>,
+    popped: HashMap<u64, Vec<f32>>,
 }
 
 impl AudioGraph {
@@ -134,6 +141,9 @@ impl AudioGraph {
             headphone_cue_unit: 1,
             headphone_copy_master: false,
             master_peak: (0.0, 0.0),
+            scratch_master: Vec::new(),
+            scratch_mixed: Vec::new(),
+            popped: HashMap::new(),
         };
         // Tests must not open the machine's output. HAL Start can block forever
         // on CI runners, and AudioEngine used to join that thread from Drop.
@@ -286,7 +296,8 @@ impl AudioGraph {
         if frames == 0 {
             return Vec::new();
         }
-        let mut live_master = vec![0.0f32; frames * 2];
+        self.scratch_master.clear();
+        self.scratch_master.resize(frames * 2, 0.0);
         if produce {
             let mut ids: Vec<u64> = uploads.primed_ids();
             for id in self.inputs.keys() {
@@ -294,9 +305,10 @@ impl AudioGraph {
                     ids.push(*id);
                 }
             }
-            let mut popped: HashMap<u64, Vec<(f32, f32)>> = HashMap::new();
+            self.popped.retain(|id, _| ids.contains(id));
             for id in ids {
-                popped.insert(id, uploads.pop_frames(id, frames));
+                let slot = self.popped.entry(id).or_default();
+                uploads.pop_frames_into(id, frames, slot);
             }
             let spec_map: HashMap<u64, &[OverlayDesc]> = scenes
                 .iter()
@@ -317,41 +329,36 @@ impl AudioGraph {
                     )
                 };
                 if copy_master {
-                    let mut mixed = live_master.clone();
-                    for sample in &mut mixed {
-                        *sample *= fader;
-                    }
+                    self.scratch_mixed.clear();
+                    self.scratch_mixed.extend_from_slice(&self.scratch_master);
+                    crate::simd::scale_f32(&mut self.scratch_mixed, fader);
                     if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
-                        bus.peak = peak_interleaved(&mixed);
+                        bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                     }
-                    delay.push(bus_id, &mixed);
+                    delay.push(bus_id, &self.scratch_mixed);
                     continue;
                 }
                 let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map);
-                let mut mixed = vec![0.0f32; frames * 2];
+                self.scratch_mixed.clear();
+                self.scratch_mixed.resize(frames * 2, 0.0);
                 for (id, gain) in gains {
                     if gain.abs() < 1e-6 {
                         continue;
                     }
-                    let Some(samples) = popped.get(&id) else {
+                    let Some(samples) = self.popped.get(&id) else {
                         continue;
                     };
-                    for (i, (left, right)) in samples.iter().enumerate() {
-                        mixed[i * 2] += left * gain;
-                        mixed[i * 2 + 1] += right * gain;
-                    }
+                    crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
                 }
-                for sample in &mut mixed {
-                    *sample *= fader;
-                }
+                crate::simd::scale_f32(&mut self.scratch_mixed, fader);
                 if role == ROLE_MASTER {
-                    live_master.copy_from_slice(&mixed);
-                    self.master_peak = peak_interleaved(&mixed);
+                    self.scratch_master.copy_from_slice(&self.scratch_mixed);
+                    self.master_peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
                 if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
-                    bus.peak = peak_interleaved(&mixed);
+                    bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
-                delay.push(bus_id, &mixed);
+                delay.push(bus_id, &self.scratch_mixed);
             }
         }
         let mut master = vec![0.0f32; frames * 2];
@@ -525,12 +532,3 @@ fn add_source(
         .or_insert(level);
 }
 
-fn peak_interleaved(samples: &[f32]) -> (f32, f32) {
-    let mut left = 0.0f32;
-    let mut right = 0.0f32;
-    for chunk in samples.chunks_exact(2) {
-        left = left.max(chunk[0].abs());
-        right = right.max(chunk[1].abs());
-    }
-    (left.min(1.0), right.min(1.0))
-}

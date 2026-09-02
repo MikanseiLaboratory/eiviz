@@ -289,7 +289,11 @@ impl ProgramSender {
             sample_rate: audio.sample_rate,
             channels: audio.channels,
             samples_per_channel: audio.samples_per_channel,
-            data: audio.pcm_planar_f32.clone(),
+            data: audio
+                .pcm_planar_f32
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect(),
             ..Default::default()
         };
         self.sender.send_audio(frame).map_err(|e| e.to_string())
@@ -559,11 +563,16 @@ fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
     } else {
         (frame.pcm_planar_f32.len() as i32 / 4 / channels).max(1)
     };
+    let pcm = frame
+        .pcm_planar_f32
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
     AudioPacket {
         timestamp: frame.timestamp,
         sample_rate: frame.sample_rate,
         channels: frame.channels,
         samples_per_channel: samples,
-        pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
+        pcm_planar_f32: pcm,
     }
 }
