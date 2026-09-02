@@ -123,7 +123,6 @@ struct ContentView: View {
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
-            .frame(width: 220)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
             .padding(.top, 12)
@@ -538,37 +537,56 @@ struct ContentView: View {
     private var mixUnitBar: some View {
         HStack(spacing: 8) {
             Text(L10n.t("chrome.mixingUnit"))
+                .lineLimit(1)
+                .fixedSize()
             Picker("", selection: $mixer.selectedUnitId) {
                 ForEach(mixer.session.units) { unit in
-                    Text(unit.displayName).tag(unit.id)
+                    Text(unit.displayName)
+                        .lineLimit(1)
+                        .tag(unit.id)
                 }
             }
-            .frame(width: 280)
+            .frame(minWidth: 220, idealWidth: 280)
+            .fixedSize(horizontal: true, vertical: true)
             Button(L10n.t("chrome.add")) { mixer.addUnit() }
+                .fixedSize()
             Button(L10n.t("chrome.edit")) {
                 mixer.editingUnit = mixer.selectedUnit
                 mixer.showMixingUnit = true
             }
+            .fixedSize()
             Button(L10n.t("chrome.delete")) { mixer.deleteUnit() }
+                .fixedSize()
             Button(L10n.t("chrome.open")) { mixer.openSwitcher() }
-            Text(mixer.status).foregroundStyle(EivizTheme.status)
+                .fixedSize()
         }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: true)
         .buttonStyle(MixerButtonStyle())
     }
 
     private var statusBar: some View {
-        HStack {
+        HStack(spacing: 8) {
             mixUnitBar
-            Spacer()
+                .layoutPriority(1)
+            Spacer(minLength: 8)
             if !mixer.warnText.isEmpty {
-                Text(mixer.warnText).foregroundStyle(EivizTheme.warn)
+                Text(mixer.warnText)
+                    .foregroundStyle(EivizTheme.warn)
+                    .lineLimit(1)
             }
             if !mixer.errorText.isEmpty {
-                Text(mixer.errorText).foregroundStyle(EivizTheme.warn)
+                Text(mixer.errorText)
+                    .foregroundStyle(EivizTheme.warn)
+                    .lineLimit(1)
             }
-            Text(mixer.resourceText).foregroundStyle(EivizTheme.hud)
+            Text(mixer.resourceText)
+                .foregroundStyle(EivizTheme.hud)
+                .lineLimit(1)
         }
         .font(.system(size: 12))
+        .lineLimit(1)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(EivizTheme.statusBar)

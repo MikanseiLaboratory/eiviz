@@ -59,21 +59,21 @@ public partial class SceneEditorWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096, Func<double>? maxOf = null)
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, max, format));
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, maxOf?.Invoke() ?? max, format));
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
         Bind(PosXLabel, XBox, 2, min: -_width, max: _width * 2);
         Bind(PosYLabel, YBox, 2, min: -_height, max: _height * 2);
         Bind(SizeXLabel, WBox, 2, min: 1, max: _width * 2);
         Bind(SizeYLabel, HBox, 2, min: 1, max: _height * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, max: _width);
-        Bind(CropYLabel, CropYBox, 2, min: 0, max: _height);
-        Bind(CropWLabel, CropWBox, 2, min: 1, max: _width);
-        Bind(CropHLabel, CropHBox, 2, min: 1, max: _height);
+        Bind(CropXLabel, CropXBox, 2, min: 0, maxOf: CropXMaxPx);
+        Bind(CropYLabel, CropYBox, 2, min: 0, maxOf: CropYMaxPx);
+        Bind(CropWLabel, CropWBox, 2, min: 1, maxOf: CropWMaxPx);
+        Bind(CropHLabel, CropHBox, 2, min: 1, maxOf: CropHMaxPx);
         Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
     }
 
@@ -89,7 +89,7 @@ public partial class SceneEditorWindow : Window
         _meterFormat = format;
         MeterTitle.Text = title;
         MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min + 1);
+        MeterSlider.Maximum = Math.Max(max, min);
         _suppress = true;
         if (float.TryParse(box.Text, out var value))
             MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
@@ -305,6 +305,57 @@ public partial class SceneEditorWindow : Window
         }
     }
 
+    private double CropXMaxPx() => Math.Max(0, (1 - (_selected?.CropWidth ?? 1)) * _width);
+    private double CropYMaxPx() => Math.Max(0, (1 - (_selected?.CropHeight ?? 1)) * _height);
+    private double CropWMaxPx() => Math.Max(1, (1 - (_selected?.CropX ?? 0)) * _width);
+    private double CropHMaxPx() => Math.Max(1, (1 - (_selected?.CropY ?? 0)) * _height);
+
+    private void WriteCropBoxes()
+    {
+        if (_selected is null)
+            return;
+        CropXBox.Text = (_selected.CropX * _width).ToString("0.#");
+        CropYBox.Text = (_selected.CropY * _height).ToString("0.#");
+        CropWBox.Text = (_selected.CropWidth * _width).ToString("0.#");
+        CropHBox.Text = (_selected.CropHeight * _height).ToString("0.#");
+    }
+
+    private void RefreshCropMeterRange()
+    {
+        if (_meterBox is null || MeterHost.Visibility != Visibility.Visible)
+            return;
+        double min;
+        double max;
+        if (ReferenceEquals(_meterBox, CropXBox))
+        {
+            min = 0;
+            max = CropXMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropYBox))
+        {
+            min = 0;
+            max = CropYMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropWBox))
+        {
+            min = 1;
+            max = CropWMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropHBox))
+        {
+            min = 1;
+            max = CropHMaxPx();
+        }
+        else
+            return;
+        _suppress = true;
+        MeterSlider.Minimum = min;
+        MeterSlider.Maximum = Math.Max(max, min);
+        if (float.TryParse(_meterBox.Text, out var meter))
+            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
+        _suppress = false;
+    }
+
     private void FillNumeric()
     {
         var layer = _selected;
@@ -468,6 +519,8 @@ public partial class SceneEditorWindow : Window
         }
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
+        WriteCropBoxes();
+        RefreshCropMeterRange();
         if (push)
         {
             FillNumeric();

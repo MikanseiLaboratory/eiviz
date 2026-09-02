@@ -103,7 +103,6 @@ struct SwitcherView: View {
                 }
             )
             .tint(mixer.session.settings.previewColor.color)
-            .frame(width: 220)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
             .padding(.top, 12)

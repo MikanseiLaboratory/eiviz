@@ -9,6 +9,7 @@ struct SceneEditorView: View {
     @State private var name: String = ""
     @State private var copyFromId: UInt64 = 0
     @State private var lastGpuPush = Date.distantPast
+    @State private var editorMonitor: UInt64 = 0
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -118,8 +119,9 @@ struct SceneEditorView: View {
 
             VStack(alignment: .leading) {
                 Text("Live preview").fontWeight(.bold)
-                if let scene = current {
-                    MetalPreviewRepresentable(role: .monitor(monitorId: scene.monitorId, sourceId: scene.gpuId))
+                if let scene = current, editorMonitor != 0 {
+                    MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: scene.gpuId))
+                        .id(editorMonitor)
                         .aspectRatio(projectAspect, contentMode: .fit)
                         .frame(maxWidth: .infinity)
                         .background(Color.black)
@@ -157,6 +159,9 @@ struct SceneEditorView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
+            if editorMonitor == 0 {
+                editorMonitor = mixer.allocateMonitorId()
+            }
             original = current?.layers ?? []
             name = current?.name ?? ""
             selectedLayer = current?.layers.first?.id
@@ -262,12 +267,12 @@ struct SceneEditorView: View {
                 layerMeter("Size Y", index: index, axis: .h, range: 1 ... projectH * 2)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop X", index: index, axis: .cx, range: 0 ... projectW)
-                layerMeter("Crop Y", index: index, axis: .cy, range: 0 ... projectH)
+                layerMeter("Crop X", index: index, axis: .cx, range: cropRange(.cx, index: index))
+                layerMeter("Crop Y", index: index, axis: .cy, range: cropRange(.cy, index: index))
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop W", index: index, axis: .cw, range: 1 ... projectW)
-                layerMeter("Crop H", index: index, axis: .ch, range: 1 ... projectH)
+                layerMeter("Crop W", index: index, axis: .cw, range: cropRange(.cw, index: index))
+                layerMeter("Crop H", index: index, axis: .ch, range: cropRange(.ch, index: index))
             }
             layerMeter("Opacity", index: index, axis: .op, range: 0 ... 1, pixelsPerUnit: 400)
         }
@@ -299,6 +304,22 @@ struct SceneEditorView: View {
     }
 
     private enum PixelAxis { case x, y, w, h, cx, cy, cw, ch, op }
+
+    private func cropRange(_ axis: PixelAxis, index: Int) -> ClosedRange<Float> {
+        let layer = layer(index)
+        switch axis {
+        case .cx:
+            return 0 ... max(0, (1 - (layer?.cropWidth ?? 1)) * projectW)
+        case .cy:
+            return 0 ... max(0, (1 - (layer?.cropHeight ?? 1)) * projectH)
+        case .cw:
+            return 1 ... max(1, (1 - (layer?.cropX ?? 0)) * projectW)
+        case .ch:
+            return 1 ... max(1, (1 - (layer?.cropY ?? 0)) * projectH)
+        default:
+            return 0 ... 1
+        }
+    }
 
     private func layerMeter(
         _ title: String,

@@ -100,6 +100,12 @@ final class MixerController: ObservableObject {
         booted = false
     }
 
+    func allocateMonitorId() -> UInt64 {
+        let id = session.nextMonitorId
+        session.nextMonitorId += 1
+        return id
+    }
+
     func previewSelectedInput() {
         guard let id = selectedInputId,
               let input = session.inputs.first(where: { $0.id == id })
@@ -844,20 +850,27 @@ final class MixerController: ObservableObject {
             pushOverlays()
             return
         }
-        session.units[unitIndex].overlays[slotIndex].enabled = true
-        overlayOn[id] = true
-        pushOverlays()
-        fail(mixer_unit_overlay_auto(unit.id, enabled ? 1 : 0, ms, &desc), "overlay auto")
-        if !enabled {
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
-                guard let self,
-                      let ui = self.session.units.firstIndex(where: { $0.id == unit.id }),
-                      let si = self.session.units[ui].overlays.firstIndex(where: { $0.id == id })
-                else { return }
-                self.session.units[ui].overlays[si].enabled = false
-                self.overlayOn[id] = false
-                self.pushOverlays()
+        if enabled {
+            session.units[unitIndex].overlays[slotIndex].enabled = true
+            overlayOn[id] = true
+            pushOverlays()
+            fail(mixer_unit_overlay_auto(unit.id, 1, ms, &desc), "overlay auto")
+            return
+        }
+        session.units[unitIndex].overlays[slotIndex].enabled = false
+        overlayOn[id] = false
+        pushOverlays(forceEnabled: id)
+        fail(mixer_unit_overlay_auto(unit.id, 0, ms, &desc), "overlay auto")
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
+            guard let self,
+                  let ui = self.session.units.firstIndex(where: { $0.id == unit.id }),
+                  let si = self.session.units[ui].overlays.firstIndex(where: { $0.id == id })
+            else { return }
+            if self.session.units[ui].overlays[si].enabled {
+                return
             }
+            self.overlayOn[id] = false
+            self.pushOverlays()
         }
     }
 
@@ -1153,8 +1166,10 @@ final class MixerController: ObservableObject {
         }
     }
 
-    func pushOverlays() {
-        var state = currentState(selectedUnit.id)
+    func pushOverlays(forceEnabled: UUID? = nil) {
+        var state = MixerFFI.emptyState()
+        _ = mixer_unit_get_state(selectedUnit.id, &state)
+        fillAux(&state, unit: selectedUnit, forceEnabled: forceEnabled)
         fail(mixer_unit_set_state(selectedUnit.id, &state), "Overlays")
     }
 
@@ -1177,8 +1192,8 @@ final class MixerController: ObservableObject {
         return state
     }
 
-    private func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry) {
-        let enabled = unit.overlays.filter { $0.enabled }.prefix(8)
+    private func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry, forceEnabled: UUID? = nil) {
+        let enabled = unit.overlays.filter { $0.enabled || $0.id == forceEnabled }.prefix(8)
         state.overlay_count = UInt32(enabled.count)
         for (index, slot) in enabled.enumerated() {
             var desc = MixerFFI.emptyOverlay()

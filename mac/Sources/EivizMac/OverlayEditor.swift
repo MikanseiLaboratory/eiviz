@@ -55,7 +55,7 @@ struct OverlayView: View {
             ForEach(Array(unit.overlays.enumerated()), id: \.element.id) { pair in
                 OverlayListRow(
                     title: rowTitle(pair.offset, pair.element),
-                    enabled: pair.element.enabled,
+                    enabled: mixer.overlayOn[pair.element.id] ?? pair.element.enabled,
                     audioFollow: pair.element.audioFollow,
                     locked: pair.element.locked,
                     onToggleEnabled: {
@@ -334,12 +334,12 @@ struct OverlayView: View {
                 }
             }
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Crop X", range: 0 ... pw) { $0.cropX * pw } set: { $0.cropX = $1 / pw; $0.clampCrop(edit: .x) }
-                overlayMeter("Crop Y", range: 0 ... ph) { $0.cropY * ph } set: { $0.cropY = $1 / ph; $0.clampCrop(edit: .y) }
+                overlayMeter("Crop X", range: 0 ... max(0, (1 - (current?.cropWidth ?? 1)) * pw)) { $0.cropX * pw } set: { $0.cropX = $1 / pw; $0.clampCrop(edit: .x) }
+                overlayMeter("Crop Y", range: 0 ... max(0, (1 - (current?.cropHeight ?? 1)) * ph)) { $0.cropY * ph } set: { $0.cropY = $1 / ph; $0.clampCrop(edit: .y) }
             }
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Crop W", range: 1 ... pw) { $0.cropWidth * pw } set: { $0.cropWidth = max(1, $1) / pw; $0.clampCrop(edit: .w) }
-                overlayMeter("Crop H", range: 1 ... ph) { $0.cropHeight * ph } set: { $0.cropHeight = max(1, $1) / ph; $0.clampCrop(edit: .h) }
+                overlayMeter("Crop W", range: 1 ... max(1, (1 - (current?.cropX ?? 0)) * pw)) { $0.cropWidth * pw } set: { $0.cropWidth = max(1, $1) / pw; $0.clampCrop(edit: .w) }
+                overlayMeter("Crop H", range: 1 ... max(1, (1 - (current?.cropY ?? 0)) * ph)) { $0.cropHeight * ph } set: { $0.cropHeight = max(1, $1) / ph; $0.clampCrop(edit: .h) }
             }
             overlayMeter("Opacity", range: 0 ... 1, pixelsPerUnit: 400) { $0.opacity } set: { $0.opacity = min(1, max(0, $1)) }
         }

@@ -652,24 +652,46 @@ public partial class MainWindow : Window
         {
             slot.Enabled = enabled;
             PushAuxFor(unit);
+            NotifyOverlayUi();
             return;
         }
+        if (enabled)
+        {
+            slot.Enabled = true;
+            PushAuxFor(unit);
+            unsafe
+            {
+                MixerNative.OverlayAuto(unit.Id, 1u, ms, &desc);
+            }
+            NotifyOverlayUi();
+            return;
+        }
+
+        slot.Enabled = false;
+        NotifyOverlayUi();
         slot.Enabled = true;
         PushAuxFor(unit);
         unsafe
         {
-            MixerNative.OverlayAuto(unit.Id, enabled ? 1u : 0u, ms, &desc);
+            MixerNative.OverlayAuto(unit.Id, 0u, ms, &desc);
         }
-        if (!enabled)
+        slot.Enabled = false;
+        var delay = TimeSpan.FromMilliseconds(ms);
+        _ = Dispatcher.InvokeAsync(async () =>
         {
-            var delay = TimeSpan.FromMilliseconds(ms);
-            _ = Dispatcher.InvokeAsync(async () =>
-            {
-                await Task.Delay(delay);
-                slot.Enabled = false;
-                PushAuxFor(unit);
-            });
-        }
+            await Task.Delay(delay);
+            PushAuxFor(unit);
+            NotifyOverlayUi();
+        });
+    }
+
+    internal void NotifyOverlayUi()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            RebuildOverlayToggles();
+            _overlay?.RefreshEnabled();
+        });
     }
 
     private void OpenOverlay_Click(object sender, RoutedEventArgs e)

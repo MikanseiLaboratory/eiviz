@@ -48,7 +48,7 @@
                         <StackPanel x:Name="TransitionPanel"/>
                     </ScrollViewer>
                     <Slider x:Name="TBar" Grid.Row="2" Orientation="Horizontal" Minimum="0" Maximum="1"
-                            Width="220" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                            HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
                             Margin="8,12,8,16" Height="18"
                             IsMoveToPointEnabled="True"
                             ValueChanged="TBar_ValueChanged"

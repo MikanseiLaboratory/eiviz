@@ -45,6 +45,8 @@ public partial class OverlayWindow : Window
         };
     }
 
+    internal void RefreshEnabled() => RefreshList();
+
     public void Reload(MixingUnitEntry unit)
     {
         _unit = unit;
@@ -62,23 +64,28 @@ public partial class OverlayWindow : Window
     private float WidthPx => _unit.Width;
     private float HeightPx => _unit.Height;
 
+    private double CropXMaxPx() => Math.Max(0, (1 - (_selected?.CropWidth ?? 1)) * WidthPx);
+    private double CropYMaxPx() => Math.Max(0, (1 - (_selected?.CropHeight ?? 1)) * HeightPx);
+    private double CropWMaxPx() => Math.Max(1, (1 - (_selected?.CropX ?? 0)) * WidthPx);
+    private double CropHMaxPx() => Math.Max(1, (1 - (_selected?.CropY ?? 0)) * HeightPx);
+
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096, Func<double>? maxOf = null)
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, max, format));
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, maxOf?.Invoke() ?? max, format));
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
         Bind(PosXLabel, XBox, 2, min: -WidthPx, max: WidthPx * 2);
         Bind(PosYLabel, YBox, 2, min: -HeightPx, max: HeightPx * 2);
         Bind(SizeXLabel, WBox, 2, min: 1, max: WidthPx * 2);
         Bind(SizeYLabel, HBox, 2, min: 1, max: HeightPx * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, max: WidthPx);
-        Bind(CropYLabel, CropYBox, 2, min: 0, max: HeightPx);
-        Bind(CropWLabel, CropWBox, 2, min: 1, max: WidthPx);
-        Bind(CropHLabel, CropHBox, 2, min: 1, max: HeightPx);
+        Bind(CropXLabel, CropXBox, 2, min: 0, maxOf: CropXMaxPx);
+        Bind(CropYLabel, CropYBox, 2, min: 0, maxOf: CropYMaxPx);
+        Bind(CropWLabel, CropWBox, 2, min: 1, maxOf: CropWMaxPx);
+        Bind(CropHLabel, CropHBox, 2, min: 1, maxOf: CropHMaxPx);
         Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
     }
 
@@ -94,7 +101,7 @@ public partial class OverlayWindow : Window
         _meterFormat = format;
         MeterTitle.Text = title;
         MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min + 1);
+        MeterSlider.Maximum = Math.Max(max, min);
         _suppress = true;
         if (float.TryParse(box.Text, out var value))
             MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
@@ -287,6 +294,52 @@ public partial class OverlayWindow : Window
                 WireCanvas.Children.Add(handle);
             }
         }
+    }
+
+    private void WriteCropBoxes()
+    {
+        if (_selected is null)
+            return;
+        CropXBox.Text = (_selected.CropX * WidthPx).ToString("0.#");
+        CropYBox.Text = (_selected.CropY * HeightPx).ToString("0.#");
+        CropWBox.Text = (_selected.CropWidth * WidthPx).ToString("0.#");
+        CropHBox.Text = (_selected.CropHeight * HeightPx).ToString("0.#");
+    }
+
+    private void RefreshCropMeterRange()
+    {
+        if (_meterBox is null || MeterHost.Visibility != Visibility.Visible)
+            return;
+        double min;
+        double max;
+        if (ReferenceEquals(_meterBox, CropXBox))
+        {
+            min = 0;
+            max = CropXMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropYBox))
+        {
+            min = 0;
+            max = CropYMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropWBox))
+        {
+            min = 1;
+            max = CropWMaxPx();
+        }
+        else if (ReferenceEquals(_meterBox, CropHBox))
+        {
+            min = 1;
+            max = CropHMaxPx();
+        }
+        else
+            return;
+        _suppress = true;
+        MeterSlider.Minimum = min;
+        MeterSlider.Maximum = Math.Max(max, min);
+        if (float.TryParse(_meterBox.Text, out var meter))
+            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
+        _suppress = false;
     }
 
     private void FillFields()
@@ -505,9 +558,7 @@ public partial class OverlayWindow : Window
     {
         if (_suppress || _selected is null || KindBox.SelectedItem is not ComboBoxItem item)
             return;
-        _selected.TransitionKind = item.Tag is string text && uint.TryParse(text, out var value)
-            ? value
-            : MixerNative.TransitionFade;
+        _selected.TransitionKind = ParseComboTag(item.Tag, MixerNative.TransitionFade);
         Push();
     }
 
@@ -515,10 +566,30 @@ public partial class OverlayWindow : Window
     {
         if (_suppress || _selected is null || DurationUnitBox.SelectedItem is not ComboBoxItem item)
             return;
-        _selected.DurationUnit = item.Tag is string text && uint.TryParse(text, out var value)
-            ? value
-            : MixerNative.DurationFrames;
+        _selected.DurationUnit = ParseComboTag(item.Tag, MixerNative.DurationFrames);
         Push();
+    }
+
+    private static uint ParseComboTag(object? tag, uint fallback)
+    {
+        switch (tag)
+        {
+            case string text when uint.TryParse(text, out var parsed):
+                return parsed;
+            case uint value:
+                return value;
+            case int value when value >= 0:
+                return (uint)value;
+            default:
+                try
+                {
+                    return Convert.ToUInt32(tag);
+                }
+                catch
+                {
+                    return fallback;
+                }
+        }
     }
 
     private void Duration_LostFocus(object sender, RoutedEventArgs e)
@@ -593,6 +664,8 @@ public partial class OverlayWindow : Window
         }
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
+        WriteCropBoxes();
+        RefreshCropMeterRange();
         if (push)
         {
             FillFields();
