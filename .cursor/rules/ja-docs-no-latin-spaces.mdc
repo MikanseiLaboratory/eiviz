@@ -1,0 +1,15 @@
+---
+description: 日本語ドキュメントで半角語の前後に半角スペースを入れない（和欧間スペース禁止）
+globs: docs/src/content/docs/ja/**/*.md
+alwaysApply: false
+---
+
+# 日本語ドキュメント: 和欧間スペース禁止
+
+日本語文で、半角語（OS、Linux、UI、eiviz など）の前後に半角スペースを入れない。
+
+詳細とチェック手順は `.cursor/skills/ja-docs-no-latin-spaces/SKILL.md` に従う。編集後は必ず次を実行し、違反ゼロにする:
+
+```bash
+python3 .cursor/skills/ja-docs-no-latin-spaces/scripts/check.py
+```

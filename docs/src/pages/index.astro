@@ -1,0 +1,15 @@
+---
+const dest = `${import.meta.env.BASE_URL}ja/`;
+---
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="refresh" content={`0;url=${dest}`} />
+		<link rel="canonical" href={new URL(dest, Astro.site).href} />
+		<title>eiviz</title>
+	</head>
+	<body>
+		<a href={dest}>日本語ドキュメントへ</a>
+	</body>
+</html>
