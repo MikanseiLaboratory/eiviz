@@ -1156,6 +1156,7 @@ pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) 
             )
         };
         take_cut_to(unit, swap != 0, incoming);
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1221,6 +1222,7 @@ pub extern "C" fn mixer_unit_auto(
             frozen_preview: incoming,
             easing,
         });
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)

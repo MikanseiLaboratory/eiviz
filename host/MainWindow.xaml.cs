@@ -250,6 +250,7 @@ public partial class MainWindow : Window
             Commands.TryEnqueue(new CutCommand(unit.Id, preset.Swap));
         else
             Commands.TryEnqueue(preset.ToAuto(unit.Id, unit));
+        RefreshSceneTiles();
     }
 
     private TransitionPreset TbarPreset()
@@ -1598,6 +1599,10 @@ public partial class MainWindow : Window
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
         ScenePanel.Children.Clear();
+        _selectedScene = null;
+        _lastProgramId = 0;
+        _shownProgramId = 0;
+        _shownPreviewId = 0;
         ((App)Application.Current).ReplaceSession(session);
         InputList.ItemsSource = _session.Inputs;
         UnitBox.ItemsSource = _session.Units;
@@ -1612,6 +1617,11 @@ public partial class MainWindow : Window
             SelectScene(_session.Scenes[0]);
         PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
         ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
+        Dispatcher.BeginInvoke(() =>
+        {
+            PreviewHost.ForceReattach();
+            ProgramHost.ForceReattach();
+        }, DispatcherPriority.Loaded);
         ApplyBusColors();
         ApplyAspect();
     }

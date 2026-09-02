@@ -4,6 +4,7 @@ import SwiftUI
 
 final class MetalSurfaceView: NSView {
     var presentInterval: UInt32 = 1
+    var surfaceEpoch: UInt64 = 0
     var role: SurfaceRole = .unit(unitId: 1, kind: EIVIZ_OUTPUT_PROGRAM) {
         didSet {
             if role != oldValue {
@@ -81,7 +82,7 @@ final class MetalSurfaceView: NSView {
         let (width, height) = pixelSize()
         guard width >= 16, height >= 16 else { return }
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
-        let key = role.key
+        let key = "\(role.key)#\(surfaceEpoch)"
         if !attached || attachedKey != key {
             if attached {
                 if detachIsMonitor {
@@ -192,7 +193,19 @@ final class PreviewHostView: NSView {
     }
 }
 
+private struct MixerSurfaceEpochKey: EnvironmentKey {
+    static let defaultValue: UInt64 = 0
+}
+
+extension EnvironmentValues {
+    var mixerSurfaceEpoch: UInt64 {
+        get { self[MixerSurfaceEpochKey.self] }
+        set { self[MixerSurfaceEpochKey.self] = newValue }
+    }
+}
+
 struct MetalPreviewRepresentable: NSViewRepresentable {
+    @Environment(\.mixerSurfaceEpoch) private var surfaceEpoch
     let role: SurfaceRole
     var presentInterval: UInt32 = 1
     var onClick: (() -> Void)? = nil
@@ -232,6 +245,9 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         }
         if surface.presentInterval != presentInterval {
             surface.presentInterval = presentInterval
+        }
+        if surface.surfaceEpoch != surfaceEpoch {
+            surface.surfaceEpoch = surfaceEpoch
         }
         if surface.role != role {
             surface.role = role

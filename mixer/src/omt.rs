@@ -52,7 +52,6 @@ impl OmtReceiver {
             quality,
             ..ReceiverConfig::default()
         };
-        let session = connect_receiver(&address, config)?;
         let stop = Arc::new(AtomicBool::new(false));
         let want_full = Arc::new(AtomicBool::new(true));
         let on_program = Arc::new(AtomicBool::new(false));
@@ -66,6 +65,17 @@ impl OmtReceiver {
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
+                let session = match connect_receiver(&address, config) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        crate::diag::error(&format!("omt_connect id={source_id}: {error}"));
+                        return;
+                    }
+                };
+                if stop_thread.load(Ordering::Relaxed) {
+                    session.disconnect();
+                    return;
+                }
                 {
                     let mut store = uploads.lock().expect("uploads lock");
                     let format = if use_gpu {

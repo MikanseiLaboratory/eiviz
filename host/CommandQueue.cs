@@ -58,7 +58,15 @@ internal sealed class CommandQueue : IAsyncDisposable
             TaskScheduler.Default);
     }
 
-    public bool TryEnqueue(MixerCommand command) => _commands.Writer.TryWrite(command);
+    public bool TryEnqueue(MixerCommand command)
+    {
+        if (IsDeferredIo(command))
+            return _commands.Writer.TryWrite(command);
+        return ApplyHandled(command);
+    }
+
+    private static bool IsDeferredIo(MixerCommand command) =>
+        command is ConnectOmtCommand or ConnectNdiCommand or LoadStillCommand or StartVideoCommand or StartUvcCommand;
 
     public void DefineSceneNow(SceneEntry scene, uint width, uint height)
     {
@@ -257,135 +265,160 @@ internal sealed class CommandQueue : IAsyncDisposable
 
     private async Task ConsumeAsync(CancellationToken token)
     {
-        await foreach (var command in _commands.Reader.ReadAllAsync(token))
+        var inflight = new List<Task>();
+        try
         {
-            try
+            await foreach (var command in _commands.Reader.ReadAllAsync(token))
             {
-                switch (command)
+                var captured = command;
+                inflight.Add(Task.Run(() => ApplyHandled(captured)));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        if (inflight.Count > 0)
+        {
+            try { await Task.WhenAll(inflight).ConfigureAwait(false); }
+            catch (Exception ex) { HostLog.WriteException(ex); }
+        }
+    }
+
+    private bool ApplyHandled(MixerCommand command)
+    {
+        try
+        {
+            Apply(command);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+            if (command is LoadStillCommand or StartVideoCommand)
+                ReportUserError(ex.Message, Loc.T("msg.addInput"));
+            return false;
+        }
+    }
+
+    private static void Apply(MixerCommand command)
+    {
+        switch (command)
+        {
+            case SetMixCommand setMix:
+                ApplyMix(setMix.UnitId, setMix.Value, setMix.Preset);
+                break;
+            case CutCommand cut:
+                MixerNative.ThrowIfFailed(MixerNative.Cut(cut.UnitId, cut.Swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT");
+                break;
+            case AutoCommand auto:
+                ApplyAuto(auto);
+                break;
+            case PreviewSceneCommand preview:
+                ApplyPreview(preview.UnitId, preview.SceneGpuId);
+                break;
+            case PushUnitStateCommand push:
+                ApplyState(push.UnitId, push.State);
+                break;
+            case PatchAuxCommand patch:
+                PatchAux(patch.UnitId, patch.Unit);
+                break;
+            case DefineSceneCommand define:
+                PushScene(define.Scene, define.Width, define.Height);
+                break;
+            case DestroySceneCommand destroy:
+                MixerNative.DestroyScene(destroy.GpuId);
+                break;
+            case ConnectOmtCommand connect:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.ConnectOmt(
+                        connect.SourceId,
+                        connect.Address,
+                        connect.UseGpu ? 1u : 0u,
+                        Math.Clamp(connect.FrameBufferFrames, 1u, 8u),
+                        (uint)connect.Quality),
+                    "OMT connect");
+                MixerNative.ThrowIfFailed(
+                    MixerNative.SetLiveSave(
+                        connect.SourceId,
+                        (uint)connect.SaveMode,
+                        connect.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
+                    "OMT bandwidth save");
+                break;
+            case ConnectNdiCommand connect:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.ConnectNdi(
+                        connect.SourceId,
+                        connect.Address,
+                        Math.Clamp(connect.FrameBufferFrames, 1u, 8u),
+                        connect.Bandwidth == NdiBandwidth.Lowest ? 1u : 0u),
+                    "NDI connect");
+                break;
+            case LiveSaveCommand save:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.SetLiveSave(
+                        save.SourceId,
+                        (uint)save.SaveMode,
+                        save.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
+                    "Bandwidth save");
+                if (save.OmtQuality is { } quality)
                 {
-                    case SetMixCommand setMix:
-                        ApplyMix(setMix.UnitId, setMix.Value, setMix.Preset);
-                        break;
-                    case CutCommand cut:
-                        MixerNative.ThrowIfFailed(MixerNative.Cut(cut.UnitId, cut.Swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT");
-                        break;
-                    case AutoCommand auto:
-                        ApplyAuto(auto);
-                        break;
-                    case PreviewSceneCommand preview:
-                        ApplyPreview(preview.UnitId, preview.SceneGpuId);
-                        break;
-                    case PushUnitStateCommand push:
-                        ApplyState(push.UnitId, push.State);
-                        break;
-                    case PatchAuxCommand patch:
-                        PatchAux(patch.UnitId, patch.Unit);
-                        break;
-                    case DefineSceneCommand define:
-                        PushScene(define.Scene, define.Width, define.Height);
-                        break;
-                    case DestroySceneCommand destroy:
-                        MixerNative.DestroyScene(destroy.GpuId);
-                        break;
-                    case ConnectOmtCommand connect:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.ConnectOmt(
-                                connect.SourceId,
-                                connect.Address,
-                                connect.UseGpu ? 1u : 0u,
-                                Math.Clamp(connect.FrameBufferFrames, 1u, 8u),
-                                (uint)connect.Quality),
-                            "OMT connect");
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.SetLiveSave(
-                                connect.SourceId,
-                                (uint)connect.SaveMode,
-                                connect.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
-                            "OMT bandwidth save");
-                        break;
-                    case ConnectNdiCommand connect:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.ConnectNdi(
-                                connect.SourceId,
-                                connect.Address,
-                                Math.Clamp(connect.FrameBufferFrames, 1u, 8u),
-                                connect.Bandwidth == NdiBandwidth.Lowest ? 1u : 0u),
-                            "NDI connect");
-                        break;
-                    case LiveSaveCommand save:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.SetLiveSave(
-                                save.SourceId,
-                                (uint)save.SaveMode,
-                                save.KeepFullOnMultiview ? MixerNative.SaveFlagMultiview : 0u),
-                            "Bandwidth save");
-                        if (save.OmtQuality is { } quality)
-                        {
-                            MixerNative.ThrowIfFailed(
-                                MixerNative.SetOmtQuality(save.SourceId, (uint)quality),
-                                "OMT quality");
-                        }
-                        break;
-                    case LoadStillCommand still:
-                        if (!File.Exists(still.Path))
-                            throw new InvalidOperationException(Loc.MissingFile("Still load"));
-                        MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");
-                        break;
-                    case StartVideoCommand video:
-                        if (!File.Exists(video.Path))
-                            throw new InvalidOperationException(Loc.MissingFile("Video start"));
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat, 0, 0, 0, 0),
-                            "Video start");
-                        MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
-                        MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
-                        break;
-                    case StartUvcCommand uvc:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat, uvc.Width, uvc.Height, uvc.FpsNum, uvc.FpsDen),
-                            "UVC start");
-                        break;
-                    case AddOutputCommand add:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.OutputAdd(
-                                add.Output.Id,
-                                (uint)add.Output.Transport,
-                                add.Output.Name,
-                                (uint)add.Output.SourceKind,
-                                add.Output.SourceId,
-                                add.Output.UnitId,
-                                add.Output.UseGpu ? 1u : 0u),
-                            "Add output");
-                        break;
-                    case RemoveOutputCommand remove:
-                        MixerNative.OutputRemove(remove.OutputId);
-                        break;
-                    case DefineGeneratorCommand generator:
-                        MixerNative.ThrowIfFailed(
-                            MixerNative.DefineGenerator(
-                                generator.SourceId,
-                                generator.Kind,
-                                generator.R,
-                                generator.G,
-                                generator.B,
-                                1,
-                                generator.Scroll ? 1u : 0u),
-                            "Define colour generator");
-                        MixerNative.GeneratorSetTone(generator.SourceId, generator.ToneHz, generator.ToneLevelDbfs);
-                        break;
-                    case DropSourceCommand drop:
-                        MixerNative.DestroySource(drop.SourceId);
-                        break;
-                    default:
-                        throw new InvalidOperationException("Unknown command.");
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.SetOmtQuality(save.SourceId, (uint)quality),
+                        "OMT quality");
                 }
-            }
-            catch (Exception ex)
-            {
-                HostLog.WriteException(ex);
-                if (command is LoadStillCommand or StartVideoCommand)
-                    ReportUserError(ex.Message, Loc.T("msg.addInput"));
-            }
+                break;
+            case LoadStillCommand still:
+                if (!File.Exists(still.Path))
+                    throw new InvalidOperationException(Loc.MissingFile("Still load"));
+                MixerNative.ThrowIfFailed(MixerNative.LoadStill(still.SourceId, still.Path), "Still load");
+                break;
+            case StartVideoCommand video:
+                if (!File.Exists(video.Path))
+                    throw new InvalidOperationException(Loc.MissingFile("Video start"));
+                MixerNative.ThrowIfFailed(
+                    MixerNative.VideoStart(video.SourceId, video.Path, 0, MixerNative.VideoFormat, 0, 0, 0, 0),
+                    "Video start");
+                MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
+                MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
+                break;
+            case StartUvcCommand uvc:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.VideoStart(uvc.SourceId, uvc.SymbolicLink, 1, MixerNative.VideoFormat, uvc.Width, uvc.Height, uvc.FpsNum, uvc.FpsDen),
+                    "UVC start");
+                break;
+            case AddOutputCommand add:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.OutputAdd(
+                        add.Output.Id,
+                        (uint)add.Output.Transport,
+                        add.Output.Name,
+                        (uint)add.Output.SourceKind,
+                        add.Output.SourceId,
+                        add.Output.UnitId,
+                        add.Output.UseGpu ? 1u : 0u),
+                    "Add output");
+                break;
+            case RemoveOutputCommand remove:
+                MixerNative.OutputRemove(remove.OutputId);
+                break;
+            case DefineGeneratorCommand generator:
+                MixerNative.ThrowIfFailed(
+                    MixerNative.DefineGenerator(
+                        generator.SourceId,
+                        generator.Kind,
+                        generator.R,
+                        generator.G,
+                        generator.B,
+                        1,
+                        generator.Scroll ? 1u : 0u),
+                    "Define colour generator");
+                MixerNative.GeneratorSetTone(generator.SourceId, generator.ToneHz, generator.ToneLevelDbfs);
+                break;
+            case DropSourceCommand drop:
+                MixerNative.DestroySource(drop.SourceId);
+                break;
+            default:
+                throw new InvalidOperationException("Unknown command.");
         }
     }
 

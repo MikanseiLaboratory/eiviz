@@ -42,6 +42,7 @@ final class MixerController: ObservableObject {
     @Published var openMultiview: MultiviewLayout?
     @Published var expandedTransitions: Set<UUID> = []
     @Published var kindMenuGroup: [UUID: TransitionGroup] = [:]
+    @Published private(set) var surfaceEpoch: UInt64 = 0
 
     private var booted = false
     private var tbarLatching = false
@@ -78,6 +79,7 @@ final class MixerController: ObservableObject {
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
         applyBusColors()
         applySession()
+        bumpSurfaceEpoch()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -633,7 +635,7 @@ final class MixerController: ObservableObject {
             existing.level = layout.alwaysOnTop ? .floating : .normal
             return
         }
-        let host = NSHostingController(rootView: MultiviewView(layoutId: layout.id).environmentObject(self))
+        let host = NSHostingController(rootView: MultiviewView(layoutId: layout.id).environmentObject(self).environment(\.mixerSurfaceEpoch, surfaceEpoch))
         let window = SwitcherHostWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 792),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -668,7 +670,7 @@ final class MixerController: ObservableObject {
             existing.level = unit.alwaysOnTop ? .floating : .normal
             return
         }
-        let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self))
+        let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self).environment(\.mixerSurfaceEpoch, surfaceEpoch))
         let window = SwitcherHostWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -948,6 +950,11 @@ final class MixerController: ObservableObject {
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
         applyBusColors()
         applySession()
+        bumpSurfaceEpoch()
+    }
+
+    private func bumpSurfaceEpoch() {
+        surfaceEpoch &+= 1
     }
 
     private func closeAllMultiviews() {
@@ -1025,7 +1032,10 @@ final class MixerController: ObservableObject {
     }
 
     private func attachInputs() {
-        for input in session.inputs {
+        for input in session.inputs where input.kind != .omt && input.kind != .ndi {
+            attach(input)
+        }
+        for input in session.inputs where input.kind == .omt || input.kind == .ndi {
             attach(input)
         }
     }
