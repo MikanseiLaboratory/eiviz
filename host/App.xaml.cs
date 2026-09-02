@@ -103,64 +103,71 @@ public partial class App : Application
     private void AttachInputs()
     {
         foreach (var input in Session.Inputs)
+            AttachInput(input, network: false);
+        foreach (var input in Session.Inputs)
+            AttachInput(input, network: true);
+    }
+
+    private void AttachInput(InputEntry input, bool network)
+    {
+        try
         {
-            try
+            switch (input.Kind)
             {
-                switch (input.Kind)
-                {
-                    case InputKind.Color:
-                    case InputKind.Bars:
-                        if (input.Id > MixerNative.Blue)
-                        {
-                            MixerNative.ThrowIfFailed(
-                                MixerNative.DefineGenerator(
-                                    input.Id,
-                                    input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
-                                    input.ColorR,
-                                    input.ColorG,
-                                    input.ColorB,
-                                    1,
-                                    input.Scroll ? 1u : 0u),
-                                "Define colour generator");
-                        }
-                        MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
-                        break;
-                    case InputKind.Still when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new LoadStillCommand(input.Id, input.PathOrAddress));
-                        break;
-                    case InputKind.Video when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new StartVideoCommand(
-                            input.Id,
-                            input.PathOrAddress,
-                            input.VideoLoop,
-                            input.VideoStartsPlaying));
-                        break;
-                    case InputKind.Omt when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new ConnectOmtCommand(
-                            input.Id,
-                            input.PathOrAddress,
-                            input.UseGpu,
-                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
-                            input.BandwidthSave,
-                            input.KeepFullOnMultiview,
-                            input.OmtQuality));
-                        break;
-                    case InputKind.Ndi when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new ConnectNdiCommand(
-                            input.Id,
-                            input.PathOrAddress,
-                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
-                            input.NdiBandwidth));
-                        break;
-                    case InputKind.Uvc when !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                        Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
-                        break;
-                }
+                case InputKind.Color:
+                case InputKind.Bars:
+                    if (network)
+                        return;
+                    if (input.Id > MixerNative.Blue)
+                    {
+                        MixerNative.ThrowIfFailed(
+                            MixerNative.DefineGenerator(
+                                input.Id,
+                                input.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
+                                input.ColorR,
+                                input.ColorG,
+                                input.ColorB,
+                                1,
+                                input.Scroll ? 1u : 0u),
+                            "Define colour generator");
+                    }
+                    MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
+                    break;
+                case InputKind.Still when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    Commands.TryEnqueue(new LoadStillCommand(input.Id, input.PathOrAddress));
+                    break;
+                case InputKind.Video when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    Commands.TryEnqueue(new StartVideoCommand(
+                        input.Id,
+                        input.PathOrAddress,
+                        input.VideoLoop,
+                        input.VideoStartsPlaying));
+                    break;
+                case InputKind.Uvc when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
+                    break;
+                case InputKind.Omt when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    Commands.TryEnqueue(new ConnectOmtCommand(
+                        input.Id,
+                        input.PathOrAddress,
+                        input.UseGpu,
+                        input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                        input.BandwidthSave,
+                        input.KeepFullOnMultiview,
+                        input.OmtQuality));
+                    break;
+                case InputKind.Ndi when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    Commands.TryEnqueue(new ConnectNdiCommand(
+                        input.Id,
+                        input.PathOrAddress,
+                        input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                        input.NdiBandwidth));
+                    break;
             }
-            catch (Exception ex)
-            {
-                HostLog.WriteException(ex);
-            }
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
         }
     }
 

@@ -259,6 +259,8 @@ public partial class SwitcherWindow : Window
             Commands.TryEnqueue(new CutCommand(_unit.Id, preset.Swap));
         else
             Commands.TryEnqueue(preset.ToAuto(_unit.Id, _unit));
+        RefreshBusTitles();
+        RefreshSceneThumbs();
     }
 
     private TransitionPreset TbarPreset()

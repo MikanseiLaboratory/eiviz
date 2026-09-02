@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
     ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo, OK, OUT_DECKLINK,
@@ -399,6 +399,71 @@ fn missing_video_file_returns_io_error() {
     let path = CString::new(r"C:\eiviz-missing-file-does-not-exist.mp4").unwrap();
     unsafe {
         assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0), ERR_IO);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn omt_connect_returns_before_unreachable_timeout() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let address = CString::new("omt://127.0.0.1:1/missing").unwrap();
+    let started = Instant::now();
+    unsafe {
+        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0), OK);
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(750),
+        "omt connect blocked for {:?}",
+        started.elapsed()
+    );
+    mixer_destroy();
+}
+
+#[test]
+fn reload_mixer_then_preview_and_cut() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let bars = full_layer(SRC_BARS);
+    let color = full_layer(SRC_COLOR);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &color), OK);
+        let state = UnitState {
+            program_source: scene_id(1),
+            preview_source: scene_id(2),
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    mixer_destroy();
+
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &color), OK);
+        let mut state = UnitState {
+            program_source: scene_id(1),
+            preview_source: scene_id(1),
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        state.preview_source = scene_id(2);
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        let mut previewing = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut previewing), OK);
+        assert_eq!(previewing.preview_source, scene_id(2));
+        assert_eq!(previewing.program_source, scene_id(1));
+        assert_eq!(mixer_unit_cut(1, 1, 0), OK);
+        let mut after = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut after), OK);
+        assert_eq!(after.program_source, scene_id(2));
+        assert_eq!(after.preview_source, scene_id(1));
+        assert_eq!(after.mix, 0.0);
     }
     mixer_destroy();
 }

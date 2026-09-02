@@ -58,6 +58,9 @@ impl VideoPump {
         uploads: Arc<Mutex<UploadStore>>,
         gpu: GpuVideoContext,
     ) -> Result<Self, String> {
+        if !capture && !std::path::Path::new(&path).is_file() {
+            return Err(format!("video file not found: {path}"));
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let playing = Arc::new(AtomicBool::new(true));
         let looping = Arc::new(AtomicBool::new(true));
@@ -82,8 +85,8 @@ impl VideoPump {
                 }
             })
             .map_err(|error| error.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(())) => Ok(Self {
+        match ready_rx.recv_timeout(Duration::from_millis(400)) {
+            Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(Self {
                 stop,
                 playing,
                 looping,
@@ -97,10 +100,6 @@ impl VideoPump {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
                 Err(error)
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                stop.store(true, Ordering::Relaxed);
-                Err("timed out opening the video source".into())
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 stop.store(true, Ordering::Relaxed);
