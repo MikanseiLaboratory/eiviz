@@ -70,10 +70,10 @@ public partial class SceneEditorWindow : Window
         Bind(PosYLabel, YBox, 2, min: -_height, max: _height * 2);
         Bind(SizeXLabel, WBox, 2, min: 1, max: _width * 2);
         Bind(SizeYLabel, HBox, 2, min: 1, max: _height * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, maxOf: CropXMaxPx);
-        Bind(CropYLabel, CropYBox, 2, min: 0, maxOf: CropYMaxPx);
-        Bind(CropWLabel, CropWBox, 2, min: 1, maxOf: CropWMaxPx);
-        Bind(CropHLabel, CropHBox, 2, min: 1, maxOf: CropHMaxPx);
+        Bind(CropXLabel, CropXBox, 2, min: 0, max: _width);
+        Bind(CropYLabel, CropYBox, 2, min: 0, max: _height);
+        Bind(CropWLabel, CropWBox, 2, min: 0, max: _width);
+        Bind(CropHLabel, CropHBox, 2, min: 0, max: _height);
         Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
     }
 
@@ -305,10 +305,10 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private double CropXMaxPx() => Math.Max(0, (1 - (_selected?.CropWidth ?? 1)) * _width);
-    private double CropYMaxPx() => Math.Max(0, (1 - (_selected?.CropHeight ?? 1)) * _height);
-    private double CropWMaxPx() => Math.Max(1, (1 - (_selected?.CropX ?? 0)) * _width);
-    private double CropHMaxPx() => Math.Max(1, (1 - (_selected?.CropY ?? 0)) * _height);
+    private double CropXMaxPx() => _width;
+    private double CropYMaxPx() => _height;
+    private double CropWMaxPx() => _width;
+    private double CropHMaxPx() => _height;
 
     private void WriteCropBoxes()
     {
@@ -338,12 +338,12 @@ public partial class SceneEditorWindow : Window
         }
         else if (ReferenceEquals(_meterBox, CropWBox))
         {
-            min = 1;
+            min = 0;
             max = CropWMaxPx();
         }
         else if (ReferenceEquals(_meterBox, CropHBox))
         {
-            min = 1;
+            min = 0;
             max = CropHMaxPx();
         }
         else
@@ -487,8 +487,8 @@ public partial class SceneEditorWindow : Window
             if (float.TryParse(HBox.Text, out var bothH))
                 _selected.Height = Math.Max(1f, bothH) / _height;
         }
-        var minX = 1f / Math.Max(1, _width);
-        var minY = 1f / Math.Max(1, _height);
+        var minX = 0f;
+        var minY = 0f;
         if (ReferenceEquals(sender, CropXBox) && float.TryParse(CropXBox.Text, out var cx))
         {
             _selected.CropX = cx / _width;

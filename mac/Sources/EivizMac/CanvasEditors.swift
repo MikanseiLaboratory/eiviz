@@ -267,12 +267,12 @@ struct SceneEditorView: View {
                 layerMeter("Size Y", index: index, axis: .h, range: 1 ... projectH * 2)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop X", index: index, axis: .cx, range: cropRange(.cx, index: index))
-                layerMeter("Crop Y", index: index, axis: .cy, range: cropRange(.cy, index: index))
+                layerMeter("Crop X", index: index, axis: .cx, range: 0 ... projectW)
+                layerMeter("Crop Y", index: index, axis: .cy, range: 0 ... projectH)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop W", index: index, axis: .cw, range: cropRange(.cw, index: index))
-                layerMeter("Crop H", index: index, axis: .ch, range: cropRange(.ch, index: index))
+                layerMeter("Crop W", index: index, axis: .cw, range: 0 ... projectW)
+                layerMeter("Crop H", index: index, axis: .ch, range: 0 ... projectH)
             }
             layerMeter("Opacity", index: index, axis: .op, range: 0 ... 1, pixelsPerUnit: 400)
         }
@@ -304,22 +304,6 @@ struct SceneEditorView: View {
     }
 
     private enum PixelAxis { case x, y, w, h, cx, cy, cw, ch, op }
-
-    private func cropRange(_ axis: PixelAxis, index: Int) -> ClosedRange<Float> {
-        let layer = layer(index)
-        switch axis {
-        case .cx:
-            return 0 ... max(0, (1 - (layer?.cropWidth ?? 1)) * projectW)
-        case .cy:
-            return 0 ... max(0, (1 - (layer?.cropHeight ?? 1)) * projectH)
-        case .cw:
-            return 1 ... max(1, (1 - (layer?.cropX ?? 0)) * projectW)
-        case .ch:
-            return 1 ... max(1, (1 - (layer?.cropY ?? 0)) * projectH)
-        default:
-            return 0 ... 1
-        }
-    }
 
     private func layerMeter(
         _ title: String,
@@ -385,8 +369,8 @@ struct SceneEditorView: View {
             layer.height = height
         case .cx: layer.cropX = value / projectW
         case .cy: layer.cropY = value / projectH
-        case .cw: layer.cropWidth = max(1, value) / projectW
-        case .ch: layer.cropHeight = max(1, value) / projectH
+        case .cw: layer.cropWidth = value / projectW
+        case .ch: layer.cropHeight = value / projectH
         case .op: layer.opacity = min(1, max(0, value))
         }
         layer.clampCrop(edit: cropEdit(axis))

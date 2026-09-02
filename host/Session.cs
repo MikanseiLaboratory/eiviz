@@ -370,25 +370,29 @@ public sealed class SceneLayer
     public float CropWidth { get; set; } = 1;
     public float CropHeight { get; set; } = 1;
 
-    public void ClampCrop(float minX = 0.001f, float minY = 0.001f, CropEdit edit = CropEdit.All)
+    public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
     {
         switch (edit)
         {
             case CropEdit.X:
-                CropX = Math.Clamp(CropX, 0, 1 - Math.Max(minX, CropWidth));
-                break;
-            case CropEdit.Y:
-                CropY = Math.Clamp(CropY, 0, 1 - Math.Max(minY, CropHeight));
-                break;
-            case CropEdit.W:
+                CropX = Math.Clamp(CropX, 0, 1);
                 CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
                 break;
-            case CropEdit.H:
+            case CropEdit.Y:
+                CropY = Math.Clamp(CropY, 0, 1);
                 CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
                 break;
+            case CropEdit.W:
+                CropWidth = Math.Clamp(CropWidth, minX, 1);
+                CropX = Math.Clamp(CropX, 0, 1 - CropWidth);
+                break;
+            case CropEdit.H:
+                CropHeight = Math.Clamp(CropHeight, minY, 1);
+                CropY = Math.Clamp(CropY, 0, 1 - CropHeight);
+                break;
             default:
-                CropX = Math.Clamp(CropX, 0, 1 - minX);
-                CropY = Math.Clamp(CropY, 0, 1 - minY);
+                CropX = Math.Clamp(CropX, 0, 1);
+                CropY = Math.Clamp(CropY, 0, 1);
                 CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
                 CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
                 break;
@@ -509,25 +513,29 @@ public sealed class OverlaySlot
             ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.Name ?? "Input"
             : session.Scenes.FirstOrDefault(item => item.GpuId == SceneGpuId)?.Name ?? "Scene";
 
-    public void ClampCrop(float minX = 0.001f, float minY = 0.001f, CropEdit edit = CropEdit.All)
+    public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
     {
         switch (edit)
         {
             case CropEdit.X:
-                CropX = Math.Clamp(CropX, 0, 1 - Math.Max(minX, CropWidth));
-                break;
-            case CropEdit.Y:
-                CropY = Math.Clamp(CropY, 0, 1 - Math.Max(minY, CropHeight));
-                break;
-            case CropEdit.W:
+                CropX = Math.Clamp(CropX, 0, 1);
                 CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
                 break;
-            case CropEdit.H:
+            case CropEdit.Y:
+                CropY = Math.Clamp(CropY, 0, 1);
                 CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
                 break;
+            case CropEdit.W:
+                CropWidth = Math.Clamp(CropWidth, minX, 1);
+                CropX = Math.Clamp(CropX, 0, 1 - CropWidth);
+                break;
+            case CropEdit.H:
+                CropHeight = Math.Clamp(CropHeight, minY, 1);
+                CropY = Math.Clamp(CropY, 0, 1 - CropHeight);
+                break;
             default:
-                CropX = Math.Clamp(CropX, 0, 1 - minX);
-                CropY = Math.Clamp(CropY, 0, 1 - minY);
+                CropX = Math.Clamp(CropX, 0, 1);
+                CropY = Math.Clamp(CropY, 0, 1);
                 CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
                 CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
                 break;

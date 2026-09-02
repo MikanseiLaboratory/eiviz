@@ -64,10 +64,10 @@ public partial class OverlayWindow : Window
     private float WidthPx => _unit.Width;
     private float HeightPx => _unit.Height;
 
-    private double CropXMaxPx() => Math.Max(0, (1 - (_selected?.CropWidth ?? 1)) * WidthPx);
-    private double CropYMaxPx() => Math.Max(0, (1 - (_selected?.CropHeight ?? 1)) * HeightPx);
-    private double CropWMaxPx() => Math.Max(1, (1 - (_selected?.CropX ?? 0)) * WidthPx);
-    private double CropHMaxPx() => Math.Max(1, (1 - (_selected?.CropY ?? 0)) * HeightPx);
+    private double CropXMaxPx() => WidthPx;
+    private double CropYMaxPx() => HeightPx;
+    private double CropWMaxPx() => WidthPx;
+    private double CropHMaxPx() => HeightPx;
 
     private void AttachDrags()
     {
@@ -82,10 +82,10 @@ public partial class OverlayWindow : Window
         Bind(PosYLabel, YBox, 2, min: -HeightPx, max: HeightPx * 2);
         Bind(SizeXLabel, WBox, 2, min: 1, max: WidthPx * 2);
         Bind(SizeYLabel, HBox, 2, min: 1, max: HeightPx * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, maxOf: CropXMaxPx);
-        Bind(CropYLabel, CropYBox, 2, min: 0, maxOf: CropYMaxPx);
-        Bind(CropWLabel, CropWBox, 2, min: 1, maxOf: CropWMaxPx);
-        Bind(CropHLabel, CropHBox, 2, min: 1, maxOf: CropHMaxPx);
+        Bind(CropXLabel, CropXBox, 2, min: 0, max: WidthPx);
+        Bind(CropYLabel, CropYBox, 2, min: 0, max: HeightPx);
+        Bind(CropWLabel, CropWBox, 2, min: 0, max: WidthPx);
+        Bind(CropHLabel, CropHBox, 2, min: 0, max: HeightPx);
         Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
     }
 
@@ -180,22 +180,12 @@ public partial class OverlayWindow : Window
 
     private DockPanel BuildSlotRow(OverlaySlot slot)
     {
-        var hide = new Button
-        {
-            Content = slot.Enabled ? "👁" : "–",
-            Width = 26,
-            Height = 22,
-            Padding = new Thickness(0),
-            Tag = slot,
-            ToolTip = "On/Off"
-        };
         var audio = new Button
         {
             Content = slot.AudioFollow ? "🔊" : "🔇",
             Width = 26,
             Height = 22,
             Padding = new Thickness(0),
-            Margin = new Thickness(4, 0, 0, 0),
             Tag = slot,
             ToolTip = "Audio Follow"
         };
@@ -209,10 +199,8 @@ public partial class OverlayWindow : Window
             Tag = slot,
             ToolTip = "Lock"
         };
-        hide.Click += SlotOn_Click;
         audio.Click += SlotAudio_Click;
         lockBtn.Click += SlotLock_Click;
-        DockPanel.SetDock(hide, Dock.Left);
         DockPanel.SetDock(audio, Dock.Left);
         DockPanel.SetDock(lockBtn, Dock.Left);
         var name = new TextBlock
@@ -224,7 +212,6 @@ public partial class OverlayWindow : Window
             Foreground = slot.Enabled ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
         };
         var row = new DockPanel { Tag = slot, LastChildFill = true };
-        row.Children.Add(hide);
         row.Children.Add(audio);
         row.Children.Add(lockBtn);
         row.Children.Add(name);
@@ -324,12 +311,12 @@ public partial class OverlayWindow : Window
         }
         else if (ReferenceEquals(_meterBox, CropWBox))
         {
-            min = 1;
+            min = 0;
             max = CropWMaxPx();
         }
         else if (ReferenceEquals(_meterBox, CropHBox))
         {
-            min = 1;
+            min = 0;
             max = CropHMaxPx();
         }
         else
@@ -529,22 +516,6 @@ public partial class OverlayWindow : Window
         e.Handled = true;
     }
 
-    private void SlotOn_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: OverlaySlot slot })
-            return;
-        _selected = slot;
-        if (Owner is MainWindow main)
-            main.ToggleOverlay(_unit, slot, !slot.Enabled);
-        else
-        {
-            slot.Enabled = !slot.Enabled;
-            Push();
-        }
-        RefreshList();
-        e.Handled = true;
-    }
-
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is null || _selected.Locked)
@@ -632,8 +603,8 @@ public partial class OverlayWindow : Window
             if (float.TryParse(HBox.Text, out var bothH))
                 _selected.Height = Math.Max(1f, bothH) / HeightPx;
         }
-        var minX = 1f / Math.Max(1, WidthPx);
-        var minY = 1f / Math.Max(1, HeightPx);
+        var minX = 0f;
+        var minY = 0f;
         if (ReferenceEquals(sender, CropXBox) && float.TryParse(CropXBox.Text, out var cx))
         {
             _selected.CropX = cx / WidthPx;

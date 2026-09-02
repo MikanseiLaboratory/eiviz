@@ -325,16 +325,20 @@ private func applyCropClamp(
 ) {
     switch edit {
     case .x:
-        cropX = min(1 - max(minX, cropWidth), max(0, cropX))
-    case .y:
-        cropY = min(1 - max(minY, cropHeight), max(0, cropY))
-    case .w:
+        cropX = min(1, max(0, cropX))
         cropWidth = min(1 - cropX, max(minX, cropWidth))
-    case .h:
+    case .y:
+        cropY = min(1, max(0, cropY))
         cropHeight = min(1 - cropY, max(minY, cropHeight))
+    case .w:
+        cropWidth = min(1, max(minX, cropWidth))
+        cropX = min(1 - cropWidth, max(0, cropX))
+    case .h:
+        cropHeight = min(1, max(minY, cropHeight))
+        cropY = min(1 - cropHeight, max(0, cropY))
     case .all:
-        cropX = min(1 - minX, max(0, cropX))
-        cropY = min(1 - minY, max(0, cropY))
+        cropX = min(1, max(0, cropX))
+        cropY = min(1, max(0, cropY))
         cropWidth = min(1 - cropX, max(minX, cropWidth))
         cropHeight = min(1 - cropY, max(minY, cropHeight))
     }
@@ -358,7 +362,7 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var cropWidth: Float = 1
     var cropHeight: Float = 1
 
-    mutating func clampCrop(minX: Float = 0.001, minY: Float = 0.001, edit: CropEdit = .all) {
+    mutating func clampCrop(minX: Float = 0, minY: Float = 0, edit: CropEdit = .all) {
         applyCropClamp(
             cropX: &cropX,
             cropY: &cropY,
@@ -562,7 +566,7 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var cropWidth: Float = 1
     var cropHeight: Float = 1
 
-    mutating func clampCrop(minX: Float = 0.001, minY: Float = 0.001, edit: CropEdit = .all) {
+    mutating func clampCrop(minX: Float = 0, minY: Float = 0, edit: CropEdit = .all) {
         applyCropClamp(
             cropX: &cropX,
             cropY: &cropY,

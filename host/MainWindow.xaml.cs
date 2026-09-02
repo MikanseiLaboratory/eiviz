@@ -52,7 +52,6 @@ public partial class MainWindow : Window
         RebuildTransitions();
         RebuildOverlayToggles();
         RebuildMeters();
-        UpdateStatus();
         _meterTimer.Tick += (_, _) => TickMeters();
         _meterTimer.Start();
         _tbarTimer.Tick += (_, _) => SyncTBarsFromMixer();
@@ -1432,7 +1431,6 @@ public partial class MainWindow : Window
         RebuildTransitions();
         RebuildOverlayToggles();
         MixerNative.AudioSetHeadphoneCue(unit.Id);
-        UpdateStatus();
     }
 
     private void OpenSwitcher_Click(object sender, RoutedEventArgs e) =>
@@ -1527,7 +1525,6 @@ public partial class MainWindow : Window
         ApplyAspect();
         if (_switchers.TryGetValue(unit.Id, out var switcher))
             switcher.SyncFromUnit();
-        UpdateStatus();
     }
 
     private void DeleteUnit_Click(object sender, RoutedEventArgs e)
@@ -1562,7 +1559,6 @@ public partial class MainWindow : Window
             return;
         SessionStore.Save(_session, dialog.FileName);
         AppPrefs.Current.RememberSession(dialog.FileName);
-        UpdateStatus();
     }
 
     private void NewSession_Click(object sender, RoutedEventArgs e)
@@ -1618,7 +1614,6 @@ public partial class MainWindow : Window
         ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
         ApplyBusColors();
         ApplyAspect();
-        UpdateStatus();
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e)
@@ -1678,7 +1673,6 @@ public partial class MainWindow : Window
         RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
-        UpdateStatus();
     }
 
     private void RestartMediaPumps()
@@ -1745,10 +1739,4 @@ public partial class MainWindow : Window
         && left.UnitId == right.UnitId
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled;
-
-    private void UpdateStatus()
-    {
-        var unit = SelectedUnit;
-        StatusText.Text = $"{unit.Width}x{unit.Height} {unit.FormatFps()}   Mixing Unit {unit.Id}";
-    }
 }

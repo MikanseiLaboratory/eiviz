@@ -39,8 +39,6 @@
                     <Button Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="EditUnit_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
-                    <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="16,0,0,0"
-                               Foreground="{DynamicResource StatusForeground}"/>
                 </StackPanel>
             </DockPanel>
         </Border>
