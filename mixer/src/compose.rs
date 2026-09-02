@@ -1107,6 +1107,17 @@ impl Composer {
         } else {
             self.units[&unit_id].preview_view.clone()
         };
+        if let Some(spec) = self.generators.get(&source_id).copied() {
+            self.fill_target(
+                device,
+                encoder,
+                &target_view,
+                spec.color,
+                spec.kind == GEN_BARS,
+                spec.scroll,
+            );
+            return Ok(());
+        }
         let mut pass = begin_clear(encoder, &target_view);
         self.draw_source_pass(device, &mut pass, source_id, [0.0, 0.0, 1.0, 1.0], 1.0, FULL_UV)?;
         drop(pass);
@@ -1652,7 +1663,11 @@ impl Composer {
             }
         }
         if self.generators.contains_key(&source_id) {
-            self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
+            if self.sources.contains_key(&source_id) {
+                self.blit_builtin_uv(device, pass, source_id, dst, crop, opacity);
+            } else {
+                self.blit_builtin_uv(device, pass, SRC_BLACK, dst, crop, opacity);
+            }
             return Ok(());
         }
         match source_id {
@@ -1686,12 +1701,6 @@ impl Composer {
     ) {
         let key = if self.sources.contains_key(&source_id) {
             source_id
-        } else if self.generators.contains_key(&source_id) {
-            if self.generators[&source_id].kind == GEN_BARS {
-                SRC_BARS
-            } else {
-                SRC_COLOR
-            }
         } else {
             SRC_BLACK
         };
@@ -1712,12 +1721,6 @@ impl Composer {
     ) {
         let key = if self.sources.contains_key(&source_id) {
             source_id
-        } else if self.generators.contains_key(&source_id) {
-            if self.generators[&source_id].kind == GEN_BARS {
-                SRC_BARS
-            } else {
-                SRC_COLOR
-            }
         } else {
             SRC_BLACK
         };

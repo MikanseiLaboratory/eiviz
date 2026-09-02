@@ -3257,6 +3257,7 @@ fn render_loop(
             };
             if need_gen_bake {
                 skip_compose = false;
+                frame_delay.discard(snapshot.iter().map(|(id, ..)| *id));
             }
             let skip_units = skip_compose;
             let skip_scenes = skip_compose && !monitor_due;
