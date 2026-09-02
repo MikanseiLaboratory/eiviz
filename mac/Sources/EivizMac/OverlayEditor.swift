@@ -331,12 +331,12 @@ struct OverlayView: View {
                 }
             }
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Crop X", range: 0 ... pw) { $0.cropX * pw } set: { $0.cropX = $1 / pw; $0.clampCrop(edit: .x) }
-                overlayMeter("Crop Y", range: 0 ... ph) { $0.cropY * ph } set: { $0.cropY = $1 / ph; $0.clampCrop(edit: .y) }
+                overlayMeter("Left", range: 0 ... pw) { $0.cropX * pw } set: { $0.setCropInset($1 / pw, edit: .left) }
+                overlayMeter("Up", range: 0 ... ph) { $0.cropY * ph } set: { $0.setCropInset($1 / ph, edit: .up) }
             }
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Crop W", range: 0 ... pw) { $0.cropWidth * pw } set: { $0.cropWidth = $1 / pw; $0.clampCrop(edit: .w) }
-                overlayMeter("Crop H", range: 0 ... ph) { $0.cropHeight * ph } set: { $0.cropHeight = $1 / ph; $0.clampCrop(edit: .h) }
+                overlayMeter("Right", range: 0 ... pw) { (1 - $0.cropX - $0.cropWidth) * pw } set: { $0.setCropInset($1 / pw, edit: .right) }
+                overlayMeter("Down", range: 0 ... ph) { (1 - $0.cropY - $0.cropHeight) * ph } set: { $0.setCropInset($1 / ph, edit: .down) }
             }
             overlayMeter("Opacity", range: 0 ... 1, pixelsPerUnit: 400) { $0.opacity } set: { $0.opacity = min(1, max(0, $1)) }
         }

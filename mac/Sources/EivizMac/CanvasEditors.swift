@@ -267,12 +267,12 @@ struct SceneEditorView: View {
                 layerMeter("Size Y", index: index, axis: .h, range: 1 ... projectH * 2)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop X", index: index, axis: .cx, range: 0 ... projectW)
-                layerMeter("Crop Y", index: index, axis: .cy, range: 0 ... projectH)
+                layerMeter("Left", index: index, axis: .cx, range: 0 ... projectW)
+                layerMeter("Up", index: index, axis: .cy, range: 0 ... projectH)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Crop W", index: index, axis: .cw, range: 0 ... projectW)
-                layerMeter("Crop H", index: index, axis: .ch, range: 0 ... projectH)
+                layerMeter("Right", index: index, axis: .cw, range: 0 ... projectW)
+                layerMeter("Down", index: index, axis: .ch, range: 0 ... projectH)
             }
             layerMeter("Opacity", index: index, axis: .op, range: 0 ... 1, pixelsPerUnit: 400)
         }
@@ -337,8 +337,8 @@ struct SceneEditorView: View {
                 case .h: return layer.height * projectH
                 case .cx: return layer.cropX * projectW
                 case .cy: return layer.cropY * projectH
-                case .cw: return layer.cropWidth * projectW
-                case .ch: return layer.cropHeight * projectH
+                case .cw: return (1 - layer.cropX - layer.cropWidth) * projectW
+                case .ch: return (1 - layer.cropY - layer.cropHeight) * projectH
                 case .op: return layer.opacity
                 }
             },
@@ -367,24 +367,13 @@ struct SceneEditorView: View {
                 layer.width = height * (layer.width / layer.height)
             }
             layer.height = height
-        case .cx: layer.cropX = value / projectW
-        case .cy: layer.cropY = value / projectH
-        case .cw: layer.cropWidth = value / projectW
-        case .ch: layer.cropHeight = value / projectH
+        case .cx: layer.setCropInset(value / projectW, edit: .left)
+        case .cy: layer.setCropInset(value / projectH, edit: .up)
+        case .cw: layer.setCropInset(value / projectW, edit: .right)
+        case .ch: layer.setCropInset(value / projectH, edit: .down)
         case .op: layer.opacity = min(1, max(0, value))
         }
-        layer.clampCrop(edit: cropEdit(axis))
         mixer.session.scenes[i].layers[index] = layer
-    }
-
-    private func cropEdit(_ axis: PixelAxis) -> CropEdit {
-        switch axis {
-        case .cx: return .x
-        case .cy: return .y
-        case .cw: return .w
-        case .ch: return .h
-        default: return .all
-        }
     }
 
     private func layer(_ index: Int) -> SceneLayer? {

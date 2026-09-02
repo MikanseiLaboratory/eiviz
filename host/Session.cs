@@ -346,10 +346,65 @@ internal static class InputKindNames
 public enum CropEdit
 {
     All,
-    X,
-    Y,
-    W,
-    H
+    Left,
+    Up,
+    Right,
+    Down
+}
+
+internal static class CropInsets
+{
+    public static void FromRect(float x, float y, float w, float h, out float left, out float up, out float right, out float down)
+    {
+        left = x;
+        up = y;
+        right = 1f - x - w;
+        down = 1f - y - h;
+    }
+
+    public static void Apply(ref float x, ref float y, ref float w, ref float h, CropEdit edit, float? value = null)
+    {
+        FromRect(x, y, w, h, out var left, out var up, out var right, out var down);
+        if (value is float inset)
+        {
+            switch (edit)
+            {
+                case CropEdit.Left: left = inset; break;
+                case CropEdit.Up: up = inset; break;
+                case CropEdit.Right: right = inset; break;
+                case CropEdit.Down: down = inset; break;
+            }
+        }
+        left = Math.Max(0, left);
+        up = Math.Max(0, up);
+        right = Math.Max(0, right);
+        down = Math.Max(0, down);
+        switch (edit)
+        {
+            case CropEdit.Left:
+                left = Math.Clamp(left, 0, Math.Max(0, 1 - right));
+                break;
+            case CropEdit.Up:
+                up = Math.Clamp(up, 0, Math.Max(0, 1 - down));
+                break;
+            case CropEdit.Right:
+                right = Math.Clamp(right, 0, Math.Max(0, 1 - left));
+                break;
+            case CropEdit.Down:
+                down = Math.Clamp(down, 0, Math.Max(0, 1 - up));
+                break;
+            default:
+                left = Math.Clamp(left, 0, 1);
+                up = Math.Clamp(up, 0, 1);
+                right = Math.Clamp(right, 0, Math.Max(0, 1 - left));
+                down = Math.Clamp(down, 0, Math.Max(0, 1 - up));
+                break;
+        }
+        x = left;
+        y = up;
+        w = Math.Max(0, 1 - left - right);
+        h = Math.Max(0, 1 - up - down);
+    }
 }
 
 public sealed class SceneLayer
@@ -370,33 +425,30 @@ public sealed class SceneLayer
     public float CropWidth { get; set; } = 1;
     public float CropHeight { get; set; } = 1;
 
+    public void SetCropInset(CropEdit edit, float value)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit, value);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
     public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
     {
-        switch (edit)
-        {
-            case CropEdit.X:
-                CropX = Math.Clamp(CropX, 0, 1);
-                CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
-                break;
-            case CropEdit.Y:
-                CropY = Math.Clamp(CropY, 0, 1);
-                CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
-                break;
-            case CropEdit.W:
-                CropWidth = Math.Clamp(CropWidth, minX, 1);
-                CropX = Math.Clamp(CropX, 0, 1 - CropWidth);
-                break;
-            case CropEdit.H:
-                CropHeight = Math.Clamp(CropHeight, minY, 1);
-                CropY = Math.Clamp(CropY, 0, 1 - CropHeight);
-                break;
-            default:
-                CropX = Math.Clamp(CropX, 0, 1);
-                CropY = Math.Clamp(CropY, 0, 1);
-                CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
-                CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
-                break;
-        }
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
     }
 
     public void ResetLayout()
@@ -513,33 +565,30 @@ public sealed class OverlaySlot
             ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.Name ?? "Input"
             : session.Scenes.FirstOrDefault(item => item.GpuId == SceneGpuId)?.Name ?? "Scene";
 
+    public void SetCropInset(CropEdit edit, float value)
+    {
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit, value);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
+    }
+
     public void ClampCrop(float minX = 0f, float minY = 0f, CropEdit edit = CropEdit.All)
     {
-        switch (edit)
-        {
-            case CropEdit.X:
-                CropX = Math.Clamp(CropX, 0, 1);
-                CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
-                break;
-            case CropEdit.Y:
-                CropY = Math.Clamp(CropY, 0, 1);
-                CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
-                break;
-            case CropEdit.W:
-                CropWidth = Math.Clamp(CropWidth, minX, 1);
-                CropX = Math.Clamp(CropX, 0, 1 - CropWidth);
-                break;
-            case CropEdit.H:
-                CropHeight = Math.Clamp(CropHeight, minY, 1);
-                CropY = Math.Clamp(CropY, 0, 1 - CropHeight);
-                break;
-            default:
-                CropX = Math.Clamp(CropX, 0, 1);
-                CropY = Math.Clamp(CropY, 0, 1);
-                CropWidth = Math.Clamp(CropWidth, minX, 1 - CropX);
-                CropHeight = Math.Clamp(CropHeight, minY, 1 - CropY);
-                break;
-        }
+        var x = CropX;
+        var y = CropY;
+        var w = CropWidth;
+        var h = CropHeight;
+        CropInsets.Apply(ref x, ref y, ref w, ref h, edit);
+        CropX = x;
+        CropY = y;
+        CropWidth = w;
+        CropHeight = h;
     }
 
     public void ResetLayout()

@@ -311,7 +311,11 @@ struct InputEntry: Identifiable, Codable, Hashable {
 }
 
 enum CropEdit {
-    case all, x, y, w, h
+    case all, left, up, right, down
+}
+
+private func cropInsets(x: Float, y: Float, w: Float, h: Float) -> (Float, Float, Float, Float) {
+    (x, y, 1 - x - w, 1 - y - h)
 }
 
 private func applyCropClamp(
@@ -321,27 +325,42 @@ private func applyCropClamp(
     cropHeight: inout Float,
     minX: Float,
     minY: Float,
-    edit: CropEdit
+    edit: CropEdit,
+    value: Float? = nil
 ) {
-    switch edit {
-    case .x:
-        cropX = min(1, max(0, cropX))
-        cropWidth = min(1 - cropX, max(minX, cropWidth))
-    case .y:
-        cropY = min(1, max(0, cropY))
-        cropHeight = min(1 - cropY, max(minY, cropHeight))
-    case .w:
-        cropWidth = min(1, max(minX, cropWidth))
-        cropX = min(1 - cropWidth, max(0, cropX))
-    case .h:
-        cropHeight = min(1, max(minY, cropHeight))
-        cropY = min(1 - cropHeight, max(0, cropY))
-    case .all:
-        cropX = min(1, max(0, cropX))
-        cropY = min(1, max(0, cropY))
-        cropWidth = min(1 - cropX, max(minX, cropWidth))
-        cropHeight = min(1 - cropY, max(minY, cropHeight))
+    var (left, up, right, down) = cropInsets(x: cropX, y: cropY, w: cropWidth, h: cropHeight)
+    if let value {
+        switch edit {
+        case .left: left = value
+        case .up: up = value
+        case .right: right = value
+        case .down: down = value
+        case .all: break
+        }
     }
+    left = max(0, left)
+    up = max(0, up)
+    right = max(0, right)
+    down = max(0, down)
+    switch edit {
+    case .left:
+        left = min(max(0, 1 - right), max(0, left))
+    case .up:
+        up = min(max(0, 1 - down), max(0, up))
+    case .right:
+        right = min(max(0, 1 - left), max(0, right))
+    case .down:
+        down = min(max(0, 1 - up), max(0, down))
+    case .all:
+        left = min(1, max(0, left))
+        up = min(1, max(0, up))
+        right = min(max(0, 1 - left), max(0, right))
+        down = min(max(0, 1 - up), max(0, down))
+    }
+    cropX = left
+    cropY = up
+    cropWidth = max(minX, 1 - left - right)
+    cropHeight = max(minY, 1 - up - down)
 }
 
 struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
@@ -371,6 +390,19 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
             minX: minX,
             minY: minY,
             edit: edit
+        )
+    }
+
+    mutating func setCropInset(_ value: Float, edit: CropEdit) {
+        applyCropClamp(
+            cropX: &cropX,
+            cropY: &cropY,
+            cropWidth: &cropWidth,
+            cropHeight: &cropHeight,
+            minX: 0,
+            minY: 0,
+            edit: edit,
+            value: value
         )
     }
 
@@ -575,6 +607,19 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
             minX: minX,
             minY: minY,
             edit: edit
+        )
+    }
+
+    mutating func setCropInset(_ value: Float, edit: CropEdit) {
+        applyCropClamp(
+            cropX: &cropX,
+            cropY: &cropY,
+            cropWidth: &cropWidth,
+            cropHeight: &cropHeight,
+            minX: 0,
+            minY: 0,
+            edit: edit,
+            value: value
         )
     }
 

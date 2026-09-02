@@ -84,13 +84,13 @@
                               Click="Link_Click"/>
                     <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
                     <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Crop X" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Left" VerticalAlignment="Center"/>
                     <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Crop Y" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Up" VerticalAlignment="Center"/>
                     <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Crop W" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Right" VerticalAlignment="Center"/>
                     <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Crop H" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Down" VerticalAlignment="Center"/>
                     <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
                     <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
                     <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>

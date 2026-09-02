@@ -287,10 +287,16 @@ public partial class OverlayWindow : Window
     {
         if (_selected is null)
             return;
-        CropXBox.Text = (_selected.CropX * WidthPx).ToString("0.#");
-        CropYBox.Text = (_selected.CropY * HeightPx).ToString("0.#");
-        CropWBox.Text = (_selected.CropWidth * WidthPx).ToString("0.#");
-        CropHBox.Text = (_selected.CropHeight * HeightPx).ToString("0.#");
+        WriteInsetBoxes(_selected);
+    }
+
+    private void WriteInsetBoxes(OverlaySlot slot)
+    {
+        CropInsets.FromRect(slot.CropX, slot.CropY, slot.CropWidth, slot.CropHeight, out var left, out var up, out var right, out var down);
+        CropXBox.Text = (left * WidthPx).ToString("0.#");
+        CropYBox.Text = (up * HeightPx).ToString("0.#");
+        CropWBox.Text = (right * WidthPx).ToString("0.#");
+        CropHBox.Text = (down * HeightPx).ToString("0.#");
     }
 
     private void RefreshCropMeterRange()
@@ -340,10 +346,7 @@ public partial class OverlayWindow : Window
         YBox.Text = (_selected.Y * HeightPx).ToString("0.#");
         WBox.Text = (_selected.Width * WidthPx).ToString("0.#");
         HBox.Text = (_selected.Height * HeightPx).ToString("0.#");
-        CropXBox.Text = (_selected.CropX * WidthPx).ToString("0.#");
-        CropYBox.Text = (_selected.CropY * HeightPx).ToString("0.#");
-        CropWBox.Text = (_selected.CropWidth * WidthPx).ToString("0.#");
-        CropHBox.Text = (_selected.CropHeight * HeightPx).ToString("0.#");
+        WriteInsetBoxes(_selected);
         OpBox.Text = _selected.Opacity.ToString("0.###");
         LinkBox.IsChecked = _selected.SizeLinked;
         KindBox.SelectedIndex = _selected.TransitionKind == MixerNative.TransitionCut ? 0 : 1;
@@ -603,35 +606,25 @@ public partial class OverlayWindow : Window
             if (float.TryParse(HBox.Text, out var bothH))
                 _selected.Height = Math.Max(1f, bothH) / HeightPx;
         }
-        var minX = 0f;
-        var minY = 0f;
         if (ReferenceEquals(sender, CropXBox) && float.TryParse(CropXBox.Text, out var cx))
-        {
-            _selected.CropX = cx / WidthPx;
-            _selected.ClampCrop(minX, minY, CropEdit.X);
-        }
+            _selected.SetCropInset(CropEdit.Left, cx / WidthPx);
         else if (ReferenceEquals(sender, CropYBox) && float.TryParse(CropYBox.Text, out var cy))
-        {
-            _selected.CropY = cy / HeightPx;
-            _selected.ClampCrop(minX, minY, CropEdit.Y);
-        }
+            _selected.SetCropInset(CropEdit.Up, cy / HeightPx);
         else if (ReferenceEquals(sender, CropWBox) && float.TryParse(CropWBox.Text, out var cw))
-        {
-            _selected.CropWidth = cw / WidthPx;
-            _selected.ClampCrop(minX, minY, CropEdit.W);
-        }
+            _selected.SetCropInset(CropEdit.Right, cw / WidthPx);
         else if (ReferenceEquals(sender, CropHBox) && float.TryParse(CropHBox.Text, out var ch))
-        {
-            _selected.CropHeight = ch / HeightPx;
-            _selected.ClampCrop(minX, minY, CropEdit.H);
-        }
+            _selected.SetCropInset(CropEdit.Down, ch / HeightPx);
         else
         {
-            if (float.TryParse(CropXBox.Text, out var allCx)) _selected.CropX = allCx / WidthPx;
-            if (float.TryParse(CropYBox.Text, out var allCy)) _selected.CropY = allCy / HeightPx;
-            if (float.TryParse(CropWBox.Text, out var allCw)) _selected.CropWidth = allCw / WidthPx;
-            if (float.TryParse(CropHBox.Text, out var allCh)) _selected.CropHeight = allCh / HeightPx;
-            _selected.ClampCrop(minX, minY);
+            CropInsets.FromRect(_selected.CropX, _selected.CropY, _selected.CropWidth, _selected.CropHeight, out var left, out var up, out var right, out var down);
+            if (float.TryParse(CropXBox.Text, out var allCx)) left = allCx / WidthPx;
+            if (float.TryParse(CropYBox.Text, out var allCy)) up = allCy / HeightPx;
+            if (float.TryParse(CropWBox.Text, out var allCw)) right = allCw / WidthPx;
+            if (float.TryParse(CropHBox.Text, out var allCh)) down = allCh / HeightPx;
+            _selected.SetCropInset(CropEdit.Left, left);
+            _selected.SetCropInset(CropEdit.Up, up);
+            _selected.SetCropInset(CropEdit.Right, right);
+            _selected.SetCropInset(CropEdit.Down, down);
         }
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
