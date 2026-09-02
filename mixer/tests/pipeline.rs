@@ -3,13 +3,20 @@ use std::thread;
 use std::time::Duration;
 
 use eiviz_mixer::{
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT,
+    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo, OK, OUT_DECKLINK,
+    OUT_OMT,
     OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
     VideoCaptureInfo, mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
     mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_state, mixer_video_enum_captures, mixer_video_start,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
+    mixer_video_enum_captures, mixer_video_start,
+    EASING_IN_OUT, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
+    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
+    TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
+    TRANSITION_BLOOM, TRANSITION_OPTICAL_FLOW, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -102,8 +109,11 @@ fn dx12_compose_omt_and_program_out() {
     unsafe {
         try_acquire(1);
     }
-    assert_eq!(mixer_unit_cut(1, 1), OK);
-    assert_eq!(mixer_unit_auto(1, 200, 1), OK);
+    assert_eq!(mixer_unit_cut(1, 1, 0), OK);
+    assert_eq!(
+        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+        OK
+    );
 
     let mut sender =
         Sender::create("eiviz-test-src", FrameType::VIDEO | FrameType::AUDIO).expect("sender");
@@ -330,7 +340,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
     unsafe {
         state.mix = 1.0;
         assert_eq!(mixer_unit_set_state(1, &state), OK);
-        assert_eq!(mixer_unit_cut(1, 1), OK);
+        assert_eq!(mixer_unit_cut(1, 1, 0), OK);
         let mut after = UnitState::default();
         assert_eq!(mixer_unit_get_state(1, &mut after), OK);
         assert_eq!(after.program_source, scene_id(1));
@@ -388,7 +398,288 @@ fn missing_video_file_returns_io_error() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     let path = CString::new(r"C:\eiviz-missing-file-does-not-exist.mp4").unwrap();
     unsafe {
-        assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0), ERR_IO);
+        assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0), ERR_IO);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn keep_preview_freezes_incoming_source() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let mut state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_FADE,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+            OK
+        );
+        state.preview_source = SRC_BARS;
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(550));
+    unsafe {
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BLUE);
+        assert_eq!(out.mix, 0.0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn easing_completes_with_cut() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_FADE,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+            OK
+        );
+    }
+    thread::sleep(Duration::from_millis(350));
+    unsafe {
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.mix, 0.0);
+        assert_eq!(out.program_source, SRC_BLUE);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn wipe_and_slide_emit_frames() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let mut state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.45,
+        transition_kind: TRANSITION_WIPE,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        thread::sleep(Duration::from_millis(80));
+        try_acquire(1);
+        state.transition_kind = TRANSITION_SLIDE;
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        thread::sleep(Duration::from_millis(80));
+        try_acquire(1);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn shader_transitions_emit_frames() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let kinds = [
+        TRANSITION_CUBE,
+        TRANSITION_CUBE_ZOOM,
+        TRANSITION_FLY_ROTATE,
+        TRANSITION_LOREZ,
+        TRANSITION_METAMIX,
+        TRANSITION_TILE,
+        TRANSITION_PARTS,
+        TRANSITION_SWIRL,
+        TRANSITION_MULTITASK,
+        TRANSITION_HEART,
+        TRANSITION_STAR,
+        TRANSITION_GLITCH,
+        TRANSITION_PAGE_CURL,
+        TRANSITION_PIXEL_SORT,
+        TRANSITION_DATAMOSH,
+        TRANSITION_VISUAL_DISSOLVE,
+        TRANSITION_OPTICAL_FLOW,
+        TRANSITION_BLOOM,
+    ];
+    for kind in kinds {
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.45,
+            transition_kind: kind,
+            softness: 0.02,
+            param: 0.0,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+            thread::sleep(Duration::from_millis(80));
+            try_acquire(1);
+        }
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn custom_wgsl_can_sample_prev_and_time() {
+    let src = r#"
+fn user_compute(id: vec3<u32>, dim: vec2<u32>) {
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dim);
+    let c = textureSampleLevel(pgm_tex, src_samp, uv, 0.0);
+    user_store(vec2<i32>(id.xy), c);
+}
+fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
+    let a = textureSample(pgm_tex, src_samp, uv);
+    let p = textureSample(prev_tex, src_samp_n, uv);
+    let flow = textureSample(flow_tex, src_samp, uv);
+    let bloom = textureSample(bloom_tex, src_samp, uv);
+    let aux = textureSample(aux_tex, src_samp, uv);
+    return mix(mix(a, p, fract(params.time) * t), aux + bloom * 0.1 + flow, 0.0);
+}
+"#;
+    let cstr = CString::new(src).unwrap();
+    unsafe {
+        assert_eq!(mixer_validate_custom_wgsl(cstr.as_ptr()), OK);
+    }
+}
+
+#[test]
+fn dip_uses_preset_color() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_DIP,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0, 0, 0.02, 0.0),
+            OK
+        );
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert!((out.dip_r - 0.2).abs() < 0.001);
+        assert!((out.dip_g - 0.4).abs() < 0.001);
+        assert!((out.dip_b - 0.8).abs() < 0.001);
+        thread::sleep(Duration::from_millis(80));
+        try_acquire(1);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn auto_uses_incoming_source_instead_of_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_FADE,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 0, 0, 0, 0.0, 0.0, 0.0, 1.0, SRC_BARS, 0.02, 0.0),
+            OK
+        );
+    }
+    thread::sleep(Duration::from_millis(350));
+    unsafe {
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BARS);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
+        assert_eq!(out.mix, 0.0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn cut_uses_incoming_source_instead_of_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, SRC_BARS), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BARS);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn leftover_incoming_source_does_not_override_preview() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        incoming_source: SRC_BARS,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, 0), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_BLUE);
+        assert_eq!(out.preview_source, SRC_COLOR);
+        assert_eq!(out.incoming_source, 0);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn cut_program_sentinel_keeps_program() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let state = UnitState {
+        program_source: SRC_COLOR,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_cut(1, 1, INCOMING_PROGRAM), OK);
+        let mut out = UnitState::default();
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+        assert_eq!(out.program_source, SRC_COLOR);
+        assert_eq!(out.preview_source, SRC_BLUE);
+        assert_eq!(out.incoming_source, 0);
     }
     mixer_destroy();
 }

@@ -20,6 +20,7 @@
             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                 <TextBlock Text="Name"/>
                 <TextBox x:Name="NameBox" Margin="0,4,0,0"/>
+                <TextBlock x:Name="IdLabel" Visibility="Collapsed" Margin="0,8,0,0" Foreground="#AAAAAA"/>
             </StackPanel>
             <Grid>
                 <StackPanel x:Name="ColourPanel" Visibility="Collapsed">
@@ -159,7 +160,10 @@
                 <StackPanel x:Name="UvcPanel" Visibility="Collapsed">
                     <TextBlock Text="Select a UVC / Media Foundation capture device." Margin="0,0,0,8"/>
                     <Button Content="Refresh devices" HorizontalAlignment="Left" Click="RefreshUvc_Click"/>
-                    <ListBox x:Name="UvcList" Height="300" Margin="0,12,0,0" Background="#333" Foreground="#EEE"/>
+                    <ListBox x:Name="UvcList" Height="220" Margin="0,12,0,8" Background="#333" Foreground="#EEE"
+                             SelectionChanged="UvcList_SelectionChanged"/>
+                    <TextBlock Text="Mode" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="UvcModeBox" Height="28"/>
                 </StackPanel>
             </Grid>
         </DockPanel>

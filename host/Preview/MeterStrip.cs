@@ -24,7 +24,12 @@ internal sealed class MeterStrip : StackPanel
     private readonly Slider _fader;
     private readonly ToggleButton _mute;
     private readonly TextBlock _dbText;
-    private readonly WrapPanel _routes = new() { Margin = new Thickness(0, 4, 0, 0) };
+    private readonly WrapPanel _routes = new()
+    {
+        Margin = new Thickness(0, 4, 0, 0),
+        HorizontalAlignment = HorizontalAlignment.Center,
+        ItemHeight = 22
+    };
     private float _leftPeak;
     private float _rightPeak;
     private float _leftDb = float.NegativeInfinity;
@@ -48,10 +53,12 @@ internal sealed class MeterStrip : StackPanel
         Width = 108;
         Margin = new Thickness(0, 0, 10, 0);
         Orientation = Orientation.Vertical;
+        VerticalAlignment = VerticalAlignment.Top;
         Children.Add(new TextBlock
         {
             Text = name,
             FontSize = 11,
+            Height = 16,
             TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = Brushes.Silver,
             Margin = new Thickness(0, 0, 0, 4)
@@ -92,10 +99,9 @@ internal sealed class MeterStrip : StackPanel
             Content = MuteGlyph(mute),
             FontFamily = IconFont,
             FontSize = 12,
-            Width = 28,
+            Width = 26,
             Height = 22,
-            Margin = new Thickness(0, 4, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 0, 2, 0),
             IsChecked = mute,
             ToolTip = "Mute"
         };
@@ -105,8 +111,8 @@ internal sealed class MeterStrip : StackPanel
             _mute.Content = MuteGlyph(Mute);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
-        Children.Add(_mute);
         Children.Add(_routes);
+        _routes.Children.Add(_mute);
     }
 
     public void SetLevels(float left, float right)
@@ -154,47 +160,50 @@ internal sealed class MeterStrip : StackPanel
     {
         BusMask = mask;
         _routes.Children.Clear();
-        if (Kind != MeterKind.Input)
-            return;
-        foreach (var bus in buses)
+        if (Kind == MeterKind.Input)
         {
-            var bit = bus.Bit;
-            var button = new ToggleButton
+            foreach (var bus in buses)
             {
-                Width = 26,
-                Height = 22,
-                FontSize = 10,
-                Margin = new Thickness(0, 0, 2, 2),
-                IsChecked = (mask & (1u << (int)bit)) != 0,
-                ToolTip = bus.Name
-            };
-            if (bus.Role == AudioBusRole.Master)
-            {
-                button.Content = "M";
-            }
-            else if (bus.Role == AudioBusRole.Headphone)
-            {
-                button.Content = IconHeadphone;
-                button.FontFamily = IconFont;
-                button.FontSize = 12;
-            }
-            else
-            {
-                button.Content = bus.Name.StartsWith("Bus ", StringComparison.Ordinal) && bus.Name.Length > 4
-                    ? bus.Name[4].ToString()
-                    : bus.Name.Length == 0 ? "?" : bus.Name[..1];
-            }
-            button.Click += (_, _) =>
-            {
-                var flag = 1u << (int)bit;
-                if (button.IsChecked == true)
-                    BusMask |= flag;
+                var bit = bus.Bit;
+                var button = new ToggleButton
+                {
+                    Width = 26,
+                    Height = 22,
+                    FontSize = 10,
+                    Margin = new Thickness(0, 0, 2, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsChecked = (mask & (1u << (int)bit)) != 0,
+                    ToolTip = bus.Name
+                };
+                if (bus.Role == AudioBusRole.Master)
+                {
+                    button.Content = "M";
+                }
+                else if (bus.Role == AudioBusRole.Headphone)
+                {
+                    button.Content = IconHeadphone;
+                    button.FontFamily = IconFont;
+                    button.FontSize = 12;
+                }
                 else
-                    BusMask &= ~flag;
-                BusMaskChanged?.Invoke(TargetId, BusMask);
-            };
-            _routes.Children.Add(button);
+                {
+                    button.Content = bus.Name.StartsWith("Bus ", StringComparison.Ordinal) && bus.Name.Length > 4
+                        ? bus.Name[4].ToString()
+                        : bus.Name.Length == 0 ? "?" : bus.Name[..1];
+                }
+                button.Click += (_, _) =>
+                {
+                    var flag = 1u << (int)bit;
+                    if (button.IsChecked == true)
+                        BusMask |= flag;
+                    else
+                        BusMask &= ~flag;
+                    BusMaskChanged?.Invoke(TargetId, BusMask);
+                };
+                _routes.Children.Add(button);
+            }
         }
+        _routes.Children.Add(_mute);
     }
 
     private static object MuteGlyph(bool muted) => muted ? IconMute : IconSpeaker;

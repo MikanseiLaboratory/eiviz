@@ -488,6 +488,8 @@ struct AddInputView: View {
     @State private var ndiList: [String] = []
     @State private var uvcList: [VideoCaptureDevice] = []
     @State private var selectedUvc: String = ""
+    @State private var uvcModes: [CaptureMode] = []
+    @State private var selectedMode: CaptureMode?
     @State private var r: Double = 220
     @State private var g: Double = 32
     @State private var b: Double = 32
@@ -512,6 +514,11 @@ struct AddInputView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Name")
                 mixerTextField($name, placeholder: defaultName())
+                if let editing {
+                    Text("ID \(editing.id)   GUID \(editing.guid)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(EivizTheme.dim)
+                }
                 form
                 Spacer()
                 HStack {
@@ -595,6 +602,14 @@ struct AddInputView: View {
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
             }
+            .onChange(of: selectedUvc) { _, _ in refreshUvcModes() }
+            Text("Mode")
+            Picker("", selection: $selectedMode) {
+                Text("Select mode").tag(Optional<CaptureMode>.none)
+                ForEach(uvcModes) { mode in
+                    Text(mode.label).tag(Optional(mode))
+                }
+            }
         }
     }
 
@@ -643,6 +658,20 @@ struct AddInputView: View {
 
     private func refreshUvc() {
         uvcList = MixerFFI.videoCaptures()
+        refreshUvcModes()
+    }
+
+    private func refreshUvcModes() {
+        guard !selectedUvc.isEmpty else {
+            uvcModes = []
+            selectedMode = nil
+            return
+        }
+        uvcModes = MixerFFI.videoCaptureModes(deviceId: selectedUvc)
+        if let current = selectedMode, uvcModes.contains(current) {
+            return
+        }
+        selectedMode = uvcModes.first
     }
 
     private func loadEditing() {
@@ -657,6 +686,15 @@ struct AddInputView: View {
         omtAddress = editing.kind == .omt ? (editing.pathOrAddress ?? "") : omtAddress
         ndiAddress = editing.kind == .ndi ? (editing.pathOrAddress ?? "") : ndiAddress
         selectedUvc = editing.kind == .uvc ? (editing.pathOrAddress ?? "") : selectedUvc
+        if editing.kind == .uvc, editing.captureWidth > 0, editing.captureHeight > 0 {
+            selectedMode = CaptureMode(
+                width: editing.captureWidth,
+                height: editing.captureHeight,
+                fpsNum: editing.captureFpsNum,
+                fpsDen: max(1, editing.captureFpsDen)
+            )
+        }
+        refreshUvcModes()
         r = Double(editing.colorR) * 255
         g = Double(editing.colorG) * 255
         b = Double(editing.colorB) * 255
@@ -747,9 +785,17 @@ struct AddInputView: View {
             input.frameBufferFrames = buffer
             input.useGpu = false
         default:
-            guard !selectedUvc.isEmpty else { return false }
+            guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
             input.kind = .uvc
             input.pathOrAddress = selectedUvc
+            input.captureWidth = mode.width
+            input.captureHeight = mode.height
+            input.captureFpsNum = mode.fpsNum
+            input.captureFpsDen = mode.fpsDen
+        }
+        if let editing {
+            input.guid = editing.guid
+            input.id = editing.id
         }
         mixer.upsertInput(input, replacing: editing?.id)
         return true
@@ -1388,6 +1434,94 @@ struct LogsView: View {
             return lines
         } catch {
             return []
+        }
+    }
+}
+
+struct CustomWgslEditor: View {
+    @State private var text: String
+    @State private var status = ""
+    @State private var valid = false
+    let onSave: (String) -> Void
+    let onCancel: () -> Void
+
+    init(text: String, onSave: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+        _text = State(initialValue: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Self.template : text)
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    static let template = """
+    fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> {
+        let a = textureSample(pgm_tex, src_samp, uv);
+        let b = textureSample(pvw_tex, src_samp, uv);
+        let prev = textureSample(prev_tex, src_samp, uv);
+        let w = 1.0 - smoothstep(t - 0.04, t + 0.04, uv.x);
+        return mix(mix(a, prev, 0.15 * t), b, w);
+    }
+    """
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Custom WGSL").fontWeight(.bold)
+            Text("fn user_transition(uv, t). Optional fn user_compute(id, dim) writes aux via user_store. Bound: pgm/pvw/prev/flow/bloom/aux/aux2, src_samp, src_samp_n, params. Compute uses textureSampleLevel.")
+                .font(.system(size: 11))
+                .foregroundStyle(EivizTheme.dim)
+            TextEditor(text: $text)
+                .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .foregroundStyle(EivizTheme.text)
+                .padding(6)
+                .background(Color.black.opacity(0.45))
+                .frame(minWidth: 640, minHeight: 360)
+            Text(status)
+                .font(.system(size: 11))
+                .foregroundStyle(valid ? Color.green : Color.red)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Load file…") { loadFile() }
+                Button("Validate") { _ = validate() }
+                Spacer()
+                Button("Cancel") { onCancel() }
+                Button("Save") {
+                    if validate() { onSave(text) }
+                }
+            }
+            .buttonStyle(MixerButtonStyle())
+        }
+        .padding(16)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear { _ = validate() }
+    }
+
+    @discardableResult
+    private func validate() -> Bool {
+        let code = text.withCString { mixer_validate_custom_wgsl($0) }
+        if code == EIVIZ_OK {
+            status = "Valid WGSL. user_transition will be used."
+            valid = true
+            return true
+        }
+        let error = MixerFFI.lastErrorText()
+        status = error.isEmpty ? "Invalid WGSL." : error
+        valid = false
+        return false
+    }
+
+    private func loadFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if let wgsl = UTType(filenameExtension: "wgsl") {
+            panel.allowedContentTypes = [wgsl, .plainText]
+        } else {
+            panel.allowedContentTypes = [.plainText]
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let loaded = try? String(contentsOf: url, encoding: .utf8) {
+            text = loaded
+            _ = validate()
         }
     }
 }

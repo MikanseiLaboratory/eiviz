@@ -10,6 +10,9 @@ pub const SRC_BARS: u64 = 2;
 pub const SRC_BLACK: u64 = 3;
 pub const SRC_BLUE: u64 = 4;
 
+pub const INCOMING_PREVIEW: u64 = 0;
+pub const INCOMING_PROGRAM: u64 = u64::MAX;
+
 pub const FMT_UYVY: u32 = 0;
 pub const FMT_BGRA: u32 = 1;
 pub const FMT_UYVA: u32 = 2;
@@ -18,6 +21,63 @@ pub const FMT_RGBA: u32 = 3;
 pub const TRANSITION_CUT: u32 = 0;
 pub const TRANSITION_FADE: u32 = 1;
 pub const TRANSITION_DIP: u32 = 2;
+pub const TRANSITION_WIPE: u32 = 3;
+pub const TRANSITION_SLIDE: u32 = 4;
+pub const TRANSITION_PUSH: u32 = 5;
+pub const TRANSITION_IRIS: u32 = 6;
+pub const TRANSITION_BLINDS: u32 = 7;
+pub const TRANSITION_ZOOM: u32 = 8;
+pub const TRANSITION_ADDITIVE: u32 = 9;
+pub const TRANSITION_CUBE: u32 = 10;
+pub const TRANSITION_CROSS_ZOOM: u32 = 11;
+pub const TRANSITION_FLY_ROTATE: u32 = 12;
+pub const TRANSITION_BARN_DOOR: u32 = 13;
+pub const TRANSITION_CLOCK: u32 = 14;
+pub const TRANSITION_LOREZ: u32 = 15;
+pub const TRANSITION_METAMIX: u32 = 16;
+pub const TRANSITION_TILE: u32 = 17;
+pub const TRANSITION_FLIP: u32 = 18;
+pub const TRANSITION_GLITCH: u32 = 19;
+pub const TRANSITION_SWIRL: u32 = 20;
+pub const TRANSITION_LUMA_MORPH: u32 = 21;
+pub const TRANSITION_PARTS: u32 = 22;
+pub const TRANSITION_STATIC: u32 = 23;
+pub const TRANSITION_SHIFT_RGB: u32 = 24;
+pub const TRANSITION_DISPLACE: u32 = 25;
+pub const TRANSITION_RIPPLE: u32 = 26;
+pub const TRANSITION_GRID_DISSOLVE: u32 = 27;
+pub const TRANSITION_CUBE_ZOOM: u32 = 28;
+pub const TRANSITION_PAGE_CURL: u32 = 29;
+pub const TRANSITION_KALEIDOSCOPE: u32 = 30;
+pub const TRANSITION_POLAR: u32 = 31;
+pub const TRANSITION_FILM_BURN: u32 = 32;
+pub const TRANSITION_ZOOM_BLUR: u32 = 33;
+pub const TRANSITION_MULTITASK: u32 = 34;
+pub const TRANSITION_HEART: u32 = 35;
+pub const TRANSITION_DIAMOND: u32 = 36;
+pub const TRANSITION_STAR: u32 = 37;
+pub const TRANSITION_ROLLER_DOOR: u32 = 38;
+pub const TRANSITION_PIXEL_SORT: u32 = 39;
+pub const TRANSITION_DATAMOSH: u32 = 40;
+pub const TRANSITION_VISUAL_DISSOLVE: u32 = 41;
+pub const TRANSITION_OPTICAL_FLOW: u32 = 42;
+pub const TRANSITION_BLOOM: u32 = 43;
+pub const TRANSITION_CUSTOM: u32 = 50;
+pub const TRANSITION_STINGER: u32 = 100;
+
+pub const TRANSITION_DIR_LEFT: u32 = 0;
+pub const TRANSITION_DIR_RIGHT: u32 = 1;
+pub const TRANSITION_DIR_UP: u32 = 2;
+pub const TRANSITION_DIR_DOWN: u32 = 3;
+
+pub const EASING_LINEAR: u32 = 0;
+pub const EASING_IN: u32 = 1;
+pub const EASING_OUT: u32 = 2;
+pub const EASING_IN_OUT: u32 = 3;
+pub const EASING_SMOOTHSTEP: u32 = 4;
+
+pub const DURATION_FRAMES: u32 = 0;
+pub const DURATION_MS: u32 = 1;
 
 pub const OUTPUT_PROGRAM: u32 = 0;
 pub const OUTPUT_PREVIEW: u32 = 1;
@@ -105,6 +165,16 @@ impl Default for VideoCaptureInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct VideoCaptureMode {
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub format: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MixerRebarInfo {
     pub available: u32,
@@ -145,10 +215,11 @@ pub struct Rect {
 pub struct OverlayDesc {
     pub source_id: u64,
     pub rect: Rect,
+    pub crop: Rect,
     pub opacity: f32,
     pub z: i32,
     pub audio_follow: u32,
-    pub pad: u32,
+    pub hidden: u32,
     pub label: *const std::ffi::c_char,
 }
 
@@ -157,10 +228,11 @@ impl Default for OverlayDesc {
         Self {
             source_id: 0,
             rect: Rect::default(),
+            crop: Rect::default(),
             opacity: 0.0,
             z: 0,
             audio_follow: 0,
-            pad: 0,
+            hidden: 0,
             label: std::ptr::null(),
         }
     }
@@ -182,7 +254,32 @@ pub struct UnitState {
     pub mv_slot_count: u32,
     pub overlays: [OverlayDesc; 8],
     pub mv_slots: [u64; 16],
+    pub transition_easing: u32,
+    pub transition_direction: u32,
+    pub keep_preview: u32,
+    pub pad: u32,
+    pub dip_r: f32,
+    pub dip_g: f32,
+    pub dip_b: f32,
+    pub dip_a: f32,
+    /// Report of the active mix incoming when it is not Preview. `0` means Preview.
+    /// Auto/Cut arguments: `0` Preview, `u64::MAX` (`-1`) Program, otherwise a source id.
+    pub incoming_source: u64,
+    pub softness: f32,
+    pub param: f32,
 }
+
+impl UnitState {
+    pub fn mix_incoming(&self) -> u64 {
+        if self.incoming_source != 0 {
+            self.incoming_source
+        } else {
+            self.preview_source
+        }
+    }
+}
+
+pub type UnitSnap = (u64, u32, u32, u32, u32, UnitState, u64, Option<String>);
 
 pub fn mixing_unit_source(unit_id: u64) -> u64 {
     MU_SOURCE_FLAG | (unit_id & MU_ID_MASK)

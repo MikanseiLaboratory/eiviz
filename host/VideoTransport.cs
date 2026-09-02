@@ -66,7 +66,10 @@ internal sealed class VideoTransport
             Mark(session, roles, state.ProgramSource, program: true, preview: false);
             Mark(session, roles, state.PreviewSource, program: false, preview: true);
             if (state.Mix > 0.001f)
-                Mark(session, roles, state.PreviewSource, program: true, preview: false);
+            {
+                var incoming = state.IncomingSource != 0 ? state.IncomingSource : state.PreviewSource;
+                Mark(session, roles, incoming, program: true, preview: false);
+            }
             foreach (var source in OverlaySources(state))
                 Mark(session, roles, source, program: true, preview: false);
         }

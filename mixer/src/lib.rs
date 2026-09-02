@@ -38,9 +38,22 @@ pub use abi::{
     GEN_BARS, GEN_SOLID, MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
     NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW,
     OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
-    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, UnitState,
-    VideoCaptureInfo,
+    INCOMING_PREVIEW, INCOMING_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
+    TRANSITION_BARN_DOOR, TRANSITION_BLINDS, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM,
+    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DIAMOND,
+    TRANSITION_DIP, TRANSITION_DISPLACE, TRANSITION_FADE, TRANSITION_FILM_BURN, TRANSITION_FLIP,
+    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_GRID_DISSOLVE, TRANSITION_HEART,
+    TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE, TRANSITION_LOREZ, TRANSITION_LUMA_MORPH,
+    TRANSITION_BLOOM, TRANSITION_DATAMOSH, TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_VISUAL_DISSOLVE,
+    TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE, TRANSITION_ROLLER_DOOR,
+    TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_STATIC, TRANSITION_STINGER,
+    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR,
+    TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT, TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP,
+    DURATION_FRAMES, DURATION_MS, EASING_IN,
+    EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP, UnitState, UnitSnap,
+    VideoCaptureInfo, VideoCaptureMode,
 };
 pub use audio::{AudioBusInfo, AudioDeviceInfo};
 
@@ -77,6 +90,18 @@ struct AutoTransition {
     start: Instant,
     duration: Duration,
     swap: bool,
+    keep_preview: bool,
+    incoming_locked: bool,
+    frozen_preview: u64,
+    easing: u32,
+}
+
+struct OverlayAuto {
+    desc: OverlayDesc,
+    from: f32,
+    to: f32,
+    start: Instant,
+    duration: Duration,
 }
 
 struct LiveUnit {
@@ -86,6 +111,9 @@ struct LiveUnit {
     fps_den: u32,
     state: UnitState,
     auto: Option<AutoTransition>,
+    overlay_autos: Vec<OverlayAuto>,
+    frozen_preview: Option<u64>,
+    custom_wgsl: Option<String>,
 }
 
 struct LiveOutput {
@@ -181,6 +209,7 @@ struct Shared {
     tone_phase: HashMap<u64, f64>,
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
+    compose_dirty: bool,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -357,6 +386,7 @@ enum GpuCmd {
     },
     DetachMonitor {
         monitor_id: u64,
+        reply: mpsc::Sender<i32>,
     },
     SetMonitorSource {
         monitor_id: u64,
@@ -606,6 +636,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         ndi_gpu_upload: true,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
+        compose_dirty: false,
     }));
     let (tx, rx) = mpsc::channel();
     let (send_tx, send_rx) = mpsc::channel();
@@ -715,6 +746,9 @@ pub extern "C" fn mixer_create_unit(unit_id: u64, width: u32, height: u32) -> i3
                     ..UnitState::default()
                 },
                 auto: None,
+                overlay_autos: Vec::new(),
+                frozen_preview: None,
+                custom_wgsl: None,
             },
         );
         shared
@@ -769,6 +803,7 @@ pub unsafe extern "C" fn mixer_define_scene(
                 mv_label,
             },
         );
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -777,18 +812,12 @@ pub unsafe extern "C" fn mixer_define_scene(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .scenes
-            .remove(&scene_id);
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .multiview_binds
-            .remove(&scene_id);
+        {
+            let mut shared = mixer.shared.lock().expect("shared");
+            shared.scenes.remove(&scene_id);
+            shared.multiview_binds.remove(&scene_id);
+            shared.compose_dirty = true;
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -945,56 +974,328 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
     }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
-        let Some(unit) = shared.units.get_mut(&unit_id) else {
-            return ERR_INVALID_ARGUMENT;
-        };
-        unit.state = state;
-        unit.auto = None;
+        {
+            let Some(unit) = shared.units.get_mut(&unit_id) else {
+                return ERR_INVALID_ARGUMENT;
+            };
+            let keep = state.keep_preview != 0
+                || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
+            if unit.auto.is_some() && keep {
+                let mix = unit.state.mix;
+                let program = unit.state.program_source;
+                let keep_preview = unit.state.keep_preview;
+                let dip = (unit.state.dip_r, unit.state.dip_g, unit.state.dip_b, unit.state.dip_a);
+                let look = (unit.state.softness, unit.state.param);
+                let frozen = unit.frozen_preview;
+                unit.state = state;
+                unit.state.mix = mix;
+                unit.state.program_source = program;
+                unit.state.keep_preview = keep_preview;
+                unit.state.dip_r = dip.0;
+                unit.state.dip_g = dip.1;
+                unit.state.dip_b = dip.2;
+                unit.state.dip_a = dip.3;
+                unit.state.softness = look.0;
+                unit.state.param = look.1;
+                unit.frozen_preview = frozen;
+            } else {
+                let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
+                unit.state = state;
+                if mix_changed {
+                    unit.auto = None;
+                }
+            }
+            unit.state.incoming_source = 0;
+            if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked) {
+                unit.frozen_preview
+                    .get_or_insert(unit.state.preview_source);
+            } else if unit.state.mix > 0.001 {
+                if unit.state.keep_preview != 0 {
+                    unit.frozen_preview
+                        .get_or_insert(unit.state.preview_source);
+                } else {
+                    unit.frozen_preview = None;
+                }
+            } else {
+                unit.frozen_preview = None;
+            }
+        }
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+fn ease_mix(t: f32, kind: u32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match kind {
+        1 => t * t * t,
+        2 => 1.0 - (1.0 - t).powi(3),
+        3 => {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            }
+        }
+        4 => t * t * (3.0 - 2.0 * t),
+        _ => t,
+    }
+}
+
+fn merge_overlay(state: &mut UnitState, desc: OverlayDesc) {
+    if let Some(existing) = state
+        .overlays
+        .iter_mut()
+        .take(state.overlay_count as usize)
+        .find(|item| item.source_id == desc.source_id)
+    {
+        *existing = desc;
+        return;
+    }
+    if (state.overlay_count as usize) < state.overlays.len() {
+        state.overlays[state.overlay_count as usize] = desc;
+        state.overlay_count += 1;
+    }
+}
+
+fn tick_unit_transitions(unit: &mut LiveUnit) {
+    if let Some(auto) = unit.auto.take() {
+        let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
+        if t >= 1.0 {
+            unit.state.mix = auto.to;
+            if auto.to >= 1.0 {
+                take_cut(unit, auto.swap);
+            } else {
+                unit.frozen_preview = None;
+            }
+        } else {
+            let eased = ease_mix(t, auto.easing);
+            unit.state.mix = auto.from + (auto.to - auto.from) * eased;
+            unit.auto = Some(auto);
+        }
+    }
+    let mut still = Vec::new();
+    for mut item in unit.overlay_autos.drain(..) {
+        let t = item.start.elapsed().as_secs_f32() / item.duration.as_secs_f32();
+        if t >= 1.0 {
+            item.desc.opacity = item.to;
+            if item.to > 0.001 {
+                merge_overlay(&mut unit.state, item.desc);
+            }
+        } else {
+            item.desc.opacity = item.from + (item.to - item.from) * t;
+            merge_overlay(&mut unit.state, item.desc);
+            still.push(item);
+        }
+    }
+    unit.overlay_autos = still;
+}
+
+fn live_incoming(unit: &LiveUnit) -> u64 {
+    if let Some(auto) = &unit.auto
+        && (auto.keep_preview || auto.incoming_locked)
+    {
+        return auto.frozen_preview;
+    }
+    unit.frozen_preview
+        .unwrap_or(unit.state.preview_source)
+}
+
+fn resolve_incoming(requested: u64, preview: u64, program: u64) -> u64 {
+    if requested == INCOMING_PREVIEW {
+        preview
+    } else if requested == INCOMING_PROGRAM {
+        program
+    } else {
+        requested
+    }
+}
+
+fn snapshot_mix_preview(unit: &LiveUnit) -> u64 {
+    let incoming = live_incoming(unit);
+    if incoming == unit.state.preview_source {
+        0
+    } else {
+        incoming
+    }
 }
 
 fn take_cut(unit: &mut LiveUnit, swap: bool) {
-    if swap {
-        std::mem::swap(
-            &mut unit.state.program_source,
-            &mut unit.state.preview_source,
-        );
+    take_cut_to(unit, swap, live_incoming(unit));
+}
+
+fn take_cut_to(unit: &mut LiveUnit, swap: bool, incoming: u64) {
+    let preview = unit.state.preview_source;
+    if swap && incoming == preview {
+        unit.state.preview_source = unit.state.program_source;
+        unit.state.program_source = incoming;
     } else {
-        unit.state.program_source = unit.state.preview_source;
+        unit.state.program_source = incoming;
     }
     unit.state.mix = 0.0;
+    unit.state.incoming_source = 0;
     unit.auto = None;
+    unit.frozen_preview = None;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32) -> i32 {
+pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        take_cut(unit, swap != 0);
+        let incoming = if incoming_source == INCOMING_PREVIEW {
+            live_incoming(unit)
+        } else {
+            resolve_incoming(
+                incoming_source,
+                unit.state.preview_source,
+                unit.state.program_source,
+            )
+        };
+        take_cut_to(unit, swap != 0, incoming);
         OK
     })
     .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_auto(unit_id: u64, duration_ms: u32, swap: u32) -> i32 {
+pub extern "C" fn mixer_unit_auto(
+    unit_id: u64,
+    kind: u32,
+    duration_ms: u32,
+    swap: u32,
+    keep_preview: u32,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    incoming_source: u64,
+    softness: f32,
+    param: f32,
+) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
+        let kind = if kind == crate::abi::TRANSITION_STINGER {
+            crate::abi::TRANSITION_FADE
+        } else {
+            kind
+        };
+        unit.state.transition_kind = kind;
+        unit.state.transition_easing = easing;
+        unit.state.transition_direction = direction;
+        unit.state.keep_preview = keep_preview;
+        unit.state.dip_r = dip_r;
+        unit.state.dip_g = dip_g;
+        unit.state.dip_b = dip_b;
+        unit.state.dip_a = if dip_a <= 0.0 { 1.0 } else { dip_a };
+        unit.state.softness = softness;
+        unit.state.param = param;
+        let keep = keep_preview != 0;
+        let incoming = resolve_incoming(
+            incoming_source,
+            unit.state.preview_source,
+            unit.state.program_source,
+        );
+        let incoming_locked = keep || incoming_source != INCOMING_PREVIEW;
+        if incoming_locked {
+            unit.frozen_preview = Some(incoming);
+        } else {
+            unit.frozen_preview = None;
+        }
         unit.auto = Some(AutoTransition {
             from: unit.state.mix,
             to: if unit.state.mix < 0.5 { 1.0 } else { 0.0 },
             start: Instant::now(),
             duration: Duration::from_millis(u64::from(duration_ms.max(1))),
             swap: swap != 0,
+            keep_preview: keep,
+            incoming_locked,
+            frozen_preview: incoming,
+            easing,
         });
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_unit_overlay_auto(
+    unit_id: u64,
+    target_enabled: u32,
+    duration_ms: u32,
+    desc: *const OverlayDesc,
+) -> i32 {
+    if desc.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let desc = unsafe { *desc };
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        let from = if target_enabled != 0 { 0.0 } else { desc.opacity.max(0.001) };
+        let to = if target_enabled != 0 { desc.opacity.max(0.001) } else { 0.0 };
+        unit.overlay_autos.retain(|item| item.desc.source_id != desc.source_id);
+        unit.overlay_autos.push(OverlayAuto {
+            desc,
+            from,
+            to,
+            start: Instant::now(),
+            duration: Duration::from_millis(u64::from(duration_ms.max(1))),
+        });
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_validate_custom_wgsl(wgsl: *const c_char) -> i32 {
+    let text = if wgsl.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(wgsl) }
+            .to_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    match crate::compose::Composer::validate_custom_wgsl(&text) {
+        Ok(()) => OK,
+        Err(error) => {
+            report_session_error(error);
+            ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_unit_set_custom_wgsl(unit_id: u64, wgsl: *const c_char) -> i32 {
+    let text = if wgsl.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(wgsl) }
+            .to_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        unit.custom_wgsl = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1031,11 +1332,14 @@ pub unsafe extern "C" fn mixer_unit_get_state(unit_id: u64, out: *mut UnitState)
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let Some(unit) = shared.units.get(&unit_id) else {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        unsafe { *out = unit.state };
+        tick_unit_transitions(unit);
+        let mut state = unit.state;
+        state.incoming_source = snapshot_mix_preview(unit);
+        unsafe { *out = state };
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1190,11 +1494,16 @@ pub extern "C" fn mixer_resize_monitor(monitor_id: u64, width: u32, height: u32)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_detach_monitor(monitor_id: u64) -> i32 {
-    with_mixer(|mixer| {
-        let _ = mixer.cmds.send(GpuCmd::DetachMonitor { monitor_id });
+    send_gpu_and_wait(|mixer, reply| {
+        if mixer
+            .cmds
+            .send(GpuCmd::DetachMonitor { monitor_id, reply })
+            .is_err()
+        {
+            return ERR_DEVICE;
+        }
         OK
     })
-    .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
@@ -1306,6 +1615,10 @@ pub unsafe extern "C" fn mixer_video_start(
     path: *const c_char,
     capture: u32,
     format: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
 ) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1319,7 +1632,7 @@ pub unsafe extern "C" fn mixer_video_start(
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (id, path, capture, format);
+        let _ = (id, path, capture, format, width, height, fps_num, fps_den);
         return with_mixer(|mixer| {
             set_error(&mixer.telemetry, "Video ingest is not available");
             ERR_IO
@@ -1334,7 +1647,7 @@ pub unsafe extern "C" fn mixer_video_start(
             Ok(uploads) => uploads,
             Err(code) => return code,
         };
-        return match VideoPump::start(id, path, capture != 0, uploads) {
+        return match VideoPump::start(id, path, capture != 0, width, height, fps_num, fps_den, uploads) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
         };
@@ -1357,7 +1670,7 @@ pub unsafe extern "C" fn mixer_video_start(
         let Some(gpu) = gpu else {
             return ERR_DEVICE;
         };
-        return match VideoPump::start(id, path, capture != 0, format, uploads, gpu) {
+        return match VideoPump::start(id, path, capture != 0, format, width, height, fps_num, fps_den, uploads, gpu) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
         };
@@ -1445,6 +1758,43 @@ pub unsafe extern "C" fn mixer_video_enum_captures(
                 name: write_fixed(&name),
             };
         }
+        n as i32
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_enum_capture_modes(
+    device_id: *const c_char,
+    out: *mut VideoCaptureMode,
+    cap: u32,
+) -> i32 {
+    if device_id.is_null() || out.is_null() || cap == 0 {
+        return 0;
+    }
+    let id = unsafe { CStr::from_ptr(device_id) }
+        .to_str()
+        .unwrap_or_default();
+    if id.is_empty() {
+        return 0;
+    }
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = dest;
+        return 0;
+    }
+    #[cfg(windows)]
+    {
+        let modes = crate::media::enumerate_capture_modes(id);
+        let n = modes.len().min(dest.len());
+        dest[..n].copy_from_slice(&modes[..n]);
+        return n as i32;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let modes = crate::media_macos::enumerate_capture_modes(id);
+        let n = modes.len().min(dest.len());
+        dest[..n].copy_from_slice(&modes[..n]);
         n as i32
     }
 }
@@ -1803,8 +2153,8 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     let error = match with_mixer(|mixer| mixer.telemetry.lock().expect("telemetry").last_error.clone()) {
-        Ok(error) => error,
-        Err(code) => return code,
+        Ok(error) if !error.is_empty() => error,
+        _ => session_error_slot().lock().expect("session error").clone(),
     };
     let n = error.len().min(cap);
     unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
@@ -2488,7 +2838,7 @@ fn render_loop(
     let mut frame_i = 0u64;
     let mut audio_produced = 0u64;
     let mut audio_carry = 0u64;
-    let mut last_bus: HashMap<u64, (u64, u64, u32)> = HashMap::new();
+    let mut last_bus: HashMap<u64, (u64, u64, u32, u64)> = HashMap::new();
     let mut skip_units_streak = 0u32;
     while !stop.load(Ordering::Relaxed) {
         while let Ok(cmd) = cmds.try_recv() {
@@ -2563,7 +2913,10 @@ fn render_loop(
                     width,
                     height,
                 } => presenters.resize_monitor(&device, monitor_id, width, height),
-                GpuCmd::DetachMonitor { monitor_id } => presenters.detach_monitor(monitor_id),
+                GpuCmd::DetachMonitor { monitor_id, reply } => {
+                    presenters.detach_monitor(monitor_id);
+                    let _ = reply.send(OK);
+                }
                 GpuCmd::SetMonitorSource {
                     monitor_id,
                     source_id,
@@ -2626,30 +2979,24 @@ fn render_loop(
         {
             let mut guard = shared.lock().expect("shared");
             for unit in guard.units.values_mut() {
-                if let Some(auto) = unit.auto.take() {
-                    let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
-                    if t >= 1.0 {
-                        unit.state.mix = auto.to;
-                        if auto.to >= 1.0 {
-                            take_cut(unit, auto.swap);
-                        }
-                    } else {
-                        unit.state.mix = auto.from + (auto.to - auto.from) * t;
-                        unit.auto = Some(auto);
-                    }
-                }
+                tick_unit_transitions(unit);
             }
-            let snapshot: Vec<(u64, u32, u32, u32, u32, UnitState)> = guard
+            let snapshot: Vec<(u64, u32, u32, u32, u32, UnitState, u64, Option<String>)> = guard
                 .units
                 .iter()
                 .map(|(id, unit)| {
+                    let mix_preview = snapshot_mix_preview(unit);
+                    let mut state = unit.state;
+                    state.incoming_source = mix_preview;
                     (
                         *id,
                         unit.width,
                         unit.height,
                         unit.fps_num,
                         unit.fps_den,
-                        unit.state,
+                        state,
+                        mix_preview,
+                        unit.custom_wgsl.clone(),
                     )
                 })
                 .collect();
@@ -2691,14 +3038,17 @@ fn render_loop(
                     use_gpu: output.use_gpu,
                 })
                 .collect();
+            let compose_dirty = guard.compose_dirty;
+            guard.compose_dirty = false;
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
-                .filter(|(id, .., state)| {
-                    last_bus.get(id).is_none_or(|(program, preview, mix)| {
+                .filter(|(id, _, _, _, _, state, mix_preview, _)| {
+                    last_bus.get(id).is_none_or(|(program, preview, mix, incoming)| {
                         *program != state.program_source
                             || *preview != state.preview_source
                             || *mix != state.mix.to_bits()
+                            || *incoming != *mix_preview
                     })
                 })
                 .map(|(id, ..)| *id)
@@ -2706,6 +3056,9 @@ fn render_loop(
             if !changed_units.is_empty() {
                 skip_compose = false;
                 frame_delay.discard(changed_units);
+            }
+            if compose_dirty {
+                skip_compose = false;
             }
             let tallies: Vec<(u64, u64)> = snapshot
                 .iter()
@@ -2891,8 +3244,13 @@ fn render_loop(
                 let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
                     Vec::new();
                 if !skip_units {
-                    for (unit_id, width, height, _, _, state) in &snapshot {
+                    for (unit_id, width, height, _, _, state, mix_preview, custom) in &snapshot {
                         composer.ensure_unit(&device, *unit_id, *width, *height);
+                        if let Err(error) =
+                            composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
+                        {
+                            crate::diag::error(&format!("custom wgsl: {error}"));
+                        }
                         let pack_pgm = outputs_snap.iter().any(|item| {
                             item.unit_id == *unit_id
                                 && item.source_kind == SRC_KIND_MU_PROGRAM
@@ -2902,6 +3260,7 @@ fn render_loop(
                             &device,
                             *unit_id,
                             state,
+                            *mix_preview,
                             &mut encoder,
                             need_mv,
                             pack_pgm,
@@ -2988,10 +3347,15 @@ fn render_loop(
                         pts,
                     );
                     emit_gpu(&gpu_copies, &send_tx, pts);
-                    for (id, .., state) in &snapshot {
+                    for (id, _, _, _, _, state, mix_preview, ..) in &snapshot {
                         last_bus.insert(
                             *id,
-                            (state.program_source, state.preview_source, state.mix.to_bits()),
+                            (
+                                state.program_source,
+                                state.preview_source,
+                                state.mix.to_bits(),
+                                *mix_preview,
+                            ),
                         );
                     }
                 }
@@ -3174,7 +3538,7 @@ fn interleaved_to_packet(interleaved: &[f32], pts: i64) -> AudioPacket {
 
 #[allow(dead_code)]
 fn follow_gains(
-    snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+    snapshot: &[UnitSnap],
     scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
     _uploads: &UploadStore,
 ) -> Vec<(u64, f32)> {
@@ -3212,14 +3576,25 @@ fn follow_gains(
             return;
         }
         if id > 0 {
-            *gains.entry(id).or_insert(0.0) += gain;
+            gains
+                .entry(id)
+                .and_modify(|current| *current = (*current).max(gain))
+                .or_insert(gain);
         }
     }
-    for (_, _, _, _, _, state) in snapshot {
+    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
         let mix = state.mix.clamp(0.0, 1.0);
+        let incoming = if *mix_preview != 0 {
+            *mix_preview
+        } else {
+            state.mix_incoming()
+        };
         add(state.program_source, 1.0 - mix, &spec_map, &mut gains);
-        add(state.preview_source, mix, &spec_map, &mut gains);
+        add(incoming, mix, &spec_map, &mut gains);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+            if overlay.audio_follow == 0 {
+                continue;
+            }
             add(
                 overlay.source_id,
                 overlay.opacity.max(0.0),
@@ -3256,7 +3631,7 @@ fn audio_for_source(
 
 fn collect_live_ids(
     scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
-    snapshot: &[(u64, u32, u32, u32, u32, UnitState)],
+    snapshot: &[UnitSnap],
     monitor_sources: &[u64],
     outputs: &[OutputSnap],
 ) -> (HashSet<u64>, HashSet<u64>) {
@@ -3290,9 +3665,15 @@ fn collect_live_ids(
             uploads.insert(id);
         }
     }
-    for (_, _, _, _, _, state) in snapshot {
+    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
         add(state.program_source, &spec_map, &mut scenes, &mut uploads);
         add(state.preview_source, &spec_map, &mut scenes, &mut uploads);
+        let incoming = if *mix_preview != 0 {
+            *mix_preview
+        } else {
+            state.mix_incoming()
+        };
+        add(incoming, &spec_map, &mut scenes, &mut uploads);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
             add(overlay.source_id, &spec_map, &mut scenes, &mut uploads);
         }
@@ -3424,6 +3805,14 @@ mod tests {
     #[test]
     fn ping_is_stable() {
         assert_eq!(mixer_ping(), 0x4549_5649);
+    }
+
+    #[test]
+    fn collect_live_ids_keeps_input_monitors() {
+        let (scenes, uploads) = collect_live_ids(&[], &[], &[SRC_COLOR, 20], &[]);
+        assert!(scenes.is_empty());
+        assert!(uploads.contains(&SRC_COLOR));
+        assert!(uploads.contains(&20));
     }
 
     #[test]

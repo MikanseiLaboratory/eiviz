@@ -1,7 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using Eiviz.Host;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Preview;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -11,7 +14,7 @@ public partial class SwitcherWindow : Window
     private int _tbarPresetIndex;
     private bool _tbarLatching;
     private bool _tbarLocked;
-    private bool _suppressScene;
+    private readonly Dictionary<ulong, SceneThumb> _thumbs = [];
 
     public SwitcherWindow(MixingUnitEntry unit)
     {
@@ -25,9 +28,13 @@ public partial class SwitcherWindow : Window
         ProgramAspect.RatioHeight = unit.Height;
         RebuildScenes();
         RebuildTransitions();
+        OnTopBox.IsChecked = unit.AlwaysOnTop;
+        ApplyTopmost();
         Loaded += (_, _) =>
         {
             ApplyBusColors();
+            RefreshBusTitles();
+            RefreshSceneThumbs();
             PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         };
@@ -35,14 +42,32 @@ public partial class SwitcherWindow : Window
         {
             PreviewHost.ReleaseNative();
             ProgramHost.ReleaseNative();
+            foreach (var thumb in _thumbs.Values)
+                thumb.Host.ReleaseNative();
+            _thumbs.Clear();
         };
     }
 
     public ulong UnitId => _unit.Id;
 
+    private void OnTop_Click(object sender, RoutedEventArgs e)
+    {
+        _unit.AlwaysOnTop = OnTopBox.IsChecked == true;
+        ApplyTopmost();
+    }
+
+    internal void ApplyTopmost()
+    {
+        Topmost = _unit.AlwaysOnTop;
+        Owner = _unit.AlwaysOnTop ? Application.Current.MainWindow : null;
+    }
+
     private Session Session => ((App)Application.Current).Session;
 
     private CommandQueue Commands => ((App)Application.Current).Commands;
+
+    internal void ApplyMixerMix() =>
+        MainWindow.ApplyTBarFromMixer(_unit.Id, TBar, ref _tbarLatching, ref _tbarLocked);
 
     internal void SyncFromUnit()
     {
@@ -55,6 +80,8 @@ public partial class SwitcherWindow : Window
         RebuildScenes();
         RebuildTransitions();
         ApplyBusColors();
+        RefreshBusTitles();
+        RefreshSceneThumbs();
     }
 
     internal void ApplyBusColors()
@@ -62,14 +89,125 @@ public partial class SwitcherWindow : Window
         BusTheme.Apply(Session.Settings, PreviewFrame, PreviewHeader, PreviewHeaderText, preview: true);
         BusTheme.Apply(Session.Settings, ProgramFrame, ProgramHeader, ProgramHeaderText, preview: false);
         RebuildTransitions();
+        RefreshSceneThumbs();
     }
 
     private void RebuildScenes()
     {
-        _suppressScene = true;
-        SceneList.ItemsSource = Session.Scenes.ToList();
-        SceneList.DisplayMemberPath = nameof(SceneEntry.Name);
-        _suppressScene = false;
+        var keep = Session.Scenes.Select(scene => scene.Id).ToHashSet();
+        foreach (var id in _thumbs.Keys.Where(id => !keep.Contains(id)).ToList())
+        {
+            _thumbs[id].Host.ReleaseNative();
+            SceneStrip.Children.Remove(_thumbs[id].Chrome);
+            _thumbs.Remove(id);
+        }
+
+        var interval = Session.Settings.ResolvedPresentInterval();
+        foreach (var scene in Session.Scenes)
+        {
+            if (_thumbs.TryGetValue(scene.Id, out var thumb))
+            {
+                thumb.Label.Text = scene.Name;
+                if (!thumb.Host.HasMonitor(thumb.MonitorId, scene.GpuId))
+                    thumb.Host.RetargetMonitor(thumb.MonitorId, scene.GpuId);
+            }
+            else
+            {
+                thumb = CreateThumb(scene);
+                _thumbs[scene.Id] = thumb;
+                SceneStrip.Children.Add(thumb.Chrome);
+            }
+            thumb.Host.PresentInterval = interval;
+            thumb.Host.ApplyPresentInterval();
+        }
+        RefreshSceneThumbs();
+    }
+
+    private SceneThumb CreateThumb(SceneEntry scene)
+    {
+        var monitorId = Session.NextMonitorId++;
+        var host = new SwapchainHost
+        {
+            Height = 80,
+            PresentInterval = Session.Settings.ResolvedPresentInterval()
+        };
+        host.RetargetMonitor(monitorId, scene.GpuId);
+        host.SurfaceClicked += (_, _) => PreviewScene(scene.Id);
+        var label = new TextBlock
+        {
+            Text = scene.Name,
+            Foreground = Brushes.White,
+            FontSize = 11,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(4, 4, 4, 0)
+        };
+        var chrome = new Border
+        {
+            Width = 148,
+            Margin = new Thickness(0, 0, 8, 0),
+            BorderThickness = new Thickness(2),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
+            Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11)),
+            Cursor = Cursors.Hand
+        };
+        var panel = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(label, Dock.Bottom);
+        panel.Children.Add(label);
+        panel.Children.Add(host);
+        chrome.Child = panel;
+        chrome.MouseLeftButtonUp += (_, _) => PreviewScene(scene.Id);
+        return new SceneThumb
+        {
+            SceneId = scene.Id,
+            MonitorId = monitorId,
+            Chrome = chrome,
+            Host = host,
+            Label = label
+        };
+    }
+
+    private void PreviewScene(ulong sceneId)
+    {
+        var scene = Session.Scenes.FirstOrDefault(item => item.Id == sceneId);
+        if (scene is null)
+            return;
+        Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        RefreshBusTitles();
+        RefreshSceneThumbs();
+    }
+
+    private void RefreshSceneThumbs()
+    {
+        ReadBusSources(out var previewId, out var programId);
+        var preview = BusTheme.PreviewBrush(Session.Settings);
+        var program = BusTheme.ProgramBrush(Session.Settings);
+        var inactive = BusTheme.InactiveBrush(Session.Settings);
+        foreach (var scene in Session.Scenes)
+        {
+            if (!_thumbs.TryGetValue(scene.Id, out var thumb))
+                continue;
+            thumb.Chrome.BorderBrush = scene.GpuId == programId
+                ? program
+                : scene.GpuId == previewId
+                    ? preview
+                    : inactive;
+        }
+    }
+
+    private void ReadBusSources(out ulong previewId, out ulong programId)
+    {
+        previewId = 0;
+        programId = 0;
+        unsafe
+        {
+            UnitState state = default;
+            if (MixerNative.GetUnitState(_unit.Id, &state) == 0)
+            {
+                previewId = state.PreviewSource;
+                programId = state.ProgramSource;
+            }
+        }
     }
 
     private void RebuildTransitions()
@@ -101,7 +239,7 @@ public partial class SwitcherWindow : Window
                 Padding = new Thickness(6, 4, 6, 4),
                 Child = new TextBlock
                 {
-                    Text = $"{preset.Label}  {preset.DurationFrames}f",
+                    Text = $"{preset.Label}  {preset.DurationValue}{(preset.DurationUnit == MixerNative.DurationMs ? "ms" : "f")}",
                     Foreground = System.Windows.Media.Brushes.White
                 }
             };
@@ -117,10 +255,10 @@ public partial class SwitcherWindow : Window
 
     private void FirePreset(TransitionPreset preset)
     {
-        if (preset.Kind == MixerNative.TransitionCut || preset.DurationFrames <= 1)
+        if (preset.Kind == MixerNative.TransitionCut || preset.DurationValue <= 1)
             Commands.TryEnqueue(new CutCommand(_unit.Id, preset.Swap));
         else
-            Commands.TryEnqueue(new AutoCommand(_unit.Id, preset.Kind, _unit.DurationMs(preset.DurationFrames), preset.Swap));
+            Commands.TryEnqueue(preset.ToAuto(_unit.Id, _unit));
     }
 
     private TransitionPreset TbarPreset()
@@ -155,7 +293,7 @@ public partial class SwitcherWindow : Window
             Commands.TryEnqueue(new CutCommand(_unit.Id, TbarPreset().Swap));
             return;
         }
-        Commands.TryEnqueue(new SetMixCommand(_unit.Id, mix));
+        Commands.TryEnqueue(new SetMixCommand(_unit.Id, mix, TbarPreset()));
     }
 
     private void TBar_MouseUp(object sender, MouseButtonEventArgs e) => FinishTBar();
@@ -172,17 +310,21 @@ public partial class SwitcherWindow : Window
         _tbarLocked = false;
     }
 
-    private void SceneList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void RefreshBusTitles()
     {
-        if (_suppressScene)
-            return;
-        if (SceneList.SelectedItem is SceneEntry scene)
-            Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        ReadBusSources(out var previewId, out var programId);
+        var previewName = Session.Scenes.FirstOrDefault(item => item.GpuId == previewId)?.Name;
+        var programName = Session.Scenes.FirstOrDefault(item => item.GpuId == programId)?.Name;
+        PreviewHeaderText.Text = string.IsNullOrEmpty(previewName) ? "PREVIEW" : $"PREVIEW — {previewName}";
+        ProgramHeaderText.Text = string.IsNullOrEmpty(programName) ? "PROGRAM" : $"PROGRAM — {programName}";
     }
 
-    private void SceneList_Activate(object sender, MouseButtonEventArgs e)
+    private sealed class SceneThumb
     {
-        if (SceneList.SelectedItem is SceneEntry scene)
-            Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        public ulong SceneId;
+        public ulong MonitorId;
+        public Border Chrome = null!;
+        public SwapchainHost Host = null!;
+        public TextBlock Label = null!;
     }
 }

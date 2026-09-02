@@ -44,8 +44,19 @@ struct AvCaptureInfo {
 
 unsafe extern "C" {
     fn eiviz_av_open_file(path: *const c_char, start_hns: i64) -> *mut AvPump;
-    fn eiviz_av_open_capture(device_id: *const c_char) -> *mut AvPump;
+    fn eiviz_av_open_capture(
+        device_id: *const c_char,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> *mut AvPump;
     fn eiviz_av_enum_captures(out: *mut AvCaptureInfo, cap: u32) -> i32;
+    fn eiviz_av_enum_capture_modes(
+        device_id: *const c_char,
+        out: *mut crate::abi::VideoCaptureMode,
+        cap: u32,
+    ) -> i32;
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
@@ -83,6 +94,18 @@ pub fn enumerate_video_captures() -> Vec<(String, String)> {
         .collect()
 }
 
+pub fn enumerate_capture_modes(device_id: &str) -> Vec<crate::abi::VideoCaptureMode> {
+    let Ok(c_id) = CString::new(device_id) else {
+        return Vec::new();
+    };
+    let mut buf = [crate::abi::VideoCaptureMode::default(); 64];
+    let n = unsafe { eiviz_av_enum_capture_modes(c_id.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    buf.into_iter().take(n as usize).collect()
+}
+
 struct NativePump {
     ptr: *mut AvPump,
 }
@@ -99,9 +122,9 @@ impl NativePump {
         Ok(Self { ptr })
     }
 
-    fn open_capture(device_id: &str) -> Result<Self, String> {
+    fn open_capture(device_id: &str, width: u32, height: u32, fps_num: u32, fps_den: u32) -> Result<Self, String> {
         let c_id = CString::new(device_id).map_err(|_| "invalid capture id".to_string())?;
-        let ptr = unsafe { eiviz_av_open_capture(c_id.as_ptr()) };
+        let ptr = unsafe { eiviz_av_open_capture(c_id.as_ptr(), width, height, fps_num, fps_den) };
         if ptr.is_null() {
             return Err("could not open video capture device".into());
         }
@@ -160,6 +183,10 @@ impl VideoPump {
         source_id: u64,
         path: String,
         capture: bool,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
@@ -179,7 +206,7 @@ impl VideoPump {
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, uploads, stop_t, playing_t, looping_t, seek_t, pos_t,
+                    source_id, path, capture, width, height, fps_num, fps_den, uploads, stop_t, playing_t, looping_t, seek_t, pos_t,
                     dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
@@ -251,6 +278,10 @@ fn run_loop(
     source_id: u64,
     path: String,
     capture: bool,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
@@ -267,7 +298,7 @@ fn run_loop(
             return Ok(());
         }
         let opened = if capture {
-            NativePump::open_capture(&path)
+            NativePump::open_capture(&path, width, height, fps_num, fps_den)
         } else {
             NativePump::open_file(&path, 0)
         };

@@ -58,11 +58,17 @@ public partial class AddInputWindow : Window
     public VideoPlayWhen ResultVideoPlayWhen { get; private set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen ResultVideoRestartWhen { get; private set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen ResultVideoPauseWhen { get; private set; } = VideoTriggerWhen.Never;
+    public uint ResultCaptureWidth { get; private set; }
+    public uint ResultCaptureHeight { get; private set; }
+    public uint ResultCaptureFpsNum { get; private set; } = 60;
+    public uint ResultCaptureFpsDen { get; private set; } = 1;
 
     public void Load(InputEntry input)
     {
         Title = "Input Properties";
         NameBox.Text = input.Name;
+        IdLabel.Visibility = Visibility.Visible;
+        IdLabel.Text = $"ID {input.Id}   GUID {input.Guid}";
         _lockKind = input.IsBuiltin;
         _kind = input.Kind is InputKind.Bars or InputKind.Black ? InputKind.Color : input.Kind;
         if (input.Kind == InputKind.Bars)
@@ -223,11 +229,32 @@ public partial class AddInputWindow : Window
             UvcList.ItemsSource = MixerNative.EnumVideoCaptures()
                 .Select(item => new CameraItem(item.Name, item.Id))
                 .ToArray();
+            RefreshUvcModes();
         }
         catch (Exception ex)
         {
             UvcList.ItemsSource = new[] { new CameraItem($"Capture enum failed: {ex.Message}", "") };
         }
+    }
+
+    private void UvcList_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshUvcModes();
+
+    private void RefreshUvcModes()
+    {
+        UvcModeBox.Items.Clear();
+        if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
+            return;
+        foreach (var mode in MixerNative.EnumVideoCaptureModes(camera.Link))
+        {
+            var fps = mode.FpsDen == 0 ? 0 : mode.FpsNum / (double)mode.FpsDen;
+            UvcModeBox.Items.Add(new ComboBoxItem
+            {
+                Content = $"{mode.Width}x{mode.Height} {fps:0.##}fps",
+                Tag = mode
+            });
+        }
+        if (UvcModeBox.Items.Count > 0)
+            UvcModeBox.SelectedIndex = 0;
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
@@ -305,8 +332,14 @@ public partial class AddInputWindow : Window
             case InputKind.Uvc:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
                     return;
+                if (UvcModeBox.SelectedItem is not ComboBoxItem modeItem || modeItem.Tag is not MixerVideoCaptureMode mode)
+                    return;
                 ResultPath = camera.Link;
                 ResultName = camera.Name;
+                ResultCaptureWidth = mode.Width;
+                ResultCaptureHeight = mode.Height;
+                ResultCaptureFpsNum = mode.FpsNum;
+                ResultCaptureFpsDen = mode.FpsDen == 0 ? 1 : mode.FpsDen;
                 break;
             default:
                 return;

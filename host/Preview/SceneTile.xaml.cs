@@ -30,9 +30,9 @@ public partial class SceneTile : UserControl
         Title.Text = scene.Name;
         Number.Text = number.ToString();
         Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
-        Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
+        if (!Monitor.HasMonitor(scene.MonitorId, scene.GpuId))
+            Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
         Monitor.ApplyPresentInterval();
-        SetSelected(selected, previewColor, inactiveColor);
     }
 
     public void SetPresentInterval(uint presentInterval)
@@ -41,13 +41,28 @@ public partial class SceneTile : UserControl
         Monitor.ApplyPresentInterval();
     }
 
-    public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null)
+    public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null) =>
+        SetBusRoles(selected, false, previewColor, null, inactiveColor);
+
+    private bool _preview;
+    private bool _program;
+    private Color _borderColor;
+
+    public void SetBusRoles(bool preview, bool program, Color? previewColor = null, Color? programColor = null, Color? inactiveColor = null)
     {
-        var accent = previewColor ?? Color.FromRgb(0, 255, 0);
         var idle = inactiveColor ?? Color.FromRgb(64, 64, 64);
-        Chrome.BorderBrush = selected
-            ? new SolidColorBrush(accent)
-            : new SolidColorBrush(idle);
+        var color = program
+            ? programColor ?? Color.FromRgb(255, 0, 0)
+            : preview
+                ? previewColor ?? Color.FromRgb(0, 255, 0)
+                : idle;
+        if (_preview == preview && _program == program && _borderColor == color)
+            return;
+        _preview = preview;
+        _program = program;
+        _borderColor = color;
+        Chrome.BorderBrush = new SolidColorBrush(color);
+        Chrome.BorderThickness = new Thickness(3);
     }
 
     public void SetTransport(bool hasVideo, bool loop, bool playing, bool muted)

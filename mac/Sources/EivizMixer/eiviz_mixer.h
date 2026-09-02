@@ -14,6 +14,8 @@ extern "C" {
 #define EIVIZ_SRC_BARS 2ull
 #define EIVIZ_SRC_BLACK 3ull
 #define EIVIZ_SRC_BLUE 4ull
+#define EIVIZ_INCOMING_PREVIEW 0ull
+#define EIVIZ_INCOMING_PROGRAM 0xffffffffffffffffull
 
 #define EIVIZ_OUTPUT_PROGRAM 0u
 #define EIVIZ_OUTPUT_PREVIEW 1u
@@ -33,6 +35,61 @@ extern "C" {
 #define EIVIZ_TRANSITION_CUT 0u
 #define EIVIZ_TRANSITION_FADE 1u
 #define EIVIZ_TRANSITION_DIP 2u
+#define EIVIZ_TRANSITION_WIPE 3u
+#define EIVIZ_TRANSITION_SLIDE 4u
+#define EIVIZ_TRANSITION_PUSH 5u
+#define EIVIZ_TRANSITION_IRIS 6u
+#define EIVIZ_TRANSITION_BLINDS 7u
+#define EIVIZ_TRANSITION_ZOOM 8u
+#define EIVIZ_TRANSITION_ADDITIVE 9u
+#define EIVIZ_TRANSITION_CUBE 10u
+#define EIVIZ_TRANSITION_CROSS_ZOOM 11u
+#define EIVIZ_TRANSITION_FLY_ROTATE 12u
+#define EIVIZ_TRANSITION_BARN_DOOR 13u
+#define EIVIZ_TRANSITION_CLOCK 14u
+#define EIVIZ_TRANSITION_LOREZ 15u
+#define EIVIZ_TRANSITION_METAMIX 16u
+#define EIVIZ_TRANSITION_TILE 17u
+#define EIVIZ_TRANSITION_FLIP 18u
+#define EIVIZ_TRANSITION_GLITCH 19u
+#define EIVIZ_TRANSITION_SWIRL 20u
+#define EIVIZ_TRANSITION_LUMA_MORPH 21u
+#define EIVIZ_TRANSITION_PARTS 22u
+#define EIVIZ_TRANSITION_STATIC 23u
+#define EIVIZ_TRANSITION_SHIFT_RGB 24u
+#define EIVIZ_TRANSITION_DISPLACE 25u
+#define EIVIZ_TRANSITION_RIPPLE 26u
+#define EIVIZ_TRANSITION_GRID_DISSOLVE 27u
+#define EIVIZ_TRANSITION_CUBE_ZOOM 28u
+#define EIVIZ_TRANSITION_PAGE_CURL 29u
+#define EIVIZ_TRANSITION_KALEIDOSCOPE 30u
+#define EIVIZ_TRANSITION_POLAR 31u
+#define EIVIZ_TRANSITION_FILM_BURN 32u
+#define EIVIZ_TRANSITION_ZOOM_BLUR 33u
+#define EIVIZ_TRANSITION_MULTITASK 34u
+#define EIVIZ_TRANSITION_HEART 35u
+#define EIVIZ_TRANSITION_DIAMOND 36u
+#define EIVIZ_TRANSITION_STAR 37u
+#define EIVIZ_TRANSITION_ROLLER_DOOR 38u
+#define EIVIZ_TRANSITION_PIXEL_SORT 39u
+#define EIVIZ_TRANSITION_DATAMOSH 40u
+#define EIVIZ_TRANSITION_VISUAL_DISSOLVE 41u
+#define EIVIZ_TRANSITION_OPTICAL_FLOW 42u
+#define EIVIZ_TRANSITION_BLOOM 43u
+#define EIVIZ_TRANSITION_CUSTOM 50u
+#define EIVIZ_TRANSITION_STINGER 100u
+
+#define EIVIZ_DURATION_FRAMES 0u
+#define EIVIZ_DURATION_MS 1u
+#define EIVIZ_EASING_LINEAR 0u
+#define EIVIZ_EASING_IN 1u
+#define EIVIZ_EASING_OUT 2u
+#define EIVIZ_EASING_IN_OUT 3u
+#define EIVIZ_EASING_SMOOTHSTEP 4u
+#define EIVIZ_DIR_LEFT 0u
+#define EIVIZ_DIR_RIGHT 1u
+#define EIVIZ_DIR_UP 2u
+#define EIVIZ_DIR_DOWN 3u
 
 #define EIVIZ_FMT_UYVY 0u
 #define EIVIZ_FMT_BGRA 1u
@@ -67,10 +124,11 @@ typedef struct EivizRect {
 typedef struct EivizOverlayDesc {
     uint64_t source_id;
     EivizRect rect;
+    EivizRect crop;
     float opacity;
     int32_t z;
     uint32_t audio_follow;
-    uint32_t pad;
+    uint32_t hidden;
     const char *label;
 } EivizOverlayDesc;
 
@@ -83,6 +141,17 @@ typedef struct EivizUnitState {
     uint32_t mv_slot_count;
     EivizOverlayDesc overlays[8];
     uint64_t mv_slots[16];
+    uint32_t transition_easing;
+    uint32_t transition_direction;
+    uint32_t keep_preview;
+    uint32_t pad;
+    float dip_r;
+    float dip_g;
+    float dip_b;
+    float dip_a;
+    uint64_t incoming_source;
+    float softness;
+    float param;
 } EivizUnitState;
 
 typedef struct EivizVideoInfo {
@@ -96,6 +165,14 @@ typedef struct EivizVideoCaptureInfo {
     uint8_t id[512];
     uint8_t name[256];
 } EivizVideoCaptureInfo;
+
+typedef struct EivizVideoCaptureMode {
+    uint32_t width;
+    uint32_t height;
+    uint32_t fps_num;
+    uint32_t fps_den;
+    uint32_t format;
+} EivizVideoCaptureMode;
 
 typedef struct EivizAudioPeak {
     uint64_t source_id;
@@ -164,14 +241,18 @@ int32_t mixer_detach_monitor(uint64_t monitor_id);
 int32_t mixer_monitor_set_source(uint64_t monitor_id, uint64_t source_id);
 int32_t mixer_unit_set_state(uint64_t unit_id, const EivizUnitState *state);
 int32_t mixer_unit_get_state(uint64_t unit_id, EivizUnitState *out);
-int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap);
-int32_t mixer_unit_auto(uint64_t unit_id, uint32_t duration_ms, uint32_t swap);
+int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap, uint64_t incoming_source);
+int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source, float softness, float param);
+int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_ms, const EivizOverlayDesc *desc);
+int32_t mixer_unit_set_custom_wgsl(uint64_t unit_id, const char *wgsl);
+int32_t mixer_validate_custom_wgsl(const char *wgsl);
 int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint32_t format);
 int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint32_t height, int64_t pts);
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
-int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format);
+int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
+int32_t mixer_video_enum_capture_modes(const char *device_id, EivizVideoCaptureMode *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
 int32_t mixer_video_set_loop(uint64_t id, uint32_t looping);
 int32_t mixer_video_seek(uint64_t id, int64_t hns);
