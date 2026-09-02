@@ -2164,6 +2164,19 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_take_fatal(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let Some(error) = crate::diag::take_fatal() else {
+        return 0;
+    };
+    let n = error.len().min(cap);
+    unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
+    n as i32
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
     if path.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
@@ -2842,7 +2855,7 @@ fn render_loop(
     let mut audio_carry = 0u64;
     let mut last_bus: HashMap<u64, (u64, u64, u32, u64)> = HashMap::new();
     let mut skip_units_streak = 0u32;
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
                 GpuCmd::Attach {
@@ -3702,7 +3715,7 @@ fn collect_live_ids(
 
 fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu) {
     let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         loop {
             match rx.try_recv() {
                 Ok(SendCmd::Shutdown) => return,
@@ -3769,9 +3782,13 @@ fn apply_send_cmd(
             fps_d,
         } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+                if panic::catch_unwind(AssertUnwindSafe(|| {
                     sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
-                }));
+                }))
+                .is_err()
+                {
+                    crate::diag::mark_fatal("omt send video panicked");
+                }
             }
         }
         SendCmd::GpuVideo {
@@ -3785,15 +3802,21 @@ fn apply_send_cmd(
             busy,
         } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+                match panic::catch_unwind(AssertUnwindSafe(|| {
                     sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
-                }));
+                })) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diag::mark_fatal(format!("omt send texture: {error}")),
+                    Err(_) => crate::diag::mark_fatal("omt send texture panicked"),
+                }
             }
             busy.store(false, Ordering::Release);
         }
         SendCmd::Audio { output_id, packet } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                let _ = panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet)));
+                if panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet))).is_err() {
+                    crate::diag::mark_fatal("omt send audio panicked");
+                }
             }
         }
         SendCmd::Shutdown => {}
@@ -3807,6 +3830,11 @@ mod tests {
     #[test]
     fn ping_is_stable() {
         assert_eq!(mixer_ping(), 0x4549_5649);
+    }
+
+    #[test]
+    fn take_fatal_rejects_null() {
+        assert_eq!(unsafe { mixer_take_fatal(std::ptr::null_mut(), 8) }, ERR_INVALID_ARGUMENT);
     }
 
     #[test]

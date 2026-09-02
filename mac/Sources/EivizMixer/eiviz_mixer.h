@@ -281,6 +281,7 @@ int32_t mixer_set_mv_label(uint64_t scene_id, float size, uint32_t percent, uint
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
 int32_t mixer_last_error(uint8_t *out, size_t cap);
+int32_t mixer_take_fatal(uint8_t *out, size_t cap);
 int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);
 int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
 int32_t mixer_session_canonicalize(const uint8_t *json, size_t len, uint8_t *out, size_t cap);

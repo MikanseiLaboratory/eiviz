@@ -178,6 +178,9 @@ unsafe extern "system" fn on_unhandled_exception(_info: *mut core::ffi::c_void) 
 }
 
 pub static GPU_FAULT: AtomicBool = AtomicBool::new(false);
+static FATAL: AtomicBool = AtomicBool::new(false);
+static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
+static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
 
 pub fn mark_gpu_fault(message: &str) {
     GPU_FAULT.store(true, Ordering::Release);
@@ -186,4 +189,32 @@ pub fn mark_gpu_fault(message: &str) {
 
 pub fn take_gpu_fault() -> bool {
     GPU_FAULT.swap(false, Ordering::AcqRel)
+}
+
+pub fn mark_fatal(message: impl Into<String>) {
+    let message = message.into();
+    error(&message);
+    write_crash(&message);
+    if let Ok(mut slot) = FATAL_MSG.lock() {
+        if slot.is_empty() {
+            *slot = message;
+        }
+    }
+    FATAL.store(true, Ordering::Release);
+}
+
+pub fn is_fatal() -> bool {
+    FATAL.load(Ordering::Acquire)
+}
+
+/// First caller receives the message. Later callers get `None` so the host
+/// shows the fatal dialog only once. The fatal flag itself stays set.
+pub fn take_fatal() -> Option<String> {
+    if !FATAL.load(Ordering::Acquire) {
+        return None;
+    }
+    if FATAL_TAKEN.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    FATAL_MSG.lock().ok().map(|slot| slot.clone()).filter(|msg| !msg.is_empty())
 }
