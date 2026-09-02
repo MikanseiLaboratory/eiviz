@@ -4,3 +4,9 @@ target/
 **/obj/
 **/.build/
 third_party/
+
+# Starlight / Node (docs/)
+node_modules/
+**/node_modules/
+docs/dist/
+docs/.astro/
