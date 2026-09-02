@@ -11,4 +11,5 @@ This site covers how to use eiviz, why it exists, and how it is meant to be run 
 
 - [About eiviz](/introduction/about/) — motivation and technology choices
 - [System requirements](/introduction/requirements/) — supported environments and hardware
+- [Inputs](/concepts/inputs/) — Input, Scene, and Output
 - [System architecture](/introduction/architecture/) — mixer core and UI hosts

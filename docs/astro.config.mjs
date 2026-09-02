@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import mermaid from 'astro-mermaid';
 
 // https://astro.build/config
 // GitHub Pages: https://mikanseilaboratory.github.io/eiviz/
@@ -8,6 +9,7 @@ export default defineConfig({
 	site: 'https://mikanseilaboratory.github.io',
 	base: '/eiviz/',
 	integrations: [
+		mermaid({ autoTheme: true }),
 		starlight({
 			title: 'eiviz',
 			defaultLocale: 'ja',
@@ -28,6 +30,7 @@ export default defineConfig({
 					items: [
 						'introduction/about',
 						'introduction/requirements',
+						'introduction/settings',
 						'introduction/architecture',
 					],
 				},

@@ -11,4 +11,5 @@ description: eiviz公式ドキュメント
 
 - [eivizについて](/introduction/about/) — 開発動機と技術選定
 - [システム要件](/introduction/requirements/) — 対応環境とハードウェア
+- [Inputs](/concepts/inputs/) — Input・Scene・Outputの関係
 - [システムアーキテクチャ](/introduction/architecture/) — MixerとUIの構成
