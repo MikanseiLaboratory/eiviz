@@ -9,7 +9,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 GUI上の表示を調整します。
 
-<img src="/eiviz/introduction/settings/setting_ui.jpg" alt="設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/setting_ui.jpg" alt="設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 ### 色設定
 
@@ -40,7 +40,7 @@ RAM上とGPUへ上げるときの画素の持ち方です。既定のUYVY 4:2:2�
 
 映像合成処理に関わるパフォーマンス設定です。
 
-<img src="/eiviz/introduction/settings/performance.jpg" alt="パフォーマンス設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/performance.jpg" alt="パフォーマンス設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 ## グラフィックスアダプター
 
@@ -61,7 +61,7 @@ macOS（Apple Silicon）ではUnified Memory向けの最適化を導入してい
 
 映像の出力先設定です。
 
-<img src="/eiviz/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 各行は名前、転送方式、On/Off切り替え、映像ソースです。  
 転送方式にはOMTとNDIに対応しています。Decklinkなどのハードウェア出力は現在実装中です。  
@@ -74,7 +74,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 
 ## Multiview
 
-<img src="/eiviz/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 マルチビューの設定と追加制御です。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)をご参照ください。
 
@@ -89,7 +89,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 
 ## 音声AUX
 
-<img src="/eiviz/introduction/settings/audio-aux.jpg" alt="音声AUX設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="音声AUX設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 内部ミックスは48 kHzステレオです。A〜HのAudio AUXを最大8本足せます。  
 詳細は[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご参照ください。
@@ -100,7 +100,7 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 ## 環境設定
 
-<img src="/eiviz/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 グローバルなeivizの設定です。　　
 

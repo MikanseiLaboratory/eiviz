@@ -3,7 +3,7 @@ title: Scenes
 description: A composite stacked from Inputs
 ---
 
-<img src="/eiviz/concepts/scenes.jpg" alt="Scenes concept diagram" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/concepts/scenes.jpg" alt="Scenes concept diagram" style="max-width: 100%; height: auto;" />
 
 Inputs stacked as layers.
 

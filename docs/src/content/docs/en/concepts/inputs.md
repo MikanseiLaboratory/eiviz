@@ -3,7 +3,7 @@ title: Inputs
 description: Video sources, and how Input, Scene, and Output connect
 ---
 
-<img src="/eiviz/concepts/inputs.jpg" alt="Inputs concept diagram" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/concepts/inputs.jpg" alt="Inputs concept diagram" style="max-width: 100%; height: auto;" />
 
 The same idea as Input, Source, or a camera input on other tools.
 

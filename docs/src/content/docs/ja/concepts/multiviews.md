@@ -3,7 +3,7 @@ title: Multiviews
 description: 複数ソースを一枚に並べた監視用モザイク
 ---
 
-<img src="/eiviz/concepts/multiview.jpg" alt="Multiviews例" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/concepts/multiview.jpg" alt="Multiviews例" style="max-width: 100%; height: auto;" />
 
 複数ソースを一枚に並べたマルチビューです。ATEMのMultiview、TriCasterのマルチビューと同じ用途を担当します。  
 Mixing Unitと同じく、PC性能が許す限り追加可能です。

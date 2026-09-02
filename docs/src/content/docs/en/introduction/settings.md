@@ -9,7 +9,7 @@ Open it from Settings in the main window.
 
 Adjusts what you see in the GUI.
 
-<img src="/eiviz/introduction/settings/setting_ui.jpg" alt="Screenshot of the Settings window" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/setting_ui.jpg" alt="Screenshot of the Settings window" style="max-width: 100%; height: auto;" />
 
 ### Colours
 
@@ -39,7 +39,7 @@ How pixels sit in RAM and on the upload path. The default, UYVY 4:2:2, is half t
 
 Settings that affect compose performance.
 
-<img src="/eiviz/introduction/settings/performance.jpg" alt="Screenshot of the Performance settings" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/performance.jpg" alt="Screenshot of the Performance settings" style="max-width: 100%; height: auto;" />
 
 ## Graphics adapter
 
@@ -60,7 +60,7 @@ On by default. On writes each NDI frame to the GPU so compose and send stay fast
 
 Where pictures leave the mixer.
 
-<img src="/eiviz/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
 
 Each row is a name, a transport, an On/Off switch, and a video source.  
 Transport is OMT or NDI. Hardware outputs such as DeckLink are still in progress.  
@@ -73,7 +73,7 @@ Windows applies when you press OK. macOS can also Apply per row.
 
 ## Multiview
 
-<img src="/eiviz/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />
 
 Adds and controls monitor mosaics. Detail is in [Multiviews](/eiviz/en/concepts/multiviews/).
 
@@ -88,7 +88,7 @@ Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 
 ## Audio Auxiliary
 
-<img src="/eiviz/introduction/settings/audio-aux.jpg" alt="Screenshot of the Audio AUX settings" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Audio AUX settings" style="max-width: 100%; height: auto;" />
 
 The internal mix is 48 kHz stereo. You can add up to eight Audio AUX buses, A–H.  
 Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
@@ -99,7 +99,7 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Preferences
 
-<img src="/eiviz/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />
 
 Global eiviz settings.
 

@@ -3,7 +3,7 @@ title: Inputs
 description: 映像ソースと、Input・Scene・Outputの関係
 ---
 
-<img src="/eiviz/concepts/inputs.jpg" alt="Inputsの概念図" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/concepts/inputs.jpg" alt="Inputsの概念図" style="max-width: 100%; height: auto;" />
 
 他ソフトのInput、Source、カメラ入力に相当します。  
 

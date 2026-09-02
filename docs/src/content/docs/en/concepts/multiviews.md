@@ -3,7 +3,7 @@ title: Multiviews
 description: A monitor mosaic of several sources
 ---
 
-<img src="/eiviz/concepts/multiview.jpg" alt="Multiview example" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/concepts/multiview.jpg" alt="Multiview example" style="max-width: 100%; height: auto;" />
 
 Several sources on one picture, for monitoring. Same job as an ATEM Multiview or a TriCaster multiview.  
 Like Mixing Units, you can add as many as the machine will take.
