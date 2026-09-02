@@ -335,6 +335,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_last_error")]
     internal static unsafe partial int LastError(byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_take_fatal")]
+    internal static unsafe partial int TakeFatal(byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_load", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionLoad(string path, byte* buffer, nuint capacity);
 
@@ -359,6 +362,19 @@ internal static partial class MixerNative
             fixed (byte* ptr = buffer)
             {
                 var n = LastError(ptr, (nuint)buffer.Length);
+                return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
+            }
+        }
+    }
+
+    internal static string TakeFatalText()
+    {
+        var buffer = new byte[1024];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = TakeFatal(ptr, (nuint)buffer.Length);
                 return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
             }
         }

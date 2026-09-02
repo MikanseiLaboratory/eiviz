@@ -45,6 +45,7 @@ final class MixerController: ObservableObject {
     @Published private(set) var surfaceEpoch: UInt64 = 0
 
     private var booted = false
+    private var fatalHandled = false
     private var tbarLatching = false
     private var meterTimer: Timer?
     private var mixTimer: Timer?
@@ -1273,6 +1274,7 @@ final class MixerController: ObservableObject {
     }
 
     private func tick() {
+        if handleMixerFatal() { return }
         var buffer = [EivizAudioPeak](repeating: MixerFFI.zeroed(), count: 32)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_audio_peaks(ptr.baseAddress, UInt32(ptr.count))
@@ -1427,6 +1429,48 @@ final class MixerController: ObservableObject {
     private func updateStatus() {
         let unit = selectedUnit
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+    }
+
+    private func handleMixerFatal() -> Bool {
+        if fatalHandled { return true }
+        let fatal = MixerFFI.takeFatalText()
+        guard !fatal.isEmpty else { return false }
+        fatalHandled = true
+        meterTimer?.invalidate()
+        saveRecoveredSession()
+        let alert = NSAlert()
+        alert.messageText = L10n.t("error.mixerFatal")
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+        NSApplication.shared.terminate(nil)
+        return true
+    }
+
+    private func saveRecoveredSession() {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/eiviz", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("recovered-session.eiviz.json")
+            session.selectedUnitId = selectedUnitId
+            session.settings.lastSessionPath = nil
+            let json = try SessionFile.encode(session)
+            let saved = MixerFFI.withCString(url.path) { path in
+                json.withUnsafeBytes { ptr in
+                    mixer_session_save(
+                        path,
+                        ptr.bindMemory(to: UInt8.self).baseAddress,
+                        json.count
+                    )
+                }
+            }
+            if saved != EIVIZ_OK {
+                HostLog.write("ERROR", "recovered session save failed: \(saved)")
+            }
+        } catch {
+            HostLog.write("ERROR", "recovered session save failed: \(error)")
+        }
     }
 
     func presentError(_ message: String, title: String) {

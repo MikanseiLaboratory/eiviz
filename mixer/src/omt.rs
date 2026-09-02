@@ -21,6 +21,7 @@ pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
     GpuVideoContext {
         device: Arc::new(device.device.clone()),
         queue: Arc::new(device.queue.clone()),
+        gpu_lock: Some(crate::device::gpu_queue_lock_handle()),
     }
 }
 
@@ -87,7 +88,8 @@ impl OmtReceiver {
                 }
                 let mut sent: Option<(bool, bool, bool, u32)> = None;
                 let mut drop_full_at: Option<Instant> = None;
-                while !stop_thread.load(Ordering::Relaxed) {
+                let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
                     let full = debounce_want_full(
                         want_full_thread.load(Ordering::Relaxed),
                         &mut drop_full_at,
@@ -151,6 +153,10 @@ impl OmtReceiver {
                     }
                 }
                 session.disconnect();
+                }));
+                if run.is_err() {
+                    crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
+                }
             })
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -266,6 +272,7 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
+        let _guard = crate::device::lock_gpu_queue();
         self.sender
             .send_video_texture(ctx, texture, meta)
             .map_err(|e| e.to_string())

@@ -19,6 +19,15 @@ enum MixerFFI {
         return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
     }
 
+    static func takeFatalText() -> String {
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_take_fatal(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0 else { return "" }
+        return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
+    }
+
     static func lastError(_ action: String) -> String {
         let detail = lastErrorText()
         return detail.isEmpty ? L10n.error(action, -1) : "\(L10n.error(action, -1)): \(detail)"

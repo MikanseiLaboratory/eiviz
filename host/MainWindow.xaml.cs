@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private ulong _lastProgramId;
     private ulong _shownProgramId;
     private ulong _shownPreviewId;
+    private bool _fatalHandled;
 
     public MainWindow()
     {
@@ -853,6 +854,8 @@ public partial class MainWindow : Window
 
     private void TickMeters()
     {
+        if (HandleMixerFatal())
+            return;
         var peaks = new Dictionary<ulong, (float L, float R)>();
         var buffer = new AudioPeak[64];
         unsafe
@@ -883,6 +886,32 @@ public partial class MainWindow : Window
         TickVideo();
         RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
+    }
+
+    private bool HandleMixerFatal()
+    {
+        if (_fatalHandled)
+            return true;
+        var fatal = MixerNative.TakeFatalText();
+        if (string.IsNullOrEmpty(fatal))
+            return false;
+        _fatalHandled = true;
+        _meterTimer.Stop();
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "eiviz");
+            Directory.CreateDirectory(dir);
+            SessionStore.Save(_session, Path.Combine(dir, "recovered-session.eiviz.json"));
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+        }
+        MessageBox.Show(this, Loc.T("error.mixerFatal"), Loc.T("app.title"));
+        Application.Current.Shutdown();
+        return true;
     }
 
     private void SyncTBarsFromMixer()
