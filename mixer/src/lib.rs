@@ -223,6 +223,10 @@ struct Telemetry {
     last_render_ms: f32,
     follow_primed: bool,
     monitor_pcm: VecDeque<f32>,
+    last_ram_bytes: u64,
+    last_vram_bytes: u64,
+    last_compose_vram: u64,
+    last_delay_vram: u64,
 }
 
 enum LiveReceiver {
@@ -609,6 +613,10 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         last_render_ms: 0.0,
         follow_primed: false,
         monitor_pcm: VecDeque::new(),
+        last_ram_bytes: 0,
+        last_vram_bytes: 0,
+        last_compose_vram: 0,
+        last_delay_vram: 0,
     }));
     let audio = audio::AudioEngine::new();
     let shared = Arc::new(Mutex::new(Shared {
@@ -1645,24 +1653,46 @@ pub unsafe extern "C" fn mixer_video_start(
     #[cfg(target_os = "macos")]
     {
         let _ = format;
+        let depth = match with_mixer(|mixer| {
+            mixer
+                .shared
+                .lock()
+                .expect("shared")
+                .frame_buffer_frames
+                .clamp(1, 8)
+        }) {
+            Ok(depth) => depth,
+            Err(code) => return code,
+        };
         let uploads = match take_source_uploads(id) {
             Ok(uploads) => uploads,
             Err(code) => return code,
         };
-        return match VideoPump::start(id, path, capture != 0, width, height, fps_num, fps_den, uploads) {
+        return match VideoPump::start(
+            id,
+            path,
+            capture != 0,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            uploads,
+            depth,
+        ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
         };
     }
     #[cfg(windows)]
     {
-        let (uploads, gpu, previous_video, previous_recv) = match with_mixer(|mixer| {
+        let (uploads, gpu, depth, previous_video, previous_recv) = match with_mixer(|mixer| {
             let mut shared = mixer.shared.lock().expect("shared");
             let previous_video = shared.videos.remove(&id);
             let previous_recv = shared.receivers.remove(&id);
             let uploads = shared.uploads.clone();
             let gpu = shared.gpu_video.clone();
-            (uploads, gpu, previous_video, previous_recv)
+            let depth = shared.frame_buffer_frames.clamp(1, 8);
+            (uploads, gpu, depth, previous_video, previous_recv)
         }) {
             Ok(value) => value,
             Err(code) => return code,
@@ -1672,7 +1702,7 @@ pub unsafe extern "C" fn mixer_video_start(
         let Some(gpu) = gpu else {
             return ERR_DEVICE;
         };
-        return match VideoPump::start(id, path, capture != 0, format, width, height, fps_num, fps_den, uploads, gpu) {
+        return match VideoPump::start(id, path, capture != 0, format, width, height, fps_num, fps_den, uploads, gpu, depth) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
         };
@@ -2652,12 +2682,17 @@ pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
             let shared = mixer.shared.lock().expect("shared");
             (shared.master_fps_num, shared.master_fps_den)
         };
-        let render_ms = mixer.telemetry.lock().expect("telemetry").last_render_ms;
+        let tel = mixer.telemetry.lock().expect("telemetry");
+        let render_ms = tel.last_render_ms;
         let budget = 1000.0 * den as f32 / num.max(1) as f32;
         unsafe {
             *out = MixerStats {
                 render_ms,
                 frame_budget_ms: budget,
+                ram_bytes: tel.last_ram_bytes,
+                vram_bytes: tel.last_vram_bytes,
+                compose_vram_bytes: tel.last_compose_vram,
+                delay_vram_bytes: tel.last_delay_vram,
             };
         }
         OK
@@ -3423,6 +3458,15 @@ fn render_loop(
                 !skip_units,
             );
             drop(upload_guard);
+            let compose_vram = composer.vram_bytes();
+            let delay_vram = frame_delay.vram_bytes();
+            let send_vram = gpu_sends.vram_bytes();
+            let (ram, source_vram) = uploads.lock().expect("uploads").memory_bytes();
+            let accounted = source_vram
+                .saturating_add(compose_vram)
+                .saturating_add(delay_vram)
+                .saturating_add(send_vram);
+            let adapter = crate::rebar::adapter_usage_bytes(&device.device);
             {
                 let mut guard = telemetry.lock().expect("telemetry");
                 guard.monitor_pcm.extend(mixed.iter().copied());
@@ -3434,6 +3478,10 @@ fn render_loop(
                     guard.follow_primed = true;
                 }
                 guard.last_render_ms = frame_begin.elapsed().as_secs_f32() * 1000.0;
+                guard.last_ram_bytes = ram;
+                guard.last_compose_vram = compose_vram;
+                guard.last_delay_vram = delay_vram;
+                guard.last_vram_bytes = adapter.max(accounted);
             }
             if audio_frames > 0 {
                 let packet = interleaved_to_packet(&mixed, pts);

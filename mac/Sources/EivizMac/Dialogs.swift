@@ -1280,16 +1280,18 @@ struct ResourcesView: View {
                 usages[usage.source_id] = usage
             }
         }
-        var totalRam: UInt64 = 0
-        var totalVram: UInt64 = 0
-        for usage in usages.values {
-            totalRam += usage.ram_bytes
-            totalVram += usage.vram_bytes
+        var stats = MixerFFI.zeroed() as EivizMixerStats
+        _ = mixer_copy_stats(&stats)
+        var totalRam = stats.ram_bytes
+        var totalVram = stats.vram_bytes
+        if totalRam == 0 && totalVram == 0 {
+            for usage in usages.values {
+                totalRam += usage.ram_bytes
+                totalVram += usage.vram_bytes
+            }
         }
         if totalRam == 0 { totalRam = 1 }
         if totalVram == 0 { totalVram = 1 }
-        var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
-        _ = mixer_copy_stats(&stats)
         let gpuLoad = stats.frame_budget_ms > 0.1
             ? min(100, stats.render_ms / stats.frame_budget_ms * 100)
             : 0
@@ -1311,7 +1313,10 @@ struct ResourcesView: View {
                 vram: formatBytes(vram)
             )
         }
-        summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
+            ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
+            : ""
+        summary = "Inputs \(mixer.session.inputs.count)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
 

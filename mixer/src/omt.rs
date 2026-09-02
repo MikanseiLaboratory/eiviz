@@ -367,6 +367,14 @@ impl GpuSendStore {
         }
         None
     }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.rings
+            .values()
+            .flat_map(|ring| ring.slots.iter())
+            .map(|slot| crate::upload::texture_bytes(&slot.texture))
+            .sum()
+    }
 }
 
 impl GpuSendRing {

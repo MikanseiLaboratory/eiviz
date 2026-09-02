@@ -400,7 +400,20 @@ fn ingest_video(
                     frame.timestamp(),
                 ) {
                     Ok(uploaded) => {
-                        finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "rebar");
+                        finish_gpu_frame(
+                            uploads,
+                            gpu_warned,
+                            source_id,
+                            depth,
+                            width,
+                            height,
+                            pixel_format,
+                            stride,
+                            frame,
+                            uploaded,
+                            ring.vram_bytes(),
+                            "rebar",
+                        );
                         return;
                     }
                     Err(error) => {
@@ -419,7 +432,20 @@ fn ingest_video(
             frame.timestamp(),
         ) {
             Ok(uploaded) => {
-                finish_gpu_frame(uploads, gpu_warned, source_id, depth, width, height, pixel_format, stride, frame, uploaded, "queue");
+                finish_gpu_frame(
+                    uploads,
+                    gpu_warned,
+                    source_id,
+                    depth,
+                    width,
+                    height,
+                    pixel_format,
+                    stride,
+                    frame,
+                    uploaded,
+                    gpu_ring.vram_bytes(),
+                    "queue",
+                );
                 return;
             }
             Err(error) if !*gpu_warned => {
@@ -453,6 +479,7 @@ fn finish_gpu_frame(
     stride: usize,
     frame: &VideoFrame,
     uploaded: GpuVideoFrame,
+    ring_vram: u64,
     path: &str,
 ) {
     if !*gpu_warned {
@@ -464,6 +491,7 @@ fn finish_gpu_frame(
     }
     let mut store = uploads.lock().expect("uploads lock");
     store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
+    store.set_ring_vram(source_id, ring_vram);
     let _ = store.push_playout_gpu(source_id, uploaded);
 }
 

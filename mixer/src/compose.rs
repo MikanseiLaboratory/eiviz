@@ -11,7 +11,7 @@ use crate::abi::{
 };
 use crate::device::GpuDevice;
 use crate::pool::{uniform_dyn, UniformPool};
-use crate::upload::{CpuFormat, CpuFrameSnap};
+use crate::upload::{texture_bytes, CpuFormat, CpuFrameSnap};
 
 const KEY_TALLY_RED: u64 = LABEL_BASE + 0xFF01;
 const KEY_TALLY_GREEN: u64 = LABEL_BASE + 0xFF02;
@@ -114,6 +114,7 @@ struct SourceGpu {
     bgra: bool,
     uploaded_pts: i64,
     direct: bool,
+    owned: bool,
 }
 
 pub struct UnitTargets {
@@ -487,6 +488,7 @@ impl Composer {
                             bgra: frame.bgra,
                             uploaded_pts: frame.pts,
                             direct: false,
+                            owned: false,
                         },
                     );
                 }
@@ -545,6 +547,7 @@ impl Composer {
                                 bgra,
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
+                                owned: true,
                             },
                         );
                         continue;
@@ -578,6 +581,7 @@ impl Composer {
                         bgra,
                         uploaded_pts: i64::MIN,
                         direct: false,
+                        owned: true,
                     },
                 );
             }
@@ -1917,6 +1921,7 @@ impl Composer {
                     bgra: false,
                     uploaded_pts: i64::MIN,
                     direct: false,
+                    owned: true,
                 },
             );
         }
@@ -1952,6 +1957,7 @@ impl Composer {
                         bgra: false,
                         uploaded_pts: i64::MIN,
                         direct: false,
+                        owned: true,
                     },
                 );
                 self.blit_groups.remove(&id);
@@ -2015,6 +2021,34 @@ impl Composer {
 
     pub fn source_is_packed(&self, source_id: u64) -> bool {
         self.sources.get(&source_id).is_some_and(|gpu| gpu.packed)
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        let mut total = self.units.values().map(UnitTargets::vram_bytes).sum::<u64>();
+        for source in self.sources.values() {
+            if source.owned {
+                total += texture_bytes(&source.texture);
+            }
+        }
+        for scene in self.scenes.values() {
+            total += texture_bytes(&scene.texture);
+            if let Some(packed) = &scene.packed {
+                total += texture_bytes(packed);
+            }
+        }
+        for texture in self.input_packed.values() {
+            total += texture_bytes(texture);
+        }
+        for (texture, _) in self.label_cache.values() {
+            total += texture_bytes(texture);
+        }
+        if let Some((texture, _)) = &self.tally_red {
+            total += texture_bytes(texture);
+        }
+        if let Some((texture, _)) = &self.tally_green {
+            total += texture_bytes(texture);
+        }
+        total
     }
 
     pub fn packed_texture(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {
@@ -2235,6 +2269,32 @@ impl UnitTargets {
             packed_prv: None,
             multiview: None,
         }
+    }
+
+    fn vram_bytes(&self) -> u64 {
+        let mut total = texture_bytes(&self.program)
+            + texture_bytes(&self.preview)
+            + texture_bytes(&self.mixed)
+            + texture_bytes(&self.prev)
+            + texture_bytes(&self.sort_a)
+            + texture_bytes(&self.sort_b)
+            + texture_bytes(&self.flow)
+            + texture_bytes(&self.bloom_a)
+            + texture_bytes(&self.bloom_b)
+            + texture_bytes(&self.aux);
+        if let Some(tex) = &self.packed {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_mv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.packed_prv {
+            total += texture_bytes(tex);
+        }
+        if let Some(tex) = &self.multiview {
+            total += texture_bytes(tex);
+        }
+        total
     }
 }
 

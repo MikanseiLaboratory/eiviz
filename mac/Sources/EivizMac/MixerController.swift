@@ -1264,7 +1264,7 @@ final class MixerController: ObservableObject {
             }
             peaks = next
         }
-        var stats = EivizMixerStats(render_ms: 0, frame_budget_ms: 0)
+        var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         if stats.frame_budget_ms > 0 {
             let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)

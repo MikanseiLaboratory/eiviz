@@ -61,6 +61,7 @@ pub struct SourceRing {
     last_peak: (f32, f32),
     last_hold: (f32, f32),
     fifo_primed: bool,
+    ring_vram: u64,
 }
 
 /// CPU frame borrowed for GPU upload after the ingest lock is dropped.
@@ -218,6 +219,10 @@ impl GpuUploadRing {
         }
         self.next
     }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum()
+    }
 }
 
 pub(crate) fn write_queue_texture(
@@ -304,6 +309,7 @@ impl SourceRing {
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
             fifo_primed: false,
+            ring_vram: 0,
         }
     }
 
@@ -532,13 +538,52 @@ impl SourceRing {
             + self.free.iter().map(|buf| buf.len() as u64).sum::<u64>()
     }
 
+    /// GPU textures this ring actually holds (upload ring, current frame, fifo).
+    pub fn vram_actual(&self) -> u64 {
+        if self.ring_vram > 0 {
+            return self.ring_vram;
+        }
+        let mut total = 0u64;
+        if let Some(gpu) = &self.gpu {
+            total += texture_bytes(&gpu.texture);
+        }
+        for frame in &self.gpu_fifo {
+            total += texture_bytes(&frame.texture);
+        }
+        total
+    }
+
     pub fn vram_bytes(&self) -> u64 {
+        let actual = self.vram_actual();
+        if actual > 0 {
+            return actual;
+        }
+        if !self.has_frame {
+            return 0;
+        }
+        // CPU ingest: Composer keeps one uploaded texture of this size.
         let bpp = match self.format {
             CpuFormat::Uyvy | CpuFormat::Uyva => 2,
             CpuFormat::Bgra | CpuFormat::Rgba | CpuFormat::GpuRgba => 4,
         };
         u64::from(self.width) * u64::from(self.height) * bpp
     }
+}
+
+pub(crate) fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let size = texture.size();
+    let bpp = match texture.format() {
+        wgpu::TextureFormat::R8Unorm | wgpu::TextureFormat::R8Uint => 1,
+        wgpu::TextureFormat::Rg8Unorm | wgpu::TextureFormat::Rg8Uint => 2,
+        wgpu::TextureFormat::Rgba8Unorm
+        | wgpu::TextureFormat::Rgba8UnormSrgb
+        | wgpu::TextureFormat::Bgra8Unorm
+        | wgpu::TextureFormat::Bgra8UnormSrgb => 4,
+        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba32Float => 16,
+        _ => 4,
+    };
+    u64::from(size.width) * u64::from(size.height) * u64::from(size.depth_or_array_layers) * bpp
 }
 
 #[derive(Default)]
@@ -564,6 +609,7 @@ impl UploadStore {
                 ring.free = old.free;
                 ring.has_frame = old.has_frame;
                 ring.last_pts = old.last_pts;
+                ring.ring_vram = old.ring_vram;
             }
         }
         self.sources.insert(id, ring);
@@ -687,6 +733,18 @@ impl UploadStore {
         }
     }
 
+    pub fn set_ring_vram(&mut self, id: u64, bytes: u64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.ring_vram = bytes;
+        }
+    }
+
+    pub fn memory_bytes(&self) -> (u64, u64) {
+        self.sources.values().fold((0u64, 0u64), |(ram, vram), ring| {
+            (ram + ring.ram_bytes(), vram + ring.vram_actual())
+        })
+    }
+
     pub fn push_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
         self.ensure(id, frame.width.max(2), frame.height.max(2), CpuFormat::GpuRgba);
         let ring = self
@@ -772,6 +830,19 @@ impl UploadStore {
         if let Some(ring) = self.sources.get_mut(&id) {
             ring.clear_audio();
         }
+    }
+
+    pub fn flush_video(&mut self, id: u64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.gpu_fifo.clear();
+            ring.cpu_fifo.clear();
+            ring.gpu = None;
+            ring.has_frame = false;
+        }
+    }
+
+    pub fn has_video_frame(&self, id: u64) -> bool {
+        self.sources.get(&id).is_some_and(|ring| ring.has_frame)
     }
 
     pub fn mix_follow(&mut self, gains: &[(u64, f32)], frames: usize) -> Vec<f32> {
@@ -966,6 +1037,37 @@ mod tests {
         ring.advance_playout();
         assert_eq!(ring.last_pts, 2);
         assert_eq!(ring.latest_rgba_or_packed()[..4], [2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn flush_video_drops_queued_frames() {
+        let mut store = UploadStore::default();
+        store.ensure_playout(3, 4, 2, CpuFormat::Bgra, 3);
+        store.push_playout_cpu(3, &[7u8; 32], 16, 1).unwrap();
+        store.push_playout_cpu(3, &[8u8; 32], 16, 2).unwrap();
+        assert!(store.has_video_frame(3) || store.get(3).is_some());
+        store.flush_video(3);
+        let ring = store.get(3).unwrap();
+        assert!(!ring.has_frame);
+        assert!(ring.gpu.is_none());
+    }
+
+    #[test]
+    fn cpu_source_vram_is_one_uploaded_frame() {
+        let mut ring = SourceRing::new(64, 32, CpuFormat::Bgra);
+        assert_eq!(ring.vram_bytes(), 0);
+        ring.push(&[0u8; 64 * 32 * 4], 64 * 4, 1);
+        assert_eq!(ring.vram_bytes(), 64 * 32 * 4);
+        assert_eq!(ring.vram_actual(), 0);
+    }
+
+    #[test]
+    fn ring_vram_overrides_single_frame_guess() {
+        let mut ring = SourceRing::new(64, 32, CpuFormat::GpuRgba);
+        ring.has_frame = true;
+        ring.ring_vram = 64 * 32 * 4 * 3;
+        assert_eq!(ring.vram_actual(), 64 * 32 * 4 * 3);
+        assert_eq!(ring.vram_bytes(), 64 * 32 * 4 * 3);
     }
 
     #[test]

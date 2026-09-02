@@ -172,6 +172,62 @@ fn dxgi_vram(device_id: u32) -> u64 {
     0
 }
 
+/// Process GPU memory on this adapter (dedicated + shared), matching Task Manager.
+#[cfg(windows)]
+pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+        DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+    };
+
+    let Some(luid) = (unsafe {
+        device
+            .as_hal::<wgpu::hal::api::Dx12>()
+            .map(|hal| hal.raw_device().GetAdapterLuid())
+    }) else {
+        return 0;
+    };
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+        return 0;
+    };
+    let mut i = 0;
+    loop {
+        let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else {
+            break;
+        };
+        i += 1;
+        let Ok(desc) = (unsafe { adapter.GetDesc1() }) else {
+            continue;
+        };
+        if desc.AdapterLuid.LowPart != luid.LowPart || desc.AdapterLuid.HighPart != luid.HighPart {
+            continue;
+        }
+        let Ok(adapter3) = adapter.cast::<IDXGIAdapter3>() else {
+            continue;
+        };
+        let mut local = Default::default();
+        let mut shared = Default::default();
+        let _ = unsafe {
+            adapter3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local)
+        };
+        let _ = unsafe {
+            adapter3.QueryVideoMemoryInfo(
+                0,
+                DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+                &mut shared,
+            )
+        };
+        return local.CurrentUsage.saturating_add(shared.CurrentUsage);
+    }
+    0
+}
+
+#[cfg(not(windows))]
+pub fn adapter_usage_bytes(_device: &wgpu::Device) -> u64 {
+    0
+}
+
 #[cfg(windows)]
 pub struct RebarUploader {
     d3d: windows::Win32::Graphics::Direct3D12::ID3D12Device,
@@ -437,6 +493,13 @@ impl RebarIngestRing {
 
     pub fn is_live(&self) -> bool {
         !self.dead
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.slots
+            .iter()
+            .map(|slot| crate::upload::texture_bytes(&slot.dest) + slot.buffer.size())
+            .sum()
     }
 
     pub fn upload(

@@ -332,6 +332,10 @@ pub struct AudioPeak {
 pub struct MixerStats {
     pub render_ms: f32,
     pub frame_budget_ms: f32,
+    pub ram_bytes: u64,
+    pub vram_bytes: u64,
+    pub compose_vram_bytes: u64,
+    pub delay_vram_bytes: u64,
 }
 
 #[repr(C)]

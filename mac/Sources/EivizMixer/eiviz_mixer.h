@@ -183,6 +183,10 @@ typedef struct EivizAudioPeak {
 typedef struct EivizMixerStats {
     float render_ms;
     float frame_budget_ms;
+    uint64_t ram_bytes;
+    uint64_t vram_bytes;
+    uint64_t compose_vram_bytes;
+    uint64_t delay_vram_bytes;
 } EivizMixerStats;
 
 typedef struct EivizMixerRebarInfo {

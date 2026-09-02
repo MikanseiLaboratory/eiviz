@@ -36,20 +36,23 @@ public partial class ResourceMonitorWindow : Window
             }
         }
 
-        ulong totalRam = 0, totalVram = 0;
-        foreach (var usage in usages.Values)
-        {
-            totalRam += usage.RamBytes;
-            totalVram += usage.VramBytes;
-        }
-        if (totalRam == 0) totalRam = 1;
-        if (totalVram == 0) totalVram = 1;
-
         MixerStats stats = default;
         unsafe
         {
             MixerNative.CopyStats(&stats);
         }
+        ulong totalRam = stats.RamBytes;
+        ulong totalVram = stats.VramBytes;
+        if (totalRam == 0 && totalVram == 0)
+        {
+            foreach (var usage in usages.Values)
+            {
+                totalRam += usage.RamBytes;
+                totalVram += usage.VramBytes;
+            }
+        }
+        if (totalRam == 0) totalRam = 1;
+        if (totalVram == 0) totalVram = 1;
         var gpuLoad = stats.FrameBudgetMs > 0.1f
             ? Math.Min(100f, stats.RenderMs / stats.FrameBudgetMs * 100f)
             : 0f;
@@ -72,7 +75,12 @@ public partial class ResourceMonitorWindow : Window
                 FormatBytes(vram)));
         }
         UsageList.ItemsSource = rows;
-        SummaryText.Text = $"Inputs {session.Inputs.Count}    RAM {FormatBytes(totalRam)}    VRAM {FormatBytes(totalVram)}    Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
+        var ramText = FormatBytes(totalRam == 1 ? 0 : totalRam);
+        var vramText = FormatBytes(totalVram == 1 ? 0 : totalVram);
+        var extra = stats.ComposeVramBytes > 0 || stats.DelayVramBytes > 0
+            ? $"    Compose {FormatBytes(stats.ComposeVramBytes)}    Delay {FormatBytes(stats.DelayVramBytes)}"
+            : "";
+        SummaryText.Text = $"Inputs {session.Inputs.Count}    RAM {ramText}    VRAM {vramText}{extra}    Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
     }
 
     private static string FormatBytes(ulong bytes)
@@ -83,7 +91,9 @@ public partial class ResourceMonitorWindow : Window
             return $"{bytes} B";
         if (bytes < 1024 * 1024)
             return $"{bytes / 1024.0:0.0} KB";
-        return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+        if (bytes < 1024UL * 1024 * 1024)
+            return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+        return $"{bytes / (1024.0 * 1024.0 * 1024.0):0.00} GB";
     }
 
     private sealed record Row(string Name, string Kind, string Size, string Cpu, string Gpu, string Ram, string Vram);

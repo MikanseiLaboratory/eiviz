@@ -530,6 +530,10 @@ internal struct MixerStats
 {
     public float RenderMs;
     public float FrameBudgetMs;
+    public ulong RamBytes;
+    public ulong VramBytes;
+    public ulong ComposeVramBytes;
+    public ulong DelayVramBytes;
 }
 
 [StructLayout(LayoutKind.Sequential)]
