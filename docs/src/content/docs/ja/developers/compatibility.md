@@ -1,4 +1,4 @@
 ---
-title: "互換API（vMix HTTP & TCP / OBS WebSocket）"
-description: vMix HTTP・TCP および OBS WebSocket 互換 API
+title: "互換API（vMix HTTP & TCP/OBS WebSocket）"
+description: vMix HTTP・TCPおよびOBS WebSocket互換API
 ---

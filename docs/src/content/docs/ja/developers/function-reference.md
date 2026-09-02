@@ -1,4 +1,4 @@
 ---
 title: Function Reference
-description: eiviz の関数リファレンス
+description: eivizの関数リファレンス
 ---

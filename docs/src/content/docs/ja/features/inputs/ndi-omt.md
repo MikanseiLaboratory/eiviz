@@ -1,4 +1,4 @@
 ---
 title: NDI / OMT Capture
-description: NDI および OMT からの映像入力
+description: NDIおよびOMTからの映像入力
 ---

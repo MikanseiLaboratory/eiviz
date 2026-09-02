@@ -1,4 +1,4 @@
 ---
 title: NDI / OMT
-description: NDI および OMT への出力
+description: NDIおよびOMTへの出力
 ---

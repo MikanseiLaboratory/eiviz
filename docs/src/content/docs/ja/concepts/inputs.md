@@ -1,4 +1,4 @@
 ---
 title: Inputs
-description: eiviz における Input の概念
+description: eivizにおけるInputの概念
 ---

@@ -1,4 +1,4 @@
 ---
 title: Vision Mixing
-description: Mixing Unit を使った多段 M/E 映像スイッチング
+description: Mixing Unitを使った多段M/E映像スイッチング
 ---

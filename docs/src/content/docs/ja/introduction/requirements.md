@@ -1,4 +1,4 @@
 ---
 title: システム要件とサポートするハードウェア
-description: eiviz が必要とする環境とサポートするハードウェア
+description: eivizが必要とする環境とサポートするハードウェア
 ---

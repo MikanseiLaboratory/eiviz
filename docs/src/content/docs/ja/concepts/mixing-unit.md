@@ -1,4 +1,4 @@
 ---
 title: Mixing Unit
-description: eiviz における Mixing Unit の概念
+description: eivizにおけるMixing Unitの概念
 ---

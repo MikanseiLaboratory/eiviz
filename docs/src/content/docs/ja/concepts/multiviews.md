@@ -1,4 +1,4 @@
 ---
 title: Multiviews
-description: eiviz における Multiview の概念
+description: eivizにおけるMultiviewの概念
 ---

@@ -1,4 +1,4 @@
 ---
 title: UVC Capture
-description: UVC デバイスからの映像入力
+description: UVCデバイスからの映像入力
 ---

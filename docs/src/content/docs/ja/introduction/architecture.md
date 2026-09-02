@@ -1,4 +1,4 @@
 ---
 title: システムアーキテクチャ
-description: Rust mixer core と FFI UI の構成
+description: Rust mixer coreとFFI UIの構成
 ---
