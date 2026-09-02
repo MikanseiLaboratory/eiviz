@@ -151,11 +151,11 @@ struct SceneEditorView: View {
                     }
                 }
             }
-            .frame(width: 300)
+            .frame(width: 380)
             .buttonStyle(MixerButtonStyle())
         }
         .padding(12)
-        .frame(minWidth: 1280, minHeight: 720)
+        .frame(minWidth: 1400, minHeight: 720)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -266,13 +266,19 @@ struct SceneEditorView: View {
                 Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
                 layerMeter("Size Y", index: index, axis: .h, range: 1 ... projectH * 2)
             }
-            HStack(alignment: .top, spacing: 8) {
-                layerMeter("Left", index: index, axis: .cx, range: 0 ... projectW)
-                layerMeter("Up", index: index, axis: .cy, range: 0 ... projectH)
-            }
-            HStack(alignment: .top, spacing: 8) {
-                layerMeter("Right", index: index, axis: .cw, range: 0 ... projectW)
-                layerMeter("Down", index: index, axis: .ch, range: 0 ... projectH)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Crop").fontWeight(.bold)
+                Text("px from each edge")
+                    .font(.system(size: 11))
+                    .opacity(0.7)
+                HStack(alignment: .top, spacing: 8) {
+                    layerMeter("Left", index: index, axis: .cx, range: 0 ... projectW)
+                    layerMeter("Up", index: index, axis: .cy, range: 0 ... projectH)
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    layerMeter("Right", index: index, axis: .cw, range: 0 ... projectW)
+                    layerMeter("Down", index: index, axis: .ch, range: 0 ... projectH)
+                }
             }
             layerMeter("Opacity", index: index, axis: .op, range: 0 ... 1, pixelsPerUnit: 400)
         }

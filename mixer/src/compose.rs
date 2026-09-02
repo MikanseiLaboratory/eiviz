@@ -65,6 +65,19 @@ fn crop_uv(crop: Rect) -> [f32; 4] {
     }
 }
 
+fn crop_blit(rect: [f32; 4], crop: Rect) -> ([f32; 4], [f32; 4]) {
+    let uv = crop_uv(crop);
+    (
+        [
+            rect[0] + rect[2] * uv[0],
+            rect[1] + rect[3] * uv[1],
+            rect[2] * uv[2],
+            rect[3] * uv[3],
+        ],
+        uv,
+    )
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlitParams {
@@ -774,13 +787,17 @@ impl Composer {
                     if layer.hidden != 0 {
                         continue;
                     }
+                    let (dest, uv) = crop_blit(
+                        [layer.rect.x, layer.rect.y, layer.rect.width, layer.rect.height],
+                        layer.crop,
+                    );
                     self.draw_source_pass(
                         device,
                         &mut pass,
                         layer.source_id,
-                        [layer.rect.x, layer.rect.y, layer.rect.width, layer.rect.height],
+                        dest,
                         layer.opacity,
-                        crop_uv(layer.crop),
+                        uv,
                     )?;
                 }
             }
@@ -1092,18 +1109,22 @@ impl Composer {
                 if overlay.hidden != 0 {
                     continue;
                 }
-                self.draw_source_pass(
-                    device,
-                    &mut pass,
-                    overlay.source_id,
+                let (dest, uv) = crop_blit(
                     [
                         overlay.rect.x,
                         overlay.rect.y,
                         overlay.rect.width,
                         overlay.rect.height,
                     ],
+                    overlay.crop,
+                );
+                self.draw_source_pass(
+                    device,
+                    &mut pass,
+                    overlay.source_id,
+                    dest,
                     overlay.opacity,
-                    crop_uv(overlay.crop),
+                    uv,
                 )?;
             }
         }
@@ -2663,6 +2684,58 @@ fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u
         OUTPUT_PREVIEW => preview,
         OUTPUT_PROGRAM => program,
         _ => inactive,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{crop_blit, FULL_UV};
+    use crate::abi::Rect;
+
+    #[test]
+    fn full_crop_keeps_dest_and_uv() {
+        let (dest, uv) = crop_blit(
+            [0.1, 0.2, 0.5, 0.4],
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        );
+        assert_eq!(dest, [0.1, 0.2, 0.5, 0.4]);
+        assert_eq!(uv, FULL_UV);
+    }
+
+    #[test]
+    fn down_inset_shortens_dest_from_bottom() {
+        let (dest, uv) = crop_blit(
+            [0.0, 0.0, 1.0, 1.0],
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 0.75,
+            },
+        );
+        assert_eq!(dest, [0.0, 0.0, 1.0, 0.75]);
+        assert_eq!(uv, [0.0, 0.0, 1.0, 0.75]);
+    }
+
+    #[test]
+    fn left_inset_moves_dest_right() {
+        let (dest, uv) = crop_blit(
+            [0.0, 0.0, 1.0, 1.0],
+            Rect {
+                x: 0.2,
+                y: 0.0,
+                width: 0.8,
+                height: 1.0,
+            },
+        );
+        assert_eq!(dest, [0.2, 0.0, 0.8, 1.0]);
+        assert_eq!(uv[0], 0.2);
+        assert_eq!(uv[2], 0.8);
     }
 }
 

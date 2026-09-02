@@ -209,6 +209,7 @@ struct Shared {
     tone_phase: HashMap<u64, f64>,
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
+    compose_dirty: bool,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -635,6 +636,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         ndi_gpu_upload: true,
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
+        compose_dirty: false,
     }));
     let (tx, rx) = mpsc::channel();
     let (send_tx, send_rx) = mpsc::channel();
@@ -801,6 +803,7 @@ pub unsafe extern "C" fn mixer_define_scene(
                 mv_label,
             },
         );
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -809,18 +812,12 @@ pub unsafe extern "C" fn mixer_define_scene(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .scenes
-            .remove(&scene_id);
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .multiview_binds
-            .remove(&scene_id);
+        {
+            let mut shared = mixer.shared.lock().expect("shared");
+            shared.scenes.remove(&scene_id);
+            shared.multiview_binds.remove(&scene_id);
+            shared.compose_dirty = true;
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -977,50 +974,53 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
     }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
-        let Some(unit) = shared.units.get_mut(&unit_id) else {
-            return ERR_INVALID_ARGUMENT;
-        };
-        let keep = state.keep_preview != 0
-            || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
-        if unit.auto.is_some() && keep {
-            let mix = unit.state.mix;
-            let program = unit.state.program_source;
-            let keep_preview = unit.state.keep_preview;
-            let dip = (unit.state.dip_r, unit.state.dip_g, unit.state.dip_b, unit.state.dip_a);
-            let look = (unit.state.softness, unit.state.param);
-            let frozen = unit.frozen_preview;
-            unit.state = state;
-            unit.state.mix = mix;
-            unit.state.program_source = program;
-            unit.state.keep_preview = keep_preview;
-            unit.state.dip_r = dip.0;
-            unit.state.dip_g = dip.1;
-            unit.state.dip_b = dip.2;
-            unit.state.dip_a = dip.3;
-            unit.state.softness = look.0;
-            unit.state.param = look.1;
-            unit.frozen_preview = frozen;
-        } else {
-            let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
-            unit.state = state;
-            if mix_changed {
-                unit.auto = None;
+        {
+            let Some(unit) = shared.units.get_mut(&unit_id) else {
+                return ERR_INVALID_ARGUMENT;
+            };
+            let keep = state.keep_preview != 0
+                || unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
+            if unit.auto.is_some() && keep {
+                let mix = unit.state.mix;
+                let program = unit.state.program_source;
+                let keep_preview = unit.state.keep_preview;
+                let dip = (unit.state.dip_r, unit.state.dip_g, unit.state.dip_b, unit.state.dip_a);
+                let look = (unit.state.softness, unit.state.param);
+                let frozen = unit.frozen_preview;
+                unit.state = state;
+                unit.state.mix = mix;
+                unit.state.program_source = program;
+                unit.state.keep_preview = keep_preview;
+                unit.state.dip_r = dip.0;
+                unit.state.dip_g = dip.1;
+                unit.state.dip_b = dip.2;
+                unit.state.dip_a = dip.3;
+                unit.state.softness = look.0;
+                unit.state.param = look.1;
+                unit.frozen_preview = frozen;
+            } else {
+                let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
+                unit.state = state;
+                if mix_changed {
+                    unit.auto = None;
+                }
             }
-        }
-        unit.state.incoming_source = 0;
-        if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked) {
-            unit.frozen_preview
-                .get_or_insert(unit.state.preview_source);
-        } else if unit.state.mix > 0.001 {
-            if unit.state.keep_preview != 0 {
+            unit.state.incoming_source = 0;
+            if unit.auto.as_ref().is_some_and(|auto| auto.keep_preview || auto.incoming_locked) {
                 unit.frozen_preview
                     .get_or_insert(unit.state.preview_source);
+            } else if unit.state.mix > 0.001 {
+                if unit.state.keep_preview != 0 {
+                    unit.frozen_preview
+                        .get_or_insert(unit.state.preview_source);
+                } else {
+                    unit.frozen_preview = None;
+                }
             } else {
                 unit.frozen_preview = None;
             }
-        } else {
-            unit.frozen_preview = None;
         }
+        shared.compose_dirty = true;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3038,6 +3038,8 @@ fn render_loop(
                     use_gpu: output.use_gpu,
                 })
                 .collect();
+            let compose_dirty = guard.compose_dirty;
+            guard.compose_dirty = false;
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -3054,6 +3056,9 @@ fn render_loop(
             if !changed_units.is_empty() {
                 skip_compose = false;
                 frame_delay.discard(changed_units);
+            }
+            if compose_dirty {
+                skip_compose = false;
             }
             let tallies: Vec<(u64, u64)> = snapshot
                 .iter()

@@ -2,14 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:preview="clr-namespace:Eiviz.Host.Preview"
-        Title="Overlays" Height="720" Width="1280"
+        Title="Overlays" Height="720" Width="1400"
         WindowStartupLocation="CenterOwner"
         Background="#2B2B2B" Foreground="#EEEEEE">
     <Grid Margin="12">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="240"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="320"/>
+            <ColumnDefinition Width="400"/>
         </Grid.ColumnDefinitions>
         <DockPanel>
             <TextBlock DockPanel.Dock="Top" Text="Overlays" FontWeight="Bold" Margin="0,0,0,6"/>
@@ -50,7 +50,7 @@
         </DockPanel>
         <DockPanel Grid.Column="2">
             <TextBlock DockPanel.Dock="Top" Text="Live preview" FontWeight="Bold" Margin="0,0,0,6"/>
-            <ScrollViewer DockPanel.Dock="Bottom" MaxHeight="360" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer DockPanel.Dock="Bottom" MaxHeight="420" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="Source" Margin="0,8,0,0"/>
                     <ComboBox x:Name="SourceKindBox" Margin="0,4,0,6" SelectionChanged="SourceKind_SelectionChanged">
@@ -73,6 +73,8 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
                         <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
@@ -85,16 +87,18 @@
                                   Click="Link_Click"/>
                         <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
                         <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="CropXLabel" Grid.Row="2" Text="Left" VerticalAlignment="Center"/>
-                        <TextBox x:Name="CropXBox" Grid.Row="2" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="CropYLabel" Grid.Row="2" Grid.Column="3" Text="Up" VerticalAlignment="Center"/>
-                        <TextBox x:Name="CropYBox" Grid.Row="2" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="CropWLabel" Grid.Row="3" Text="Right" VerticalAlignment="Center"/>
-                        <TextBox x:Name="CropWBox" Grid.Row="3" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="CropHLabel" Grid.Row="3" Grid.Column="3" Text="Down" VerticalAlignment="Center"/>
-                        <TextBox x:Name="CropHBox" Grid.Row="3" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="OpLabel" Grid.Row="4" Text="Opacity" VerticalAlignment="Center"/>
-                        <TextBox x:Name="OpBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Text="Crop" FontWeight="Bold" Margin="0,8,0,2"/>
+                        <TextBlock Grid.Row="3" Grid.ColumnSpan="5" Text="px from each edge" FontSize="11" Opacity="0.7" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="CropXLabel" Grid.Row="4" Text="Left" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropXBox" Grid.Row="4" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropYLabel" Grid.Row="4" Grid.Column="3" Text="Up" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropYBox" Grid.Row="4" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropWLabel" Grid.Row="5" Text="Right" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropWBox" Grid.Row="5" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="CropHLabel" Grid.Row="5" Grid.Column="3" Text="Down" VerticalAlignment="Center"/>
+                        <TextBox x:Name="CropHBox" Grid.Row="5" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
+                        <TextBlock x:Name="OpLabel" Grid.Row="6" Text="Opacity" VerticalAlignment="Center"/>
+                        <TextBox x:Name="OpBox" Grid.Row="6" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                     </Grid>
                     <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,8">
                         <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>

@@ -16,7 +16,7 @@ struct OverlayView: View {
             overlayInspector
         }
         .padding(12)
-        .frame(minWidth: 1280, minHeight: 720)
+        .frame(minWidth: 1400, minHeight: 720)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -146,7 +146,7 @@ struct OverlayView: View {
                 Button("Close") { dismiss() }
             }
         }
-        .frame(width: 300)
+        .frame(width: 380)
         .buttonStyle(MixerButtonStyle())
     }
 
@@ -330,13 +330,19 @@ struct OverlayView: View {
                     slot.height = height
                 }
             }
-            HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Left", range: 0 ... pw) { $0.cropX * pw } set: { $0.setCropInset($1 / pw, edit: .left) }
-                overlayMeter("Up", range: 0 ... ph) { $0.cropY * ph } set: { $0.setCropInset($1 / ph, edit: .up) }
-            }
-            HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Right", range: 0 ... pw) { (1 - $0.cropX - $0.cropWidth) * pw } set: { $0.setCropInset($1 / pw, edit: .right) }
-                overlayMeter("Down", range: 0 ... ph) { (1 - $0.cropY - $0.cropHeight) * ph } set: { $0.setCropInset($1 / ph, edit: .down) }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Crop").fontWeight(.bold)
+                Text("px from each edge")
+                    .font(.system(size: 11))
+                    .opacity(0.7)
+                HStack(alignment: .top, spacing: 8) {
+                    overlayMeter("Left", range: 0 ... pw) { $0.cropX * pw } set: { $0.setCropInset($1 / pw, edit: .left) }
+                    overlayMeter("Up", range: 0 ... ph) { $0.cropY * ph } set: { $0.setCropInset($1 / ph, edit: .up) }
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    overlayMeter("Right", range: 0 ... pw) { (1 - $0.cropX - $0.cropWidth) * pw } set: { $0.setCropInset($1 / pw, edit: .right) }
+                    overlayMeter("Down", range: 0 ... ph) { (1 - $0.cropY - $0.cropHeight) * ph } set: { $0.setCropInset($1 / ph, edit: .down) }
+                }
             }
             overlayMeter("Opacity", range: 0 ... 1, pixelsPerUnit: 400) { $0.opacity } set: { $0.opacity = min(1, max(0, $1)) }
         }
