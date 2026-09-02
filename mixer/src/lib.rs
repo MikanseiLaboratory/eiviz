@@ -32,6 +32,7 @@ mod readback;
 mod save;
 mod session;
 mod upload;
+mod video_cache;
 
 pub use abi::{
     AudioPeak, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED,
@@ -514,6 +515,12 @@ fn send_gpu_and_wait(send: impl FnOnce(&Mixer, mpsc::Sender<i32>) -> i32) -> i32
 
 fn set_error(telemetry: &Mutex<Telemetry>, message: impl Into<String>) {
     telemetry.lock().expect("telemetry").last_error = message.into();
+}
+
+pub(crate) fn report_user_warning(message: impl Into<String>) {
+    let message = message.into();
+    crate::diag::error(&message);
+    let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
 }
 
 fn with_uploads<T>(mixer: &Mixer, f: impl FnOnce(&mut UploadStore) -> T) -> T {
@@ -1629,6 +1636,8 @@ pub unsafe extern "C" fn mixer_video_start(
     height: u32,
     fps_num: u32,
     fps_den: u32,
+    frame_buffer_frames: u32,
+    preload_ram: u32,
 ) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -1640,9 +1649,23 @@ pub unsafe extern "C" fn mixer_video_start(
     if path.is_empty() {
         return ERR_INVALID_ARGUMENT;
     }
+    if preload_ram != 0 {
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, ""));
+    }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (id, path, capture, format, width, height, fps_num, fps_den);
+        let _ = (
+            id,
+            path,
+            capture,
+            format,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            frame_buffer_frames,
+            preload_ram,
+        );
         return with_mixer(|mixer| {
             set_error(&mixer.telemetry, "Video ingest is not available");
             ERR_IO
@@ -1654,12 +1677,17 @@ pub unsafe extern "C" fn mixer_video_start(
     {
         let _ = format;
         let depth = match with_mixer(|mixer| {
-            mixer
+            let session = mixer
                 .shared
                 .lock()
                 .expect("shared")
                 .frame_buffer_frames
-                .clamp(1, 8)
+                .clamp(1, 8);
+            if frame_buffer_frames == 0 {
+                session
+            } else {
+                frame_buffer_frames.clamp(1, 8)
+            }
         }) {
             Ok(depth) => depth,
             Err(code) => return code,
@@ -1678,6 +1706,7 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_den,
             uploads,
             depth,
+            preload_ram != 0 && capture == 0,
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -1691,7 +1720,12 @@ pub unsafe extern "C" fn mixer_video_start(
             let previous_recv = shared.receivers.remove(&id);
             let uploads = shared.uploads.clone();
             let gpu = shared.gpu_video.clone();
-            let depth = shared.frame_buffer_frames.clamp(1, 8);
+            let session = shared.frame_buffer_frames.clamp(1, 8);
+            let depth = if frame_buffer_frames == 0 {
+                session
+            } else {
+                frame_buffer_frames.clamp(1, 8)
+            };
             (uploads, gpu, depth, previous_video, previous_recv)
         }) {
             Ok(value) => value,
@@ -1702,7 +1736,20 @@ pub unsafe extern "C" fn mixer_video_start(
         let Some(gpu) = gpu else {
             return ERR_DEVICE;
         };
-        return match VideoPump::start(id, path, capture != 0, format, width, height, fps_num, fps_den, uploads, gpu, depth) {
+        return match VideoPump::start(
+            id,
+            path,
+            capture != 0,
+            format,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            uploads,
+            gpu,
+            depth,
+            preload_ram != 0 && capture == 0,
+        ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
         };

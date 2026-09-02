@@ -993,7 +993,9 @@ final class MixerController: ObservableObject {
         fpsNum: UInt32 = 0,
         fpsDen: UInt32 = 0,
         loop: Bool,
-        playing: Bool
+        playing: Bool,
+        frameBuffer: UInt32 = 3,
+        preloadRam: Bool = false
     ) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
             presentInputError(L10n.missingFile("Video start"))
@@ -1001,12 +1003,26 @@ final class MixerController: ObservableObject {
         }
         MixerFFI.withCString(path) { cstr in
             fail(
-                mixer_video_start(id, cstr, capture, EIVIZ_FMT_BGRA, width, height, fpsNum, fpsDen),
+                mixer_video_start(
+                    id,
+                    cstr,
+                    capture,
+                    EIVIZ_FMT_BGRA,
+                    width,
+                    height,
+                    fpsNum,
+                    fpsDen,
+                    max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer)),
+                    preloadRam && capture == 0 ? 1 : 0
+                ),
                 capture == 0 ? "Video start" : "UVC start"
             )
         }
         _ = mixer_video_set_loop(id, loop ? 1 : 0)
         _ = mixer_video_set_playing(id, playing ? 1 : 0)
+        if preloadRam && capture == 0, let warning = MixerFFI.preloadRamWarning() {
+            presentInputError(warning)
+        }
     }
 
     func videoPlayToggle() {
@@ -1077,7 +1093,9 @@ final class MixerController: ObservableObject {
                     path: path,
                     capture: 0,
                     loop: input.videoLoop,
-                    playing: input.videoStartsPlaying
+                    playing: input.videoStartsPlaying,
+                    frameBuffer: input.frameBufferFrames,
+                    preloadRam: input.videoPreloadRam
                 )
                 videoTitle = input.name
                 videoPlaying = input.videoStartsPlaying
@@ -1136,7 +1154,9 @@ final class MixerController: ObservableObject {
                 fpsNum: input.captureFpsNum,
                 fpsDen: input.captureFpsDen,
                 loop: false,
-                playing: true
+                playing: true,
+                frameBuffer: input.frameBufferFrames,
+                preloadRam: false
             )
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {

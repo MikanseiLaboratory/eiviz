@@ -32,6 +32,9 @@ use crate::upload::{
     AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_clocked,
     ingest_audio_throttled,
 };
+use crate::video_cache::{
+    available_ram_bytes, estimated_decoded_ram_bytes, index_at_or_after, ram_overflows, PreloadError,
+};
 
 static MF_ONCE: Once = Once::new();
 
@@ -59,6 +62,7 @@ impl VideoPump {
         uploads: Arc<Mutex<UploadStore>>,
         gpu: GpuVideoContext,
         frame_buffer_frames: u32,
+        preload_ram: bool,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -81,15 +85,15 @@ impl VideoPump {
             .name(format!("eiviz-mf-{source_id}"))
             .spawn(move || {
                 if let Err(error) = run_loop(
-                    source_id, path, capture, format, width, height, fps_num, fps_den, uploads, gpu, depth, stop_t, playing_t, looping_t,
+                    source_id, path, capture, format, width, height, fps_num, fps_den, uploads, gpu, depth, preload_ram, stop_t, playing_t, looping_t,
                     seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
             })
             .map_err(|error| error.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_millis(400)) {
-            Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(Self {
+        match wait_ready(ready_rx, preload_ram) {
+            Ok(()) => Ok(Self {
                 stop,
                 playing,
                 looping,
@@ -99,15 +103,10 @@ impl VideoPump {
                 is_file: !capture,
                 join: Some(join),
             }),
-            Ok(Err(error)) => {
+            Err(error) => {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
                 Err(error)
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop.store(true, Ordering::Relaxed);
-                let _ = join.join();
-                Err("video thread exited before the source opened".into())
             }
         }
     }
@@ -135,6 +134,24 @@ impl VideoPump {
     }
 }
 
+fn wait_ready(
+    ready_rx: mpsc::Receiver<Result<(), String>>,
+    preload_ram: bool,
+) -> Result<(), String> {
+    let result = if preload_ram {
+        ready_rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+    } else {
+        ready_rx.recv_timeout(Duration::from_millis(400))
+    };
+    match result {
+        Ok(Ok(())) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("video thread exited before the source opened".into())
+        }
+    }
+}
+
 impl Drop for VideoPump {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -157,6 +174,7 @@ fn run_loop(
     uploads: Arc<Mutex<UploadStore>>,
     gpu: GpuVideoContext,
     depth: u32,
+    preload_ram: bool,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -208,6 +226,41 @@ fn run_loop(
             }
         };
         duration_hns.store(read_duration(&reader), Ordering::Relaxed);
+        if !capture && preload_ram {
+            match try_preload_ram(
+                &path,
+                prefer_packed,
+                duration_hns.load(Ordering::Relaxed),
+                &layout,
+                &stop,
+            ) {
+                Ok(cache) => {
+                    if duration_hns.load(Ordering::Relaxed) <= 0 {
+                        if let Some(last) = cache.frames.last() {
+                            duration_hns.store(last.pts(), Ordering::Relaxed);
+                        }
+                    }
+                    send_ready(&mut ready, Ok(()));
+                    return play_from_ram(
+                        source_id,
+                        cache,
+                        uploads,
+                        stop,
+                        playing,
+                        looping,
+                        seek_hns,
+                        position_hns,
+                    );
+                }
+                Err(PreloadError::Stopped) => {
+                    send_ready(&mut ready, Ok(()));
+                    return Ok(());
+                }
+                Err(error) => {
+                    crate::report_user_warning(error.token());
+                }
+            }
+        }
         send_ready(&mut ready, Ok(()));
         let live_depth = depth;
         let file_prefetch = depth.max(3);
@@ -515,6 +568,237 @@ fn push_live_frame(
     }
 }
 
+struct RamCache {
+    frames: Vec<Prefetched>,
+    audio: Vec<AudioPacket>,
+}
+
+impl RamCache {
+    fn ram_bytes(&self) -> u64 {
+        self.frames
+            .iter()
+            .map(|frame| match frame {
+                Prefetched::Cpu { pixels, .. } => pixels.len() as u64,
+                Prefetched::Gpu(_) => 0,
+            })
+            .sum::<u64>()
+            + self
+                .audio
+                .iter()
+                .map(|packet| packet.pcm_planar_f32.len() as u64)
+                .sum::<u64>()
+    }
+
+    fn video_index(&self, seek_hns: i64) -> usize {
+        let pts: Vec<i64> = self.frames.iter().map(Prefetched::pts).collect();
+        index_at_or_after(&pts, seek_hns)
+    }
+
+    fn audio_index(&self, seek_hns: i64) -> usize {
+        let pts: Vec<i64> = self.audio.iter().map(|packet| packet.timestamp).collect();
+        index_at_or_after(&pts, seek_hns)
+    }
+}
+
+fn try_preload_ram(
+    path: &str,
+    prefer_packed: bool,
+    duration_hns: i64,
+    hint: &VideoLayout,
+    stop: &AtomicBool,
+) -> Result<RamCache, PreloadError> {
+    if let Some(est) = estimated_decoded_ram_bytes(
+        hint.width,
+        hint.height,
+        prefer_packed,
+        duration_hns,
+        hint.fps_num,
+        hint.fps_den,
+    ) {
+        if ram_overflows(est, available_ram_bytes()) {
+            return Err(PreloadError::Overflow);
+        }
+    }
+    let reader = open_reader(path, false, None, prefer_packed).map_err(|_| PreloadError::Failed)?;
+    let layout =
+        configure_video(&reader, false, prefer_packed, 0, 0, 0, 0).map_err(|_| PreloadError::Failed)?;
+    let audio = configure_audio(&reader).ok();
+    if audio.is_none() {
+        let _ = unsafe { reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false) };
+    }
+    let mut cache = RamCache {
+        frames: Vec::new(),
+        audio: Vec::new(),
+    };
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(PreloadError::Stopped);
+        }
+        match read_sample(&reader, audio.as_ref()) {
+            Ok(Some(Decoded::Audio { packet, .. })) => {
+                let next = cache.ram_bytes() + packet.pcm_planar_f32.len() as u64;
+                if ram_overflows(next, available_ram_bytes()) {
+                    return Err(PreloadError::Overflow);
+                }
+                cache.audio.push(packet);
+            }
+            Ok(Some(Decoded::Video { pts, sample })) => {
+                let next = cache.ram_bytes()
+                    + u64::from(layout.width) * u64::from(layout.height) * if layout.packed { 2 } else { 4 };
+                if ram_overflows(next, available_ram_bytes()) {
+                    return Err(PreloadError::Overflow);
+                }
+                let frame = take_cpu_frame(&sample, &layout, pts).map_err(|_| PreloadError::Failed)?;
+                cache.frames.push(frame);
+            }
+            Ok(None) => continue,
+            Err(true) => break,
+            Err(false) => return Err(PreloadError::Failed),
+        }
+    }
+    if cache.frames.is_empty() {
+        return Err(PreloadError::Failed);
+    }
+    crate::diag::info(&format!(
+        "video ram preload frames={} audio={} bytes={}",
+        cache.frames.len(),
+        cache.audio.len(),
+        cache.ram_bytes()
+    ));
+    Ok(cache)
+}
+
+fn play_from_ram(
+    source_id: u64,
+    cache: RamCache,
+    uploads: Arc<Mutex<UploadStore>>,
+    stop: Arc<AtomicBool>,
+    playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
+    seek_hns: Arc<AtomicI64>,
+    position_hns: Arc<AtomicI64>,
+) -> Result<(), String> {
+    let mut video_i = 0usize;
+    let mut audio_i = 0usize;
+    let mut clock_pts = -1i64;
+    let mut seek_base = 0i64;
+    let mut clock_start = Instant::now();
+    let mut need_frame = true;
+    let mut was_playing = false;
+    {
+        let mut store = uploads.lock().expect("uploads");
+        if let Some(Prefetched::Cpu {
+            width, height, format, ..
+        }) = cache.frames.first()
+        {
+            store.ensure_playout(source_id, (*width).max(2), (*height).max(2), *format, 1);
+        }
+        store.set_cache_ram(source_id, cache.ram_bytes());
+    }
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let seek = seek_hns.swap(-1, Ordering::Relaxed);
+        if seek >= 0 {
+            video_i = cache.video_index(seek).min(cache.frames.len().saturating_sub(1));
+            audio_i = cache.audio_index(seek);
+            {
+                let mut store = uploads.lock().expect("uploads");
+                store.flush_audio(source_id);
+                store.flush_video(source_id);
+                store.set_cache_ram(source_id, cache.ram_bytes());
+            }
+            clock_pts = -1;
+            seek_base = seek;
+            position_hns.store(seek, Ordering::Relaxed);
+            clock_start = Instant::now();
+            need_frame = true;
+        }
+        let is_playing = playing.load(Ordering::Relaxed);
+        if is_playing && !was_playing {
+            clock_pts = -1;
+            seek_base = position_hns.load(Ordering::Relaxed);
+            clock_start = Instant::now();
+        }
+        was_playing = is_playing;
+        if need_frame {
+            if let Some(frame) = cache.frames.get(video_i) {
+                let pts = frame.pts();
+                if clock_pts < 0 {
+                    clock_pts = pts;
+                    clock_start = Instant::now();
+                }
+                position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
+                push_cached_cpu(&uploads, source_id, frame);
+            }
+            need_frame = false;
+        }
+        if !is_playing {
+            thread::sleep(Duration::from_millis(16));
+            continue;
+        }
+        while video_i < cache.frames.len() {
+            let pts = cache.frames[video_i].pts();
+            if clock_pts < 0 {
+                clock_pts = pts;
+                clock_start = Instant::now();
+            }
+            if !frame_due(pts, clock_pts, clock_start.elapsed()) {
+                break;
+            }
+            position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
+            push_cached_cpu(&uploads, source_id, &cache.frames[video_i]);
+            video_i += 1;
+        }
+        while audio_i < cache.audio.len() {
+            let pts = cache.audio[audio_i].timestamp;
+            if clock_pts < 0 || !frame_due(pts, clock_pts, clock_start.elapsed()) {
+                break;
+            }
+            ingest_audio_clocked(&uploads, source_id, cache.audio[audio_i].clone());
+            audio_i += 1;
+        }
+        if video_i >= cache.frames.len() {
+            if looping.load(Ordering::Relaxed) {
+                video_i = 0;
+                audio_i = 0;
+                clock_pts = -1;
+                seek_base = 0;
+                position_hns.store(0, Ordering::Relaxed);
+                clock_start = Instant::now();
+                need_frame = true;
+            } else {
+                playing.store(false, Ordering::Relaxed);
+            }
+            continue;
+        }
+        let wait = pts_wait(cache.frames[video_i].pts(), clock_pts, clock_start);
+        if wait > Duration::ZERO && wait < Duration::from_secs(2) {
+            thread::sleep(wait.min(Duration::from_millis(8)));
+        } else {
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+fn push_cached_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &Prefetched) {
+    let Prefetched::Cpu {
+        pixels,
+        stride,
+        format,
+        pts,
+        width,
+        height,
+    } = frame
+    else {
+        return;
+    };
+    let mut store = uploads.lock().expect("uploads");
+    store.ensure_playout(source_id, (*width).max(2), (*height).max(2), *format, 1);
+    let _ = store.push(source_id, pixels, *stride, *pts);
+}
+
 fn push_file_frame(uploads: &Mutex<UploadStore>, source_id: u64, frame: Prefetched, ring_vram: u64) {
     let mut store = uploads.lock().expect("uploads");
     match frame {
@@ -555,6 +839,8 @@ struct VideoLayout {
     stride: i32,
     gpu: bool,
     packed: bool,
+    fps_num: u32,
+    fps_den: u32,
 }
 
 fn startup() -> Result<(), String> {
@@ -841,6 +1127,10 @@ fn read_video_layout(
             return Err("Media Foundation reported a zero-sized frame".into());
         }
         let stride = ty.GetUINT32(&MF_MT_DEFAULT_STRIDE).unwrap_or(0) as i32;
+        let (fps_num, fps_den) = ty
+            .GetUINT64(&MF_MT_FRAME_RATE)
+            .map(|rate| ((rate >> 32) as u32, rate as u32))
+            .unwrap_or((0, 1));
         Ok(VideoLayout {
             width,
             height,
@@ -848,6 +1138,8 @@ fn read_video_layout(
             stride,
             gpu,
             packed,
+            fps_num,
+            fps_den,
         })
     }
 }

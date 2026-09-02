@@ -1186,7 +1186,17 @@ public partial class MainWindow : Window
         var keepLive = replacing
             && input.Kind == dialog.Kind
             && (
-                (dialog.Kind == InputKind.Video && input.PathOrAddress == dialog.ResultPath)
+                (dialog.Kind == InputKind.Video
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
+                    && input.VideoPreloadRam == dialog.ResultVideoPreloadRam)
+                || (dialog.Kind == InputKind.Uvc
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.CaptureWidth == dialog.ResultCaptureWidth
+                    && input.CaptureHeight == dialog.ResultCaptureHeight
+                    && input.CaptureFpsNum == dialog.ResultCaptureFpsNum
+                    && input.CaptureFpsDen == dialog.ResultCaptureFpsDen
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
                 || (dialog.Kind is InputKind.Omt or InputKind.Ndi
                     && input.PathOrAddress == dialog.ResultPath
                     && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
@@ -1207,9 +1217,10 @@ public partial class MainWindow : Window
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi
+        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Video or InputKind.Uvc
             ? dialog.ResultFrameBufferFrames
             : 1;
+        input.VideoPreloadRam = dialog.Kind == InputKind.Video && dialog.ResultVideoPreloadRam;
         input.BandwidthSave = dialog.Kind == InputKind.Omt
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
@@ -1261,7 +1272,9 @@ public partial class MainWindow : Window
                     input.Id,
                     dialog.ResultPath!,
                     input.VideoLoop,
-                    input.VideoStartsPlaying));
+                    input.VideoStartsPlaying,
+                    input.FrameBufferFrames,
+                    input.VideoPreloadRam));
                 break;
             case InputKind.Omt:
                 Commands.TryEnqueue(new ConnectOmtCommand(
@@ -1285,7 +1298,7 @@ public partial class MainWindow : Window
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen));
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames));
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
@@ -1699,9 +1712,11 @@ public partial class MainWindow : Window
                     input.Id,
                     input.PathOrAddress,
                     input.VideoLoop,
-                    input.VideoStartsPlaying));
+                    input.VideoStartsPlaying,
+                    input.FrameBufferFrames,
+                    input.VideoPreloadRam));
             else if (input.Kind == InputKind.Uvc)
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
+                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
         }
     }
 

@@ -498,6 +498,8 @@ struct AddInputView: View {
     @State private var toneHz: Float = 1000
     @State private var useGpu = true
     @State private var buffer: UInt32 = 1
+    @State private var mediaBuffer: UInt32 = 3
+    @State private var videoPreloadRam = false
     @State private var quality: UInt32 = 0
     @State private var ndiLow = false
     @State private var videoLoop = true
@@ -565,6 +567,11 @@ struct AddInputView: View {
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
             recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
+            frameBufferPicker($mediaBuffer)
+            Toggle("Preload into RAM", isOn: $videoPreloadRam)
+            Text("Frame buffer (1–8) absorbs decode jitter. Preload decodes the clip into system RAM (not VRAM). If it will not fit, an error is shown and the file streams.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Picker("Play when", selection: $videoPlayWhen) {
                 Text("Never (manual)").tag(VideoPlayWhen.never)
                 Text("Active (Program)").tag(VideoPlayWhen.onActive)
@@ -589,12 +596,14 @@ struct AddInputView: View {
             List(omtList, id: \.self, selection: $omtAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("GPU decode", isOn: $useGpu)
+            frameBufferPicker($buffer)
         case "NDI®":
             mixerTextField($ndiAddress, placeholder: "NDI® source")
             Button("Refresh discovery") { refreshNdi() }
             List(ndiList, id: \.self, selection: $ndiAddress) { Text($0) }
                 .frame(height: 120)
             Toggle("Lowest bandwidth", isOn: $ndiLow)
+            frameBufferPicker($buffer)
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
         default:
@@ -610,6 +619,20 @@ struct AddInputView: View {
                     Text(mode.label).tag(Optional(mode))
                 }
             }
+            frameBufferPicker($mediaBuffer)
+            Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func frameBufferPicker(_ selection: Binding<UInt32>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Frame buffer (frames)")
+            Picker("", selection: selection) {
+                ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { Text("\($0)").tag($0) }
+            }
+            .frame(width: 220)
         }
     }
 
@@ -703,6 +726,8 @@ struct AddInputView: View {
         toneHz = editing.toneHz
         useGpu = editing.useGpu
         buffer = editing.frameBufferFrames
+        mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
+        videoPreloadRam = editing.videoPreloadRam
         ndiLow = editing.ndiBandwidth == .lowest
         quality = editing.omtQuality.rawUInt
         videoLoop = editing.videoLoop
@@ -765,6 +790,8 @@ struct AddInputView: View {
             input.videoPlayWhen = videoPlayWhen
             input.videoRestartWhen = videoRestartWhen
             input.videoPauseWhen = videoPauseWhen
+            input.frameBufferFrames = max(1, min(8, mediaBuffer))
+            input.videoPreloadRam = videoPreloadRam
         case "OMT":
             guard !omtAddress.isEmpty else { return false }
             input.kind = .omt
@@ -792,6 +819,7 @@ struct AddInputView: View {
             input.captureHeight = mode.height
             input.captureFpsNum = mode.fpsNum
             input.captureFpsDen = mode.fpsDen
+            input.frameBufferFrames = max(1, min(8, mediaBuffer))
         }
         if let editing {
             input.guid = editing.guid

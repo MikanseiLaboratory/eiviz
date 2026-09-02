@@ -319,6 +319,7 @@ public sealed class InputEntry
     public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+    public bool VideoPreloadRam { get; set; }
     public uint CaptureWidth { get; set; }
     public uint CaptureHeight { get; set; }
     public uint CaptureFpsNum { get; set; }

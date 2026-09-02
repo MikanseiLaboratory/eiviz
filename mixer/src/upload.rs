@@ -62,6 +62,7 @@ pub struct SourceRing {
     last_hold: (f32, f32),
     fifo_primed: bool,
     ring_vram: u64,
+    cache_ram: u64,
 }
 
 /// CPU frame borrowed for GPU upload after the ingest lock is dropped.
@@ -310,6 +311,7 @@ impl SourceRing {
             last_hold: (0.0, 0.0),
             fifo_primed: false,
             ring_vram: 0,
+            cache_ram: 0,
         }
     }
 
@@ -536,6 +538,7 @@ impl SourceRing {
                 .map(|frame| frame.pixels.len() as u64)
                 .sum::<u64>()
             + self.free.iter().map(|buf| buf.len() as u64).sum::<u64>()
+            + self.cache_ram
     }
 
     /// GPU textures this ring actually holds (upload ring, current frame, fifo).
@@ -610,6 +613,7 @@ impl UploadStore {
                 ring.has_frame = old.has_frame;
                 ring.last_pts = old.last_pts;
                 ring.ring_vram = old.ring_vram;
+                ring.cache_ram = old.cache_ram;
             }
         }
         self.sources.insert(id, ring);
@@ -736,6 +740,12 @@ impl UploadStore {
     pub fn set_ring_vram(&mut self, id: u64, bytes: u64) {
         if let Some(ring) = self.sources.get_mut(&id) {
             ring.ring_vram = bytes;
+        }
+    }
+
+    pub fn set_cache_ram(&mut self, id: u64, bytes: u64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.cache_ram = bytes;
         }
     }
 

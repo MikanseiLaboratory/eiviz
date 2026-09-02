@@ -254,7 +254,7 @@ int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint
 int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint32_t height, int64_t pts);
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
-int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
+int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, uint32_t frame_buffer_frames, uint32_t preload_ram);
 int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
 int32_t mixer_video_enum_capture_modes(const char *device_id, EivizVideoCaptureMode *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);

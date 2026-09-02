@@ -2,6 +2,14 @@ import EivizMixer
 import Foundation
 
 enum MixerFFI {
+    static func preloadRamWarning() -> String? {
+        switch lastErrorText() {
+        case "preload-ram-overflow": L10n.t("error.videoPreloadRam")
+        case "preload-ram-failed": L10n.t("error.videoPreloadFailed")
+        default: nil
+        }
+    }
+
     static func lastErrorText() -> String {
         var buffer = [UInt8](repeating: 0, count: 1024)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

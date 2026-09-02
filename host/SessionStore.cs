@@ -175,6 +175,7 @@ internal static class SessionStore
         public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
         public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
         public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+        public bool VideoPreloadRam { get; set; }
         public uint CaptureWidth { get; set; }
         public uint CaptureHeight { get; set; }
         public uint CaptureFpsNum { get; set; }
@@ -206,6 +207,7 @@ internal static class SessionStore
             VideoPlayWhen = input.VideoPlayWhen,
             VideoRestartWhen = input.VideoRestartWhen,
             VideoPauseWhen = input.VideoPauseWhen,
+            VideoPreloadRam = input.Kind == InputKind.Video && input.VideoPreloadRam,
             CaptureWidth = input.CaptureWidth,
             CaptureHeight = input.CaptureHeight,
             CaptureFpsNum = input.CaptureFpsNum,
@@ -238,6 +240,7 @@ internal static class SessionStore
             VideoPlayWhen = VideoPlayWhen,
             VideoRestartWhen = VideoRestartWhen,
             VideoPauseWhen = VideoPauseWhen,
+            VideoPreloadRam = Kind == InputKind.Video && VideoPreloadRam,
             CaptureWidth = CaptureWidth,
             CaptureHeight = CaptureHeight,
             CaptureFpsNum = CaptureFpsNum,

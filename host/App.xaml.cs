@@ -141,10 +141,12 @@ public partial class App : Application
                         input.Id,
                         input.PathOrAddress,
                         input.VideoLoop,
-                        input.VideoStartsPlaying));
+                        input.VideoStartsPlaying,
+                        input.FrameBufferFrames,
+                        input.VideoPreloadRam));
                     break;
                 case InputKind.Uvc when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen));
+                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
                     break;
                 case InputKind.Omt when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     Commands.TryEnqueue(new ConnectOmtCommand(
