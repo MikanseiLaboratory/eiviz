@@ -3,10 +3,8 @@ title: Outputs
 description: Sending the chosen source
 ---
 
-# Outputs
+The exit that sends a chosen picture. Mixing Unit Program is the internal program bus; an Output is how that (or another source) leaves over the network. Same job as ATEM output routing or vMix NDI/SRT.
 
-An Output is the exit that sends a chosen picture. It is the end of [Input → Scene → Output](/concepts/inputs/).
+Add one under [Settings](/introduction/settings/) → Outputs. Transport is OMT or NDI. Source is Input, Scene, MU Preview, MU Program, or Multiview. A new session defaults to Mixing Unit Program.
 
-Add one under Settings → Outputs. Transport is OMT or NDI. Source is Input, Scene, MU Preview, MU Program, or Multiview. A new session defaults to Mixing Unit Program.
-
-Send detail is [NDI / OMT](/features/outputs/ndi-omt/).
+Windows also lists DeckLink; it is not linked in this build. Send detail is [NDI / OMT](/features/outputs/ndi-omt/).

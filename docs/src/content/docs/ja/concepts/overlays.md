@@ -1,4 +1,8 @@
 ---
 title: Overlays
-description: eivizにおけるOverlayの概念
+description: Mixing UnitのProgramに載せるDSK
 ---
+
+他スイッチャーのDSK、ダウンストリームキー、vMixのOverlayです。[Mixing Unit](/concepts/mixing-unit/)ごとに最大8本。ソースは[Scene](/concepts/scenes/)で、Inputを直接は置けません。先にSceneへ載せます。
+
+CUTやTバーで混ざったあとのProgramに載ります。メインウィンドウのOverlayから位置と大きさを決め、本体のトグルでON/OFFします。

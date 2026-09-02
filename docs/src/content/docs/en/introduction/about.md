@@ -3,8 +3,6 @@ title: About eiviz
 description: Motivation and technology choices
 ---
 
-# About eiviz
-
 ## Motivation
 
 eiviz is developed and maintained by volunteers and individuals.  

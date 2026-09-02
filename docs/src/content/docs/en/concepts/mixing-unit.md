@@ -3,8 +3,10 @@ title: Mixing Unit
 description: The unit that switches Scenes on Preview and Program
 ---
 
-# Mixing Unit
+The M/E. Same job as a vMix Mix Input, a TriCaster or ATEM M/E, or a Kairos scene. Next shot on Preview, program on Program; CUT, AUTO, or the T-bar swaps them.
 
-A Mixing Unit puts Scenes or Inputs on Preview and Program and switches between them. It is the M/E on other switchers.
+No per-session cap. Add as many as the machine will take. Each unit has its own resolution and output frame rate. The session clock is Master Frame Rate in [Settings](/introduction/settings/).
 
-In [Input → Scene → Output](/concepts/inputs/), it sits between Scene and Output. Buses and controls are [Vision Mixing](/features/vision-mixing/).
+[Overlays](/concepts/overlays/) sit on that unit’s Program. One unit’s Program can feed another unit.
+
+Bus counts and the desk are [Vision Mixing](/features/vision-mixing/).

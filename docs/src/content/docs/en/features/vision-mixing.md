@@ -3,8 +3,6 @@ title: Vision Mixing
 description: Multi M/E switching with Mixing Units
 ---
 
-# Vision Mixing
-
 eiviz calls the video compose unit a **Mixing Unit**. Other switchers call the same idea Mix Effect or M/E. It maps to vMix Mix Input, Panasonic Kairos scenes, and the M/E on Viz/NewTek TriCaster and Blackmagic Design.
 
 There is no per-session cap on Mixing Units. Add as many as the machine will take.

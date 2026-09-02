@@ -3,8 +3,6 @@ title: Settings
 description: Session-backed Settings dialog, item by item
 ---
 
-# Settings
-
 Open it from Settings in the main chrome. Values live in the session JSON, so the same file opens on Windows and macOS. Language and window theme are the neighbouring Preferences dialog.
 
 The left list is the category: Display, Performance, Outputs, Multiview, Audio Auxiliary. OK pushes into the mixer. Cancel discards. On Windows, Default restores display numbers, bus colours, ReBAR, and NDI upload. It does not touch the output or bus lists.

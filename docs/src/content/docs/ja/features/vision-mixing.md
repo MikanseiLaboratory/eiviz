@@ -3,8 +3,6 @@ title: Vision Mixing
 description: Mixing Unitを使った多段M/E映像スイッチング
 ---
 
-# Vision Mixing
-
 eivizでは、他スイッチャーではMix EffectやM/Eと呼ばれる映像合成ユニットの単位を**Mixing Unit**と呼称します。
 これは実質的にvMixでのMix InputやPanasonic Kairosでのシーン、Viz/NewTek TriCasterやBlackmagic DesignのM/Eに該当します。
 最も大きな変更点として、セッションごとのMixing Unitには上限がなくPC性能が許す限りユーザーの責務で無限に追加することが可能です。  

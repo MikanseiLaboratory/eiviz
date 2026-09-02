@@ -12,6 +12,32 @@ export default defineConfig({
 		mermaid({ autoTheme: true }),
 		starlight({
 			title: 'eiviz',
+			logo: {
+				light: './src/assets/logo-light.png',
+				dark: './src/assets/logo-dark.png',
+				alt: 'Mikansei Laboratory',
+			},
+			favicon: '/favicon.png',
+			head: [
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'icon',
+						type: 'image/png',
+						href: '/eiviz/favicon.png',
+						media: '(prefers-color-scheme: light)',
+					},
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'icon',
+						type: 'image/png',
+						href: '/eiviz/favicon-dark.png',
+						media: '(prefers-color-scheme: dark)',
+					},
+				},
+			],
 			defaultLocale: 'ja',
 			locales: {
 				ja: { label: '日本語' },
@@ -29,6 +55,7 @@ export default defineConfig({
 					translations: { ja: 'はじめに' },
 					items: [
 						'introduction/about',
+						'introduction/mikansei-laboratory',
 						'introduction/requirements',
 						'introduction/settings',
 						'introduction/architecture',

@@ -3,9 +3,7 @@ title: Inputs
 description: 映像ソースと、Input・Scene・Outputの関係
 ---
 
-# Inputs
-
-映像は**Input → Scene → Output**の順で扱います。Mixing Unitは、SceneをPreviewとProgramに載せて切り替える単位です。
+他ソフトのInput、Source、カメラ入力に相当します。eivizでは**Input → Scene → Mixing Unit → Output**の順で扱います。切替そのものはMixing Unitです。
 
 ```mermaid
 flowchart LR
@@ -31,7 +29,7 @@ OutputのソースはInput、Scene、Mixing UnitのPreview/Program、Multiview�
 - 静止画
 - 動画ファイル
 - UVC（キャプチャデバイス）
-- NDI / OMT
+- NDI/OMT
 
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。
 

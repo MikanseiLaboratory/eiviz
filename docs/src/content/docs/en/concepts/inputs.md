@@ -3,9 +3,7 @@ title: Inputs
 description: Video sources, and how Input, Scene, and Output connect
 ---
 
-# Inputs
-
-Video moves **Input → Scene → Output**. A Mixing Unit is where Scenes sit on Preview and Program so you can switch them.
+The same idea as Input, Source, or a camera tally on other tools. In eiviz the path is **Input → Scene → Mixing Unit → Output**. Switching itself is the Mixing Unit.
 
 ```mermaid
 flowchart LR

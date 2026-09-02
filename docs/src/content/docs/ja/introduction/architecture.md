@@ -3,8 +3,6 @@ title: システムアーキテクチャ
 description: Mixerとホストの責務分担、合成パイプライン、GPUと音声の流れ
 ---
 
-# システムアーキテクチャ
-
 実装者向けの概観です。ファイル名や関数名は意図的に書いていません。概念の定義は[eiviz上の概念](/concepts/inputs/)、技術選定は[eivizについて](/introduction/about/)です。
 
 ## 全体像

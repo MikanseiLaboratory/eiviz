@@ -3,8 +3,6 @@ title: System architecture
 description: Mixer versus host, the compose pipeline, and how GPU and audio move
 ---
 
-# System architecture
-
 A map for implementers. It deliberately avoids file and function names. Concepts live under [Concepts](/concepts/inputs/). Stack choices live in [About eiviz](/introduction/about/).
 
 ## Shape
