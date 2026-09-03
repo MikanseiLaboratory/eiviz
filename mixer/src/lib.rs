@@ -3402,7 +3402,6 @@ fn render_loop(
             let need_prv = outputs_snap
                 .iter()
                 .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
-            composer.set_mix_aliases(resolve_mix_aliases(&mix_inputs, &frame_delay));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
             match panic::catch_unwind(AssertUnwindSafe(|| {
                 presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
@@ -3514,6 +3513,15 @@ fn render_loop(
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("eiviz compose"),
                     });
+            {
+                let mix_sources = resolve_mix_sources(&mix_inputs, &frame_delay);
+                composer.stage_mix_inputs(
+                    &device,
+                    &mut encoder,
+                    mix_inputs.keys().copied(),
+                    &mix_sources,
+                );
+            }
             if let Err(error) =
                 composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
             {
@@ -3585,7 +3593,8 @@ fn render_loop(
                     continue;
                 }
                 let src = match output.source_kind {
-                    SRC_KIND_INPUT => mix_rgba_at(&mix_inputs, &frame_delay, output.source_id)
+                    SRC_KIND_INPUT => composer
+                        .mix_texture(output.source_id)
                         .or_else(|| composer.source_texture(output.source_id)),
                     SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
                         composer.scene_texture(output.source_id)
@@ -3979,24 +3988,17 @@ fn mix_source_cycles(
     false
 }
 
-fn resolve_mix_aliases(
+fn resolve_mix_sources<'a>(
     mix_inputs: &HashMap<u64, MixInputSpec>,
-    frame_delay: &FrameDelay,
-) -> HashMap<u64, wgpu::TextureView> {
-    let mut aliases = HashMap::new();
-    for (id, spec) in mix_inputs {
-        let view = if spec.is_session_multiview() {
-            frame_delay.scene_view_at(spec.target_id, spec.delay)
-        } else if let Some(bus) = spec.unit_bus() {
-            frame_delay.view_at(spec.target_id, bus, spec.delay)
-        } else {
-            None
-        };
-        if let Some(view) = view {
-            aliases.insert(*id, view);
+    frame_delay: &'a FrameDelay,
+) -> HashMap<u64, &'a wgpu::Texture> {
+    let mut sources = HashMap::new();
+    for id in mix_inputs.keys() {
+        if let Some(texture) = mix_rgba_at(mix_inputs, frame_delay, *id) {
+            sources.insert(*id, texture);
         }
     }
-    aliases
+    sources
 }
 
 fn mix_rgba_at<'a>(
