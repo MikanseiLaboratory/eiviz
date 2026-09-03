@@ -4,11 +4,9 @@ Starlight starter (`npm create astro@latest -- --template starlight`).
 
 Public URL: [https://mikanseilaboratory.github.io/eiviz/](https://mikanseilaboratory.github.io/eiviz/)
 
-After each production deploy, `sitemap-index.xml` and `robots.txt` are published at the site root (`/eiviz/`). Submit this sitemap in [Google Search Console](https://search.google.com/search-console) for the `https://mikanseilaboratory.github.io/eiviz/` prefix:
+After each production deploy, `sitemap-index.xml` and `robots.txt` are at the site root (`/eiviz/`). An org owner submits this sitemap in [Google Search Console](https://search.google.com/search-console) for the prefix `https://mikanseilaboratory.github.io/eiviz/` (URL-prefix or HTML-file verification):
 
 - https://mikanseilaboratory.github.io/eiviz/sitemap-index.xml
-
-Search Console property verification has to be done by a GitHub org owner (URL-prefix or HTML-file). The build cannot register the property by itself.
 
 Japanese is the source of truth (`src/content/docs/ja/`). English lives in `src/content/docs/en/` with the same relative paths.
 
