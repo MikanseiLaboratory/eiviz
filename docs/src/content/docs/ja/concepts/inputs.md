@@ -35,8 +35,6 @@ InputはMixing UnitとOutputにも直接載せられます。
 - NDI/OMT
 - Mix（Mixing UnitのPreview/Program、またはセッションMultiviewと、1–8フレームのFrame Buffer）
 
-Mix Inputは既存バスの遅延付き再ルートです。FrameDelayリングのNフレーム前を参照し、swapchainは増やしません。同じMixing Unitに、そのユニットを対象とするMix Inputは載せられません。入れ子のM/E（ユニットAのMixをユニットBへ）は、その遅延で安定します。セッションMultiviewのMix Inputは最初からミュートです。
-
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
 入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。
 
