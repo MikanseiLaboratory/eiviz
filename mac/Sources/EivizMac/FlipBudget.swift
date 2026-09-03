@@ -6,7 +6,7 @@ enum GpuPresentStore {
         var observedCeiling: Int
     }
 
-    private(set) static var observedCeiling: Int?
+    nonisolated(unsafe) private(set) static var observedCeiling: Int?
 
     static func load() {
         let url = storeURL()
@@ -42,12 +42,12 @@ enum FlipBudget {
     static let autoDefault = 6
     private static let learnWindowMs: UInt64 = 3000
 
-    private static var limitSetting: UInt32 = 0
-    private static var ceiling = autoDefault
-    private static var attached = 0
-    private static weak var lastAttach: MetalSurfaceView?
-    private static var attachTick: UInt64 = 0
-    private static var seenLost: UInt64 = 0
+    nonisolated(unsafe) private static var limitSetting: UInt32 = 0
+    nonisolated(unsafe) private static var ceiling = autoDefault
+    nonisolated(unsafe) private static var attached = 0
+    nonisolated(unsafe) private static weak var lastAttach: MetalSurfaceView?
+    nonisolated(unsafe) private static var attachTick: UInt64 = 0
+    nonisolated(unsafe) private static var seenLost: UInt64 = 0
 
     static func configure(_ limit: UInt32) {
         limitSetting = isAllowed(limit) ? limit : 0

@@ -171,7 +171,7 @@ enum ThumbSubscriptions {
         let interval: UInt32
     }
 
-    private static var live: [UInt64: [Sub]] = [:]
+    nonisolated(unsafe) private static var live: [UInt64: [Sub]] = [:]
 
     static func retain(
         _ view: ThumbImageView,
@@ -237,7 +237,7 @@ enum ThumbPump {
         weak var view: ThumbImageView?
     }
 
-    private static var views: [ObjectIdentifier: WeakThumb] = [:]
+    nonisolated(unsafe) private static var views: [ObjectIdentifier: WeakThumb] = [:]
 
     static func register(_ view: ThumbImageView) {
         views[ObjectIdentifier(view)] = WeakThumb(view: view)
