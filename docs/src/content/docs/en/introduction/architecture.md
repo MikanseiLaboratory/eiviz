@@ -149,7 +149,7 @@ Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI /
 
 Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
 
-Scene tiles, switcher scene thumbs, and input previews are GPU readback thumbnails. Adding scenes does not add swapchains.
+Scene tiles, switcher scene thumbs, and input previews are GPU readback thumbnails. Adding scenes or Mix Inputs does not add swapchains. A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 
 Windows cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open. They are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process.
 

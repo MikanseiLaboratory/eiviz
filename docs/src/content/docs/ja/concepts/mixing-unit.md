@@ -13,3 +13,5 @@ description: PreviewとProgramでSceneを切り替える単位
 
 切替用の映像バスはPreviewとProgramです。  
 Switcher UIはPreviewとProgramを表示するので、映像出力先ウィンドウを2スロット使います。閉じると枠が空きます。
+
+Add Inputから、このユニットのPreviewまたはProgramをMix Inputとして追加できます。既存のFrameDelayリング（1–8フレーム）を参照し、swapchainは増やしません。別のMixing Unitに載せると入れ子のM/Eになります。同じユニットへの自己配線は拒否されます。音声は対象のAudio BusかNoneを指定します。

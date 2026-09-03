@@ -1387,7 +1387,7 @@ public partial class MainWindow : Window
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
             return;
         var id = _session.NextInputId++;
         var input = new InputEntry
@@ -1395,7 +1395,7 @@ public partial class MainWindow : Window
             Id = id,
             Name = dialog.ResultName ?? $"Input {id}",
             Kind = dialog.Kind,
-            BusMask = 1
+            BusMask = dialog.Kind == InputKind.Mix ? 0u : 1u
         };
         try
         {
@@ -1426,7 +1426,7 @@ public partial class MainWindow : Window
         dialog.Load(input);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
             return;
         try
         {
@@ -1503,7 +1503,12 @@ public partial class MainWindow : Window
                     && input.PathOrAddress == dialog.ResultPath
                     && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
-                    && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth)));
+                    && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth))
+                || (dialog.Kind == InputKind.Mix
+                    && input.MixSource == dialog.ResultMixSource
+                    && input.MixTargetId == dialog.ResultMixTargetId
+                    && input.MixAudioBusId == dialog.ResultMixAudioBusId
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             Commands.TryEnqueue(new DropSourceCommand(input.Id));
@@ -1521,9 +1526,14 @@ public partial class MainWindow : Window
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Video or InputKind.Uvc
+        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Video or InputKind.Uvc or InputKind.Mix
             ? dialog.ResultFrameBufferFrames
             : 1;
+        input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
+        input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
+        input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
+        if (dialog.Kind == InputKind.Mix)
+            input.BusMask = 0;
         input.BandwidthSave = dialog.Kind == InputKind.Omt
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
@@ -1601,6 +1611,20 @@ public partial class MainWindow : Window
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames));
+                break;
+            case InputKind.Mix:
+                if (dialog.ResultMixSource != MixSource.SessionMultiview)
+                {
+                    var unit = _session.Units.FirstOrDefault(item => item.Id == dialog.ResultMixTargetId);
+                    if (unit is not null && InputKindNames.UnitUsesSource(_session, unit, input.Id))
+                        throw new InvalidOperationException(Loc.T("msg.mixCycle"));
+                }
+                Commands.TryEnqueue(new DefineMixInputCommand(
+                    input.Id,
+                    dialog.ResultMixTargetId,
+                    InputKindNames.MixSourceKind(dialog.ResultMixSource),
+                    dialog.ResultFrameBufferFrames,
+                    dialog.ResultMixAudioBusId));
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");

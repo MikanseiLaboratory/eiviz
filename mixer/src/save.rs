@@ -89,9 +89,6 @@ pub fn collect_source_roles(
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
             add(overlay.source_id, Role::Program, &spec_map, &mut roles);
         }
-        for slot in state.mv_slots.iter().take(state.mv_slot_count as usize) {
-            add(*slot, Role::Multiview, &spec_map, &mut roles);
-        }
     }
     for id in monitor_sources {
         add(*id, Role::Preview, &spec_map, &mut roles);

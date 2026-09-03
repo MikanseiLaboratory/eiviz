@@ -232,10 +232,23 @@ impl AudioEngine {
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
         produce: bool,
+        mix_inputs: &std::collections::HashMap<u64, crate::abi::MixInputSpec>,
+        fps_num: u32,
+        fps_den: u32,
     ) -> Vec<f32> {
         let mut graph = self.graph.lock().expect("audio");
         let mut delay = self.delay.lock().expect("audio delay");
-        graph.mix(uploads, snapshot, scenes, frames, &mut delay, produce)
+        graph.mix(
+            uploads,
+            snapshot,
+            scenes,
+            frames,
+            &mut delay,
+            produce,
+            mix_inputs,
+            fps_num,
+            fps_den,
+        )
     }
 
     pub fn master_peak(&self) -> (f32, f32) {
@@ -250,6 +263,10 @@ impl AudioEngine {
             .iter()
             .map(|bus| (bus.id, bus.peak.0, bus.peak.1))
             .collect()
+    }
+
+    pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
+        self.graph.lock().expect("audio").mix_input_peaks()
     }
 
     pub fn skip_bus_frames(&self, frames: usize) {

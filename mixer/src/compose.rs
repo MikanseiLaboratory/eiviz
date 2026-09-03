@@ -3,11 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::abi::{
-    GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM,
-    OverlayDesc, Rect, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM,
-    TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW,
-    TRANSITION_STINGER, UnitState, is_multiview, is_scene, mixing_unit_bus,
-    mixing_unit_from_source, mixing_unit_multiview, mixing_unit_preview, mixing_unit_source,
+    GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect, SRC_BARS,
+    SRC_BLACK, SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM,
+    TRANSITION_DATAMOSH, TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
+    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
+    mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
 use crate::pool::{UniformPool, uniform_dyn};
@@ -139,9 +139,7 @@ pub struct UnitTargets {
     bloom_b: wgpu::Texture,
     aux: wgpu::Texture,
     pub packed: Option<wgpu::Texture>,
-    pub packed_mv: Option<wgpu::Texture>,
     pub packed_prv: Option<wgpu::Texture>,
-    pub multiview: Option<wgpu::Texture>,
     program_view: wgpu::TextureView,
     preview_view: wgpu::TextureView,
     mixed_view: wgpu::TextureView,
@@ -154,7 +152,6 @@ pub struct UnitTargets {
     aux_view: wgpu::TextureView,
     prev_seeded: bool,
     packed_view: Option<wgpu::TextureView>,
-    multiview_view: Option<wgpu::TextureView>,
 }
 
 struct SceneGpu {
@@ -217,6 +214,7 @@ pub struct Composer {
     fx2_layout: wgpu::BindGroupLayout,
     user_cs_layout: wgpu::BindGroupLayout,
     pack_groups: HashMap<u64, wgpu::BindGroup>,
+    mix_aliases: HashMap<u64, wgpu::TextureView>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
     scene_gpu_pct: HashMap<u64, f32>,
@@ -444,6 +442,7 @@ impl Composer {
             fx2_layout,
             user_cs_layout,
             pack_groups: HashMap::new(),
+            mix_aliases: HashMap::new(),
             color_group,
             gpu_epoch: 1,
             scene_gpu_pct: HashMap::new(),
@@ -478,7 +477,6 @@ impl Composer {
         self.mix_groups.remove(&unit_id);
         self.pack_groups.remove(&unit_id);
         self.pack_groups.remove(&mixing_unit_preview(unit_id));
-        self.pack_groups.remove(&mixing_unit_multiview(unit_id));
         self.blit_groups.remove(&mixing_unit_source(unit_id));
         self.blit_groups.remove(&mixing_unit_preview(unit_id));
         self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
@@ -504,38 +502,20 @@ impl Composer {
         self.pack_groups.remove(&unit_id);
     }
 
-    fn ensure_multiview(&mut self, device: &GpuDevice, unit_id: u64) {
-        {
-            let Some(unit) = self.units.get_mut(&unit_id) else {
-                return;
-            };
-            if unit.multiview.is_some() {
-                return;
-            }
-            let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC;
-            let texture = make_texture(device, unit.width, unit.height, usage);
-            unit.multiview_view = Some(texture.create_view(&Default::default()));
-            unit.multiview = Some(texture);
-        }
-        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-    }
-
-    fn ensure_packed_bus(&mut self, device: &GpuDevice, unit_id: u64, preview: bool) {
+    fn ensure_packed_bus(&mut self, device: &GpuDevice, unit_id: u64) {
         let Some(unit) = self.units.get_mut(&unit_id) else {
             return;
         };
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC;
-        if preview {
-            if unit.packed_prv.is_none() {
-                unit.packed_prv = Some(make_texture(device, unit.width / 2, unit.height, usage));
-            }
-        } else if unit.packed_mv.is_none() {
-            unit.packed_mv = Some(make_texture(device, unit.width / 2, unit.height, usage));
+        if unit.packed_prv.is_none() {
+            unit.packed_prv = Some(make_texture(device, unit.width / 2, unit.height, usage));
         }
+    }
+
+    pub fn set_mix_aliases(&mut self, aliases: HashMap<u64, wgpu::TextureView>) {
+        self.mix_aliases = aliases;
     }
 
     pub fn upload_sources(
@@ -1200,7 +1180,6 @@ impl Composer {
         state: &UnitState,
         mix_preview: u64,
         encoder: &mut wgpu::CommandEncoder,
-        compose_mv: bool,
         pack_pgm: bool,
     ) -> Result<(), String> {
         let (width, height) = {
@@ -1262,10 +1241,6 @@ impl Composer {
             )?;
         }
         self.draw_overlays_on_program(device, encoder, unit_id, state)?;
-        if compose_mv {
-            self.ensure_multiview(device, unit_id);
-            self.draw_multiview(device, encoder, unit_id, state)?;
-        }
         if pack_pgm {
             self.ensure_packed(device, unit_id);
             self.draw_pack(device, encoder, unit_id)?;
@@ -1353,62 +1328,6 @@ impl Composer {
                     overlay.opacity,
                     uv,
                 )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn draw_multiview(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        unit_id: u64,
-        state: &UnitState,
-    ) -> Result<(), String> {
-        let Some(dest) = self
-            .units
-            .get(&unit_id)
-            .and_then(|unit| unit.multiview_view.clone())
-        else {
-            return Ok(());
-        };
-        let preview = self.units[&unit_id].preview_view.clone();
-        let mixed = self.units[&unit_id].mixed_view.clone();
-        {
-            let mut pass = begin_clear(encoder, &dest);
-            self.blit_pass(
-                device,
-                &mut pass,
-                mixing_unit_preview(unit_id),
-                &preview,
-                [0.0, 0.0, 0.5, 0.5],
-                1.0,
-                false,
-            );
-            self.blit_pass(
-                device,
-                &mut pass,
-                mixing_unit_source(unit_id),
-                &mixed,
-                [0.5, 0.0, 0.5, 0.5],
-                1.0,
-                false,
-            );
-            let count = (state.mv_slot_count as usize).min(MV_SLOT_MAX).max(1);
-            let (cols, rows) = tile_grid(count as u32);
-            for index in 0..count {
-                let col = (index as u32 % cols) as f32;
-                let row = (index as u32 / cols) as f32;
-                let x = col / cols as f32;
-                let y = 0.5 + row / rows as f32 * 0.5;
-                let w = 1.0 / cols as f32;
-                let h = 0.5 / rows as f32;
-                let slot = state.mv_slots[index];
-                if slot == 0 {
-                    self.blit_builtin_pass(device, &mut pass, SRC_BLACK, [x, y, w, h], 1.0);
-                } else {
-                    self.draw_source_pass(device, &mut pass, slot, [x, y, w, h], 1.0, FULL_UV)?;
-                }
             }
         }
         Ok(())
@@ -1864,6 +1783,10 @@ impl Composer {
         opacity: f32,
         crop: [f32; 4],
     ) -> Result<(), String> {
+        if let Some(view) = self.mix_aliases.get(&source_id).cloned() {
+            self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
+            return Ok(());
+        }
         if is_scene(source_id) {
             if let Some(view) = self.scenes.get(&source_id).map(|scene| scene.view.clone()) {
                 self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
@@ -1876,10 +1799,6 @@ impl Composer {
                 .get(&other)
                 .map(|unit| match mixing_unit_bus(source_id) {
                     OUTPUT_PREVIEW => unit.preview_view.clone(),
-                    OUTPUT_MULTIVIEW => unit
-                        .multiview_view
-                        .clone()
-                        .unwrap_or_else(|| unit.mixed_view.clone()),
                     _ => unit.mixed_view.clone(),
                 });
             if let Some(view) = view {
@@ -2265,10 +2184,6 @@ impl Composer {
         let unit = self.units.get(&unit_id)?;
         Some(match kind {
             OUTPUT_PREVIEW => unit.preview_view.clone(),
-            OUTPUT_MULTIVIEW => unit
-                .multiview_view
-                .clone()
-                .unwrap_or_else(|| unit.mixed_view.clone()),
             _ => unit.mixed_view.clone(),
         })
     }
@@ -2315,6 +2230,9 @@ impl Composer {
     }
 
     pub fn view_for_source(&self, source_id: u64) -> Option<wgpu::TextureView> {
+        if let Some(view) = self.mix_aliases.get(&source_id) {
+            return Some(view.clone());
+        }
         if let Some(scene) = self.scenes.get(&source_id) {
             return Some(scene.view.clone());
         }
@@ -2326,10 +2244,6 @@ impl Composer {
                 .get(&unit_id)
                 .map(|unit| match mixing_unit_bus(source_id) {
                     OUTPUT_PREVIEW => unit.preview_view.clone(),
-                    OUTPUT_MULTIVIEW => unit
-                        .multiview_view
-                        .clone()
-                        .unwrap_or_else(|| unit.mixed_view.clone()),
                     _ => unit.mixed_view.clone(),
                 })
         })
@@ -2403,7 +2317,6 @@ impl Composer {
         let unit = self.units.get(&unit_id)?;
         match kind {
             OUTPUT_PREVIEW => unit.packed_prv.as_ref(),
-            OUTPUT_MULTIVIEW => unit.packed_mv.as_ref(),
             _ => unit.packed.as_ref(),
         }
     }
@@ -2414,44 +2327,24 @@ impl Composer {
         encoder: &mut wgpu::CommandEncoder,
         unit_id: u64,
         preview: bool,
-        multiview: bool,
     ) {
-        if preview {
-            self.ensure_packed_bus(device, unit_id, true);
+        if !preview {
+            return;
         }
-        if multiview {
-            self.ensure_multiview(device, unit_id);
-            self.ensure_packed_bus(device, unit_id, false);
-        }
-        if preview {
-            let (src, dest) = {
-                let Some(unit) = self.units.get(&unit_id) else {
-                    return;
-                };
-                match unit.packed_prv.as_ref() {
-                    Some(packed) => (
-                        unit.preview_view.clone(),
-                        packed.create_view(&Default::default()),
-                    ),
-                    None => return,
-                }
+        self.ensure_packed_bus(device, unit_id);
+        let (src, dest) = {
+            let Some(unit) = self.units.get(&unit_id) else {
+                return;
             };
-            self.pack_to(device, encoder, mixing_unit_preview(unit_id), &src, &dest);
-        }
-        if multiview {
-            let (src, dest) = {
-                let Some(unit) = self.units.get(&unit_id) else {
-                    return;
-                };
-                match (unit.multiview_view.as_ref(), unit.packed_mv.as_ref()) {
-                    (Some(mv_view), Some(packed)) => {
-                        (mv_view.clone(), packed.create_view(&Default::default()))
-                    }
-                    _ => return,
-                }
-            };
-            self.pack_to(device, encoder, mixing_unit_multiview(unit_id), &src, &dest);
-        }
+            match unit.packed_prv.as_ref() {
+                Some(packed) => (
+                    unit.preview_view.clone(),
+                    packed.create_view(&Default::default()),
+                ),
+                None => return,
+            }
+        };
+        self.pack_to(device, encoder, mixing_unit_preview(unit_id), &src, &dest);
     }
 
     pub fn pack_source(
@@ -2608,7 +2501,6 @@ impl UnitTargets {
             aux_view: aux.create_view(&Default::default()),
             prev_seeded: false,
             packed_view: None,
-            multiview_view: None,
             program,
             preview,
             mixed,
@@ -2620,9 +2512,7 @@ impl UnitTargets {
             bloom_b,
             aux,
             packed: None,
-            packed_mv: None,
             packed_prv: None,
-            multiview: None,
         }
     }
 
@@ -2640,13 +2530,7 @@ impl UnitTargets {
         if let Some(tex) = &self.packed {
             total += texture_bytes(tex);
         }
-        if let Some(tex) = &self.packed_mv {
-            total += texture_bytes(tex);
-        }
         if let Some(tex) = &self.packed_prv {
-            total += texture_bytes(tex);
-        }
-        if let Some(tex) = &self.multiview {
             total += texture_bytes(tex);
         }
         total
@@ -2771,18 +2655,6 @@ fn user_store(p: vec2<i32>, c: vec4<f32>) {
     textureStore(aux_out, p, c);
 }
 "#;
-
-fn tile_grid(count: u32) -> (u32, u32) {
-    match count {
-        0 | 1 => (1, 1),
-        2 => (2, 1),
-        3 | 4 => (2, 2),
-        5 | 6 => (3, 2),
-        7 | 8 => (4, 2),
-        9..=12 => (4, 3),
-        _ => (4, 4),
-    }
-}
 
 fn color_for(id: u64) -> [f32; 4] {
     match id {

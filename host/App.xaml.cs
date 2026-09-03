@@ -196,6 +196,14 @@ public partial class App : Application
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
                         input.NdiBandwidth));
                     break;
+                case InputKind.Mix when !network && input.MixTargetId != 0:
+                    Commands.TryEnqueue(new DefineMixInputCommand(
+                        input.Id,
+                        input.MixTargetId,
+                        InputKindNames.MixSourceKind(input.MixSource),
+                        input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                        input.MixAudioBusId));
+                    break;
             }
         }
         catch (Exception ex)

@@ -33,12 +33,15 @@ Add them from Inputs in the main window.
 - Video file
 - UVC (capture device)
 - NDI/OMT
+- Mix (Mixing Unit Preview/Program, or a session Multiview, plus a 1–8 frame buffer)
+
+A Mix Input is a delayed reroute of an existing bus. It reads N frames ago from the FrameDelay ring and does not add a swapchain. The same Mixing Unit cannot use a Mix Input that targets itself. Nested M/E (Mix of unit A on unit B) is stable with that delay. Mix audio is a delayed copy of one selected Audio Bus, or silence if None.
 
 Use an Input as a Scene layer, a Mixing Unit bus, a Multiview tile, or an Output source.  
 Input preview is a GPU readback thumbnail and does not use the video output destination window limit.
 
 ## Tags
 
-An Input can have more than one tag. Tabs above the list switch All, each tag, and Kind (Colours, Still, Video, OMT, NDI®, Video Capture). Right-click the tab strip to add, rename, or delete a tag.
+An Input can have more than one tag. Tabs above the list switch All, each tag, and Kind (Colours, Still, Video, OMT, NDI®, Video Capture, Mix). Right-click the tab strip to add, rename, or delete a tag.
 
 Detail is in [Scenes](/eiviz/en/concepts/scenes/), [Mixing Unit](/eiviz/en/concepts/mixing-unit/), and [Outputs](/eiviz/en/concepts/outputs/).

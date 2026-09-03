@@ -40,7 +40,7 @@ pub use abi::{
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
     ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MixerRebarInfo,
     MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
-    OUT_OMT, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
+    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
     SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
     SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
     SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
@@ -68,7 +68,7 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use abi::NativeSurface;
+use abi::{MixInputSpec, NativeSurface};
 use compose::{Composer, Generator};
 use delay::FrameDelay;
 use device::GpuDevice;
@@ -213,6 +213,7 @@ struct Shared {
     multiview_binds: HashMap<u64, (u64, u64)>,
     compose_dirty: bool,
     thumbs: HashMap<u64, crate::thumb::ThumbSub>,
+    mix_inputs: HashMap<u64, MixInputSpec>,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -482,6 +483,7 @@ fn detach_source(id: u64) -> Result<DetachedSource, i32> {
         shared.generators.remove(&id);
         shared.tone_phase.remove(&id);
         shared.live_save.remove(&id);
+        shared.mix_inputs.remove(&id);
         let uploads = shared.uploads.clone();
         DetachedSource {
             receiver,
@@ -655,6 +657,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         multiview_binds: HashMap::new(),
         compose_dirty: false,
         thumbs: HashMap::new(),
+        mix_inputs: HashMap::new(),
     }));
     let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
@@ -878,6 +881,38 @@ pub extern "C" fn mixer_define_generator(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_define_mix_input(
+    id: u64,
+    target_id: u64,
+    source_kind: u32,
+    delay: u32,
+    audio_bus_id: u64,
+) -> i32 {
+    let Some(spec) = MixInputSpec::new(target_id, source_kind, delay, audio_bus_id) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        let mut pending = shared.mix_inputs.clone();
+        pending.insert(id, spec);
+        if !spec.is_session_multiview() {
+            for (unit_id, unit) in &shared.units {
+                if unit_uses_mix_cycle(*unit_id, &unit.state, &pending, &shared.scenes) {
+                    return ERR_INVALID_ARGUMENT;
+                }
+            }
+        }
+        shared.mix_inputs.insert(id, spec);
+        shared.compose_dirty = true;
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
@@ -997,6 +1032,9 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
     }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
+        if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
+            return ERR_INVALID_ARGUMENT;
+        }
         {
             let Some(unit) = shared.units.get_mut(&unit_id) else {
                 return ERR_INVALID_ARGUMENT;
@@ -2625,13 +2663,14 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let (master, buses, uploads) = {
+        let (master, buses, mix_peaks, uploads) = {
             let shared = mixer.shared.lock().expect("shared");
             let master = shared.audio.master_peak();
             let buses = shared.audio.bus_peaks();
+            let mix_peaks = shared.audio.mix_input_peaks();
             let uploads = Arc::clone(&mixer.uploads);
             drop(shared);
-            (master, buses, uploads)
+            (master, buses, mix_peaks, uploads)
         };
         let uploads = uploads.lock().expect("uploads");
         let mut n = 0u32;
@@ -2663,10 +2702,26 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             if n >= cap {
                 break;
             }
+            if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
+                continue;
+            }
             let Some(ring) = uploads.get(id) else {
                 continue;
             };
             let (left, right) = ring.peak();
+            unsafe {
+                *out.add(n as usize) = AudioPeak {
+                    source_id: id,
+                    left,
+                    right,
+                };
+            }
+            n += 1;
+        }
+        for (id, left, right) in mix_peaks {
+            if n >= cap {
+                break;
+            }
             unsafe {
                 *out.add(n as usize) = AudioPeak {
                     source_id: id,
@@ -3148,7 +3203,15 @@ fn render_loop(
             let use_rebar = guard.rebar.available && guard.rebar_optimization;
             let direct_sample = use_rebar && cfg!(target_os = "macos");
             (
-                guard.frame_buffer_frames.clamp(1, 8),
+                {
+                    let mix_max = guard
+                        .mix_inputs
+                        .values()
+                        .map(|spec| spec.delay)
+                        .max()
+                        .unwrap_or(1);
+                    guard.frame_buffer_frames.clamp(1, 8).max(mix_max)
+                },
                 use_rebar,
                 direct_sample,
             )
@@ -3240,6 +3303,7 @@ fn render_loop(
             let compose_dirty = guard.compose_dirty;
             guard.compose_dirty = false;
             let thumbs_snap = guard.thumbs.clone();
+            let mix_inputs = guard.mix_inputs.clone();
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -3280,9 +3344,15 @@ fn render_loop(
             compose_sources.extend_from_slice(&due_thumbs);
             let mut upload_sources = monitor_sources.clone();
             upload_sources.extend_from_slice(&thumb_ids);
-            let (mut used_scenes, mut used_uploads) =
-                collect_live_ids(&scene_specs, &snapshot, &compose_sources, &outputs_snap);
-            let (_, monitor_uploads) = collect_live_ids(&scene_specs, &[], &upload_sources, &[]);
+            let (mut used_scenes, mut used_uploads) = collect_live_ids(
+                &scene_specs,
+                &snapshot,
+                &compose_sources,
+                &outputs_snap,
+                &mix_inputs,
+            );
+            let (_, monitor_uploads) =
+                collect_live_ids(&scene_specs, &[], &upload_sources, &[], &mix_inputs);
             used_uploads.extend(monitor_uploads);
             if compose_dirty {
                 for (id, ..) in &scene_specs {
@@ -3341,9 +3411,7 @@ fn render_loop(
             let need_prv = outputs_snap
                 .iter()
                 .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
-            let need_mv = snapshot
-                .iter()
-                .any(|(unit_id, ..)| presenters.has_kind(*unit_id, OUTPUT_MULTIVIEW));
+            composer.set_mix_aliases(resolve_mix_aliases(&mix_inputs, &frame_delay));
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
             match panic::catch_unwind(AssertUnwindSafe(|| {
                 presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
@@ -3481,12 +3549,11 @@ fn render_loop(
                     state,
                     *mix_preview,
                     &mut encoder,
-                    need_mv,
                     pack_pgm,
                 ) {
                     set_error(&telemetry, error);
                 }
-                composer.pack_aux(&device, &mut encoder, *unit_id, need_prv, false);
+                composer.pack_aux(&device, &mut encoder, *unit_id, need_prv);
             }
             for output in &outputs_snap {
                 if output.source_kind == SRC_KIND_MU_PROGRAM
@@ -3527,7 +3594,8 @@ fn render_loop(
                     continue;
                 }
                 let src = match output.source_kind {
-                    SRC_KIND_INPUT => composer.source_texture(output.source_id),
+                    SRC_KIND_INPUT => mix_rgba_at(&mix_inputs, &frame_delay, output.source_id)
+                        .or_else(|| composer.source_texture(output.source_id)),
                     SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
                         composer.scene_texture(output.source_id)
                     }
@@ -3553,6 +3621,15 @@ fn render_loop(
                 &mut encoder,
                 &composer,
                 snapshot.iter().map(|(id, ..)| *id),
+            );
+            frame_delay.capture_scenes(
+                &device,
+                &mut encoder,
+                &composer,
+                mix_inputs
+                    .values()
+                    .filter(|spec| spec.is_session_multiview())
+                    .map(|spec| spec.target_id),
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
@@ -3635,6 +3712,9 @@ fn render_loop(
                 &scene_specs,
                 audio_frames,
                 true,
+                &mix_inputs,
+                fps_num,
+                fps_den,
             );
             drop(upload_guard);
             let compose_vram = composer.vram_bytes();
@@ -3863,11 +3943,91 @@ fn audio_for_source(
 /// Scenes and CPU/GPU uploads that must be current for the given buses.
 /// Pass only *due* monitor ids for compose; pass every attached monitor when
 /// collecting uploads so tile-only sources keep their FIFOs moving.
+fn unit_uses_mix_cycle(
+    unit_id: u64,
+    state: &UnitState,
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    scenes: &HashMap<u64, SceneSpec>,
+) -> bool {
+    let mut seen = HashSet::new();
+    let incoming = state.mix_incoming();
+    mix_source_cycles(state.program_source, unit_id, mix_inputs, scenes, &mut seen)
+        || mix_source_cycles(state.preview_source, unit_id, mix_inputs, scenes, &mut seen)
+        || mix_source_cycles(incoming, unit_id, mix_inputs, scenes, &mut seen)
+        || state
+            .overlays
+            .iter()
+            .take(state.overlay_count as usize)
+            .any(|overlay| {
+                mix_source_cycles(overlay.source_id, unit_id, mix_inputs, scenes, &mut seen)
+            })
+}
+
+fn mix_source_cycles(
+    source_id: u64,
+    unit_id: u64,
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    scenes: &HashMap<u64, SceneSpec>,
+    seen: &mut HashSet<u64>,
+) -> bool {
+    if !seen.insert(source_id) {
+        return false;
+    }
+    if let Some(spec) = mix_inputs.get(&source_id)
+        && !spec.is_session_multiview()
+        && spec.target_id == unit_id
+    {
+        return true;
+    }
+    if let Some(scene) = scenes.get(&source_id) {
+        return scene.layers.iter().any(|layer| {
+            mix_source_cycles(layer.source_id, unit_id, mix_inputs, scenes, seen)
+        });
+    }
+    false
+}
+
+fn resolve_mix_aliases(
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    frame_delay: &FrameDelay,
+) -> HashMap<u64, wgpu::TextureView> {
+    let mut aliases = HashMap::new();
+    for (id, spec) in mix_inputs {
+        let view = if spec.is_session_multiview() {
+            frame_delay.scene_view_at(spec.target_id, spec.delay)
+        } else if let Some(bus) = spec.unit_bus() {
+            frame_delay.view_at(spec.target_id, bus, spec.delay)
+        } else {
+            None
+        };
+        if let Some(view) = view {
+            aliases.insert(*id, view);
+        }
+    }
+    aliases
+}
+
+fn mix_rgba_at<'a>(
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    frame_delay: &'a FrameDelay,
+    source_id: u64,
+) -> Option<&'a wgpu::Texture> {
+    let spec = mix_inputs.get(&source_id)?;
+    if spec.is_session_multiview() {
+        frame_delay.scene_rgba_at(spec.target_id, spec.delay)
+    } else if let Some(bus) = spec.unit_bus() {
+        frame_delay.rgba_at(spec.target_id, bus, spec.delay)
+    } else {
+        None
+    }
+}
+
 fn collect_live_ids(
     scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
     snapshot: &[UnitSnap],
     monitor_sources: &[u64],
     outputs: &[OutputSnap],
+    mix_inputs: &HashMap<u64, MixInputSpec>,
 ) -> (HashSet<u64>, HashSet<u64>) {
     let spec_map: HashMap<u64, &[OverlayDesc]> = scene_specs
         .iter()
@@ -3878,16 +4038,23 @@ fn collect_live_ids(
     fn add(
         id: u64,
         spec_map: &HashMap<u64, &[OverlayDesc]>,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
         scenes: &mut HashSet<u64>,
         uploads: &mut HashSet<u64>,
     ) {
+        if let Some(spec) = mix_inputs.get(&id) {
+            if spec.is_session_multiview() {
+                add(spec.target_id, spec_map, mix_inputs, scenes, uploads);
+            }
+            return;
+        }
         if crate::abi::is_scene(id) {
             if !scenes.insert(id) {
                 return;
             }
             if let Some(layers) = spec_map.get(&id) {
                 for layer in *layers {
-                    add(layer.source_id, spec_map, scenes, uploads);
+                    add(layer.source_id, spec_map, mix_inputs, scenes, uploads);
                 }
             }
             return;
@@ -3900,32 +4067,55 @@ fn collect_live_ids(
         }
     }
     for (_, _, _, _, _, state, mix_preview, _) in snapshot {
-        add(state.program_source, &spec_map, &mut scenes, &mut uploads);
-        add(state.preview_source, &spec_map, &mut scenes, &mut uploads);
+        add(
+            state.program_source,
+            &spec_map,
+            mix_inputs,
+            &mut scenes,
+            &mut uploads,
+        );
+        add(
+            state.preview_source,
+            &spec_map,
+            mix_inputs,
+            &mut scenes,
+            &mut uploads,
+        );
         let incoming = if *mix_preview != 0 {
             *mix_preview
         } else {
             state.mix_incoming()
         };
-        add(incoming, &spec_map, &mut scenes, &mut uploads);
+        add(incoming, &spec_map, mix_inputs, &mut scenes, &mut uploads);
         for overlay in state.overlays.iter().take(state.overlay_count as usize) {
-            add(overlay.source_id, &spec_map, &mut scenes, &mut uploads);
-        }
-        for slot in state.mv_slots.iter().take(state.mv_slot_count as usize) {
-            add(*slot, &spec_map, &mut scenes, &mut uploads);
+            add(
+                overlay.source_id,
+                &spec_map,
+                mix_inputs,
+                &mut scenes,
+                &mut uploads,
+            );
         }
     }
     for &id in monitor_sources {
-        add(id, &spec_map, &mut scenes, &mut uploads);
+        add(id, &spec_map, mix_inputs, &mut scenes, &mut uploads);
     }
     for output in outputs {
         match output.source_kind {
-            SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => {
-                add(output.source_id, &spec_map, &mut scenes, &mut uploads)
-            }
-            SRC_KIND_INPUT => {
-                uploads.insert(output.source_id);
-            }
+            SRC_KIND_SCENE | SRC_KIND_MU_MULTIVIEW => add(
+                output.source_id,
+                &spec_map,
+                mix_inputs,
+                &mut scenes,
+                &mut uploads,
+            ),
+            SRC_KIND_INPUT => add(
+                output.source_id,
+                &spec_map,
+                mix_inputs,
+                &mut scenes,
+                &mut uploads,
+            ),
             _ => {}
         }
     }
@@ -4045,6 +4235,7 @@ fn apply_send_cmd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn ping_is_stable() {
@@ -4061,7 +4252,7 @@ mod tests {
 
     #[test]
     fn collect_live_ids_keeps_input_monitors() {
-        let (scenes, uploads) = collect_live_ids(&[], &[], &[SRC_COLOR, 20], &[]);
+        let (scenes, uploads) = collect_live_ids(&[], &[], &[SRC_COLOR, 20], &[], &HashMap::new());
         assert!(scenes.is_empty());
         assert!(uploads.contains(&SRC_COLOR));
         assert!(uploads.contains(&20));
@@ -4090,10 +4281,10 @@ mod tests {
             0,
             None,
         )];
-        let (scenes, _) = collect_live_ids(&specs, &snapshot, &[], &[]);
+        let (scenes, _) = collect_live_ids(&specs, &snapshot, &[], &[], &HashMap::new());
         assert!(scenes.contains(&on_air));
         assert!(!scenes.contains(&idle));
-        let (scenes, _) = collect_live_ids(&specs, &snapshot, &[idle], &[]);
+        let (scenes, _) = collect_live_ids(&specs, &snapshot, &[idle], &[], &HashMap::new());
         assert!(scenes.contains(&idle));
     }
 
@@ -4102,7 +4293,7 @@ mod tests {
         let empty: std::sync::Arc<[crate::abi::OverlayDesc]> = std::sync::Arc::from([]);
         let idle = SCENE_BASE | 3;
         let specs = [(idle, 1920, 1080, empty, MvLabelStyle::default())];
-        let (scenes, _) = collect_live_ids(&specs, &[], &[idle], &[]);
+        let (scenes, _) = collect_live_ids(&specs, &[], &[idle], &[], &HashMap::new());
         assert!(scenes.contains(&idle));
     }
 
