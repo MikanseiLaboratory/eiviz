@@ -3442,7 +3442,13 @@ fn render_loop(
                             && item.cpu_video()
                     });
                     if pack_pgm {
-                        if let Some(packed) = frame_delay.packed(*unit_id, OUTPUT_PROGRAM) {
+                        // Mix/T-bar ticks discard the delay ring so present can
+                        // show the live compose. Program send must do the same
+                        // or NDI/OMT freeze until mix is stable again.
+                        if let Some(packed) = frame_delay
+                            .packed(*unit_id, OUTPUT_PROGRAM)
+                            .or_else(|| composer.packed_texture(*unit_id, OUTPUT_PROGRAM))
+                        {
                             let width = packed.size().width.saturating_mul(2).max(2);
                             let height = packed.size().height.max(1);
                             let rb = readbacks.ensure(&device, *unit_id, width, height);
@@ -3456,7 +3462,9 @@ fn render_loop(
                         continue;
                     }
                     let packed = match output.source_kind {
-                        SRC_KIND_MU_PREVIEW => frame_delay.packed(output.unit_id, OUTPUT_PREVIEW),
+                        SRC_KIND_MU_PREVIEW => frame_delay
+                            .packed(output.unit_id, OUTPUT_PREVIEW)
+                            .or_else(|| composer.packed_texture(output.unit_id, OUTPUT_PREVIEW)),
                         _ => None,
                     };
                     if let Some(texture) = packed {
@@ -3474,8 +3482,12 @@ fn render_loop(
                         continue;
                     }
                     let rgba = match output.source_kind {
-                        SRC_KIND_MU_PROGRAM => frame_delay.rgba(output.unit_id, OUTPUT_PROGRAM),
-                        SRC_KIND_MU_PREVIEW => frame_delay.rgba(output.unit_id, OUTPUT_PREVIEW),
+                        SRC_KIND_MU_PROGRAM => frame_delay
+                            .rgba(output.unit_id, OUTPUT_PROGRAM)
+                            .or_else(|| composer.rgba_texture(output.unit_id, OUTPUT_PROGRAM)),
+                        SRC_KIND_MU_PREVIEW => frame_delay
+                            .rgba(output.unit_id, OUTPUT_PREVIEW)
+                            .or_else(|| composer.rgba_texture(output.unit_id, OUTPUT_PREVIEW)),
                         _ => None,
                     };
                     if let Some(src) = rgba

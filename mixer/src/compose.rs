@@ -2362,6 +2362,14 @@ impl Composer {
         }
     }
 
+    pub fn rgba_texture(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {
+        let unit = self.units.get(&unit_id)?;
+        Some(match kind {
+            OUTPUT_PREVIEW => &unit.preview,
+            _ => &unit.mixed,
+        })
+    }
+
     pub fn pack_aux(
         &mut self,
         device: &GpuDevice,
