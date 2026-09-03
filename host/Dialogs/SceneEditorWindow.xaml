@@ -56,6 +56,11 @@
             <StackPanel DockPanel.Dock="Bottom">
                 <TextBlock Text="Name" Margin="0,8,0,4"/>
                 <TextBox x:Name="NameBox"/>
+                <TextBlock Text="Tags" Margin="0,8,0,4"/>
+                <DockPanel Margin="0,0,0,4">
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTag_Click"/>
+                    <WrapPanel x:Name="TagPanel" Margin="0,0,8,0"/>
+                </DockPanel>
                 <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="56"/>

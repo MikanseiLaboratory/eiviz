@@ -216,6 +216,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var captureHeight: UInt32 = 0
     var captureFpsNum: UInt32 = 0
     var captureFpsDen: UInt32 = 0
+    var tags: [String] = []
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -224,7 +225,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
-        case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen
+        case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
     }
 
     init(
@@ -307,6 +308,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         captureHeight = try container.decodeIfPresent(UInt32.self, forKey: .captureHeight) ?? 0
         captureFpsNum = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsNum) ?? 0
         captureFpsDen = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsDen) ?? 0
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
     }
 }
 
@@ -472,10 +474,40 @@ struct SceneEntry: Identifiable, Codable {
     var name: String
     var monitorId: UInt64 = 0
     var layers: [SceneLayer] = []
+    var tags: [String] = []
+    var previewCollapsed: Bool = false
     var gpuId: UInt64 { EIVIZ_SCENE_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, guid, name, layers
+        case id, guid, name, layers, tags, previewCollapsed
+    }
+
+    init(
+        id: UInt64,
+        guid: String = UUID().uuidString,
+        name: String,
+        monitorId: UInt64 = 0,
+        layers: [SceneLayer] = [],
+        tags: [String] = [],
+        previewCollapsed: Bool = false
+    ) {
+        self.id = id
+        self.guid = guid
+        self.name = name
+        self.monitorId = monitorId
+        self.layers = layers
+        self.tags = tags
+        self.previewCollapsed = previewCollapsed
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        guid = try container.decodeIfPresent(String.self, forKey: .guid) ?? UUID().uuidString
+        name = try container.decode(String.self, forKey: .name)
+        layers = try container.decodeIfPresent([SceneLayer].self, forKey: .layers) ?? []
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        previewCollapsed = try container.decodeIfPresent(Bool.self, forKey: .previewCollapsed) ?? false
     }
 }
 
@@ -1169,6 +1201,8 @@ struct MixerSessionData: Codable {
     var outputs: [OutputEntry] = []
     var multiviews: [MultiviewLayout] = []
     var buses: [AudioBusEntry] = []
+    var inputTags: [String] = []
+    var sceneTags: [String] = []
     var nextInputId: UInt64 = 10
     var nextSceneId: UInt64 = 1
     var nextUnitId: UInt64 = 2
@@ -1181,6 +1215,7 @@ struct MixerSessionData: Codable {
 
     enum CodingKeys: String, CodingKey {
         case version, settings, inputs, scenes, scenePresets, units, outputs, multiviews, buses
+        case inputTags, sceneTags
         case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId, nextBusId
         case selectedUnitId, headphoneCopyMaster
     }

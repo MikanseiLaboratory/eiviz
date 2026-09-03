@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace Eiviz.Host.Preview;
@@ -22,6 +23,7 @@ public partial class SceneTile : UserControl
     public event EventHandler<SceneEntry>? SceneAudioRequested;
     public event EventHandler<SceneEntry>? ScenePreviewRequested;
     public event EventHandler<SceneEntry>? SceneCloseRequested;
+    public event EventHandler<SceneEntry>? SceneCollapseToggled;
 
     public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3, Color? previewColor = null, Color? inactiveColor = null)
     {
@@ -29,6 +31,7 @@ public partial class SceneTile : UserControl
         Title.Text = scene.Name;
         Number.Text = number.ToString();
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
+        ApplyCollapsed();
     }
 
     public void SetPresentInterval(uint presentInterval) =>
@@ -67,6 +70,34 @@ public partial class SceneTile : UserControl
         LoopButton.Opacity = loop ? 1 : 0.55;
         PlayButton.Content = playing ? "❚❚" : "▶";
         AudioButton.Opacity = muted ? 0.45 : 1;
+    }
+
+    public void ApplyCollapsed()
+    {
+        var collapsed = Scene?.PreviewCollapsed == true;
+        Monitor.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        Transport.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        if (collapsed)
+            SetThumbWanted(false);
+    }
+
+    private void TitleBar_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (Scene is not { } scene)
+            return;
+        scene.PreviewCollapsed = !scene.PreviewCollapsed;
+        ApplyCollapsed();
+        SceneCollapseToggled?.Invoke(this, scene);
+        e.Handled = true;
+    }
+
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount >= 2)
+        {
+            Raise(SceneEditRequested);
+            e.Handled = true;
+        }
     }
 
     private void Select()

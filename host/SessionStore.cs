@@ -51,6 +51,8 @@ internal static class SessionStore
         public List<MultiviewDto> Multiviews { get; set; } = [];
         public List<AudioBusEntry> Buses { get; set; } = [];
         public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
+        public List<string> InputTags { get; set; } = [];
+        public List<string> SceneTags { get; set; } = [];
         public ulong NextInputId { get; set; }
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
@@ -85,6 +87,8 @@ internal static class SessionStore
                 Name = preset.Name,
                 Layers = [.. preset.Layers]
             }).ToList(),
+            InputTags = [.. session.InputTags],
+            SceneTags = [.. session.SceneTags],
             NextInputId = session.NextInputId,
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
@@ -132,7 +136,10 @@ internal static class SessionStore
                 session.Buses.Add(CloneBus(bus));
             foreach (var preset in ScenePresets)
                 session.ScenePresets.Add(preset);
+            session.InputTags.AddRange(TagCatalog.NormalizeList(InputTags));
+            session.SceneTags.AddRange(TagCatalog.NormalizeList(SceneTags));
             session.EnsureDefaultBuses();
+            session.MergeTagCatalogs();
             session.NextInputId = Math.Max(NextInputId, session.Inputs.Count == 0 ? 10 : session.Inputs.Max(item => item.Id) + 1);
             session.NextSceneId = Math.Max(NextSceneId, session.Scenes.Count == 0 ? 1 : session.Scenes.Max(item => item.Id) + 1);
             session.NextUnitId = Math.Max(NextUnitId, session.Units.Count == 0 ? 1 : session.Units.Max(item => item.Id) + 1);
@@ -182,6 +189,7 @@ internal static class SessionStore
         public uint CaptureHeight { get; set; }
         public uint CaptureFpsNum { get; set; }
         public uint CaptureFpsDen { get; set; }
+        public List<string> Tags { get; set; } = [];
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -212,7 +220,8 @@ internal static class SessionStore
             CaptureWidth = input.CaptureWidth,
             CaptureHeight = input.CaptureHeight,
             CaptureFpsNum = input.CaptureFpsNum,
-            CaptureFpsDen = input.CaptureFpsDen
+            CaptureFpsDen = input.CaptureFpsDen,
+            Tags = [.. input.Tags]
         };
 
         public InputEntry ToEntry() => new()
@@ -244,7 +253,8 @@ internal static class SessionStore
             CaptureWidth = CaptureWidth,
             CaptureHeight = CaptureHeight,
             CaptureFpsNum = CaptureFpsNum,
-            CaptureFpsDen = CaptureFpsDen
+            CaptureFpsDen = CaptureFpsDen,
+            Tags = TagCatalog.NormalizeList(Tags)
         };
     }
 
@@ -254,13 +264,17 @@ internal static class SessionStore
         public string Guid { get; set; } = "";
         public string Name { get; set; } = "";
         public List<SceneLayer> Layers { get; set; } = [];
+        public List<string> Tags { get; set; } = [];
+        public bool PreviewCollapsed { get; set; }
 
         public static SceneDto From(SceneEntry scene) => new()
         {
             Id = scene.Id,
             Guid = scene.Guid,
             Name = scene.Name,
-            Layers = [.. scene.Layers]
+            Layers = [.. scene.Layers],
+            Tags = [.. scene.Tags],
+            PreviewCollapsed = scene.PreviewCollapsed
         };
 
         public SceneEntry ToEntry(Session session)
@@ -270,7 +284,9 @@ internal static class SessionStore
                 Id = Id,
                 Guid = string.IsNullOrWhiteSpace(Guid) ? System.Guid.NewGuid().ToString() : Guid,
                 Name = Name,
-                MonitorId = session.NextMonitorId++
+                MonitorId = session.NextMonitorId++,
+                Tags = TagCatalog.NormalizeList(Tags),
+                PreviewCollapsed = PreviewCollapsed
             };
             foreach (var layer in Layers)
                 scene.Layers.Add(layer);
