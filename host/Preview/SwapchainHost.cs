@@ -16,6 +16,7 @@ internal sealed partial class SwapchainHost : HwndHost
     public ulong MonitorId { get; set; }
     public ulong SourceId { get; set; }
     public bool IsMonitor { get; set; }
+    public bool AutoAttach { get; set; } = true;
     public uint PresentInterval { get; set; } = 1;
 
     public event EventHandler? SurfaceClicked;
@@ -24,7 +25,7 @@ internal sealed partial class SwapchainHost : HwndHost
     public SwapchainHost()
     {
         SizeChanged += (_, _) => ApplySize();
-        Loaded += (_, _) => Dispatcher.BeginInvoke(ApplySize, System.Windows.Threading.DispatcherPriority.Loaded);
+        Loaded += (_, _) => Dispatcher.BeginInvoke(() => ApplySize(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
@@ -89,7 +90,7 @@ internal sealed partial class SwapchainHost : HwndHost
         IsMonitor = true;
         MonitorId = monitorId;
         SourceId = sourceId;
-        ApplySize();
+        ApplySize(forceAttach: true);
     }
 
     public void UpdateMonitorSource(ulong sourceId)
@@ -101,6 +102,8 @@ internal sealed partial class SwapchainHost : HwndHost
 
     public void RefreshSize() => ApplySize();
 
+    private void ApplySize() => ApplySize(forceAttach: false);
+
     public void ApplyPresentInterval()
     {
         if (!IsMonitor || MonitorId == 0)
@@ -108,7 +111,7 @@ internal sealed partial class SwapchainHost : HwndHost
         MixerNative.SetMonitorPresentInterval(MonitorId, Math.Clamp(PresentInterval, 1u, 8u));
     }
 
-    private void ApplySize()
+    private void ApplySize(bool forceAttach)
     {
         if (_hwnd == nint.Zero)
             return;
@@ -118,20 +121,35 @@ internal sealed partial class SwapchainHost : HwndHost
         MoveWindow(_hwnd, 0, 0, (int)width, (int)height, true);
         if (!_attached)
         {
-            if (IsMonitor)
+            if (!forceAttach && !AutoAttach)
+                return;
+            if (!FlipBudget.TryBegin(this))
+                return;
+            try
             {
-                if (MonitorId == 0 || SourceId == 0)
-                    return;
-                MixerNative.ThrowIfFailed(
-                    MixerNative.AttachMonitor(MonitorId, SourceId, _hwnd, width, height),
-                    "Attach source monitor");
-                ApplyPresentInterval();
+                if (IsMonitor)
+                {
+                    if (MonitorId == 0 || SourceId == 0)
+                    {
+                        FlipBudget.Cancel(this);
+                        return;
+                    }
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.AttachMonitor(MonitorId, SourceId, _hwnd, width, height),
+                        "Attach source monitor");
+                    ApplyPresentInterval();
+                }
+                else
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.AttachOutput(UnitId, _hwnd, width, height, OutputKind),
+                        "Attach DX12 surface");
+                _attached = true;
             }
-            else
-                MixerNative.ThrowIfFailed(
-                    MixerNative.AttachOutput(UnitId, _hwnd, width, height, OutputKind),
-                    "Attach DX12 surface");
-            _attached = true;
+            catch
+            {
+                FlipBudget.Cancel(this);
+                throw;
+            }
             return;
         }
 
@@ -150,6 +168,7 @@ internal sealed partial class SwapchainHost : HwndHost
         else
             MixerNative.DetachOutput(UnitId, OutputKind, _hwnd);
         _attached = false;
+        FlipBudget.End(this);
     }
 
     private (uint Width, uint Height) PixelSize()

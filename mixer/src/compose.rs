@@ -2038,6 +2038,47 @@ impl Composer {
         })
     }
 
+    pub fn blit_source_to(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        source_id: u64,
+        dest: &wgpu::TextureView,
+    ) -> bool {
+        let Some(src) = self.view_for_source(source_id) else {
+            return false;
+        };
+        let packed = self.source_is_packed(source_id);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("thumb"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            self.blit_pass(
+                device,
+                &mut pass,
+                source_id,
+                &src,
+                [0.0, 0.0, 1.0, 1.0],
+                1.0,
+                packed,
+            );
+        }
+        true
+    }
+
     pub fn view_for_source(&self, source_id: u64) -> Option<wgpu::TextureView> {
         if let Some(scene) = self.scenes.get(&source_id) {
             return Some(scene.view.clone());

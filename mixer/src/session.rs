@@ -66,6 +66,8 @@ pub struct SessionSettings {
     #[serde(default = "three")]
     pub default_present_interval: u32,
     #[serde(default)]
+    pub flip_swapchain_limit: u32,
+    #[serde(default)]
     pub internal_color_format: InternalColorFormat,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub rebar_optimization: bool,
@@ -99,6 +101,7 @@ impl Default for SessionSettings {
             default_multiview_unit_id: 1,
             frame_buffer_frames: 3,
             default_present_interval: 3,
+            flip_swapchain_limit: 0,
             internal_color_format: InternalColorFormat::Uyvy,
             rebar_optimization: true,
             rebar_direct_sample: false,
@@ -801,6 +804,10 @@ impl Document {
             doc.settings.frame_buffer_frames = 3;
         }
         doc.settings.default_present_interval = doc.settings.default_present_interval.clamp(1, 8);
+        doc.settings.flip_swapchain_limit = match doc.settings.flip_swapchain_limit {
+            0 | 4 | 6 | 8 | 10 | 12 | 16 => doc.settings.flip_swapchain_limit,
+            _ => 0,
+        };
         if doc.settings.master_fps_num == 0 {
             doc.settings.master_fps_num = fps_num();
         }

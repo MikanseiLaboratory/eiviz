@@ -837,6 +837,7 @@ public partial class SceneEditorWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        PreviewHost.ReleaseNative();
         if (DialogResult != true)
         {
             _scene.Layers.Clear();

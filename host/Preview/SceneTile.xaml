@@ -31,7 +31,7 @@
                 <Button Style="{StaticResource TileBtn}" Content="Prev" Click="Preview_Click"/>
                 <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"/>
             </StackPanel>
-            <preview:SwapchainHost x:Name="Monitor" Height="90" IsMonitor="True"/>
+            <preview:ThumbView x:Name="Monitor" Height="90"/>
         </DockPanel>
     </Border>
 </UserControl>

@@ -63,6 +63,7 @@ public partial class MainWindow : Window
             _meterTimer.Stop();
             _resources.Dispose();
         };
+        SceneScroll.ScrollChanged += (_, _) => ApplySceneTileThumbs();
         Loaded += (_, _) =>
         {
             ApplyBusColors();
@@ -162,6 +163,21 @@ public partial class MainWindow : Window
                 BusTheme.Preview(_session.Settings),
                 BusTheme.Program(_session.Settings),
                 BusTheme.Inactive(_session.Settings));
+        }
+        ApplySceneTileThumbs();
+    }
+
+    private void ApplySceneTileThumbs()
+    {
+        var tiles = ScenePanel.Children.OfType<SceneTile>().Where(tile => tile.Scene is not null);
+        var selectedId = _selectedScene?.Id ?? 0;
+        foreach (var tile in tiles)
+        {
+            var scene = tile.Scene!;
+            var pinned = scene.Id == _shownProgramId
+                || scene.Id == _shownPreviewId
+                || scene.Id == selectedId;
+            tile.SetThumbWanted(pinned || ThumbViewport.Intersects(tile, SceneScroll));
         }
     }
 
@@ -900,6 +916,12 @@ public partial class MainWindow : Window
             else
                 strip.Decay();
         }
+        MixerStats stats = default;
+        unsafe
+        {
+            if (MixerNative.CopyStats(&stats) == 0)
+                FlipBudget.ObserveLost(stats.SurfaceLost);
+        }
         _resources.Sample();
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
@@ -1209,8 +1231,7 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
-        var monitorId = _session.NextMonitorId++;
-        var window = new InputPreviewWindow(name, sourceId, monitorId, SelectedUnit.Width, SelectedUnit.Height)
+        var window = new InputPreviewWindow(name, sourceId, SelectedUnit.Width, SelectedUnit.Height)
         {
             Owner = this
         };
@@ -1473,6 +1494,8 @@ public partial class MainWindow : Window
         var monitorId = _session.NextMonitorId++;
         var dialog = new SceneEditorWindow(scene, _session, SceneWidth, SceneHeight, monitorId) { Owner = this };
         dialog.ShowDialog();
+        if (Application.Current is not App appAfter || appAfter.Session is null || _fatalHandled)
+            return;
         RebuildScenes();
         SelectScene(scene);
         RefreshMultiviewLabels();
@@ -1662,7 +1685,7 @@ public partial class MainWindow : Window
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
-            tile.Monitor.ReleaseNative();
+            tile.SetThumbWanted(false);
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e)
@@ -1682,6 +1705,8 @@ public partial class MainWindow : Window
         _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
         _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
+        _session.Settings.FlipSwapchainLimit = dialog.Settings.FlipSwapchainLimit;
+        FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;

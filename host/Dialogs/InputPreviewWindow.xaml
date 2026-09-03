@@ -21,8 +21,8 @@
         <Grid Grid.Row="1" Background="#111">
             <preview:AspectBox x:Name="VideoAspect" RatioWidth="16" RatioHeight="9"
                                HorizontalAlignment="Center" VerticalAlignment="Center">
-                <preview:SwapchainHost x:Name="PreviewHost" IsMonitor="True"
-                                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                <preview:ThumbView x:Name="PreviewHost"
+                                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
             </preview:AspectBox>
         </Grid>
     </Grid>

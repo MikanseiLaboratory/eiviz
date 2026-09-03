@@ -336,6 +336,7 @@ pub struct MixerStats {
     pub vram_bytes: u64,
     pub compose_vram_bytes: u64,
     pub delay_vram_bytes: u64,
+    pub surface_lost: u64,
 }
 
 #[repr(C)]

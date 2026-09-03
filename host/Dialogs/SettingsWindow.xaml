@@ -18,12 +18,12 @@
                 <ListBoxItem Content="{Binding [settings.outputs], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.multiview], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.audioAux], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.advanced], Source={x:Static i18n:Loc.Source}}"/>
             </ListBox>
         </Border>
         <DockPanel Grid.Column="1">
             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="16">
                 <Button Content="{Binding [dialog.default], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Default_Click"/>
-                <CheckBox Content="{Binding [settings.showAdvanced], Source={x:Static i18n:Loc.Source}}" Margin="16,0,0,0" VerticalAlignment="Center" IsEnabled="False"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Width="280">
                     <Button Content="{Binding [dialog.ok], Source={x:Static i18n:Loc.Source}}" Width="88" IsDefault="True" Click="Ok_Click"/>
                     <Button Content="{Binding [dialog.cancel], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" IsCancel="True"/>
@@ -143,6 +143,20 @@
                     <StackPanel x:Name="BusRows"/>
                 </ScrollViewer>
             </DockPanel>
+            <StackPanel x:Name="AdvancedPanel" Margin="20" Visibility="Collapsed">
+                <TextBlock Text="{Binding [settings.flipBudget], Source={x:Static i18n:Loc.Source}}"/>
+                <ComboBox x:Name="FlipBudgetBox" Margin="0,4,0,8" Width="280" HorizontalAlignment="Left">
+                    <ComboBoxItem Content="{Binding [settings.flipBudgetAuto], Source={x:Static i18n:Loc.Source}}" Tag="0"/>
+                    <ComboBoxItem Content="4" Tag="4"/>
+                    <ComboBoxItem Content="6" Tag="6"/>
+                    <ComboBoxItem Content="8" Tag="8"/>
+                    <ComboBoxItem Content="10" Tag="10"/>
+                    <ComboBoxItem Content="12" Tag="12"/>
+                    <ComboBoxItem Content="16" Tag="16"/>
+                </ComboBox>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.flipBudgetHelp], Source={x:Static i18n:Loc.Source}}"/>
+            </StackPanel>
         </DockPanel>
     </Grid>
 </Window>

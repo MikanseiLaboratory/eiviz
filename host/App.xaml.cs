@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
+using Eiviz.Host.Preview;
 using Microsoft.Win32;
 
 namespace Eiviz.Host;
@@ -15,6 +16,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         HostLog.Install();
+        GpuPresentStore.Load();
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
         Loc.Apply(AppPrefs.Current.Language);
         ThemeService.Apply(AppPrefs.Current.Theme);
@@ -96,6 +98,7 @@ public partial class App : Application
                 MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
                 "Configure Mixing Unit");
         }
+        FlipBudget.Configure(Session.Settings.FlipSwapchainLimit);
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");

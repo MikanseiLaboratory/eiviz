@@ -28,6 +28,7 @@ mod omt;
 mod pool;
 mod present;
 mod readback;
+mod thumb;
 mod rebar;
 mod save;
 mod session;
@@ -211,6 +212,7 @@ struct Shared {
     live_save: HashMap<u64, LiveSave>,
     multiview_binds: HashMap<u64, (u64, u64)>,
     compose_dirty: bool,
+    thumbs: HashMap<u64, crate::thumb::ThumbSub>,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -411,6 +413,7 @@ struct Mixer {
     telemetry: Arc<Mutex<Telemetry>>,
     cmds: mpsc::Sender<GpuCmd>,
     send_tx: mpsc::Sender<SendCmd>,
+    thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
     send: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
@@ -552,7 +555,6 @@ fn prepare_surface_off_slot(
     surface: NativeSurface,
     width: u32,
     height: u32,
-    prefer_mailbox: bool,
 ) -> Result<present::PreparedSurface, i32> {
     let gpu = match with_mixer(|mixer| mixer.surface_gpu.clone()) {
         Ok(gpu) => gpu,
@@ -566,7 +568,6 @@ fn prepare_surface_off_slot(
             surface,
             width,
             height,
-            prefer_mailbox,
         )
     })
     .map_err(|error| {
@@ -653,7 +654,9 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         audio: audio.clone(),
         multiview_binds: HashMap::new(),
         compose_dirty: false,
+        thumbs: HashMap::new(),
     }));
+    let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
     let (send_tx, send_rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
@@ -662,6 +665,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     let render_telemetry = Arc::clone(&telemetry);
     let render_stop = Arc::clone(&stop);
     let render_send = send_tx.clone();
+    let render_thumbs = Arc::clone(&thumb_pixels);
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
@@ -672,6 +676,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
                 render_shared,
                 render_uploads,
                 render_telemetry,
+                render_thumbs,
                 rx,
                 render_send,
                 render_stop,
@@ -690,6 +695,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         telemetry,
         cmds: tx,
         send_tx,
+        thumb_pixels,
         render: Some(render),
         send: Some(send),
         stop,
@@ -941,7 +947,7 @@ pub extern "C" fn mixer_unit_attach_native(
         return ERR_INVALID_ARGUMENT;
     };
     #[cfg(target_os = "macos")]
-    let prepared = match prepare_surface_off_slot(surface, width, height, true) {
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
         Ok(prepared) => Some(prepared),
         Err(code) => return code,
     };
@@ -1487,7 +1493,7 @@ pub extern "C" fn mixer_attach_monitor_native(
         return ERR_INVALID_ARGUMENT;
     };
     #[cfg(target_os = "macos")]
-    let prepared = match prepare_surface_off_slot(surface, width, height, false) {
+    let prepared = match prepare_surface_off_slot(surface, width, height) {
         Ok(prepared) => Some(prepared),
         Err(code) => return code,
     };
@@ -2794,6 +2800,7 @@ pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
                 vram_bytes: tel.last_vram_bytes,
                 compose_vram_bytes: tel.last_compose_vram,
                 delay_vram_bytes: tel.last_delay_vram,
+                surface_lost: crate::diag::surface_lost(),
             };
         }
         OK
@@ -2930,6 +2937,54 @@ pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u3
     .unwrap_or_else(|code| code)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_thumb_set(source_id: u64, width: u32, height: u32, interval: u32) -> i32 {
+    with_mixer(|mixer| {
+        let mut guard = mixer.shared.lock().expect("shared");
+        match crate::thumb::ThumbSub::clamp(width, height, interval) {
+            Some(sub) => {
+                guard.thumbs.insert(source_id, sub);
+            }
+            None => {
+                guard.thumbs.remove(&source_id);
+            }
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_thumb_read(
+    source_id: u64,
+    buf: *mut u8,
+    cap: usize,
+    out_w: *mut u32,
+    out_h: *mut u32,
+    out_stride: *mut u32,
+) -> i32 {
+    if buf.is_null() || out_w.is_null() || out_h.is_null() || out_stride.is_null() {
+        return 0;
+    }
+    with_mixer(|mixer| {
+        let pixels = mixer.thumb_pixels.lock().expect("thumb pixels");
+        let Some(frame) = pixels.get(&source_id) else {
+            return 0;
+        };
+        if cap < frame.data.len() {
+            return 0;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(frame.data.as_ptr(), buf, frame.data.len());
+            *out_w = frame.width;
+            *out_h = frame.height;
+            *out_stride = frame.stride;
+        }
+        frame.data.len() as i32
+    })
+    .unwrap_or(0)
+}
+
 #[derive(Clone)]
 struct Acquired {
     data: Arc<[u8]>,
@@ -2955,6 +3010,7 @@ fn render_loop(
     shared: Arc<Mutex<Shared>>,
     uploads: Arc<Mutex<UploadStore>>,
     telemetry: Arc<Mutex<Telemetry>>,
+    thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     cmds: mpsc::Receiver<GpuCmd>,
     send_tx: mpsc::Sender<SendCmd>,
     stop: Arc<AtomicBool>,
@@ -2967,6 +3023,7 @@ fn render_loop(
         }
     };
     let mut presenters = Presenters::default();
+    let mut thumbs = crate::thumb::ThumbStore::new(thumb_pixels);
     let mut readbacks = ReadbackStore::default();
     let mut gpu_sends = GpuSendStore::default();
     let mut frame_delay = FrameDelay::new(3);
@@ -3180,6 +3237,7 @@ fn render_loop(
             }));
             let compose_dirty = guard.compose_dirty;
             guard.compose_dirty = false;
+            let thumbs_snap = guard.thumbs.clone();
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -3210,10 +3268,20 @@ fn render_loop(
             // Lane 3 uses due monitors only; every attached monitor still uploads.
             let monitor_sources = presenters.attached_monitor_sources();
             let due_monitors = presenters.attached_monitor_sources_due(frame_i);
+            let thumb_ids: Vec<u64> = thumbs_snap.keys().copied().collect();
+            let due_thumbs: Vec<u64> = thumbs_snap
+                .iter()
+                .filter(|(_, sub)| frame_i % u64::from(sub.interval) == 0)
+                .map(|(id, _)| *id)
+                .collect();
+            let mut compose_sources = due_monitors;
+            compose_sources.extend_from_slice(&due_thumbs);
+            let mut upload_sources = monitor_sources.clone();
+            upload_sources.extend_from_slice(&thumb_ids);
             let (mut used_scenes, mut used_uploads) =
-                collect_live_ids(&scene_specs, &snapshot, &due_monitors, &outputs_snap);
+                collect_live_ids(&scene_specs, &snapshot, &compose_sources, &outputs_snap);
             let (_, monitor_uploads) =
-                collect_live_ids(&scene_specs, &[], &monitor_sources, &[]);
+                collect_live_ids(&scene_specs, &[], &upload_sources, &[]);
             used_uploads.extend(monitor_uploads);
             if compose_dirty {
                 for (id, ..) in &scene_specs {
@@ -3225,7 +3293,7 @@ fn render_loop(
                 .map(|item| (item.source_kind, item.source_id))
                 .collect();
             let roles =
-                collect_source_roles(&scene_specs, &snapshot, &monitor_sources, &output_refs);
+                collect_source_roles(&scene_specs, &snapshot, &upload_sources, &output_refs);
             {
                 let guard = shared.lock().expect("shared");
                 for (id, receiver) in &guard.receivers {
@@ -3491,7 +3559,9 @@ fn render_loop(
                 &composer,
                 snapshot.iter().map(|(id, ..)| *id),
             );
+            thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
+            thumbs.advance(&device);
             emit_packed(
                 &mut readbacks,
                 &device,
@@ -4029,6 +4099,15 @@ mod tests {
         assert!(scenes.contains(&on_air));
         assert!(!scenes.contains(&idle));
         let (scenes, _) = collect_live_ids(&specs, &snapshot, &[idle], &[]);
+        assert!(scenes.contains(&idle));
+    }
+
+    #[test]
+    fn collect_live_ids_keeps_thumb_sources() {
+        let empty: std::sync::Arc<[crate::abi::OverlayDesc]> = std::sync::Arc::from([]);
+        let idle = SCENE_BASE | 3;
+        let specs = [(idle, 1920, 1080, empty, MvLabelStyle::default())];
+        let (scenes, _) = collect_live_ids(&specs, &[], &[idle], &[]);
         assert!(scenes.contains(&idle));
     }
 
