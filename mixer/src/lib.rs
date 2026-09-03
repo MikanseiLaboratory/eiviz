@@ -128,6 +128,7 @@ struct LiveOutput {
     audio_bus_id: u64,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
+    tx: mpsc::Sender<SendCmd>,
 }
 
 #[derive(Clone)]
@@ -141,6 +142,7 @@ struct OutputSnap {
     fps_d: u32,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
+    tx: mpsc::Sender<SendCmd>,
 }
 
 impl OutputSnap {
@@ -331,16 +333,7 @@ impl OutputHandle {
 }
 
 enum SendCmd {
-    Add {
-        output_id: u64,
-        sender: OutputHandle,
-        video_sub: Arc<AtomicBool>,
-    },
-    Remove {
-        output_id: u64,
-    },
     Video {
-        output_id: u64,
         width: u32,
         height: u32,
         stride: u32,
@@ -350,7 +343,6 @@ enum SendCmd {
         fps_d: u32,
     },
     GpuVideo {
-        output_id: u64,
         texture: wgpu::Texture,
         width: u32,
         height: u32,
@@ -360,10 +352,14 @@ enum SendCmd {
         busy: Arc<AtomicBool>,
     },
     Audio {
-        output_id: u64,
         packet: AudioPacket,
     },
     Shutdown,
+}
+
+struct OutputWorker {
+    tx: mpsc::Sender<SendCmd>,
+    join: JoinHandle<()>,
 }
 
 enum GpuCmd {
@@ -425,10 +421,10 @@ struct Mixer {
     uploads: Arc<Mutex<UploadStore>>,
     telemetry: Arc<Mutex<Telemetry>>,
     cmds: mpsc::Sender<GpuCmd>,
-    send_tx: mpsc::Sender<SendCmd>,
+    send_workers: HashMap<u64, OutputWorker>,
+    omt_gpu: OmtGpu,
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
-    send: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     #[cfg(target_os = "macos")]
     surface_gpu: present::SurfaceGpu,
@@ -440,10 +436,10 @@ fn mixer_slot() -> &'static Mutex<Option<Mixer>> {
     MIXER.get_or_init(|| Mutex::new(None))
 }
 
-fn with_mixer<T>(f: impl FnOnce(&Mixer) -> T) -> Result<T, i32> {
+fn with_mixer<T>(f: impl FnOnce(&mut Mixer) -> T) -> Result<T, i32> {
     let start = Instant::now();
-    let slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    let result = match slot.as_ref() {
+    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    let result = match slot.as_mut() {
         Some(mixer) => Ok(f(mixer)),
         None => Err(ERR_NOT_CREATED),
     };
@@ -674,13 +670,11 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     }));
     let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
-    let (send_tx, send_rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let render_shared = Arc::clone(&shared);
     let render_uploads = Arc::clone(&uploads);
     let render_telemetry = Arc::clone(&telemetry);
     let render_stop = Arc::clone(&stop);
-    let render_send = send_tx.clone();
     let render_thumbs = Arc::clone(&thumb_pixels);
     let render = thread::Builder::new()
         .name("eiviz-render".into())
@@ -694,26 +688,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
                 render_telemetry,
                 render_thumbs,
                 rx,
-                render_send,
                 render_stop,
             );
         })
         .expect("render thread");
-    let send_stop = Arc::clone(&stop);
-    let send_gpu = omt_send_gpu;
-    let send = thread::Builder::new()
-        .name("eiviz-omt-send".into())
-        .spawn(move || send_loop(send_rx, send_stop, send_gpu))
-        .expect("omt send thread");
     *slot = Some(Mixer {
         shared,
         uploads,
         telemetry,
         cmds: tx,
-        send_tx,
+        send_workers: HashMap::new(),
+        omt_gpu: omt_send_gpu,
         thumb_pixels,
         render: Some(render),
-        send: Some(send),
         stop,
         #[cfg(target_os = "macos")]
         surface_gpu,
@@ -749,9 +736,8 @@ pub extern "C" fn mixer_destroy() {
     if let Some(join) = mixer.render.take() {
         crate::diag::join_timeout(join, Duration::from_secs(2), "render");
     }
-    let _ = mixer.send_tx.send(SendCmd::Shutdown);
-    if let Some(join) = mixer.send.take() {
-        crate::diag::join_timeout(join, Duration::from_secs(2), "send");
+    for worker in std::mem::take(&mut mixer.send_workers).into_values() {
+        shutdown_output_worker(worker);
     }
     crate::diag::info("mixer_destroy end");
 }
@@ -960,7 +946,9 @@ pub extern "C" fn mixer_destroy_unit(unit_id: u64) -> i32 {
         });
         drop(shared);
         for output_id in gone {
-            let _ = mixer.send_tx.send(SendCmd::Remove { output_id });
+            if let Some(worker) = mixer.send_workers.remove(&output_id) {
+                shutdown_output_worker(worker);
+            }
         }
         let _ = mixer.cmds.send(GpuCmd::DetachUnit { unit_id });
         OK
@@ -2204,7 +2192,23 @@ pub unsafe extern "C" fn mixer_output_add(
         _ => return ERR_INVALID_ARGUMENT,
     };
     with_mixer(|mixer| {
+        if let Some(old) = mixer.send_workers.remove(&output_id) {
+            mixer
+                .shared
+                .lock()
+                .expect("shared")
+                .outputs
+                .remove(&output_id);
+            shutdown_output_worker(old);
+        }
         let video_sub = Arc::new(AtomicBool::new(false));
+        let worker = spawn_output_worker(
+            output_id,
+            handle,
+            Arc::clone(&video_sub),
+            mixer.omt_gpu.clone(),
+            Arc::clone(&mixer.stop),
+        );
         mixer.shared.lock().expect("shared").outputs.insert(
             output_id,
             LiveOutput {
@@ -2213,15 +2217,12 @@ pub unsafe extern "C" fn mixer_output_add(
                 source_id,
                 unit_id,
                 audio_bus_id,
-                video_sub: Arc::clone(&video_sub),
+                video_sub,
                 use_gpu,
+                tx: worker.tx.clone(),
             },
         );
-        let _ = mixer.send_tx.send(SendCmd::Add {
-            output_id,
-            sender: handle,
-            video_sub,
-        });
+        mixer.send_workers.insert(output_id, worker);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -2236,7 +2237,9 @@ pub extern "C" fn mixer_output_remove(output_id: u64) -> i32 {
             .expect("shared")
             .outputs
             .remove(&output_id);
-        let _ = mixer.send_tx.send(SendCmd::Remove { output_id });
+        if let Some(worker) = mixer.send_workers.remove(&output_id) {
+            shutdown_output_worker(worker);
+        }
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3105,7 +3108,6 @@ fn render_loop(
     telemetry: Arc<Mutex<Telemetry>>,
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     cmds: mpsc::Receiver<GpuCmd>,
-    send_tx: mpsc::Sender<SendCmd>,
     stop: Arc<AtomicBool>,
 ) {
     let mut composer = match Composer::new(&device) {
@@ -3337,6 +3339,7 @@ fn render_loop(
                         .unwrap_or(fps_den),
                     video_sub: Arc::clone(&output.video_sub),
                     use_gpu: output.use_gpu,
+                    tx: output.tx.clone(),
                 }
             }));
             let compose_dirty = guard.compose_dirty;
@@ -3472,8 +3475,15 @@ fn render_loop(
                             label: Some("eiviz delay out"),
                         });
                 let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
-                let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
-                    Vec::new();
+                let mut gpu_copies: Vec<(
+                    mpsc::Sender<SendCmd>,
+                    wgpu::Texture,
+                    u32,
+                    u32,
+                    Arc<AtomicBool>,
+                    u32,
+                    u32,
+                )> = Vec::new();
                 for (unit_id, ..) in &snapshot {
                     let pack_pgm = outputs_snap.iter().any(|item| {
                         item.unit_id == *unit_id
@@ -3534,7 +3544,7 @@ fn render_loop(
                             gpu_sends.copy(&device, &mut encoder, output.output_id, src)
                     {
                         gpu_copies.push((
-                            output.output_id,
+                            output.tx.clone(),
                             texture,
                             w,
                             h,
@@ -3545,15 +3555,8 @@ fn render_loop(
                     }
                 }
                 device.submit(Some(encoder.finish()));
-                emit_packed(
-                    &mut readbacks,
-                    &device,
-                    &packed_copies,
-                    &outputs_snap,
-                    &send_tx,
-                    pts,
-                );
-                emit_gpu(&gpu_copies, &send_tx, pts);
+                emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap, pts);
+                emit_gpu(&gpu_copies, pts);
             }
             frame_delay.consume_display(false);
             composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
@@ -3579,8 +3582,15 @@ fn render_loop(
                 set_error(&telemetry, error);
             }
             let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
-            let mut gpu_copies: Vec<(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)> =
-                Vec::new();
+            let mut gpu_copies: Vec<(
+                mpsc::Sender<SendCmd>,
+                wgpu::Texture,
+                u32,
+                u32,
+                Arc<AtomicBool>,
+                u32,
+                u32,
+            )> = Vec::new();
             for (unit_id, width, height, _, _, state, mix_preview, custom) in &snapshot {
                 composer.ensure_unit(&device, *unit_id, *width, *height);
                 if let Err(error) =
@@ -3657,7 +3667,7 @@ fn render_loop(
                         gpu_sends.copy(&device, &mut encoder, output.output_id, src)
                 {
                     gpu_copies.push((
-                        output.output_id,
+                        output.tx.clone(),
                         texture,
                         w,
                         h,
@@ -3685,15 +3695,8 @@ fn render_loop(
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
             thumbs.advance(&device);
-            emit_packed(
-                &mut readbacks,
-                &device,
-                &packed_copies,
-                &outputs_snap,
-                &send_tx,
-                pts,
-            );
-            emit_gpu(&gpu_copies, &send_tx, pts);
+            emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap, pts);
+            emit_gpu(&gpu_copies, pts);
             for (id, _, _, _, _, state, mix_preview, ..) in &snapshot {
                 last_bus.insert(
                     *id,
@@ -3802,25 +3805,18 @@ fn render_loop(
                 for output in &outputs_snap {
                     // Multiview stays silent on NDI and OMT. Wiring a bus is
                     // technically possible (same SendCmd::Audio as PGM), but
-                    // A/V sync on the shared send thread is messy: mosaic
-                    // encode is heavy, CPU Multiview uses irregular async
-                    // readback, and pairing PCM before/after that encode
-                    // either buffers at the receiver or waits behind the
-                    // mosaic (and other outputs). Skip it rather than add a
-                    // second clocked audio path.
-                    if output.audio_bus_id == 0
-                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
-                    {
+                    // mosaic encode is heavy, CPU Multiview uses irregular async
+                    // readback, and pairing PCM before/after that encode either
+                    // buffers at the receiver or waits behind the mosaic. Skip
+                    // it rather than add a second clocked audio path.
+                    if output.audio_bus_id == 0 || output.source_kind == SRC_KIND_MU_MULTIVIEW {
                         continue;
                     }
                     let packet = interleaved_to_packet(mixed.for_bus(output.audio_bus_id), pts);
                     if packet.samples_per_channel <= 0 {
                         continue;
                     }
-                    let _ = send_tx.send(SendCmd::Audio {
-                        output_id: output.output_id,
-                        packet,
-                    });
+                    let _ = output.tx.send(SendCmd::Audio { packet });
                 }
             }
         }
@@ -3833,7 +3829,6 @@ fn emit_packed(
     device: &GpuDevice,
     packed_copies: &[(u64, u32, u32)],
     outputs_snap: &[OutputSnap],
-    send_tx: &mpsc::Sender<SendCmd>,
     pts: i64,
 ) {
     for (key, width, height) in packed_copies {
@@ -3861,8 +3856,7 @@ fn emit_packed(
                     if out_key != *key {
                         continue;
                     }
-                    let _ = send_tx.send(SendCmd::Video {
-                        output_id: output.output_id,
+                    let _ = output.tx.send(SendCmd::Video {
                         width: *width,
                         height: *height,
                         stride: width * 2,
@@ -3878,21 +3872,32 @@ fn emit_packed(
 }
 
 fn emit_gpu(
-    copies: &[(u64, wgpu::Texture, u32, u32, Arc<AtomicBool>, u32, u32)],
-    send_tx: &mpsc::Sender<SendCmd>,
+    copies: &[(
+        mpsc::Sender<SendCmd>,
+        wgpu::Texture,
+        u32,
+        u32,
+        Arc<AtomicBool>,
+        u32,
+        u32,
+    )],
     pts: i64,
 ) {
-    for (output_id, texture, width, height, busy, fps_n, fps_d) in copies {
-        let _ = send_tx.send(SendCmd::GpuVideo {
-            output_id: *output_id,
-            texture: texture.clone(),
-            width: *width,
-            height: *height,
-            pts,
-            fps_n: *fps_n,
-            fps_d: *fps_d,
-            busy: Arc::clone(busy),
-        });
+    for (tx, texture, width, height, busy, fps_n, fps_d) in copies {
+        if tx
+            .send(SendCmd::GpuVideo {
+                texture: texture.clone(),
+                width: *width,
+                height: *height,
+                pts,
+                fps_n: *fps_n,
+                fps_d: *fps_d,
+                busy: Arc::clone(busy),
+            })
+            .is_err()
+        {
+            busy.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -4202,66 +4207,161 @@ fn collect_live_ids(
     (scenes, uploads)
 }
 
-fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu) {
-    let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
+fn spawn_output_worker(
+    output_id: u64,
+    handle: OutputHandle,
+    video_sub: Arc<AtomicBool>,
+    omt_gpu: OmtGpu,
+    stop: Arc<AtomicBool>,
+) -> OutputWorker {
+    let (tx, rx) = mpsc::channel();
+    let join = thread::Builder::new()
+        .name(format!("eiviz-send-{output_id}"))
+        .spawn(move || send_worker(rx, handle, video_sub, omt_gpu, stop))
+        .expect("send worker");
+    OutputWorker { tx, join }
+}
+
+fn shutdown_output_worker(worker: OutputWorker) {
+    let _ = worker.tx.send(SendCmd::Shutdown);
+    crate::diag::join_timeout(worker.join, Duration::from_secs(2), "send");
+}
+
+fn send_worker(
+    rx: mpsc::Receiver<SendCmd>,
+    mut sender: OutputHandle,
+    video_sub: Arc<AtomicBool>,
+    omt_gpu: OmtGpu,
+    stop: Arc<AtomicBool>,
+) {
     let mut batch = Vec::new();
-    while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
+    loop {
+        if stop.load(Ordering::Relaxed) || crate::diag::is_fatal() {
+            drain_release_gpu(&rx, std::mem::take(&mut batch));
+            return;
+        }
         loop {
             match rx.try_recv() {
-                Ok(SendCmd::Shutdown) => return,
+                Ok(SendCmd::Shutdown) => {
+                    drain_release_gpu(&rx, std::mem::take(&mut batch));
+                    return;
+                }
                 Ok(cmd) => {
                     if stop.load(Ordering::Relaxed) {
-                        if let SendCmd::GpuVideo { busy, .. } = &cmd {
-                            busy.store(false, Ordering::Release);
-                        }
+                        release_send_cmd(cmd);
                         continue;
                     }
                     batch.push(cmd);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let _ = dispatch_worker_batch(&mut sender, &mut batch, &omt_gpu);
+                    drain_release_gpu(&rx, std::mem::take(&mut batch));
+                    return;
+                }
             }
         }
-        dispatch_send_batch(&mut senders, &mut batch, &omt_gpu);
-        pump_senders(&mut senders);
+        if !dispatch_worker_batch(&mut sender, &mut batch, &omt_gpu) {
+            drain_release_gpu(&rx, std::mem::take(&mut batch));
+            return;
+        }
+        if !pump_one(&mut sender, &video_sub) {
+            drain_release_gpu(&rx, std::mem::take(&mut batch));
+            return;
+        }
         match rx.recv_timeout(Duration::from_millis(2)) {
-            Ok(SendCmd::Shutdown) => return,
+            Ok(SendCmd::Shutdown) => {
+                drain_release_gpu(&rx, std::mem::take(&mut batch));
+                return;
+            }
             Ok(cmd) => {
                 if stop.load(Ordering::Relaxed) {
-                    if let SendCmd::GpuVideo { busy, .. } = &cmd {
-                        busy.store(false, Ordering::Release);
-                    }
+                    release_send_cmd(cmd);
                     continue;
                 }
                 batch.push(cmd);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                drain_release_gpu(&rx, std::mem::take(&mut batch));
+                return;
+            }
         }
     }
 }
 
-fn dispatch_send_batch(
-    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
-    batch: &mut Vec<SendCmd>,
-    omt_gpu: &OmtGpu,
-) {
-    if batch.is_empty() {
-        return;
+fn drain_release_gpu(rx: &mpsc::Receiver<SendCmd>, extra: Vec<SendCmd>) {
+    for cmd in extra {
+        release_send_cmd(cmd);
     }
-    for cmd in take_audio_first(std::mem::take(batch)) {
-        dispatch_send_cmd(senders, cmd, omt_gpu);
+    while let Ok(cmd) = rx.try_recv() {
+        release_send_cmd(cmd);
     }
 }
 
+fn release_send_cmd(cmd: SendCmd) {
+    if let SendCmd::GpuVideo { busy, .. } = cmd {
+        busy.store(false, Ordering::Release);
+    }
+}
+
+fn dispatch_worker_batch(
+    sender: &mut OutputHandle,
+    batch: &mut Vec<SendCmd>,
+    omt_gpu: &OmtGpu,
+) -> bool {
+    if batch.is_empty() {
+        return true;
+    }
+    for cmd in take_audio_first(coalesce_latest_video(std::mem::take(batch))) {
+        let heavy = matches!(cmd, SendCmd::GpuVideo { .. });
+        if heavy && !pump_accept_one(sender) {
+            release_send_cmd(cmd);
+            return false;
+        }
+        apply_send_cmd(sender, cmd, omt_gpu);
+        if heavy && !pump_accept_one(sender) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Keep audio in order; keep only the last CPU/GPU video in a drain so a slow
+/// output does not send stale frames. Dropped GPU frames free the send ring.
+fn coalesce_latest_video(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
+    let mut last_video = None;
+    let mut out = Vec::with_capacity(cmds.len());
+    for cmd in cmds {
+        match cmd {
+            SendCmd::Audio { .. } => out.push(cmd),
+            SendCmd::Shutdown => {
+                if let Some(prev) = last_video.take() {
+                    release_send_cmd(prev);
+                }
+                out.push(SendCmd::Shutdown);
+            }
+            SendCmd::Video { .. } | SendCmd::GpuVideo { .. } => {
+                if let Some(prev) = last_video.replace(cmd) {
+                    release_send_cmd(prev);
+                }
+            }
+        }
+    }
+    if let Some(video) = last_video {
+        out.push(video);
+    }
+    out
+}
+
 /// Send audio before CPU/GPU video in a drain so NDI `send_audio` is not delayed
-/// behind encode. Add/Remove stay barriers so a new sender is inserted first.
+/// behind encode.
 fn take_audio_first(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
     let mut out = Vec::with_capacity(cmds.len());
     let mut pending_video = Vec::new();
     for cmd in cmds {
         match &cmd {
-            SendCmd::Add { .. } | SendCmd::Remove { .. } | SendCmd::Shutdown => {
+            SendCmd::Shutdown => {
                 out.append(&mut pending_video);
                 out.push(cmd);
             }
@@ -4273,69 +4373,28 @@ fn take_audio_first(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
     out
 }
 
-fn dispatch_send_cmd(
-    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
-    cmd: SendCmd,
-    omt_gpu: &OmtGpu,
-) {
-    let heavy = matches!(cmd, SendCmd::GpuVideo { .. });
-    if heavy {
-        // Accept only: metadata `read` shares the peer lock with writers and
-        // used to stall GPU encode when a socket was left blocking.
-        pump_accept_senders(senders);
-    }
-    apply_send_cmd(senders, cmd, omt_gpu);
-    if heavy {
-        pump_accept_senders(senders);
+fn pump_accept_one(sender: &mut OutputHandle) -> bool {
+    // Accept only: metadata `read` shares the peer lock with writers and
+    // used to stall GPU encode when a socket was left blocking.
+    match panic::catch_unwind(AssertUnwindSafe(|| sender.pump_accept())) {
+        Ok(Ok(())) => true,
+        Ok(Err(_)) | Err(_) => false,
     }
 }
 
-fn pump_accept_senders(senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>) {
-    let mut dead = Vec::new();
-    for (&id, (sender, _)) in senders.iter_mut() {
-        let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump_accept()));
-        match pumped {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) | Err(_) => dead.push(id),
+fn pump_one(sender: &mut OutputHandle, video_sub: &AtomicBool) -> bool {
+    match panic::catch_unwind(AssertUnwindSafe(|| sender.pump())) {
+        Ok(Ok(subscribed)) => {
+            video_sub.store(subscribed, Ordering::Relaxed);
+            true
         }
-    }
-    for id in dead {
-        senders.remove(&id);
+        Ok(Err(_)) | Err(_) => false,
     }
 }
 
-fn pump_senders(senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>) {
-    let mut dead = Vec::new();
-    for (&id, (sender, video_sub)) in senders.iter_mut() {
-        let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump()));
-        match pumped {
-            Ok(Ok(subscribed)) => video_sub.store(subscribed, Ordering::Relaxed),
-            Ok(Err(_)) | Err(_) => dead.push(id),
-        }
-    }
-    for id in dead {
-        senders.remove(&id);
-    }
-}
-
-fn apply_send_cmd(
-    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
-    cmd: SendCmd,
-    omt_gpu: &OmtGpu,
-) {
+fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &OmtGpu) {
     match cmd {
-        SendCmd::Add {
-            output_id,
-            sender,
-            video_sub,
-        } => {
-            senders.insert(output_id, (sender, video_sub));
-        }
-        SendCmd::Remove { output_id } => {
-            senders.remove(&output_id);
-        }
         SendCmd::Video {
-            output_id,
             width,
             height,
             stride,
@@ -4344,18 +4403,15 @@ fn apply_send_cmd(
             fps_n,
             fps_d,
         } => {
-            if let Some((sender, _)) = senders.get_mut(&output_id) {
-                if panic::catch_unwind(AssertUnwindSafe(|| {
-                    sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
-                }))
-                .is_err()
-                {
-                    crate::diag::mark_fatal("omt send video panicked");
-                }
+            if panic::catch_unwind(AssertUnwindSafe(|| {
+                sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
+            }))
+            .is_err()
+            {
+                crate::diag::mark_fatal("omt send video panicked");
             }
         }
         SendCmd::GpuVideo {
-            output_id,
             texture,
             width,
             height,
@@ -4364,24 +4420,20 @@ fn apply_send_cmd(
             fps_d,
             busy,
         } => {
-            if let Some((sender, _)) = senders.get_mut(&output_id) {
-                match panic::catch_unwind(AssertUnwindSafe(|| {
-                    sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
-                })) {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => crate::diag::mark_fatal(format!("omt send texture: {error}")),
-                    Err(_) => crate::diag::mark_fatal("omt send texture panicked"),
-                }
+            match panic::catch_unwind(AssertUnwindSafe(|| {
+                sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
+            })) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => crate::diag::mark_fatal(format!("omt send texture: {error}")),
+                Err(_) => crate::diag::mark_fatal("omt send texture panicked"),
             }
             busy.store(false, Ordering::Release);
         }
-        SendCmd::Audio { output_id, packet } => {
-            if let Some((sender, _)) = senders.get_mut(&output_id) {
-                match panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet))) {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => crate::diag::error(&format!("send audio: {error}")),
-                    Err(_) => crate::diag::mark_fatal("send audio panicked"),
-                }
+        SendCmd::Audio { packet } => {
+            match panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet))) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => crate::diag::error(&format!("send audio: {error}")),
+                Err(_) => crate::diag::mark_fatal("send audio panicked"),
             }
         }
         SendCmd::Shutdown => {}
@@ -4472,6 +4524,7 @@ mod tests {
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(true)),
             use_gpu: false,
+            tx: mpsc::channel().0,
         }];
         let (scenes, uploads) = collect_live_ids(&specs, &[], &[], &outputs, &HashMap::new());
         assert!(scenes.contains(&mv));
@@ -4596,9 +4649,8 @@ mod tests {
         }
     }
 
-    fn dummy_video(output_id: u64) -> SendCmd {
+    fn dummy_video() -> SendCmd {
         SendCmd::Video {
-            output_id,
             width: 2,
             height: 2,
             stride: 4,
@@ -4609,9 +4661,8 @@ mod tests {
         }
     }
 
-    fn dummy_audio(output_id: u64) -> SendCmd {
+    fn dummy_audio() -> SendCmd {
         SendCmd::Audio {
-            output_id,
             packet: AudioPacket {
                 timestamp: 0,
                 sample_rate: AUDIO_RATE,
@@ -4622,43 +4673,74 @@ mod tests {
         }
     }
 
-    fn send_kind(cmd: &SendCmd) -> (u8, u64) {
+    fn dummy_gpu_video(busy: Arc<AtomicBool>, pts: i64, device: &GpuDevice) -> SendCmd {
+        let texture = device.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz coalesce test"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        SendCmd::GpuVideo {
+            texture,
+            width: 16,
+            height: 16,
+            pts,
+            fps_n: 60,
+            fps_d: 1,
+            busy,
+        }
+    }
+
+    fn send_kind(cmd: &SendCmd) -> u8 {
         match cmd {
-            SendCmd::Audio { output_id, .. } => (0, *output_id),
-            SendCmd::Video { output_id, .. } => (1, *output_id),
-            SendCmd::Remove { output_id } => (2, *output_id),
-            SendCmd::Add { output_id, .. } => (3, *output_id),
-            SendCmd::GpuVideo { output_id, .. } => (4, *output_id),
-            SendCmd::Shutdown => (5, 0),
+            SendCmd::Audio { .. } => 0,
+            SendCmd::Video { .. } => 1,
+            SendCmd::GpuVideo { .. } => 2,
+            SendCmd::Shutdown => 3,
         }
     }
 
     #[test]
     fn take_audio_first_sends_audio_before_video() {
         let out = take_audio_first(vec![
-            dummy_video(1),
-            dummy_audio(1),
-            dummy_video(2),
-            dummy_audio(2),
+            dummy_video(),
+            dummy_audio(),
+            dummy_video(),
+            dummy_audio(),
         ]);
         assert_eq!(
             out.iter().map(send_kind).collect::<Vec<_>>(),
-            vec![(0, 1), (0, 2), (1, 1), (1, 2)]
+            vec![0, 0, 1, 1]
         );
     }
 
     #[test]
-    fn take_audio_first_keeps_remove_as_barrier() {
-        let out = take_audio_first(vec![
-            dummy_video(1),
-            dummy_audio(1),
-            SendCmd::Remove { output_id: 1 },
-            dummy_video(2),
-            dummy_audio(2),
+    fn coalesce_latest_video_releases_stale_gpu_busy() {
+        let device = GpuDevice::new().expect("gpu");
+        let stale = Arc::new(AtomicBool::new(true));
+        let latest = Arc::new(AtomicBool::new(true));
+        let out = coalesce_latest_video(vec![
+            dummy_audio(),
+            dummy_gpu_video(Arc::clone(&stale), 1, &device),
+            dummy_video(),
+            dummy_gpu_video(Arc::clone(&latest), 2, &device),
         ]);
-        assert_eq!(
-            out.iter().map(send_kind).collect::<Vec<_>>(),
-            vec![(0, 1), (1, 1), (2, 1), (0, 2), (1, 2)]
+        assert!(
+            !stale.load(Ordering::Acquire),
+            "stale GPU frame must free the send ring"
         );
+        assert!(
+            latest.load(Ordering::Acquire),
+            "kept GPU frame stays busy until sent"
+        );
+        assert_eq!(out.iter().map(send_kind).collect::<Vec<_>>(), vec![0, 2]);
     }
 }
