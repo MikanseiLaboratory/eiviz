@@ -1,17 +1,17 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVE_FORMAT_PCM,
+    AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    WAVE_FORMAT_PCM, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::core::PCWSTR;
 
 use super::graph::BusRing;
 use super::pop_stereo_rate;
@@ -27,8 +27,9 @@ pub fn run(
 ) -> Result<(), String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-            .map_err(|error| format!("enumerator: {error}"))?;
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|error| format!("enumerator: {error}"))?;
         let device: IMMDevice = if device_id.is_empty() {
             enumerator
                 .GetDefaultAudioEndpoint(eRender, eConsole)
@@ -69,8 +70,8 @@ pub fn run(
         } else {
             init.map_err(|error| format!("initialize: {error}"))?;
         }
-        let event = CreateEventW(None, false, false, None)
-            .map_err(|error| format!("event: {error}"))?;
+        let event =
+            CreateEventW(None, false, false, None).map_err(|error| format!("event: {error}"))?;
         client
             .SetEventHandle(event)
             .map_err(|error| format!("set event: {error}"))?;
@@ -136,9 +137,27 @@ fn write_mapped(
         return;
     }
     for (i, (left, right)) in stereo.iter().enumerate() {
-        write_sample(dest, i, channels, sample_bytes, float, bits, map_left, *left);
+        write_sample(
+            dest,
+            i,
+            channels,
+            sample_bytes,
+            float,
+            bits,
+            map_left,
+            *left,
+        );
         if map_right != map_left {
-            write_sample(dest, i, channels, sample_bytes, float, bits, map_right, *right);
+            write_sample(
+                dest,
+                i,
+                channels,
+                sample_bytes,
+                float,
+                bits,
+                map_right,
+                *right,
+            );
         }
     }
 }

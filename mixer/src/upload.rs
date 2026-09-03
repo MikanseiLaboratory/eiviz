@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
@@ -16,6 +15,82 @@ const AUDIO_FIFO_HIGH_FRAMES: usize = AUDIO_FIFO_FRAMES * 4 / 5;
 /// Target source latency (~40 ms). File pumps must not ingest past this.
 pub const AUDIO_LIVE_FRAMES: usize = AUDIO_RATE as usize / 25;
 const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
+
+fn fifo_cond() -> &'static Condvar {
+    static COND: OnceLock<Condvar> = OnceLock::new();
+    COND.get_or_init(Condvar::new)
+}
+
+fn notify_fifo() {
+    fifo_cond().notify_all();
+}
+
+/// Fixed-capacity interleaved sample ring. Drops oldest samples when full.
+pub struct SampleRing {
+    buf: Vec<f32>,
+    cap: usize,
+    head: usize,
+    len: usize,
+}
+
+impl SampleRing {
+    pub fn new(cap_samples: usize) -> Self {
+        let cap = cap_samples.max(2);
+        Self {
+            buf: vec![0.0; cap],
+            cap,
+            head: 0,
+            len: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn clear(&mut self) {
+        self.head = 0;
+        self.len = 0;
+    }
+
+    pub fn extend(&mut self, samples: impl IntoIterator<Item = f32>) {
+        for sample in samples {
+            if self.len == self.cap {
+                self.head = (self.head + 1) % self.cap;
+                self.len -= 1;
+            }
+            let i = (self.head + self.len) % self.cap;
+            self.buf[i] = sample;
+            self.len += 1;
+        }
+    }
+
+    pub fn drain_front(&mut self, n: usize) {
+        let take = n.min(self.len);
+        self.head = (self.head + take) % self.cap;
+        self.len -= take;
+    }
+
+    pub fn pop_front(&mut self) -> Option<f32> {
+        if self.len == 0 {
+            return None;
+        }
+        let value = self.buf[self.head];
+        self.head = (self.head + 1) % self.cap;
+        self.len -= 1;
+        Some(value)
+    }
+
+    pub fn pop_into(&mut self, n: usize, out: &mut Vec<f32>) {
+        let take = n.min(self.len);
+        out.reserve(take);
+        for _ in 0..take {
+            out.push(self.buf[self.head]);
+            self.head = (self.head + 1) % self.cap;
+            self.len -= 1;
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CpuFormat {
@@ -57,7 +132,7 @@ pub struct SourceRing {
     cpu_fifo: VecDeque<CpuQueuedFrame>,
     gpu_fifo: VecDeque<GpuVideoFrame>,
     free: Vec<Vec<u8>>,
-    fifo: VecDeque<f32>,
+    fifo: SampleRing,
     last_peak: (f32, f32),
     last_hold: (f32, f32),
     fifo_primed: bool,
@@ -222,7 +297,10 @@ impl GpuUploadRing {
     }
 
     pub fn vram_bytes(&self) -> u64 {
-        self.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum()
+        self.slots
+            .iter()
+            .map(|slot| texture_bytes(&slot.texture))
+            .sum()
     }
 }
 
@@ -282,7 +360,7 @@ pub struct AudioPacket {
     pub sample_rate: i32,
     pub channels: i32,
     pub samples_per_channel: i32,
-    pub pcm_planar_f32: Vec<u8>,
+    pub pcm_planar_f32: Vec<f32>,
 }
 
 impl SourceRing {
@@ -306,7 +384,7 @@ impl SourceRing {
             cpu_fifo: VecDeque::new(),
             gpu_fifo: VecDeque::new(),
             free: Vec::new(),
-            fifo: VecDeque::new(),
+            fifo: SampleRing::new(AUDIO_FIFO_FRAMES * 2),
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
             fifo_primed: false,
@@ -470,10 +548,6 @@ impl SourceRing {
         self.last_peak = peak_planar(&packet);
         let stereo = resample_to_stereo_48k(&packet);
         self.fifo.extend(stereo);
-        let cap = AUDIO_FIFO_FRAMES * 2;
-        while self.fifo.len() > cap {
-            self.fifo.pop_front();
-        }
         if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.fifo_primed = true;
         }
@@ -506,7 +580,7 @@ impl SourceRing {
     pub fn skip_audio_frames(&mut self, frames: usize) {
         let n = frames.saturating_mul(2).min(self.fifo.len());
         if n > 0 {
-            self.fifo.drain(..n);
+            self.fifo.drain_front(n);
         }
     }
 
@@ -517,7 +591,7 @@ impl SourceRing {
         if self.fifo.len() > max {
             let drop = self.fifo.len().saturating_sub(live);
             if drop > 0 {
-                self.fifo.drain(..drop);
+                self.fifo.drain_front(drop);
             }
         }
     }
@@ -625,7 +699,8 @@ impl UploadStore {
 
     pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
         match self.sources.get(&id) {
-            Some(ring) if ring.width == width && ring.height == height && ring.format == format => {}
+            Some(ring) if ring.width == width && ring.height == height && ring.format == format => {
+            }
             _ => self.register(id, width, height, format),
         }
     }
@@ -750,13 +825,20 @@ impl UploadStore {
     }
 
     pub fn memory_bytes(&self) -> (u64, u64) {
-        self.sources.values().fold((0u64, 0u64), |(ram, vram), ring| {
-            (ram + ring.ram_bytes(), vram + ring.vram_actual())
-        })
+        self.sources
+            .values()
+            .fold((0u64, 0u64), |(ram, vram), ring| {
+                (ram + ring.ram_bytes(), vram + ring.vram_actual())
+            })
     }
 
     pub fn push_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
-        self.ensure(id, frame.width.max(2), frame.height.max(2), CpuFormat::GpuRgba);
+        self.ensure(
+            id,
+            frame.width.max(2),
+            frame.height.max(2),
+            CpuFormat::GpuRgba,
+        );
         let ring = self
             .sources
             .get_mut(&id)
@@ -786,16 +868,12 @@ impl UploadStore {
         let Some(ring) = self.sources.get_mut(&id) else {
             return;
         };
-        let mut pcm = Vec::with_capacity(planar.len() * 4);
-        for sample in planar {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
         ring.ingest_audio(AudioPacket {
             timestamp: pts,
             sample_rate,
             channels,
             samples_per_channel: frames as i32,
-            pcm_planar_f32: pcm,
+            pcm_planar_f32: planar.to_vec(),
         });
     }
 
@@ -824,7 +902,35 @@ impl UploadStore {
         let Some(ring) = self.sources.get_mut(&id) else {
             return vec![(0.0, 0.0); frames];
         };
-        (0..frames).map(|_| ring.pop_stereo()).collect()
+        let mut out = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            out.push(ring.pop_stereo());
+        }
+        notify_fifo();
+        out
+    }
+
+    pub fn pop_frames_into(&mut self, id: u64, frames: usize, out: &mut Vec<f32>) {
+        out.clear();
+        let Some(ring) = self.sources.get_mut(&id) else {
+            out.resize(frames * 2, 0.0);
+            return;
+        };
+        if !ring.fifo_primed {
+            out.resize(frames * 2, 0.0);
+            return;
+        }
+        ring.trim_to_live();
+        let want = frames * 2;
+        ring.fifo.pop_into(want, out);
+        while out.len() < want {
+            out.push(ring.last_hold.0);
+            out.push(ring.last_hold.1);
+        }
+        if want >= 2 {
+            ring.last_hold = (out[want - 2], out[want - 1]);
+        }
+        notify_fifo();
     }
 
     pub fn skip_audio_frames(&mut self, frames: usize) {
@@ -834,6 +940,7 @@ impl UploadStore {
         for ring in self.sources.values_mut() {
             ring.skip_audio_frames(frames);
         }
+        notify_fifo();
     }
 
     pub fn flush_audio(&mut self, id: u64) {
@@ -867,17 +974,22 @@ impl UploadStore {
             let Some(ring) = self.sources.get_mut(&id) else {
                 continue;
             };
-            for i in 0..frames {
+            let mut samples = Vec::with_capacity(frames * 2);
+            for _ in 0..frames {
                 let (left, right) = ring.pop_stereo();
-                out[i * 2] += left * gain;
-                out[i * 2 + 1] += right * gain;
+                samples.push(left);
+                samples.push(right);
             }
+            crate::simd::mix_stereo_gain(&mut out, &samples, gain);
         }
         out
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
-        self.sources.get(&id).map(|ring| ring.fifo.len() / 2).unwrap_or(0)
+        self.sources
+            .get(&id)
+            .map(|ring| ring.fifo.len() / 2)
+            .unwrap_or(0)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -894,35 +1006,34 @@ impl UploadStore {
 }
 
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    wait_fifo_below(uploads, id, AUDIO_FIFO_HIGH_FRAMES, 8);
+    wait_fifo_below(uploads, id, AUDIO_FIFO_HIGH_FRAMES);
     uploads.lock().expect("uploads").ingest_audio(id, packet);
 }
 
 /// File pumps are clocked by video PTS. Keep only a short audio lead so the
 /// mix does not play 400–500 ms of already-decoded sound behind the current frame.
 pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    wait_fifo_below(uploads, id, AUDIO_LIVE_FRAMES, 32);
+    wait_fifo_below(uploads, id, AUDIO_LIVE_FRAMES);
     uploads.lock().expect("uploads").ingest_audio(id, packet);
 }
 
-fn wait_fifo_below(uploads: &Mutex<UploadStore>, id: u64, limit: usize, tries: u32) {
-    for _ in 0..tries {
-        let frames = uploads.lock().expect("uploads").fifo_frames(id);
-        if frames < limit {
+fn wait_fifo_below(uploads: &Mutex<UploadStore>, id: u64, limit: usize) {
+    let mut guard = uploads.lock().expect("uploads");
+    while guard.fifo_frames(id) >= limit {
+        let (next, timeout) = fifo_cond()
+            .wait_timeout(guard, Duration::from_millis(50))
+            .expect("fifo wait");
+        guard = next;
+        if timeout.timed_out() {
             break;
         }
-        thread::sleep(Duration::from_millis(2));
     }
 }
 
 fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
     let channels = packet.channels.max(1) as usize;
     let src_rate = packet.sample_rate.max(1) as usize;
-    let values: Vec<f32> = packet
-        .pcm_planar_f32
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
+    let values = &packet.pcm_planar_f32;
     if values.is_empty() {
         return Vec::new();
     }
@@ -933,39 +1044,15 @@ fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
     }
     .max(1)
     .min(values.len() / channels.max(1));
-    if src_rate == AUDIO_RATE as usize {
-        let mut out = Vec::with_capacity(src_frames * 2);
-        for i in 0..src_frames {
-            let left = values[i];
-            let right = if channels > 1 {
-                values.get(src_frames + i).copied().unwrap_or(left)
-            } else {
-                left
-            };
-            out.push(left);
-            out.push(right);
-        }
-        return out;
-    }
-    let dst_frames = (src_frames * AUDIO_RATE as usize + src_rate / 2) / src_rate;
-    let mut out = Vec::with_capacity(dst_frames * 2);
-    let last = src_frames.saturating_sub(1);
-    for i in 0..dst_frames {
-        let src = i as f64 * src_rate as f64 / AUDIO_RATE as f64;
-        let idx = (src.floor() as usize).min(last);
-        let frac = (src - idx as f64) as f32;
-        let nxt = (idx + 1).min(last);
-        let left = values[idx] * (1.0 - frac) + values[nxt] * frac;
-        let right = if channels > 1 {
-            let a = values.get(src_frames + idx).copied().unwrap_or(left);
-            let b = values.get(src_frames + nxt).copied().unwrap_or(a);
-            a * (1.0 - frac) + b * frac
-        } else {
-            left
-        };
-        out.push(left);
-        out.push(right);
-    }
+    let mut out = Vec::new();
+    crate::simd::resample_planar_to_stereo(
+        values,
+        src_frames,
+        channels,
+        src_rate,
+        AUDIO_RATE as usize,
+        &mut out,
+    );
     out
 }
 
@@ -976,10 +1063,7 @@ mod tests {
 
     #[test]
     fn linear_resample_48k_passthrough() {
-        let mut pcm = Vec::new();
-        for sample in [0.0f32, 0.5, 1.0] {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
+        let pcm = vec![0.0f32, 0.5, 1.0];
         let packet = AudioPacket {
             timestamp: 0,
             sample_rate: 48_000,
@@ -995,10 +1079,7 @@ mod tests {
     }
 
     fn tone_packet(frames: usize) -> AudioPacket {
-        let mut pcm = Vec::with_capacity(frames * 4);
-        for i in 0..frames {
-            pcm.extend_from_slice(&(i as f32 * 0.001).to_le_bytes());
-        }
+        let pcm: Vec<f32> = (0..frames).map(|i| i as f32 * 0.001).collect();
         AudioPacket {
             timestamp: 0,
             sample_rate: AUDIO_RATE,
@@ -1097,32 +1178,24 @@ mod tests {
 
 fn peak_planar(audio: &AudioPacket) -> (f32, f32) {
     let channels = audio.channels.max(1) as usize;
-    let byte_samples = audio.pcm_planar_f32.len() / 4;
-    if byte_samples == 0 {
+    if audio.pcm_planar_f32.is_empty() {
         return (0.0, 0.0);
     }
     let samples = if audio.samples_per_channel > 0 {
         audio.samples_per_channel as usize
     } else {
-        (byte_samples / channels).max(1)
+        (audio.pcm_planar_f32.len() / channels).max(1)
     };
-    let plane_bytes = samples * 4;
-    let left = peak_bytes(&audio.pcm_planar_f32[..plane_bytes.min(audio.pcm_planar_f32.len())]);
+    let plane = samples.min(audio.pcm_planar_f32.len());
+    let left = crate::simd::peak_f32(&audio.pcm_planar_f32[..plane]);
     let right = if channels > 1 {
-        let start = plane_bytes.min(audio.pcm_planar_f32.len());
-        let end = (start + plane_bytes).min(audio.pcm_planar_f32.len());
-        peak_bytes(&audio.pcm_planar_f32[start..end])
+        let start = plane.min(audio.pcm_planar_f32.len());
+        let end = (start + plane).min(audio.pcm_planar_f32.len());
+        crate::simd::peak_f32(&audio.pcm_planar_f32[start..end])
     } else {
         left
     };
     (left.min(1.0), right.min(1.0))
-}
-
-fn peak_bytes(bytes: &[u8]) -> f32 {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).abs())
-        .fold(0.0f32, f32::max)
 }
 
 fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {
@@ -1153,7 +1226,9 @@ pub(crate) fn write_slot(
     }
     let needed_src = match height {
         0 => 0,
-        h => (h as usize - 1).saturating_mul(stride).saturating_add(row_bytes),
+        h => (h as usize - 1)
+            .saturating_mul(stride)
+            .saturating_add(row_bytes),
     };
     let needed_dst = slot_bytes(width, height, format);
     if src.len() < needed_src || dst.len() < needed_dst {
@@ -1168,12 +1243,6 @@ pub(crate) fn write_slot(
         }
     }
     if opaque_x && matches!(format, CpuFormat::Bgra | CpuFormat::Rgba) {
-        let words = needed_dst / 4;
-        let ptr = dst.as_mut_ptr();
-        unsafe {
-            for i in 0..words {
-                *ptr.add(i * 4).cast::<u32>() |= 0xFF00_0000;
-            }
-        }
+        crate::simd::or_opaque_bgra(&mut dst[..needed_dst]);
     }
 }

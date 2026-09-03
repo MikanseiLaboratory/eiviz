@@ -43,6 +43,7 @@ public partial class OverlayWindow : Window
             AttachDrags();
             ListReorder.Attach(SlotList, MoveSlot);
         };
+        Closed += (_, _) => PreviewHost.ReleaseNative();
     }
 
     internal void RefreshEnabled() => RefreshList();

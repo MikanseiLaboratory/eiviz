@@ -89,70 +89,71 @@ impl OmtReceiver {
                 let mut sent: Option<(bool, bool, bool, u32)> = None;
                 let mut drop_full_at: Option<Instant> = None;
                 let run = panic::catch_unwind(AssertUnwindSafe(|| {
-                while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
-                    let full = debounce_want_full(
-                        want_full_thread.load(Ordering::Relaxed),
-                        &mut drop_full_at,
-                    );
-                    apply_omt_save(
-                        &session,
-                        full,
-                        on_program_thread.load(Ordering::Relaxed),
-                        on_preview_thread.load(Ordering::Relaxed),
-                        quality_from_abi(quality_thread.load(Ordering::Relaxed)),
-                        &mut sent,
-                    );
-                    if use_gpu {
-                        if let Some(frame) =
-                            session.recv_video_gpu_timeout(Duration::from_millis(4))
-                        {
-                            let width = frame.width.max(2);
-                            let height = frame.height.max(2);
-                            let gpu_frame = if depth > 1 {
-                                if let Some(ctx) = gpu.as_ref() {
-                                    copy_gpu_frame(
-                                        ctx,
-                                        &frame.texture,
-                                        width,
-                                        height,
-                                        frame.timestamp,
-                                    )
+                    while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
+                        let full = debounce_want_full(
+                            want_full_thread.load(Ordering::Relaxed),
+                            &mut drop_full_at,
+                        );
+                        apply_omt_save(
+                            &session,
+                            full,
+                            on_program_thread.load(Ordering::Relaxed),
+                            on_preview_thread.load(Ordering::Relaxed),
+                            quality_from_abi(quality_thread.load(Ordering::Relaxed)),
+                            &mut sent,
+                        );
+                        if use_gpu {
+                            if let Some(frame) =
+                                session.recv_video_gpu_timeout(Duration::from_millis(4))
+                            {
+                                let width = frame.width.max(2);
+                                let height = frame.height.max(2);
+                                let gpu_frame = if depth > 1 {
+                                    if let Some(ctx) = gpu.as_ref() {
+                                        copy_gpu_frame(
+                                            ctx,
+                                            &frame.texture,
+                                            width,
+                                            height,
+                                            frame.timestamp,
+                                        )
+                                    } else {
+                                        gpu_frame_from_omt(frame)
+                                    }
                                 } else {
                                     gpu_frame_from_omt(frame)
-                                }
-                            } else {
-                                gpu_frame_from_omt(frame)
-                            };
+                                };
+                                let mut store = uploads.lock().expect("uploads lock");
+                                store.ensure_playout(
+                                    source_id,
+                                    gpu_frame.width,
+                                    gpu_frame.height,
+                                    CpuFormat::GpuRgba,
+                                    depth,
+                                );
+                                store.push_playout_gpu(source_id, gpu_frame).ok();
+                            }
+                        } else if let Some(frame) =
+                            session.recv_video_timeout(Duration::from_millis(4))
+                        {
                             let mut store = uploads.lock().expect("uploads lock");
                             store.ensure_playout(
                                 source_id,
-                                gpu_frame.width,
-                                gpu_frame.height,
-                                CpuFormat::GpuRgba,
+                                frame.width.max(2),
+                                frame.height.max(2),
+                                CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
                                 depth,
                             );
-                            store.push_playout_gpu(source_id, gpu_frame).ok();
+                            let stride = frame.stride.max(frame.width * 4) as usize;
+                            store
+                                .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
+                                .ok();
                         }
-                    } else if let Some(frame) = session.recv_video_timeout(Duration::from_millis(4))
-                    {
-                        let mut store = uploads.lock().expect("uploads lock");
-                        store.ensure_playout(
-                            source_id,
-                            frame.width.max(2),
-                            frame.height.max(2),
-                            CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                            depth,
-                        );
-                        let stride = frame.stride.max(frame.width * 4) as usize;
-                        store
-                            .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
-                            .ok();
+                        while let Some(audio) = session.try_recv_audio() {
+                            ingest_audio_throttled(&uploads, source_id, to_audio(audio));
+                        }
                     }
-                    while let Some(audio) = session.try_recv_audio() {
-                        ingest_audio_throttled(&uploads, source_id, to_audio(audio));
-                    }
-                }
-                session.disconnect();
+                    session.disconnect();
                 }));
                 if run.is_err() {
                     crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
@@ -289,7 +290,11 @@ impl ProgramSender {
             sample_rate: audio.sample_rate,
             channels: audio.channels,
             samples_per_channel: audio.samples_per_channel,
-            data: audio.pcm_planar_f32.clone(),
+            data: audio
+                .pcm_planar_f32
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect(),
             ..Default::default()
         };
         self.sender.send_audio(frame).map_err(|e| e.to_string())
@@ -559,11 +564,16 @@ fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
     } else {
         (frame.pcm_planar_f32.len() as i32 / 4 / channels).max(1)
     };
+    let pcm = frame
+        .pcm_planar_f32
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
     AudioPacket {
         timestamp: frame.timestamp,
         sample_rate: frame.sample_rate,
         channels: frame.channels,
         samples_per_channel: samples,
-        pcm_planar_f32: frame.pcm_planar_f32.to_vec(),
+        pcm_planar_f32: pcm,
     }
 }

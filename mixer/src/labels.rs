@@ -136,16 +136,12 @@ fn blit_glyph(
                 continue;
             }
             let i = (dy as usize * width + dx as usize) * 4;
-            pixels[i] = mix(bg[0], fg[0], cover);
-            pixels[i + 1] = mix(bg[1], fg[1], cover);
-            pixels[i + 2] = mix(bg[2], fg[2], cover);
-            pixels[i + 3] = mix(BAND_ALPHA, TEXT_ALPHA, cover);
+            pixels[i] = crate::simd::blend_u8(bg[0], fg[0], cover);
+            pixels[i + 1] = crate::simd::blend_u8(bg[1], fg[1], cover);
+            pixels[i + 2] = crate::simd::blend_u8(bg[2], fg[2], cover);
+            pixels[i + 3] = crate::simd::blend_u8(BAND_ALPHA, TEXT_ALPHA, cover);
         }
     }
-}
-
-fn mix(bg: u8, fg: u8, cover: u16) -> u8 {
-    ((fg as u16 * cover + bg as u16 * (255 - cover)) / 255) as u8
 }
 
 fn font() -> Option<&'static fontdue::Font> {

@@ -4,15 +4,15 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, PixelFormat, Receiver, ReceiverBandwidth,
-    ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source, SourceAddress, VideoFrame,
-    NDI,
+    AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
+    ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source,
+    SourceAddress, VideoFrame,
 };
 
 use crate::abi::FMT_BGRA;
 use crate::upload::{
-    ingest_audio_throttled, write_slot, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
-    GpuVideoFrame, UploadStore,
+    AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, GpuVideoFrame, UploadStore,
+    ingest_audio_throttled, write_slot,
 };
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
@@ -232,17 +232,13 @@ impl NdiSender {
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
         let channels = audio.channels.max(1);
         let samples = audio.samples_per_channel.max(1);
-        let floats: Vec<f32> = audio
-            .pcm_planar_f32
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
+        let floats = &audio.pcm_planar_f32;
         if floats.is_empty() {
             return Ok(());
         }
         let expected = channels as usize * samples as usize;
         let data = if floats.len() == expected {
-            floats
+            floats.clone()
         } else {
             let n = floats.len().min(expected);
             let mut trimmed = vec![0.0f32; expected];
@@ -284,7 +280,9 @@ fn open_receiver(
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
     let sources = with_finder(|finder| {
-        let snapshot = finder.current_sources().map_err(|error| error.to_string())?;
+        let snapshot = finder
+            .current_sources()
+            .map_err(|error| error.to_string())?;
         if !snapshot.is_empty() {
             return Ok(snapshot);
         }
@@ -294,7 +292,10 @@ pub fn discover_sources() -> Result<Vec<String>, String> {
             .find_sources(Duration::from_secs(5))
             .map_err(|error| error.to_string())
     })?;
-    let names: Vec<String> = sources.into_iter().map(|source| source.to_string()).collect();
+    let names: Vec<String> = sources
+        .into_iter()
+        .map(|source| source.to_string())
+        .collect();
     eprintln!("eiviz ndi discover count={}", names.len());
     Ok(names)
 }
@@ -304,7 +305,8 @@ fn resolve_source(query: &str) -> Result<Source, String> {
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    if let Ok(sources) = with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
+    if let Ok(sources) =
+        with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
     {
         if let Some(source) = sources.iter().find(|source| {
             source.to_string().eq_ignore_ascii_case(trimmed)
@@ -463,7 +465,15 @@ fn ingest_video(
             None => return,
         }
     };
-    write_slot(&mut pixels, frame.data(), stride, width, height, format, opaque_x);
+    write_slot(
+        &mut pixels,
+        frame.data(),
+        stride,
+        width,
+        height,
+        format,
+        opaque_x,
+    );
     let mut store = uploads.lock().expect("uploads lock");
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
 }
@@ -498,10 +508,7 @@ fn finish_gpu_frame(
 fn to_audio(frame: &AudioFrame) -> AudioPacket {
     let channels = frame.num_channels().max(1);
     let samples = frame.num_samples().max(1);
-    let mut pcm = Vec::with_capacity(frame.data().len() * 4);
-    for sample in frame.data() {
-        pcm.extend_from_slice(&sample.to_le_bytes());
-    }
+    let pcm = frame.data().to_vec();
     AudioPacket {
         timestamp: frame.timestamp(),
         sample_rate: frame.sample_rate().max(1),
@@ -517,14 +524,14 @@ fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
     let packed_stride = width.saturating_mul(2) as usize;
     let src_stride = stride.max(packed_stride as u32) as usize;
     let mut packed = vec![0u8; packed_stride * height as usize];
-    for y in 0..height as usize {
-        let src = y * src_stride;
-        let dst = y * packed_stride;
-        let end = src.saturating_add(packed_stride);
-        if end <= pixels.len() {
-            packed[dst..dst + packed_stride].copy_from_slice(&pixels[src..end]);
-        }
-    }
+    crate::simd::copy_rows(
+        pixels,
+        src_stride,
+        &mut packed,
+        packed_stride,
+        packed_stride,
+        height as usize,
+    );
     packed
 }
 
@@ -541,7 +548,10 @@ mod tests {
         src[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
         let packed = pack_uyvy(width, height, stride, &src);
-        assert_eq!(packed, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(
+            packed,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
     }
 
     #[test]

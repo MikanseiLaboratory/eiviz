@@ -42,7 +42,10 @@ fn copy_windows_ndi_dll() {
         return;
     };
     copy_file(&dll, &profile_dir.join("Processing.NDI.Lib.x64.dll"));
-    copy_file(&dll, &profile_dir.join("deps").join("Processing.NDI.Lib.x64.dll"));
+    copy_file(
+        &dll,
+        &profile_dir.join("deps").join("Processing.NDI.Lib.x64.dll"),
+    );
 }
 
 fn ndi_runtime_dll() -> Option<PathBuf> {
@@ -92,7 +95,12 @@ fn ndi_runtime_dylib() -> Option<PathBuf> {
         PathBuf::from("/Library/NDI 6 SDK"),
         PathBuf::from("/Library/NDI SDK"),
     ]);
-    let names = ["libndi.dylib", "libndi.6.dylib", "libndi.5.dylib", "libndi.4.dylib"];
+    let names = [
+        "libndi.dylib",
+        "libndi.6.dylib",
+        "libndi.5.dylib",
+        "libndi.4.dylib",
+    ];
     for root in roots {
         for libdir in [root.join("lib/macOS"), root.join("lib")] {
             for name in names {

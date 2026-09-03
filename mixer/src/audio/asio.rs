@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use windows::core::{GUID, HRESULT, IUnknown, Interface};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
 };
+use windows::core::{GUID, HRESULT, IUnknown, Interface};
 
 use super::graph::BusRing;
 use super::pop_stereo_rate;
@@ -26,7 +26,8 @@ struct Iasio {
 
 #[repr(C)]
 struct IasioVtbl {
-    query_interface: unsafe extern "system" fn(*mut Iasio, *const GUID, *mut *mut core::ffi::c_void) -> HRESULT,
+    query_interface:
+        unsafe extern "system" fn(*mut Iasio, *const GUID, *mut *mut core::ffi::c_void) -> HRESULT,
     add_ref: unsafe extern "system" fn(*mut Iasio) -> u32,
     release: unsafe extern "system" fn(*mut Iasio) -> u32,
     init: unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void) -> i32,
@@ -37,13 +38,19 @@ struct IasioVtbl {
     stop: unsafe extern "system" fn(*mut Iasio) -> i32,
     get_channels: unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32) -> i32,
     get_latencies: unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32) -> i32,
-    get_buffer_size: unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32, *mut i32, *mut i32) -> i32,
+    get_buffer_size:
+        unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32, *mut i32, *mut i32) -> i32,
     can_sample_rate: unsafe extern "system" fn(*mut Iasio, f64) -> i32,
     get_sample_rate: unsafe extern "system" fn(*mut Iasio, *mut f64) -> i32,
     set_sample_rate: unsafe extern "system" fn(*mut Iasio, f64) -> i32,
-    get_clock_sources: unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void, *mut i32) -> i32,
+    get_clock_sources:
+        unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void, *mut i32) -> i32,
     set_clock_source: unsafe extern "system" fn(*mut Iasio, i32) -> i32,
-    get_sample_position: unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void, *mut core::ffi::c_void) -> i32,
+    get_sample_position: unsafe extern "system" fn(
+        *mut Iasio,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> i32,
     get_channel_info: unsafe extern "system" fn(*mut Iasio, *mut AsioChannelInfo) -> i32,
     create_buffers: unsafe extern "system" fn(
         *mut Iasio,
@@ -84,9 +91,8 @@ struct AsioCallbacks {
     buffer_switch: Option<unsafe extern "C" fn(i32, i32)>,
     sample_rate_did_change: Option<unsafe extern "C" fn(f64)>,
     asio_message: Option<unsafe extern "C" fn(i32, i32, *mut core::ffi::c_void, *mut f64) -> i32>,
-    buffer_switch_time_info: Option<
-        unsafe extern "C" fn(*mut core::ffi::c_void, i32, i32) -> *mut core::ffi::c_void,
-    >,
+    buffer_switch_time_info:
+        Option<unsafe extern "C" fn(*mut core::ffi::c_void, i32, i32) -> *mut core::ffi::c_void>,
 }
 
 struct AsioState {
@@ -138,7 +144,9 @@ pub fn run(
         let mut max_size = 0i32;
         let mut pref = 0i32;
         let mut gran = 0i32;
-        if (vtbl.get_buffer_size)(asio, &mut min_size, &mut max_size, &mut pref, &mut gran) != ASIO_OK {
+        if (vtbl.get_buffer_size)(asio, &mut min_size, &mut max_size, &mut pref, &mut gran)
+            != ASIO_OK
+        {
             let _ = (vtbl.release)(asio);
             return Err("ASIO buffer size".into());
         }
@@ -176,7 +184,8 @@ pub fn run(
             asio_message: Some(asio_message),
             buffer_switch_time_info: Some(buffer_switch_time_info),
         };
-        if (vtbl.create_buffers)(asio, infos.as_mut_ptr(), outs, buffer_size, &mut callbacks) != ASIO_OK
+        if (vtbl.create_buffers)(asio, infos.as_mut_ptr(), outs, buffer_size, &mut callbacks)
+            != ASIO_OK
         {
             *ASIO.lock().expect("asio slot") = None;
             let _ = (vtbl.release)(asio);

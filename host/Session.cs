@@ -834,6 +834,7 @@ public sealed class SessionSettings
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
     public uint DefaultPresentInterval { get; set; } = 3;
+    public uint FlipSwapchainLimit { get; set; }
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public bool? RebarOptimization { get; set; } = true;
     public bool? RebarDirectSample { get; set; } = false;

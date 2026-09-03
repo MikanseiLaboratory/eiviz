@@ -2,12 +2,13 @@ import SwiftUI
 
 struct ScenePreviewTile: View, @MainActor Equatable {
     let sceneId: UInt64
-    let monitorId: UInt64
     let gpuId: UInt64
     let name: String
     let number: Int
     let preview: Bool
     let program: Bool
+    let selected: Bool
+    let interval: UInt32
     let loopOn: Bool
     let playing: Bool
     let muted: Bool
@@ -24,19 +25,24 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    @State private var appeared = false
+
     static func == (lhs: ScenePreviewTile, rhs: ScenePreviewTile) -> Bool {
         lhs.sceneId == rhs.sceneId
-            && lhs.monitorId == rhs.monitorId
             && lhs.gpuId == rhs.gpuId
             && lhs.name == rhs.name
             && lhs.number == rhs.number
             && lhs.preview == rhs.preview
             && lhs.program == rhs.program
+            && lhs.selected == rhs.selected
+            && lhs.interval == rhs.interval
             && lhs.loopOn == rhs.loopOn
             && lhs.playing == rhs.playing
             && lhs.muted == rhs.muted
             && lhs.hasVideo == rhs.hasVideo
     }
+
+    private var wanted: Bool { preview || program || selected || appeared }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,9 +61,12 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             .background(Color(white: 0.2))
             .contentShape(Rectangle())
             .onTapGesture(perform: onPreview)
-            MetalPreviewRepresentable(
-                role: .monitor(monitorId: monitorId, sourceId: gpuId),
-                presentInterval: 1,
+            ThumbRepresentable(
+                sourceId: gpuId,
+                width: 176,
+                height: 90,
+                interval: interval,
+                wanted: wanted,
                 onClick: onPreview
             )
             .frame(width: 176, height: 90)
@@ -83,6 +92,8 @@ struct ScenePreviewTile: View, @MainActor Equatable {
         .contextMenu {
             Button("Edit", action: onEdit)
         }
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
     }
 
     private func chip(_ title: String, action: @escaping () -> Void) -> some View {

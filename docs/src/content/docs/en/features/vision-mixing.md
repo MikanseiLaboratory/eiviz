@@ -24,7 +24,7 @@ They sit on Program after CUT or the T-bar has mixed. They do not sit on Preview
 ### Multiview
 
 Monitor mosaics are not Mixing Unit buses. They are session-level [Multiviews](/eiviz/en/concepts/multiviews/).  
-Like Mixing Units, there is no cap. Add them from [Settings](/eiviz/en/introduction/settings/) as the machine will take. A tile can be an Input, a Scene, MU Preview, or MU Program.
+There is no cap on layouts in the session. Open monitor windows count toward the video output destination window limit in [Settings](/eiviz/en/introduction/settings/). A tile can be an Input, a Scene, MU Preview, or MU Program.
 
 ## Transition
 

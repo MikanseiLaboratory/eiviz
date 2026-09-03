@@ -170,7 +170,7 @@
                             </StackPanel>
                             <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                         </DockPanel>
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ScrollViewer x:Name="SceneScroll" VerticalScrollBarVisibility="Auto">
                             <WrapPanel x:Name="ScenePanel"/>
                         </ScrollViewer>
                     </DockPanel>

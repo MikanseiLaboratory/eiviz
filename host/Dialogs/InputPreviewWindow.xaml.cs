@@ -4,13 +4,11 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
 
 public partial class InputPreviewWindow : Window
 {
-    private readonly ulong _monitorId;
     private readonly ulong _sourceId;
     private readonly double _ratioW;
     private readonly double _ratioH;
@@ -21,15 +19,14 @@ public partial class InputPreviewWindow : Window
 
     public ulong SourceId => _sourceId;
 
-    public InputPreviewWindow(InputEntry input, ulong monitorId, uint ratioWidth, uint ratioHeight)
-        : this(input.Name, input.Id, monitorId, ratioWidth, ratioHeight)
+    public InputPreviewWindow(InputEntry input, uint ratioWidth, uint ratioHeight)
+        : this(input.Name, input.Id, ratioWidth, ratioHeight)
     {
     }
 
-    public InputPreviewWindow(string name, ulong sourceId, ulong monitorId, uint ratioWidth, uint ratioHeight)
+    public InputPreviewWindow(string name, ulong sourceId, uint ratioWidth, uint ratioHeight)
     {
         InitializeComponent();
-        _monitorId = monitorId;
         _sourceId = sourceId;
         _ratioW = Math.Max(1, ratioWidth);
         _ratioH = Math.Max(1, ratioHeight);
@@ -37,19 +34,18 @@ public partial class InputPreviewWindow : Window
         TitleText.Text = name;
         VideoAspect.RatioWidth = _ratioW;
         VideoAspect.RatioHeight = _ratioH;
-        PreviewHost.RetargetMonitor(_monitorId, _sourceId);
         SourceInitialized += (_, _) =>
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
                 source.AddHook(WndProc);
         };
+        SizeChanged += (_, _) => ApplyThumbSize();
         Loaded += (_, _) =>
         {
             SnapWindowToAspect();
-            PreviewHost.RetargetMonitor(_monitorId, _sourceId);
-            MixerNative.SetMonitorPresentInterval(_monitorId, 1);
+            Dispatcher.BeginInvoke(ApplyThumbSize, DispatcherPriority.Loaded);
         };
-        Closed += (_, _) => PreviewHost.ReleaseNative();
+        Closed += (_, _) => PreviewHost.SetWanted(false);
     }
 
     public void SetTitle(string name)
@@ -97,7 +93,22 @@ public partial class InputPreviewWindow : Window
             _fullscreen = false;
             Dispatcher.BeginInvoke(SnapWindowToAspect, DispatcherPriority.Loaded);
         }
-        Dispatcher.BeginInvoke(PreviewHost.RefreshSize, DispatcherPriority.Loaded);
+        Dispatcher.BeginInvoke(ApplyThumbSize, DispatcherPriority.Loaded);
+    }
+
+    private void ApplyThumbSize()
+    {
+        var dpi = VisualTreeHelper.GetDpi(PreviewHost);
+        var width = (uint)Math.Max(2, Math.Round(Math.Max(PreviewHost.ActualWidth, 2) * dpi.DpiScaleX));
+        var height = (uint)Math.Max(2, Math.Round(Math.Max(PreviewHost.ActualHeight, 2) * dpi.DpiScaleY));
+        if (width > 960 || height > 540)
+        {
+            var scale = Math.Min(960.0 / width, 540.0 / height);
+            width = (uint)Math.Max(2, Math.Round(width * scale));
+            height = (uint)Math.Max(2, Math.Round(height * scale));
+        }
+        PreviewHost.Bind(_sourceId, width, height, 1);
+        PreviewHost.SetWanted(true);
     }
 
     private void SnapWindowToAspect()

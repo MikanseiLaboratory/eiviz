@@ -486,12 +486,16 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
         return None;
     }
     let src = unsafe { std::slice::from_raw_parts(sample.data, bytes) };
+    let pcm = src
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
     Some(AudioPacket {
         timestamp: sample.pts_hns,
         sample_rate: sample.sample_rate,
         channels: sample.channels,
         samples_per_channel: sample.frames,
-        pcm_planar_f32: src.to_vec(),
+        pcm_planar_f32: pcm,
     })
 }
 

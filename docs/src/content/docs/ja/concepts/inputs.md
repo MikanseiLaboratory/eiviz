@@ -34,6 +34,7 @@ InputはMixing UnitとOutputにも直接載せられます。
 - UVC（キャプチャデバイス）
 - NDI/OMT
 
-Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。
+Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
+入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。
 
 詳細は[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご参照ください。

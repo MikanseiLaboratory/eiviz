@@ -1,27 +1,29 @@
 use std::sync::{Arc, Mutex};
 
-use windows::core::{Interface, IUnknown};
 use windows::Win32::Foundation::CloseHandle;
-use windows::Win32::Graphics::Direct3D::{D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+};
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11DeviceContext, ID3D11Multithread, ID3D11Resource, ID3D11Texture2D,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_TEXTURE2D_DESC,
+    ID3D11DeviceContext, ID3D11Multithread, ID3D11Resource, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Direct3D11on12::{D3D11On12CreateDevice, ID3D11On12Device2};
 use windows::Win32::Graphics::Direct3D12::{
-    ID3D12CommandQueue, ID3D12Device, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT,
-    D3D12_COMMAND_QUEUE_DESC,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, ID3D12CommandQueue, ID3D12Device,
+    ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_NV12,
     DXGI_FORMAT_R8G8B8A8_UNORM,
 };
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIResource1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
+    DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource1,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFDXGIBuffer, IMFDXGIDeviceManager, IMFSample, MFCreateDXGIDeviceManager,
 };
+use windows::core::{IUnknown, Interface};
 
 use crate::convert::Nv12Converter;
 use crate::device::GpuDevice;
@@ -129,7 +131,9 @@ impl DxgiVideo {
         }
         let manager = manager.ok_or("DXGI device manager")?;
         unsafe {
-            manager.ResetDevice(&d3d11, token).map_err(|e| e.to_string())?;
+            manager
+                .ResetDevice(&d3d11, token)
+                .map_err(|e| e.to_string())?;
         }
         Ok(Self {
             context: Mutex::new(context),
@@ -149,7 +153,9 @@ impl DxgiVideo {
     ) -> Result<crate::upload::GpuVideoFrame, String> {
         unsafe {
             let buffer = sample.GetBufferByIndex(0).map_err(|e| e.to_string())?;
-            let dxgi: IMFDXGIBuffer = buffer.cast().map_err(|_| "sample is not a DXGI buffer".to_string())?;
+            let dxgi: IMFDXGIBuffer = buffer
+                .cast()
+                .map_err(|_| "sample is not a DXGI buffer".to_string())?;
             let mut raw = std::ptr::null_mut();
             dxgi.GetResource(&ID3D11Texture2D::IID, &mut raw)
                 .map_err(|e| e.to_string())?;
@@ -174,18 +180,18 @@ impl DxgiVideo {
                     desc.Height,
                     pts,
                 )?,
-                DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB | DXGI_FORMAT_R8G8B8A8_UNORM => {
-                    gpu.convert.copy_bgra(
-                        &gpu.device,
-                        &gpu.queue,
-                        ring,
-                        resource12,
-                        desc.Width,
-                        desc.Height,
-                        pts,
-                        desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM,
-                    )?
-                }
+                DXGI_FORMAT_B8G8R8A8_UNORM
+                | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+                | DXGI_FORMAT_R8G8B8A8_UNORM => gpu.convert.copy_bgra(
+                    &gpu.device,
+                    &gpu.queue,
+                    ring,
+                    resource12,
+                    desc.Width,
+                    desc.Height,
+                    pts,
+                    desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM,
+                )?,
                 other => return Err(format!("unsupported DXGI format {}", other.0)),
             };
             if wrapped {

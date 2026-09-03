@@ -1,13 +1,17 @@
 import AppKit
 
-func makeInputPreviewContent(monitorId: UInt64, sourceId: UInt64, frame: NSRect) -> NSView {
-    let content = PreviewHostView(frame: frame)
+func makeInputPreviewContent(sourceId: UInt64, frame: NSRect) -> NSView {
+    let content = ThumbHostView(frame: frame)
     content.autoresizingMask = [.width, .height]
-    let surface = MetalSurfaceView(frame: content.bounds)
-    surface.autoresizingMask = [.width, .height]
-    surface.presentInterval = 1
-    surface.role = .monitor(monitorId: monitorId, sourceId: sourceId)
-    content.addSubview(surface)
+    let thumb = ThumbImageView(frame: content.bounds)
+    thumb.autoresizingMask = [.width, .height]
+    thumb.autoSizeFromBounds = true
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    let width = UInt32(min(960, max(2, (frame.width * scale).rounded())))
+    let height = UInt32(min(540, max(2, (frame.height * scale).rounded())))
+    thumb.bind(sourceId: sourceId, width: width, height: height, interval: 1)
+    thumb.setWanted(true)
+    content.addSubview(thumb)
     return content
 }
 

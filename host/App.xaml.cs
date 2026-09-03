@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
+using Eiviz.Host.Preview;
 using Microsoft.Win32;
 
 namespace Eiviz.Host;
@@ -15,6 +16,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         HostLog.Install();
+        GpuPresentStore.Load();
         System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
         Loc.Apply(AppPrefs.Current.Language);
         ThemeService.Apply(AppPrefs.Current.Theme);
@@ -38,7 +40,7 @@ public partial class App : Application
         }
     }
 
-    internal void ReplaceSession(Session session)
+    private void ReplaceSession(Session session)
     {
         var previous = Commands;
         Commands = null!;
@@ -48,6 +50,38 @@ public partial class App : Application
         MixerNative.Destroy();
         Session = session;
         BootMixer();
+    }
+
+    /// Restart the mixer and replace the main window so surfaces attach on first
+    /// layout, the same as a cold start. Do not reuse HWNDs across mixer lifetimes.
+    internal void ReloadSession(Session session)
+    {
+        var previous = MainWindow as MainWindow;
+        previous?.CloseOwnedSurfaces();
+        ReplaceSession(session);
+        var next = new MainWindow();
+        if (previous is not null)
+        {
+            next.WindowStartupLocation = WindowStartupLocation.Manual;
+            if (previous.WindowState == WindowState.Normal)
+            {
+                next.Left = previous.Left;
+                next.Top = previous.Top;
+                next.Width = previous.Width;
+                next.Height = previous.Height;
+            }
+            else
+            {
+                next.Left = previous.RestoreBounds.Left;
+                next.Top = previous.RestoreBounds.Top;
+                next.Width = previous.RestoreBounds.Width;
+                next.Height = previous.RestoreBounds.Height;
+            }
+            next.WindowState = previous.WindowState;
+        }
+        MainWindow = next;
+        next.Show();
+        previous?.Close();
     }
 
     private void BootMixer()
@@ -64,6 +98,7 @@ public partial class App : Application
                 MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
                 "Configure Mixing Unit");
         }
+        FlipBudget.Configure(Session.Settings.FlipSwapchainLimit);
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
             "Set frame buffer");

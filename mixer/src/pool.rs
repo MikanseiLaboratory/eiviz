@@ -47,7 +47,9 @@ impl UniformPool {
 pub fn uniform_dyn(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
+        visibility: wgpu::ShaderStages::FRAGMENT
+            | wgpu::ShaderStages::VERTEX
+            | wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: true,

@@ -332,6 +332,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_set_monitor_present_interval")]
     internal static partial int SetMonitorPresentInterval(ulong monitorId, uint frames);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_thumb_set")]
+    internal static partial int ThumbSet(ulong sourceId, uint width, uint height, uint interval);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_thumb_read")]
+    internal static unsafe partial int ThumbRead(ulong sourceId, byte* buf, nuint cap, uint* outW, uint* outH, uint* outStride);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_last_error")]
     internal static unsafe partial int LastError(byte* buffer, nuint capacity);
 
@@ -550,6 +556,7 @@ internal struct MixerStats
     public ulong VramBytes;
     public ulong ComposeVramBytes;
     public ulong DelayVramBytes;
+    public ulong SurfaceLost;
 }
 
 [StructLayout(LayoutKind.Sequential)]

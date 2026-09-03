@@ -1,9 +1,9 @@
 //! Core Audio HAL output for macOS buses.
 
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -139,12 +139,7 @@ unsafe extern "C" {
     fn AudioOutputUnitStart(unit: AudioUnit) -> OSStatus;
     fn AudioOutputUnitStop(unit: AudioUnit) -> OSStatus;
     fn CFRelease(cf: CFTypeRef);
-    fn CFStringGetCString(
-        string: CFStringRef,
-        buffer: *mut i8,
-        size: isize,
-        encoding: u32,
-    ) -> u8;
+    fn CFStringGetCString(string: CFStringRef, buffer: *mut i8, size: isize, encoding: u32) -> u8;
 }
 
 struct RenderCtx {
@@ -171,7 +166,10 @@ pub fn run(
         return Err("HAL output component missing".into());
     }
     let mut unit: AudioUnit = ptr::null_mut();
-    status(unsafe { AudioComponentInstanceNew(comp, &mut unit) }, "instance")?;
+    status(
+        unsafe { AudioComponentInstanceNew(comp, &mut unit) },
+        "instance",
+    )?;
     let enable: u32 = 1;
     status(
         unsafe {
@@ -397,7 +395,13 @@ fn output_devices() -> Vec<(AudioDeviceID, String, String, u32)> {
     };
     let mut size = 0u32;
     if unsafe {
-        AudioObjectGetPropertyDataSize(K_AUDIO_OBJECT_SYSTEM_OBJECT, &address, 0, ptr::null(), &mut size)
+        AudioObjectGetPropertyDataSize(
+            K_AUDIO_OBJECT_SYSTEM_OBJECT,
+            &address,
+            0,
+            ptr::null(),
+            &mut size,
+        )
     } != NO_ERR
         || size == 0
     {
@@ -490,11 +494,7 @@ fn device_rate(id: AudioDeviceID) -> f64 {
             &mut rate as *mut f64 as *mut c_void,
         )
     };
-    if rate < 8000.0 {
-        48_000.0
-    } else {
-        rate
-    }
+    if rate < 8000.0 { 48_000.0 } else { rate }
 }
 
 fn output_channels(id: AudioDeviceID) -> u32 {
@@ -563,7 +563,14 @@ fn cf_string_prop(id: AudioObjectID, selector: u32) -> Option<String> {
         return None;
     }
     let mut buf = [0i8; 256];
-    let ok = unsafe { CFStringGetCString(cf, buf.as_mut_ptr(), buf.len() as isize, K_CF_STRING_ENCODING_UTF8) };
+    let ok = unsafe {
+        CFStringGetCString(
+            cf,
+            buf.as_mut_ptr(),
+            buf.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+    };
     unsafe { CFRelease(cf) };
     if ok == 0 {
         return None;

@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -46,7 +46,10 @@ pub fn log_dir() -> PathBuf {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let mac = PathBuf::from(&home).join("Library").join("Logs").join("eiviz");
+        let mac = PathBuf::from(&home)
+            .join("Library")
+            .join("Logs")
+            .join("eiviz");
         if cfg!(target_os = "macos") || mac.parent().is_some_and(|p| p.exists()) {
             return mac;
         }
@@ -121,11 +124,7 @@ fn open_log() -> Option<std::fs::File> {
             let _ = fs::rename(&path, old);
         }
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()
+    OpenOptions::new().create(true).append(true).open(path).ok()
 }
 
 fn install_panic_hook() {
@@ -178,6 +177,7 @@ unsafe extern "system" fn on_unhandled_exception(_info: *mut core::ffi::c_void) 
 }
 
 pub static GPU_FAULT: AtomicBool = AtomicBool::new(false);
+static SURFACE_LOST: AtomicU64 = AtomicU64::new(0);
 static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
@@ -189,6 +189,14 @@ pub fn mark_gpu_fault(message: &str) {
 
 pub fn take_gpu_fault() -> bool {
     GPU_FAULT.swap(false, Ordering::AcqRel)
+}
+
+pub fn note_surface_lost() {
+    SURFACE_LOST.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn surface_lost() -> u64 {
+    SURFACE_LOST.load(Ordering::Relaxed)
 }
 
 pub fn mark_fatal(message: impl Into<String>) {
@@ -216,5 +224,9 @@ pub fn take_fatal() -> Option<String> {
     if FATAL_TAKEN.swap(true, Ordering::AcqRel) {
         return None;
     }
-    FATAL_MSG.lock().ok().map(|slot| slot.clone()).filter(|msg| !msg.is_empty())
+    FATAL_MSG
+        .lock()
+        .ok()
+        .map(|slot| slot.clone())
+        .filter(|msg| !msg.is_empty())
 }

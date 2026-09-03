@@ -40,6 +40,7 @@ public partial class MultiviewWindow : Window
             MultiviewHost.RetargetMonitor(layout.MonitorId, layout.GpuId);
             _layout.PushPresentInterval(_session.Settings);
         };
+        Closed += (_, _) => MultiviewHost.ReleaseNative();
     }
 
     public ulong LayoutId => _layout.Id;

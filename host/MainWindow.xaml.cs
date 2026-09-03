@@ -62,7 +62,11 @@ public partial class MainWindow : Window
             _tbarTimer.Stop();
             _meterTimer.Stop();
             _resources.Dispose();
+            if (!ReferenceEquals(Application.Current?.MainWindow, this))
+                return;
+            CloseOwnedSurfaces();
         };
+        SceneScroll.ScrollChanged += (_, _) => ApplySceneTileThumbs();
         Loaded += (_, _) =>
         {
             ApplyBusColors();
@@ -162,6 +166,21 @@ public partial class MainWindow : Window
                 BusTheme.Preview(_session.Settings),
                 BusTheme.Program(_session.Settings),
                 BusTheme.Inactive(_session.Settings));
+        }
+        ApplySceneTileThumbs();
+    }
+
+    private void ApplySceneTileThumbs()
+    {
+        var tiles = ScenePanel.Children.OfType<SceneTile>().Where(tile => tile.Scene is not null);
+        var selectedId = _selectedScene?.Id ?? 0;
+        foreach (var tile in tiles)
+        {
+            var scene = tile.Scene!;
+            var pinned = scene.Id == _shownProgramId
+                || scene.Id == _shownPreviewId
+                || scene.Id == selectedId;
+            tile.SetThumbWanted(pinned || ThumbViewport.Intersects(tile, SceneScroll));
         }
     }
 
@@ -723,6 +742,8 @@ public partial class MainWindow : Window
             _overlay.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         _overlay = new OverlayWindow(_session, SelectedUnit) { Owner = this };
         _overlay.Closed += (_, _) =>
         {
@@ -776,6 +797,8 @@ public partial class MainWindow : Window
 
     internal void OpenNewMultiview(ulong unitId)
     {
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
         var layout = _session.AddMultiview(unitId: unit.Id);
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
@@ -790,6 +813,8 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var unit = SelectedUnit;
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         var window = new MultiviewWindow(_session, layout);
@@ -899,6 +924,12 @@ public partial class MainWindow : Window
                 strip.SetLevels(pair.L, pair.R);
             else
                 strip.Decay();
+        }
+        MixerStats stats = default;
+        unsafe
+        {
+            if (MixerNative.CopyStats(&stats) == 0)
+                FlipBudget.ObserveLost(stats.SurfaceLost);
         }
         _resources.Sample();
         ResourceText.Text = _resources.Line();
@@ -1209,8 +1240,7 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
-        var monitorId = _session.NextMonitorId++;
-        var window = new InputPreviewWindow(name, sourceId, monitorId, SelectedUnit.Width, SelectedUnit.Height)
+        var window = new InputPreviewWindow(name, sourceId, SelectedUnit.Width, SelectedUnit.Height)
         {
             Owner = this
         };
@@ -1470,9 +1500,13 @@ public partial class MainWindow : Window
 
     private void OpenSceneEditor(SceneEntry scene)
     {
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var monitorId = _session.NextMonitorId++;
         var dialog = new SceneEditorWindow(scene, _session, SceneWidth, SceneHeight, monitorId) { Owner = this };
         dialog.ShowDialog();
+        if (Application.Current is not App appAfter || appAfter.Session is null || _fatalHandled)
+            return;
         RebuildScenes();
         SelectScene(scene);
         RefreshMultiviewLabels();
@@ -1505,6 +1539,8 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(2, this))
+            return;
         var window = new SwitcherWindow(unit);
         if (unit.AlwaysOnTop)
             window.Owner = this;
@@ -1625,7 +1661,7 @@ public partial class MainWindow : Window
 
     private void NewSession_Click(object sender, RoutedEventArgs e)
     {
-        ApplySession(Session.Default());
+        ((App)Application.Current).ReloadSession(Session.Default());
     }
 
     private void LoadSession_Click(object sender, RoutedEventArgs e)
@@ -1640,7 +1676,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            ApplySession(SessionStore.Load(path));
+            ((App)Application.Current).ReloadSession(SessionStore.Load(path));
             AppPrefs.Current.RememberSession(path);
         }
         catch (Exception ex)
@@ -1649,9 +1685,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ApplySession(Session session)
+    internal void CloseOwnedSurfaces()
     {
         _overlay?.Close();
+        _resourcesWindow?.Close();
+        _logWindow?.Close();
         CloseAllSwitchers();
         foreach (var window in _multiviews.ToArray())
             window.Close();
@@ -1659,32 +1697,8 @@ public partial class MainWindow : Window
             preview.Close();
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
-        ScenePanel.Children.Clear();
-        _selectedScene = null;
-        _lastProgramId = 0;
-        _shownProgramId = 0;
-        _shownPreviewId = 0;
-        ((App)Application.Current).ReplaceSession(session);
-        InputList.ItemsSource = _session.Inputs;
-        UnitBox.ItemsSource = _session.Units;
-        _suppressUnitChange = true;
-        UnitBox.SelectedIndex = 0;
-        _suppressUnitChange = false;
-        RebuildScenes();
-        RebuildTransitions();
-        RebuildOverlayToggles();
-        RebuildMeters();
-        if (_session.Scenes.Count > 0)
-            SelectScene(_session.Scenes[0]);
-        PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
-        ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
-        Dispatcher.BeginInvoke(() =>
-        {
-            PreviewHost.ForceReattach();
-            ProgramHost.ForceReattach();
-        }, DispatcherPriority.Loaded);
-        ApplyBusColors();
-        ApplyAspect();
+        foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
+            tile.SetThumbWanted(false);
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e)
@@ -1704,6 +1718,8 @@ public partial class MainWindow : Window
         _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
         _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
         _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
+        _session.Settings.FlipSwapchainLimit = dialog.Settings.FlipSwapchainLimit;
+        FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;

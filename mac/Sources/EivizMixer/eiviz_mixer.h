@@ -187,6 +187,7 @@ typedef struct EivizMixerStats {
     uint64_t vram_bytes;
     uint64_t compose_vram_bytes;
     uint64_t delay_vram_bytes;
+    uint64_t surface_lost;
 } EivizMixerStats;
 
 typedef struct EivizMixerRebarInfo {
@@ -285,6 +286,8 @@ int32_t mixer_set_bus_colors(uint8_t prv_r, uint8_t prv_g, uint8_t prv_b, uint8_
 int32_t mixer_set_mv_label(uint64_t scene_id, float size, uint32_t percent, uint32_t top);
 int32_t mixer_set_frame_buffer(uint32_t frames);
 int32_t mixer_set_monitor_present_interval(uint64_t monitor_id, uint32_t frames);
+int32_t mixer_thumb_set(uint64_t source_id, uint32_t width, uint32_t height, uint32_t interval);
+int32_t mixer_thumb_read(uint64_t source_id, uint8_t *buf, size_t cap, uint32_t *out_w, uint32_t *out_h, uint32_t *out_stride);
 int32_t mixer_last_error(uint8_t *out, size_t cap);
 int32_t mixer_take_fatal(uint8_t *out, size_t cap);
 int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);

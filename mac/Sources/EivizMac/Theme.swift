@@ -61,7 +61,7 @@ extension RgbColor {
     }
 }
 
-/// Keeps every child alive (unlike LazyVGrid) so Metal scene tiles stay attached.
+/// Keeps every child alive (unlike LazyVGrid). Scene tiles are CPU thumbs now.
 struct WrapFlowLayout: Layout {
     var spacing: CGFloat = 8
 

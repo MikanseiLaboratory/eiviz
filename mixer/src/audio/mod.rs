@@ -351,28 +351,11 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
 }
 
 pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: u32) -> Vec<f32> {
-    let src_frames = src.len() / 2;
     if dst_frames == 0 {
         return Vec::new();
     }
-    if src_frames == 0 {
-        return vec![0.0; dst_frames * 2];
-    }
-    if src_rate == dst_rate && src_frames == dst_frames {
-        return src.to_vec();
-    }
     let mut out = vec![0.0f32; dst_frames * 2];
-    let last = src_frames.saturating_sub(1);
-    for i in 0..dst_frames {
-        let src_pos = i as f64 * f64::from(src_rate) / f64::from(dst_rate.max(1));
-        let idx = (src_pos.floor() as usize).min(last);
-        let frac = (src_pos - idx as f64) as f32;
-        let nxt = (idx + 1).min(last);
-        let l = src[idx * 2] * (1.0 - frac) + src[nxt * 2] * frac;
-        let r = src[idx * 2 + 1] * (1.0 - frac) + src[nxt * 2 + 1] * frac;
-        out[i * 2] = l;
-        out[i * 2 + 1] = r;
-    }
+    crate::simd::resample_stereo(src, src_rate, dst_frames, dst_rate, &mut out);
     out
 }
 

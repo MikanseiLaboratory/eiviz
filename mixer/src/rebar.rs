@@ -106,7 +106,8 @@ fn windows_probe(device: &GpuDevice) -> RebarSnapshot {
                 .CheckFeatureSupport(
                     D3D12_FEATURE_D3D12_OPTIONS16,
                     std::ptr::from_mut(&mut opts).cast(),
-                    u32::try_from(std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS16>()).unwrap_or(0),
+                    u32::try_from(std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS16>())
+                        .unwrap_or(0),
                 )
                 .is_ok()
                 && opts.GPUUploadHeapSupported.as_bool();
@@ -115,7 +116,8 @@ fn windows_probe(device: &GpuDevice) -> RebarSnapshot {
                 .CheckFeatureSupport(
                     D3D12_FEATURE_ARCHITECTURE1,
                     std::ptr::from_mut(&mut arch).cast(),
-                    u32::try_from(std::mem::size_of::<D3D12_FEATURE_DATA_ARCHITECTURE1>()).unwrap_or(0),
+                    u32::try_from(std::mem::size_of::<D3D12_FEATURE_DATA_ARCHITECTURE1>())
+                        .unwrap_or(0),
                 )
                 .is_ok()
                 && arch.UMA.as_bool();
@@ -150,7 +152,7 @@ fn windows_probe(device: &GpuDevice) -> RebarSnapshot {
 
 #[cfg(windows)]
 fn dxgi_vram(device_id: u32) -> u64 {
-        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 
     let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
         return 0;
@@ -175,11 +177,20 @@ fn dxgi_vram(device_id: u32) -> u64 {
 /// Process GPU memory on this adapter (dedicated + shared), matching Task Manager.
 #[cfg(windows)]
 pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::LUID;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1};
     use windows::core::Interface;
-    use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-        DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
-    };
+
+    struct Cache {
+        luid: LUID,
+        adapter: IDXGIAdapter3,
+        last: Instant,
+        usage: u64,
+    }
+
+    static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
     let Some(luid) = (unsafe {
         device
@@ -188,6 +199,23 @@ pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
     }) else {
         return 0;
     };
+
+    let mut guard = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    let same = guard.as_ref().is_some_and(|cache| {
+        cache.luid.LowPart == luid.LowPart && cache.luid.HighPart == luid.HighPart
+    });
+    if same {
+        if let Some(cache) = guard.as_mut() {
+            if cache.last.elapsed() < Duration::from_millis(500) {
+                return cache.usage;
+            }
+            let usage = query_usage(&cache.adapter);
+            cache.usage = usage;
+            cache.last = Instant::now();
+            return usage;
+        }
+    }
+
     let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
         return 0;
     };
@@ -206,21 +234,30 @@ pub fn adapter_usage_bytes(device: &wgpu::Device) -> u64 {
         let Ok(adapter3) = adapter.cast::<IDXGIAdapter3>() else {
             continue;
         };
-        let mut local = Default::default();
-        let mut shared = Default::default();
-        let _ = unsafe {
-            adapter3.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local)
-        };
-        let _ = unsafe {
-            adapter3.QueryVideoMemoryInfo(
-                0,
-                DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
-                &mut shared,
-            )
-        };
-        return local.CurrentUsage.saturating_add(shared.CurrentUsage);
+        let usage = query_usage(&adapter3);
+        *guard = Some(Cache {
+            luid,
+            adapter: adapter3,
+            last: Instant::now(),
+            usage,
+        });
+        return usage;
     }
     0
+}
+
+#[cfg(windows)]
+fn query_usage(adapter: &windows::Win32::Graphics::Dxgi::IDXGIAdapter3) -> u64 {
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+    };
+    let mut local = Default::default();
+    let mut shared = Default::default();
+    let _ = unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut local) };
+    let _ = unsafe {
+        adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut shared)
+    };
+    local.CurrentUsage.saturating_add(shared.CurrentUsage)
 }
 
 #[cfg(not(windows))]
@@ -340,9 +377,10 @@ impl RebarUploader {
         sample: bool,
     ) -> Result<StagingSlot, String> {
         use windows::Win32::Graphics::Direct3D12::{
-            ID3D12Resource, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
-            D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            D3D12_RESOURCE_STATE_COMMON, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_DESC,
+            D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_COMMON,
+            D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12Resource,
         };
         use windows::Win32::Graphics::Dxgi::Common::{
             DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -415,28 +453,30 @@ impl RebarUploader {
             )
         };
         let imported = unsafe {
-            device.device.create_texture_from_hal::<wgpu::hal::api::Dx12>(
-                hal,
-                &wgpu::TextureDescriptor {
-                    label: Some("eiviz rebar staging"),
-                    size: extent,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: if sample {
-                        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC
-                    } else {
-                        wgpu::TextureUsages::COPY_SRC
+            device
+                .device
+                .create_texture_from_hal::<wgpu::hal::api::Dx12>(
+                    hal,
+                    &wgpu::TextureDescriptor {
+                        label: Some("eiviz rebar staging"),
+                        size: extent,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: if sample {
+                            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC
+                        } else {
+                            wgpu::TextureUsages::COPY_SRC
+                        },
+                        view_formats: &[],
                     },
-                    view_formats: &[],
-                },
-                if sample {
-                    wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC
-                } else {
-                    wgpu::TextureUses::COPY_SRC
-                },
-            )
+                    if sample {
+                        wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC
+                    } else {
+                        wgpu::TextureUses::COPY_SRC
+                    },
+                )
         };
         let view = imported.create_view(&Default::default());
         Ok(StagingSlot {
@@ -609,8 +649,13 @@ impl RebarIngestRing {
         self.slots.clear();
         self.next = 0;
         while self.slots.len() < STAGING_SLOTS {
-            self.slots
-                .push(create_gpu_upload_buffer(&self.d3d, &self.device, width, height, format)?);
+            self.slots.push(create_gpu_upload_buffer(
+                &self.d3d,
+                &self.device,
+                width,
+                height,
+                format,
+            )?);
         }
         Ok(self.next)
     }
@@ -625,10 +670,10 @@ fn create_gpu_upload_buffer(
     format: wgpu::TextureFormat,
 ) -> Result<IngestSlot, String> {
     use windows::Win32::Graphics::Direct3D12::{
-        ID3D12Resource, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
+        D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_GPU_UPLOAD,
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
         D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_STATE_GENERIC_READ,
-        D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12Resource,
     };
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -750,7 +795,14 @@ fn write_mapped(
     height: u32,
     row_pitch: u32,
 ) -> Result<(), String> {
-    write_mapped_strided(resource, data, row_bytes as usize, row_bytes as usize, height, row_pitch)
+    write_mapped_strided(
+        resource,
+        data,
+        row_bytes as usize,
+        row_bytes as usize,
+        height,
+        row_pitch,
+    )
 }
 
 #[cfg(windows)]
@@ -956,20 +1008,22 @@ impl UmaUploader {
             )
         };
         let imported = unsafe {
-            device.device.create_texture_from_hal::<wgpu::hal::api::Metal>(
-                hal,
-                &wgpu::TextureDescriptor {
-                    label: Some("eiviz uma shared"),
-                    size: extent,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                },
-                wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
-            )
+            device
+                .device
+                .create_texture_from_hal::<wgpu::hal::api::Metal>(
+                    hal,
+                    &wgpu::TextureDescriptor {
+                        label: Some("eiviz uma shared"),
+                        size: extent,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    },
+                    wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+                )
         };
         let view = imported.create_view(&Default::default());
         Ok(UmaSlot {

@@ -11,7 +11,6 @@ public partial class SceneTile : UserControl
     {
         InitializeComponent();
         MouseLeftButtonUp += (_, _) => Select();
-        Monitor.SurfaceClicked += (_, _) => Select();
     }
 
     public SceneEntry? Scene { get; private set; }
@@ -29,17 +28,13 @@ public partial class SceneTile : UserControl
         Scene = scene;
         Title.Text = scene.Name;
         Number.Text = number.ToString();
-        Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
-        if (!Monitor.HasMonitor(scene.MonitorId, scene.GpuId))
-            Monitor.RetargetMonitor(scene.MonitorId, scene.GpuId);
-        Monitor.ApplyPresentInterval();
+        Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
     }
 
-    public void SetPresentInterval(uint presentInterval)
-    {
-        Monitor.PresentInterval = Math.Clamp(presentInterval, 1u, 8u);
-        Monitor.ApplyPresentInterval();
-    }
+    public void SetPresentInterval(uint presentInterval) =>
+        Monitor.SetPresentInterval(presentInterval);
+
+    public void SetThumbWanted(bool wanted) => Monitor.SetWanted(wanted);
 
     public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null) =>
         SetBusRoles(selected, false, previewColor, null, inactiveColor);

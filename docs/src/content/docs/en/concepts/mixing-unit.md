@@ -11,4 +11,5 @@ Each unit has its own resolution and output frame rate.
 
 [Overlays](/eiviz/en/concepts/overlays/) sit on that unit’s Program. One unit’s Program can feed another unit or an Output.
 
-The switching buses are Preview and Program.
+The switching buses are Preview and Program.  
+A Switcher UI shows Preview and Program, so it uses 2 slots of the video output destination window limit. Closing it frees those slots.

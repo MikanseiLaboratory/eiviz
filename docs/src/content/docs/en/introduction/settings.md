@@ -97,6 +97,16 @@ Enabled keeps the bus mixing internally with no output device.
 
 Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it off if you want a cue mix.
 
+## Advanced
+
+### Video output destination window limit
+
+Used for real-time Preview, Program, and Multiview.  
+A Switcher UI shows Preview and Program, so it uses 2 slots. The main Preview/Program, each open Multiview, Scene Editor, and the Overlay window count the same way. Scene tiles and input-preview thumbs do not count.
+
+Auto starts at 6. You can raise it in Settings, but it may become unstable.  
+At the limit, a new window will not open. Close one to free a slot. The host path is in [System architecture](/eiviz/en/introduction/architecture/).
+
 ## Preferences
 
 <img src="/eiviz/images/en/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />

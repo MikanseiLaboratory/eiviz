@@ -34,7 +34,6 @@ pub struct Presenter {
     pending: Option<(u32, u32)>,
     ready: bool,
     occluded_streak: u32,
-    acquire_panics: u32,
 }
 
 #[derive(Default)]
@@ -223,39 +222,16 @@ impl Presenters {
             .copied()
             .filter(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
             .collect();
-        let planned: Vec<_> = due
-            .into_iter()
-            .filter_map(|monitor_id| {
-                let source_id = *self.monitor_sources.get(&monitor_id)?;
-                let (view, packed) = match source_view(source_id) {
-                    Some((view, packed)) => (Some(view), packed),
-                    None => (None, false),
-                };
-                Some((monitor_id, source_id ^ epoch.rotate_left(8), view, packed))
+        let (tiles, previews): (Vec<u64>, Vec<u64>) = due.into_iter().partition(|id| {
+            self.monitors.get(id).is_some_and(|presenter| {
+                !is_preview_surface(presenter.config.width, presenter.config.height)
             })
-            .collect();
-        let mut encoder = device
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("eiviz present"),
-            });
-        let mut acquired = Vec::new();
-        for (monitor_id, cache_key, view, packed) in planned {
-            let Some(presenter) = self.monitors.get_mut(&monitor_id) else {
-                continue;
-            };
-            if let Some(item) = draw_presenter(
-                device,
-                presenter,
-                cache_key,
-                view.as_ref(),
-                packed,
-                &mut encoder,
-            ) {
-                acquired.push(item);
-            }
+        });
+        present_monitor_group(self, device, epoch, &tiles, &source_view)?;
+        for id in previews {
+            present_monitor_group(self, device, epoch, &[id], &source_view)?;
         }
-        submit_presents(device, encoder, acquired)
+        Ok(())
     }
 
     pub fn has_kind(&self, unit_id: u64, kind: u32) -> bool {
@@ -356,7 +332,7 @@ pub(crate) fn prepare_surface(
     config.alpha_mode = pick_alpha_mode(&caps.alpha_modes);
     config.present_mode = pick_present_mode(&caps.present_modes);
     crate::diag::info(&format!("surface present_mode={:?}", config.present_mode));
-    let config = configure_or_fifo(device, &surface, config)?;
+    configure_surface(device, &surface, &config)?;
     Ok(PreparedSurface { surface, config })
 }
 
@@ -384,7 +360,6 @@ fn presenter_from_prepared(
         pending: None,
         ready: true,
         occluded_streak: 0,
-        acquire_panics: 0,
     })
 }
 
@@ -400,6 +375,56 @@ fn resize_presenter_for(
     presenter.pending = Some((width.max(2), height.max(2)));
 }
 
+fn is_preview_surface(width: u32, height: u32) -> bool {
+    width >= 256 && height >= 256
+}
+
+fn present_monitor_group(
+    presenters: &mut Presenters,
+    device: &GpuDevice,
+    epoch: u64,
+    ids: &[u64],
+    source_view: &impl Fn(u64) -> Option<(wgpu::TextureView, bool)>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let planned: Vec<_> = ids
+        .iter()
+        .copied()
+        .filter_map(|monitor_id| {
+            let source_id = *presenters.monitor_sources.get(&monitor_id)?;
+            let (view, packed) = match source_view(source_id) {
+                Some((view, packed)) => (Some(view), packed),
+                None => (None, false),
+            };
+            Some((monitor_id, source_id ^ epoch.rotate_left(8), view, packed))
+        })
+        .collect();
+    let mut encoder = device
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("eiviz present"),
+        });
+    let mut acquired = Vec::new();
+    for (monitor_id, cache_key, view, packed) in planned {
+        let Some(presenter) = presenters.monitors.get_mut(&monitor_id) else {
+            continue;
+        };
+        if let Some(item) = draw_presenter(
+            device,
+            presenter,
+            cache_key,
+            view.as_ref(),
+            packed,
+            &mut encoder,
+        ) {
+            acquired.push(item);
+        }
+    }
+    submit_presents(device, encoder, acquired)
+}
+
 fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
     let Some((width, height)) = presenter.pending else {
         return;
@@ -411,20 +436,12 @@ fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
     let mut config = presenter.config.clone();
     config.width = width;
     config.height = height;
-    match configure_or_fifo(&device.device, &presenter.surface, config) {
-        Ok(config) => {
-            presenter.config = config;
-            presenter.bind = None;
-            presenter.bind_key = 0;
-            presenter.pending = None;
-            presenter.ready = true;
-        }
-        Err(error) => {
-            crate::diag::error(&format!("surface reconfigure failed: {error}"));
-            if presenter.acquire_panics >= 1 {
-                crate::diag::mark_fatal(format!("surface reconfigure failed: {error}"));
-            }
-        }
+    if configure_surface(&device.device, &presenter.surface, &config).is_ok() {
+        presenter.config = config;
+        presenter.bind = None;
+        presenter.bind_key = 0;
+        presenter.pending = None;
+        presenter.ready = true;
     }
 }
 
@@ -441,27 +458,6 @@ fn wait_gpu_idle(device: &wgpu::Device) {
     }
 }
 
-fn configure_or_fifo(
-    device: &wgpu::Device,
-    surface: &wgpu::Surface,
-    mut config: wgpu::SurfaceConfiguration,
-) -> Result<wgpu::SurfaceConfiguration, String> {
-    if configure_surface(device, surface, &config).is_ok() {
-        return Ok(config);
-    }
-    if config.present_mode != wgpu::PresentMode::Fifo {
-        crate::diag::warn(&format!(
-            "surface configure failed present_mode={:?}; retrying Fifo",
-            config.present_mode
-        ));
-        config.present_mode = wgpu::PresentMode::Fifo;
-        configure_surface(device, surface, &config)?;
-        crate::diag::info("surface present_mode=Fifo (fallback)");
-        return Ok(config);
-    }
-    Err("surface configure failed".into())
-}
-
 fn configure_surface(
     device: &wgpu::Device,
     surface: &wgpu::Surface,
@@ -473,10 +469,6 @@ fn configure_surface(
             wait_gpu_idle(device);
             let (_, failed) = device::with_surface_configure(|| {
                 surface.configure(device, config);
-                // Flush deferred DX12 validation while the configure error
-                // scope is still open. Otherwise configure looks successful
-                // and get_current_texture later panics.
-                wait_gpu_idle(device);
             });
             if !failed {
                 return Ok(());
@@ -497,14 +489,6 @@ fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
         .into_iter()
         .find(|mode| modes.contains(mode))
         .unwrap_or(wgpu::PresentMode::Fifo)
-}
-
-fn fallback_present_mode(mode: wgpu::PresentMode) -> wgpu::PresentMode {
-    if mode == wgpu::PresentMode::Fifo {
-        mode
-    } else {
-        wgpu::PresentMode::Fifo
-    }
 }
 
 fn pick_surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
@@ -543,14 +527,7 @@ fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTex
         Err(_) => {
             crate::diag::error("surface get_current_texture panicked");
             presenter.ready = false;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-            presenter.acquire_panics = presenter.acquire_panics.saturating_add(1);
-            presenter.config.present_mode = fallback_present_mode(presenter.config.present_mode);
-            if presenter.acquire_panics >= 2 {
-                crate::diag::mark_fatal(
-                    "surface get_current_texture panicked after reconfigure",
-                );
-            }
+            presenter.pending = None;
             return None;
         }
     };
@@ -558,12 +535,15 @@ fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTex
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
             presenter.occluded_streak = 0;
-            presenter.acquire_panics = 0;
             Some(texture)
         }
-        wgpu::CurrentSurfaceTexture::Outdated
-        | wgpu::CurrentSurfaceTexture::Lost
-        | wgpu::CurrentSurfaceTexture::Validation => {
+        wgpu::CurrentSurfaceTexture::Lost => {
+            crate::diag::note_surface_lost();
+            presenter.ready = false;
+            presenter.pending = Some((presenter.config.width, presenter.config.height));
+            None
+        }
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Validation => {
             presenter.ready = false;
             presenter.pending = Some((presenter.config.width, presenter.config.height));
             None
@@ -799,7 +779,7 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_present_mode, BlitParams};
+    use super::{BlitParams, pick_present_mode};
 
     #[test]
     fn present_params_match_uyvy_shader() {
@@ -821,13 +801,5 @@ mod tests {
             wgpu::PresentMode::Immediate,
         ];
         assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Mailbox);
-    }
-
-    #[test]
-    fn acquire_panic_keeps_pending_for_reconfigure() {
-        let pending = Some((1920, 1080));
-        assert!(pending.is_some());
-        assert_eq!(super::fallback_present_mode(wgpu::PresentMode::Mailbox), wgpu::PresentMode::Fifo);
-        assert_eq!(super::fallback_present_mode(wgpu::PresentMode::Fifo), wgpu::PresentMode::Fifo);
     }
 }

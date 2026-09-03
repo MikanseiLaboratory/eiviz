@@ -131,43 +131,16 @@ struct SwitcherView: View {
     private func switcherSceneThumb(_ scene: SceneEntry) -> some View {
         let preview = isPreviewing(scene)
         let program = isProgramming(scene)
-        return VStack(spacing: 4) {
-            MetalPreviewRepresentable(
-                role: .monitor(
-                    monitorId: mixer.monitorIdForSwitcherScene(unitId: unitId, sceneId: scene.id),
-                    sourceId: scene.gpuId
-                ),
-                presentInterval: mixer.session.settings.resolvedPresentInterval,
-                onClick: { mixer.previewScene(scene, unitId: unitId) }
-            )
-            .frame(width: 142, height: 80)
-            .background(Color.black)
-            Text(scene.name)
-                .font(.system(size: 11))
-                .lineLimit(1)
-                .frame(width: 142)
-        }
-        .padding(4)
-        .background(rowFill(preview: preview, program: program))
-        .overlay(
-            Rectangle().stroke(rowStroke(preview: preview, program: program), lineWidth: 2)
+        return SwitcherSceneThumb(
+            scene: scene,
+            preview: preview,
+            program: program,
+            interval: mixer.session.settings.resolvedPresentInterval,
+            previewColor: mixer.session.settings.previewColor.color,
+            programColor: mixer.session.settings.programColor.color,
+            inactiveColor: mixer.session.settings.inactiveColor.color,
+            onPreview: { mixer.previewScene(scene, unitId: unitId) }
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            mixer.previewScene(scene, unitId: unitId)
-        }
-    }
-
-    private func rowFill(preview: Bool, program: Bool) -> Color {
-        if program { return mixer.session.settings.programColor.color.opacity(0.28) }
-        if preview { return mixer.session.settings.previewColor.color.opacity(0.22) }
-        return Color.clear
-    }
-
-    private func rowStroke(preview: Bool, program: Bool) -> Color {
-        if program { return mixer.session.settings.programColor.color }
-        if preview { return mixer.session.settings.previewColor.color }
-        return mixer.session.settings.inactiveColor.color
     }
 
     private func isPreviewing(_ scene: SceneEntry) -> Bool {
@@ -225,6 +198,59 @@ struct SwitcherView: View {
         mix = 0
         tbarLatching = false
         tbarLocked = false
+    }
+}
+
+private struct SwitcherSceneThumb: View {
+    let scene: SceneEntry
+    let preview: Bool
+    let program: Bool
+    let interval: UInt32
+    let previewColor: Color
+    let programColor: Color
+    let inactiveColor: Color
+    let onPreview: () -> Void
+
+    @State private var appeared = false
+
+    private var wanted: Bool { preview || program || appeared }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ThumbRepresentable(
+                sourceId: scene.gpuId,
+                width: 142,
+                height: 80,
+                interval: interval,
+                wanted: wanted,
+                onClick: onPreview
+            )
+            .frame(width: 142, height: 80)
+            .background(Color.black)
+            Text(scene.name)
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .frame(width: 142)
+        }
+        .padding(4)
+        .background(rowFill)
+        .overlay(Rectangle().stroke(rowStroke, lineWidth: 2))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onPreview)
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
+    }
+
+    private var rowFill: Color {
+        if program { return programColor.opacity(0.28) }
+        if preview { return previewColor.opacity(0.22) }
+        return Color.clear
+    }
+
+    private var rowStroke: Color {
+        if program { return programColor }
+        if preview { return previewColor }
+        return inactiveColor
     }
 }
 

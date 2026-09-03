@@ -1,6 +1,6 @@
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 
-use crate::upload::{texture_bytes, GpuVideoFrame};
+use crate::upload::{GpuVideoFrame, texture_bytes};
 
 /// Reused NV12/BGRA destinations so file and capture ingest do not allocate every frame.
 pub struct VideoGpuRing {
@@ -44,9 +44,11 @@ impl VideoGpuRing {
     ) -> (wgpu::Texture, wgpu::TextureView) {
         let width = width.max(2);
         let height = height.max(2);
-        if self.dests.iter().any(|slot| {
-            slot.width != width || slot.height != height || slot.format != format
-        }) {
+        if self
+            .dests
+            .iter()
+            .any(|slot| slot.width != width || slot.height != height || slot.format != format)
+        {
             self.dests.clear();
             self.next = 0;
         }
@@ -93,7 +95,12 @@ impl VideoGpuRing {
             self.plane_h = height;
         }
         if self.y.is_none() {
-            self.y = Some(owned_plane(device, wgpu::TextureFormat::R8Unorm, width, height));
+            self.y = Some(owned_plane(
+                device,
+                wgpu::TextureFormat::R8Unorm,
+                width,
+                height,
+            ));
         }
         if self.uv.is_none() {
             self.uv = Some(owned_plane(
@@ -110,7 +117,11 @@ impl VideoGpuRing {
     }
 
     pub fn vram_bytes(&self) -> u64 {
-        let mut total = self.dests.iter().map(|slot| texture_bytes(&slot.texture)).sum();
+        let mut total = self
+            .dests
+            .iter()
+            .map(|slot| texture_bytes(&slot.texture))
+            .sum();
         if let Some(y) = &self.y {
             total += texture_bytes(y);
         }
@@ -407,7 +418,9 @@ fn import_plane(
             1,
         )
     };
-    if plane > 0 || format == wgpu::TextureFormat::R8Unorm || format == wgpu::TextureFormat::Rg8Unorm
+    if plane > 0
+        || format == wgpu::TextureFormat::R8Unorm
+        || format == wgpu::TextureFormat::Rg8Unorm
     {
         hal = hal.with_plane_slice(plane);
     }
@@ -429,7 +442,12 @@ fn import_plane(
     })
 }
 
-fn owned_plane(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> wgpu::Texture {
+fn owned_plane(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("eiviz nv12 plane"),
         size: wgpu::Extent3d {

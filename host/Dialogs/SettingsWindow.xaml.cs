@@ -26,6 +26,7 @@ public partial class SettingsWindow : Window
             DefaultMultiviewUnitId = session.Settings.DefaultMultiviewUnitId,
             FrameBufferFrames = session.Settings.FrameBufferFrames,
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
+            FlipSwapchainLimit = session.Settings.FlipSwapchainLimit,
             InternalColorFormat = session.Settings.InternalColorFormat,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
             NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
@@ -46,6 +47,7 @@ public partial class SettingsWindow : Window
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
         SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
         SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 3 : Settings.DefaultPresentInterval).ToString());
+        SelectTag(FlipBudgetBox, Settings.FlipSwapchainLimit.ToString());
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
@@ -74,7 +76,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -82,6 +84,7 @@ public partial class SettingsWindow : Window
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -91,6 +94,7 @@ public partial class SettingsWindow : Window
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
         SelectTag(MvPresentBox, "3");
+        SelectTag(FlipBudgetBox, "0");
         RebarOptBox.IsChecked = _rebarAvailable;
         NdiGpuBox.IsChecked = true;
         Settings.ResetBusColors();
@@ -574,6 +578,9 @@ public partial class SettingsWindow : Window
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);
+        if (FlipBudgetBox.SelectedItem is ComboBoxItem flip && flip.Tag is string flipTag
+            && uint.TryParse(flipTag, out var flipLimit))
+            Settings.FlipSwapchainLimit = flipLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16 ? flipLimit : 0;
         Settings.RebarOptimization = _rebarAvailable && RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;

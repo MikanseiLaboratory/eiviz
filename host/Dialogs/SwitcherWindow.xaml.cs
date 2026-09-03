@@ -28,6 +28,7 @@ public partial class SwitcherWindow : Window
         ProgramAspect.RatioHeight = unit.Height;
         RebuildScenes();
         RebuildTransitions();
+        SceneScroll.ScrollChanged += (_, _) => ApplyThumbSubscriptions();
         OnTopBox.IsChecked = unit.AlwaysOnTop;
         ApplyTopmost();
         Loaded += (_, _) =>
@@ -43,7 +44,7 @@ public partial class SwitcherWindow : Window
             PreviewHost.ReleaseNative();
             ProgramHost.ReleaseNative();
             foreach (var thumb in _thumbs.Values)
-                thumb.Host.ReleaseNative();
+                thumb.Host.SetWanted(false);
             _thumbs.Clear();
         };
     }
@@ -97,7 +98,7 @@ public partial class SwitcherWindow : Window
         var keep = Session.Scenes.Select(scene => scene.Id).ToHashSet();
         foreach (var id in _thumbs.Keys.Where(id => !keep.Contains(id)).ToList())
         {
-            _thumbs[id].Host.ReleaseNative();
+            _thumbs[id].Host.SetWanted(false);
             SceneStrip.Children.Remove(_thumbs[id].Chrome);
             _thumbs.Remove(id);
         }
@@ -108,8 +109,7 @@ public partial class SwitcherWindow : Window
             if (_thumbs.TryGetValue(scene.Id, out var thumb))
             {
                 thumb.Label.Text = scene.Name;
-                if (!thumb.Host.HasMonitor(thumb.MonitorId, scene.GpuId))
-                    thumb.Host.RetargetMonitor(thumb.MonitorId, scene.GpuId);
+                thumb.Host.Bind(scene.GpuId, 148, 80, interval);
             }
             else
             {
@@ -117,22 +117,15 @@ public partial class SwitcherWindow : Window
                 _thumbs[scene.Id] = thumb;
                 SceneStrip.Children.Add(thumb.Chrome);
             }
-            thumb.Host.PresentInterval = interval;
-            thumb.Host.ApplyPresentInterval();
+            thumb.Host.SetPresentInterval(interval);
         }
         RefreshSceneThumbs();
     }
 
     private SceneThumb CreateThumb(SceneEntry scene)
     {
-        var monitorId = Session.NextMonitorId++;
-        var host = new SwapchainHost
-        {
-            Height = 80,
-            PresentInterval = Session.Settings.ResolvedPresentInterval()
-        };
-        host.RetargetMonitor(monitorId, scene.GpuId);
-        host.SurfaceClicked += (_, _) => PreviewScene(scene.Id);
+        var host = new ThumbView { Height = 80 };
+        host.Bind(scene.GpuId, 148, 80, Session.Settings.ResolvedPresentInterval());
         var label = new TextBlock
         {
             Text = scene.Name,
@@ -160,7 +153,6 @@ public partial class SwitcherWindow : Window
         return new SceneThumb
         {
             SceneId = scene.Id,
-            MonitorId = monitorId,
             Chrome = chrome,
             Host = host,
             Label = label
@@ -192,6 +184,19 @@ public partial class SwitcherWindow : Window
                 : scene.GpuId == previewId
                     ? preview
                     : inactive;
+        }
+        ApplyThumbSubscriptions();
+    }
+
+    private void ApplyThumbSubscriptions()
+    {
+        ReadBusSources(out var previewId, out var programId);
+        foreach (var scene in Session.Scenes)
+        {
+            if (!_thumbs.TryGetValue(scene.Id, out var thumb))
+                continue;
+            var pinned = scene.GpuId == programId || scene.GpuId == previewId;
+            thumb.Host.SetWanted(pinned || ThumbViewport.Intersects(thumb.Chrome, SceneScroll));
         }
     }
 
@@ -324,9 +329,8 @@ public partial class SwitcherWindow : Window
     private sealed class SceneThumb
     {
         public ulong SceneId;
-        public ulong MonitorId;
         public Border Chrome = null!;
-        public SwapchainHost Host = null!;
+        public ThumbView Host = null!;
         public TextBlock Label = null!;
     }
 }

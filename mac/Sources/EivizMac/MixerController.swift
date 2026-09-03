@@ -53,10 +53,8 @@ final class MixerController: ObservableObject {
     @Published private(set) var programByUnit: [UInt64: UInt64] = [:]
     private var inputPreviewWindows: [UInt64: NSWindow] = [:]
     private var inputPreviewControllers: [UInt64: NSWindowController] = [:]
-    private var inputPreviewMonitorIds: [UInt64: UInt64] = [:]
     private let inputPreviewCloser = InputPreviewCloser()
     private var switcherWindows: [UInt64: NSWindow] = [:]
-    private var switcherSceneMonitors: [UInt64: [UInt64: UInt64]] = [:]
     private let switcherCloser = SwitcherCloser()
     private var multiviewWindows: [UInt64: NSWindow] = [:]
     private let multiviewCloser = SwitcherCloser()
@@ -78,6 +76,8 @@ final class MixerController: ObservableObject {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        GpuPresentStore.load()
+        FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
         bumpSurfaceEpoch()
@@ -85,7 +85,10 @@ final class MixerController: ObservableObject {
             Task { @MainActor in self?.tick() }
         }
         mixTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.syncAllUnitBuses() }
+            Task { @MainActor in
+                ThumbPump.poll()
+                self?.syncAllUnitBuses()
+            }
         }
         booted = true
         updateStatus()
@@ -127,9 +130,6 @@ final class MixerController: ObservableObject {
             presentInputPreview(existing)
             return
         }
-        let monitorId = session.nextMonitorId
-        session.nextMonitorId += 1
-        inputPreviewMonitorIds[inputId] = monitorId
         let unit = selectedUnit
         let width = CGFloat(960)
         let height = width * CGFloat(max(1, unit.height)) / CGFloat(max(1, unit.width))
@@ -144,7 +144,6 @@ final class MixerController: ObservableObject {
         window.identifier = NSUserInterfaceItemIdentifier("input-preview-\(inputId)")
         window.contentAspect = CGFloat(max(1, unit.width)) / CGFloat(max(1, unit.height))
         window.contentView = makeInputPreviewContent(
-            monitorId: monitorId,
             sourceId: inputId,
             frame: contentRect
         )
@@ -165,7 +164,6 @@ final class MixerController: ObservableObject {
         inputPreviewControllers[inputId] = controller
         inputPreviewWindows[inputId] = window
         presentInputPreview(window)
-        _ = mixer_set_monitor_present_interval(monitorId, 1)
     }
 
     private func presentInputPreview(_ window: NSWindow) {
@@ -180,9 +178,6 @@ final class MixerController: ObservableObject {
     func closeInputPreview(_ inputId: UInt64) {
         let window = inputPreviewWindows.removeValue(forKey: inputId)
         inputPreviewControllers.removeValue(forKey: inputId)
-        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
-            _ = mixer_detach_monitor(monitorId)
-        }
         window?.delegate = nil
         window?.close()
     }
@@ -196,9 +191,6 @@ final class MixerController: ObservableObject {
     private func inputPreviewDidClose(_ inputId: UInt64) {
         inputPreviewWindows.removeValue(forKey: inputId)
         inputPreviewControllers.removeValue(forKey: inputId)
-        if let monitorId = inputPreviewMonitorIds.removeValue(forKey: inputId) {
-            _ = mixer_detach_monitor(monitorId)
-        }
     }
 
     func applySession() {
@@ -620,6 +612,7 @@ final class MixerController: ObservableObject {
     }
 
     func openNewMultiview() {
+        guard FlipBudget.tryOpen(1) else { return }
         let unitId = session.settings.defaultMultiviewUnitId == 0
             ? selectedUnitId
             : session.settings.defaultMultiviewUnitId
@@ -636,6 +629,7 @@ final class MixerController: ObservableObject {
             existing.level = layout.alwaysOnTop ? .floating : .normal
             return
         }
+        guard FlipBudget.tryOpen(1) else { return }
         let host = NSHostingController(rootView: MultiviewView(layoutId: layout.id).environmentObject(self).environment(\.mixerSurfaceEpoch, surfaceEpoch))
         let window = SwitcherHostWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 792),
@@ -671,6 +665,7 @@ final class MixerController: ObservableObject {
             existing.level = unit.alwaysOnTop ? .floating : .normal
             return
         }
+        guard FlipBudget.tryOpen(2) else { return }
         let host = NSHostingController(rootView: SwitcherView(unitId: unit.id).environmentObject(self).environment(\.mixerSurfaceEpoch, surfaceEpoch))
         let window = SwitcherHostWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 640),
@@ -689,7 +684,6 @@ final class MixerController: ObservableObject {
         switcherCloser.onClose = { [weak self] closedId in
             Task { @MainActor in
                 self?.switcherWindows.removeValue(forKey: closedId)
-                self?.switcherSceneMonitors.removeValue(forKey: closedId)
             }
         }
         window.delegate = switcherCloser
@@ -701,17 +695,24 @@ final class MixerController: ObservableObject {
         let window = switcherWindows.removeValue(forKey: unitId)
         window?.delegate = nil
         window?.close()
-        switcherSceneMonitors.removeValue(forKey: unitId)
     }
 
-    func monitorIdForSwitcherScene(unitId: UInt64, sceneId: UInt64) -> UInt64 {
-        if let existing = switcherSceneMonitors[unitId]?[sceneId] {
-            return existing
+    func openSceneEditor(_ scene: SceneEntry?) {
+        if showSceneEditor {
+            editingScene = scene
+            return
         }
-        let monitorId = session.nextMonitorId
-        session.nextMonitorId += 1
-        switcherSceneMonitors[unitId, default: [:]][sceneId] = monitorId
-        return monitorId
+        guard FlipBudget.tryOpen(1) else { return }
+        editingScene = scene
+        showSceneEditor = true
+    }
+
+    func openOverlay() {
+        if showOverlay {
+            return
+        }
+        guard FlipBudget.tryOpen(1) else { return }
+        showOverlay = true
     }
 
     func closeAllSwitchers() {
@@ -949,6 +950,7 @@ final class MixerController: ObservableObject {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
         bumpSurfaceEpoch()
@@ -1279,6 +1281,7 @@ final class MixerController: ObservableObject {
         }
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
+        FlipBudget.observeLost(stats.surface_lost)
         if stats.frame_budget_ms > 0 {
             let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
             resourceText = hud.text

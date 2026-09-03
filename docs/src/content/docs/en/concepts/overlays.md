@@ -7,4 +7,5 @@ DSK, downstream key, vMix Overlay.
 Up to eight per [Mixing Unit](/eiviz/en/concepts/mixing-unit/). The source is a [Scene](/eiviz/en/concepts/scenes/) or an Input.
 
 They sit on top of Program. Overlay in the main window sets position and size; the desk toggles turn them on and off.  
+The Overlay window shows Program in real time, so it uses 1 slot of the video output destination window limit. Closing it frees the slot.
 Transitions are Cut or Fade.
