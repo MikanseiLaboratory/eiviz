@@ -130,7 +130,7 @@ These copies run in the frame:
 
 - Frame Delay. Copies `mixed` and `preview` into a ring so picture lines up with audio. GUI Preview/Program sample that delayed surface
 - Transition history. Copies `mixed` into `prev`
-- Send. The CPU path packs UYVY; GPU OMT copies into an async send slot
+- Send. The CPU path packs UYVY; GPU OMT copies into a per-output async send slot. Encode and SDK send run on that output’s send thread
 
 Intermediate buffers such as sort / flow / bloom stay in VRAM. Their compute runs during those transitions.
 
@@ -148,9 +148,9 @@ Then the picture moves like this:
 
 1. An ingest thread deposits the latest frame
 2. Each Mixing Unit draws Preview and Program, mixes with the T-bar or AUTO, then overlays and multiview
-3. The result is sent to the compose buses
-4. If needed it is packed for send, or handed on as a GPU texture
-5. Audio buses mix on the same tick
+3. Outputs that send pack UYVY or copy into a GPU slot
+4. Each output’s send thread compresses and transmits
+5. Audio buses mix on the same master tick and ride those outputs. A Multiview output is silent
 
 ```mermaid
 sequenceDiagram
@@ -199,9 +199,11 @@ Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/).
 
 | | Video | Status |
 | --- | --- | --- |
-| OMT | Stay on the GPU, or read back and encode on CPU | Shipped |
-| NDI | CPU path | Shipped |
+| OMT | Stay on the GPU, or read back and encode on the send thread | Shipped |
+| NDI | CPU path. Video-clocked; PCM on a side thread; SDK send is async | Shipped |
 | DeckLink | — | In progress |
+
+Each output has its own send thread. The mix clock packs and copies; one output’s encode wait does not stall another output’s accept or audio.
 
 OMT receive stays full quality on Preview/Program and drops bandwidth otherwise.  
 Full quality holds a short time after leaving those buses so TAKE and the T-bar do not rebuild the receiver.

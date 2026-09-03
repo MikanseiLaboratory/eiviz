@@ -63,12 +63,15 @@ macOS（Apple Silicon）ではUnified Memory向けの最適化を導入してい
 
 <img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-各行は名前、転送方式、On/Off切り替え、映像ソースです。  
+各行は名前、転送方式、On/Off切り替え、映像ソース、音声です。  
 転送方式にはOMTとNDIに対応しています。Decklinkなどのハードウェア出力は現在実装中です。  
-映像ソースはInput、Scene、MU PRV、MU PGM、Multiviewから選択が可能です。
+映像ソースはInput、Scene、MU PRV、MU PGM、Multiviewから選択が可能です。  
+音声はMasterかNoneです。既定はMasterです。Multiviewをソースにした行は無音です。
 
-OMTはエンコード方式を選択可能です。GPU encodeはフレームをGPUに載せたままVMXコーデックに変換し送信し、CPU encodeはUYVYへ変換後CPUに転送します。  
-NDIは常にCPU encodeです。
+OMTはエンコード方式を選択可能です。GPU encodeはフレームをGPUに載せたままVMXコーデックに変換し送信し、CPU encodeはUYVYへ変換後CPUに転送し、送出スレッドでVMXへ圧縮します。  
+NDIは常にCPU encodeです。送信スレッドはSDKのエンコード完了を待ちません。
+
+各出力は独立して送出します。詳細は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)です。
 
 Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適用可能です。
 

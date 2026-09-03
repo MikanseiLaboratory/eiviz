@@ -34,4 +34,4 @@ Pick the animation and frame interpolation, then run it to change Program.
 
 ## Outputs
 
-An Output’s source can be an Input, a Scene, Mixing Unit Preview or Program, or a Multiview. The default is Mixing Unit Program. Signal flow is in [Inputs](/eiviz/en/concepts/inputs/).
+An Output’s source can be an Input, a Scene, Mixing Unit Preview or Program, or a Multiview. The default is Mixing Unit Program. An output whose source is a Multiview is silent. Signal flow is in [Inputs](/eiviz/en/concepts/inputs/) and [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
