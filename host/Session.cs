@@ -739,6 +739,13 @@ public sealed class MultiviewLayout
     }
 }
 
+public enum SwitcherSceneFilter
+{
+    All,
+    Include,
+    Exclude
+}
+
 public sealed class MixingUnitEntry
 {
     public ulong Id { get; set; }
@@ -752,7 +759,16 @@ public sealed class MixingUnitEntry
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public bool AlwaysOnTop { get; set; } = true;
+    public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
+    public List<ulong> SwitcherSceneIds { get; } = [];
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
+
+    public bool ShowsOnSwitcher(SceneEntry scene) => SwitcherSceneFilter switch
+    {
+        SwitcherSceneFilter.Include => SwitcherSceneIds.Contains(scene.Id),
+        SwitcherSceneFilter.Exclude => !SwitcherSceneIds.Contains(scene.Id),
+        _ => true
+    };
 
     public string FormatFps()
     {

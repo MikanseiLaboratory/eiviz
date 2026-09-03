@@ -307,6 +307,8 @@ internal static class SessionStore
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
         public bool? AlwaysOnTop { get; set; }
+        public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
+        public List<ulong> SwitcherSceneIds { get; set; } = [];
 
         public static UnitDto From(MixingUnitEntry unit) => new()
         {
@@ -320,7 +322,9 @@ internal static class SessionStore
             Overlays = [.. unit.Overlays],
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
             AudioLink = unit.AudioLink,
-            AlwaysOnTop = unit.AlwaysOnTop
+            AlwaysOnTop = unit.AlwaysOnTop,
+            SwitcherSceneFilter = unit.SwitcherSceneFilter,
+            SwitcherSceneIds = [.. unit.SwitcherSceneIds]
         };
 
         public MixingUnitEntry ToEntry()
@@ -335,12 +339,15 @@ internal static class SessionStore
                 FpsDen = FpsDen == 0 ? 1_001 : FpsDen,
                 AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
                 AudioLink = AudioLink,
-                AlwaysOnTop = AlwaysOnTop ?? true
+                AlwaysOnTop = AlwaysOnTop ?? true,
+                SwitcherSceneFilter = SwitcherSceneFilter
             };
             foreach (var preset in Transitions)
                 unit.Transitions.Add(preset);
             foreach (var overlay in Overlays)
                 unit.Overlays.Add(overlay);
+            foreach (var id in SwitcherSceneIds)
+                unit.SwitcherSceneIds.Add(id);
             unit.EnsureDefaultTransitions();
             return unit;
         }

@@ -729,6 +729,18 @@ pub struct UnitDto {
     pub audio_bus_id: u64,
     #[serde(default)]
     pub audio_link: AudioLinkMode,
+    #[serde(default)]
+    pub switcher_scene_filter: SwitcherSceneFilter,
+    #[serde(default)]
+    pub switcher_scene_ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SwitcherSceneFilter {
+    #[default]
+    All,
+    Include,
+    Exclude,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1060,6 +1072,8 @@ mod tests {
         assert!(doc.inputs[0].tags.is_empty());
         assert!(doc.scenes[0].tags.is_empty());
         assert!(!doc.scenes[0].preview_collapsed);
+        assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
+        assert!(doc.units[0].switcher_scene_ids.is_empty());
     }
 
     #[test]
@@ -1084,6 +1098,40 @@ mod tests {
         assert_eq!(again.inputs[0].tags, vec!["Cameras"]);
         assert_eq!(again.scenes[0].tags, vec!["Open"]);
         assert!(again.scenes[0].preview_collapsed);
+    }
+
+    #[test]
+    fn switcher_scene_filter_defaults_and_roundtrip() {
+        let missing = r#"{
+  "version": 2,
+  "units": [{ "id": 1, "name": "Mixing Unit 1" }]
+}"#;
+        let doc = parse(missing.as_bytes()).unwrap();
+        assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
+        assert!(doc.units[0].switcher_scene_ids.is_empty());
+
+        let src = r#"{
+  "version": 2,
+  "units": [{
+    "id": 1,
+    "name": "Mixing Unit 1",
+    "switcherSceneFilter": "Exclude",
+    "switcherSceneIds": [3, 5]
+  }]
+}"#;
+        let filtered = parse(src.as_bytes()).unwrap();
+        assert_eq!(
+            filtered.units[0].switcher_scene_filter,
+            SwitcherSceneFilter::Exclude
+        );
+        assert_eq!(filtered.units[0].switcher_scene_ids, vec![3, 5]);
+        let text = String::from_utf8(to_vec(&filtered).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(
+            again.units[0].switcher_scene_filter,
+            SwitcherSceneFilter::Exclude
+        );
+        assert_eq!(again.units[0].switcher_scene_ids, vec![3, 5]);
     }
 
     #[test]

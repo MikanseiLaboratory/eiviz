@@ -29,7 +29,9 @@ public partial class SceneTile : UserControl
     {
         Scene = scene;
         Title.Text = scene.Name;
+        CollapsedTitle.Text = scene.Name;
         Number.Text = number.ToString();
+        CollapsedNumber.Text = number.ToString();
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
         ApplyCollapsed();
     }
@@ -75,20 +77,37 @@ public partial class SceneTile : UserControl
     public void ApplyCollapsed()
     {
         var collapsed = Scene?.PreviewCollapsed == true;
-        Monitor.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        Transport.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        Width = collapsed ? 40 : 176;
+        Height = 140;
+        ExpandedBody.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        CollapsedBody.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
         if (collapsed)
             SetThumbWanted(false);
+        InvalidateMeasure();
+        InvalidateArrange();
     }
 
-    private void TitleBar_RightClick(object sender, MouseButtonEventArgs e)
+    private void Chrome_RightClick(object sender, MouseButtonEventArgs e)
     {
+        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null)
+            return;
         if (Scene is not { } scene)
             return;
         scene.PreviewCollapsed = !scene.PreviewCollapsed;
         ApplyCollapsed();
         SceneCollapseToggled?.Invoke(this, scene);
         e.Handled = true;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match)
+                return match;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

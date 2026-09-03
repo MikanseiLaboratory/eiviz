@@ -10,6 +10,8 @@ struct SwitcherView: View {
     @State private var tbarLatching = false
     @State private var tbarDragging = false
     @State private var tbarPresetIndex = 0
+    @State private var sceneTag: String? = nil
+    @State private var showScenePicker = false
 
     private var unit: MixingUnitEntry {
         mixer.session.units.first { $0.id == unitId } ?? mixer.selectedUnit
@@ -48,17 +50,26 @@ struct SwitcherView: View {
                 ))
                 .toggleStyle(.checkbox)
             }
-            HStack(spacing: 16) {
-                bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
-                transitions
-                bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+            VSplitView {
+                HSplitView {
+                    bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                    transitions
+                    bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                }
+                .frame(minHeight: 160)
+                scenes
+                    .frame(minHeight: 80)
+                overlays
+                    .frame(minHeight: 60)
             }
-            .frame(maxHeight: .infinity)
-            scenes
         }
         .padding(8)
         .background(EivizTheme.background)
         .foregroundStyle(EivizTheme.text)
+        .sheet(isPresented: $showScenePicker) {
+            SwitcherScenesSheet(unitId: unitId)
+                .environmentObject(mixer)
+        }
     }
 
     private var transitions: some View {
@@ -109,15 +120,35 @@ struct SwitcherView: View {
             .padding(.bottom, 16)
         }
         .padding(.horizontal, 12)
-        .frame(width: 260)
+        .frame(minWidth: 180, idealWidth: 260)
+    }
+
+    private var visibleScenes: [SceneEntry] {
+        mixer.session.scenes.filter { scene in
+            unit.showsOnSwitcher(scene)
+                && (sceneTag == nil || scene.tags.contains(sceneTag!))
+        }
     }
 
     private var scenes: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Scenes").fontWeight(.bold)
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(alignment: .top, spacing: 8) {
-                    ForEach(mixer.session.scenes) { scene in
+            HStack {
+                Text(L10n.t("chrome.scenes")).fontWeight(.bold)
+                Spacer()
+                Button(L10n.t("switcher.manageScenes")) { showScenePicker = true }
+                    .buttonStyle(MixerButtonStyle())
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    tagTab(L10n.t("tag.all"), selected: sceneTag == nil) { sceneTag = nil }
+                    ForEach(mixer.session.sceneTags, id: \.self) { tag in
+                        tagTab(tag, selected: sceneTag == tag) { sceneTag = tag }
+                    }
+                }
+            }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(visibleScenes) { scene in
                         switcherSceneThumb(scene)
                     }
                 }
@@ -125,7 +156,53 @@ struct SwitcherView: View {
             }
             .background(EivizTheme.list)
         }
-        .frame(height: 200)
+    }
+
+    private func tagTab(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.white : Color.secondary)
+            .padding(.bottom, 2)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(selected ? mixer.session.settings.previewColor.color : Color.clear)
+                    .frame(height: 2)
+            }
+    }
+
+    private var overlays: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(L10n.t("chrome.overlay")).fontWeight(.bold)
+                Spacer()
+                Button(L10n.t("chrome.overlay")) { mixer.openOverlay(for: unitId) }
+                    .buttonStyle(MixerButtonStyle())
+            }
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(alignment: .bottom, spacing: 12) {
+                    ForEach(unit.overlays) { slot in
+                        Toggle(isOn: Binding(
+                            get: {
+                                mixer.session.units.first { $0.id == unitId }?
+                                    .overlays.first { $0.id == slot.id }?.enabled ?? slot.enabled
+                            },
+                            set: { mixer.setOverlayEnabled(slot.id, enabled: $0, unitId: unitId) }
+                        )) {
+                            Text(overlayName(slot))
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+        }
+    }
+
+    private func overlayName(_ slot: OverlaySlot) -> String {
+        if slot.sourceKind == .input {
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+        }
+        return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }
 
     private func switcherSceneThumb(_ scene: SceneEntry) -> some View {
@@ -139,7 +216,10 @@ struct SwitcherView: View {
             previewColor: mixer.session.settings.previewColor.color,
             programColor: mixer.session.settings.programColor.color,
             inactiveColor: mixer.session.settings.inactiveColor.color,
-            onPreview: { mixer.previewScene(scene, unitId: unitId) }
+            onPreview: { mixer.previewScene(scene, unitId: unitId) },
+            onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
+            onHide: { mixer.hideSceneOnSwitcher(unitId, scene.id) },
+            onEdit: { mixer.openSceneEditor(scene) }
         )
     }
 
@@ -210,33 +290,47 @@ private struct SwitcherSceneThumb: View {
     let programColor: Color
     let inactiveColor: Color
     let onPreview: () -> Void
+    let onCollapse: () -> Void
+    let onHide: () -> Void
+    let onEdit: () -> Void
 
     @State private var appeared = false
 
-    private var wanted: Bool { preview || program || appeared }
+    private var wanted: Bool { !scene.previewCollapsed && (preview || program || appeared) }
 
     var body: some View {
-        VStack(spacing: 4) {
-            ThumbRepresentable(
-                sourceId: scene.gpuId,
-                width: 142,
-                height: 80,
-                interval: interval,
-                wanted: wanted,
-                onClick: onPreview
-            )
-            .frame(width: 142, height: 80)
-            .background(Color.black)
+        VStack(spacing: 0) {
             Text(scene.name)
-                .font(.system(size: 11))
+                .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
-                .frame(width: 142)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color(white: 0.2))
+                .onTapGesture(count: 2, perform: onEdit)
+                .onTapGesture(perform: onPreview)
+                .overlay(RightClickCatcher(action: onCollapse))
+            if !scene.previewCollapsed {
+                ThumbRepresentable(
+                    sourceId: scene.gpuId,
+                    width: 142,
+                    height: 80,
+                    interval: interval,
+                    wanted: wanted,
+                    onClick: onPreview
+                )
+                .frame(width: 142, height: 80)
+                .background(Color.black)
+            }
         }
-        .padding(4)
+        .frame(width: 148)
         .background(rowFill)
         .overlay(Rectangle().stroke(rowStroke, lineWidth: 2))
         .contentShape(Rectangle())
         .onTapGesture(perform: onPreview)
+        .contextMenu {
+            Button(L10n.t("switcher.hideHere"), action: onHide)
+        }
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
     }
@@ -255,3 +349,89 @@ private struct SwitcherSceneThumb: View {
 }
 
 final class SwitcherHostWindow: NSWindow {}
+
+private struct SwitcherScenesSheet: View {
+    @EnvironmentObject private var mixer: MixerController
+    @Environment(\.dismiss) private var dismiss
+    let unitId: UInt64
+    @State private var filter: SwitcherSceneFilter = .all
+    @State private var selected: Set<UInt64> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("switcher.manageScenes")).fontWeight(.bold)
+            Picker("", selection: $filter) {
+                Text(L10n.t("switcher.allScenes")).tag(SwitcherSceneFilter.all)
+                Text(L10n.t("switcher.onlyThese")).tag(SwitcherSceneFilter.include)
+                Text(L10n.t("switcher.hideThese")).tag(SwitcherSceneFilter.exclude)
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            List(mixer.session.scenes) { scene in
+                Toggle(isOn: Binding(
+                    get: { selected.contains(scene.id) },
+                    set: { on in
+                        if on { selected.insert(scene.id) } else { selected.remove(scene.id) }
+                    }
+                )) {
+                    Text(scene.name)
+                }
+                .disabled(filter == .all)
+            }
+            .frame(minHeight: 220)
+            HStack {
+                Spacer()
+                Button(L10n.t("dialog.ok")) {
+                    mixer.setSwitcherSceneFilter(
+                        unitId,
+                        filter,
+                        ids: filter == .all ? [] : Array(selected)
+                    )
+                    dismiss()
+                }
+                Button(L10n.t("dialog.cancel")) { dismiss() }
+            }
+        }
+        .padding(16)
+        .frame(width: 360, height: 420)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+        .onAppear {
+            guard let unit = mixer.session.units.first(where: { $0.id == unitId }) else { return }
+            filter = unit.switcherSceneFilter
+            selected = Set(unit.switcherSceneIds)
+        }
+    }
+}
+
+private struct RightClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> RightClickNSView {
+        let view = RightClickNSView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: RightClickNSView, context: Context) {
+        nsView.action = action
+    }
+}
+
+private final class RightClickNSView: NSView {
+    var action: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent else { return nil }
+        switch event.type {
+        case .rightMouseDown, .rightMouseUp:
+            return self
+        default:
+            return nil
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        action?()
+    }
+}

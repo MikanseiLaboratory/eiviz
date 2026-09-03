@@ -714,7 +714,17 @@ struct MixingUnitEntry: Identifiable, Codable {
     var audioBusId: UInt64 = 1
     var audioLink: AudioLinkMode = .follow
     var alwaysOnTop: Bool = true
+    var switcherSceneFilter: SwitcherSceneFilter = .all
+    var switcherSceneIds: [UInt64] = []
     var displayName: String { "\(name)  \(width)x\(height) \(fpsLabel)" }
+
+    func showsOnSwitcher(_ scene: SceneEntry) -> Bool {
+        switch switcherSceneFilter {
+        case .all: return true
+        case .include: return switcherSceneIds.contains(scene.id)
+        case .exclude: return !switcherSceneIds.contains(scene.id)
+        }
+    }
     var fpsLabel: String {
         if fpsNum == 60_000 && fpsDen == 1_001 { return "59.94p" }
         if fpsDen == 1 { return "\(fpsNum)p" }
@@ -735,6 +745,7 @@ struct MixingUnitEntry: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, width, height, fpsNum, fpsDen, transitions, overlays, audioBusId, audioLink, alwaysOnTop
+        case switcherSceneFilter, switcherSceneIds
     }
 
     init(from decoder: Decoder) throws {
@@ -750,7 +761,15 @@ struct MixingUnitEntry: Identifiable, Codable {
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
         audioLink = try container.decodeIfPresent(AudioLinkMode.self, forKey: .audioLink) ?? .follow
         alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
+        switcherSceneFilter = try container.decodeIfPresent(SwitcherSceneFilter.self, forKey: .switcherSceneFilter) ?? .all
+        switcherSceneIds = try container.decodeIfPresent([UInt64].self, forKey: .switcherSceneIds) ?? []
     }
+}
+
+enum SwitcherSceneFilter: String, Codable {
+    case all = "All"
+    case include = "Include"
+    case exclude = "Exclude"
 }
 
 struct OutputEntry: Identifiable, Codable {

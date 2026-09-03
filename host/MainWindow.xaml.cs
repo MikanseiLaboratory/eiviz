@@ -278,7 +278,12 @@ public partial class MainWindow : Window
         tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
         tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
         tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
-        tile.SceneCollapseToggled += (_, _) => ApplySceneTileThumbs();
+        tile.SceneCollapseToggled += (_, _) =>
+        {
+            tile.ApplyCollapsed();
+            ApplySceneTileThumbs();
+            NotifySwitcherCollapsed();
+        };
         return tile;
     }
 
@@ -313,6 +318,26 @@ public partial class MainWindow : Window
             }
         }
         RefreshSceneTiles();
+        NotifySwitchers();
+    }
+
+    internal void NotifySceneTilesFromSwitcher()
+    {
+        foreach (SceneTile tile in ScenePanel.Children)
+            tile.ApplyCollapsed();
+        ApplySceneTileThumbs();
+    }
+
+    private void NotifySwitcherCollapsed()
+    {
+        foreach (var switcher in _switchers.Values)
+            switcher.ApplySceneCollapsed();
+    }
+
+    private void NotifySwitchers()
+    {
+        foreach (var switcher in _switchers.Values)
+            switcher.SyncFromUnit();
     }
 
     private void PushScenePresentIntervals()
@@ -359,6 +384,7 @@ public partial class MainWindow : Window
         foreach (var tile in tiles)
         {
             var scene = tile.Scene!;
+            tile.ApplyCollapsed();
             if (scene.PreviewCollapsed)
             {
                 tile.SetThumbWanted(false);
@@ -917,28 +943,37 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() =>
         {
             RebuildOverlayToggles();
+            foreach (var switcher in _switchers.Values)
+                switcher.RebuildOverlays();
             _overlay?.RefreshEnabled();
         });
     }
 
-    private void OpenOverlay_Click(object sender, RoutedEventArgs e)
+    private void OpenOverlay_Click(object sender, RoutedEventArgs e) =>
+        OpenOverlayFor(SelectedUnit);
+
+    internal void OpenOverlayFor(MixingUnitEntry unit)
     {
         if (_overlay is not null)
         {
-            _overlay.Reload(SelectedUnit);
+            _overlay.Reload(unit);
             _overlay.Activate();
             return;
         }
         if (!FlipBudget.TryOpen(1, this))
             return;
-        _overlay = new OverlayWindow(_session, SelectedUnit) { Owner = this };
+        _overlay = new OverlayWindow(_session, unit) { Owner = this };
         _overlay.Closed += (_, _) =>
         {
             _overlay = null;
             RebuildOverlayToggles();
+            foreach (var switcher in _switchers.Values)
+                switcher.RebuildOverlays();
         };
         _overlay.Show();
     }
+
+    internal void EditSceneFromSwitcher(SceneEntry scene) => OpenSceneEditor(scene);
 
     private void OpenMultiview_Click(object sender, RoutedEventArgs e)
     {

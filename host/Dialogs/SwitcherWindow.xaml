@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:preview="clr-namespace:Eiviz.Host.Preview"
         xmlns:i18n="clr-namespace:Eiviz.Host.I18n"
-        Title="Switcher" Height="640" Width="1280"
+        Title="Switcher" Height="720" Width="1280"
         Background="#1A1A1A" Foreground="#EEEEEE">
     <DockPanel>
         <Border DockPanel.Dock="Top" Background="#252525" Padding="8,6">
@@ -16,14 +16,15 @@
         </Border>
         <Grid Margin="8">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="200"/>
+                <RowDefinition Height="*" MinHeight="160"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*" MinHeight="140"/>
             </Grid.RowDefinitions>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="260"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*" MinWidth="160"/>
+                    <ColumnDefinition Width="260" MinWidth="180"/>
+                    <ColumnDefinition Width="*" MinWidth="160"/>
                 </Grid.ColumnDefinitions>
                 <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -37,6 +38,9 @@
                         </DockPanel>
                     </Border>
                 </preview:AspectBox>
+                <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                              Background="#555"/>
                 <Grid Grid.Column="1" Margin="16,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -55,6 +59,9 @@
                             PreviewMouseLeftButtonUp="TBar_MouseUp"
                             LostMouseCapture="TBar_LostMouseCapture"/>
                 </Grid>
+                <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                              ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
+                              Background="#555"/>
                 <preview:AspectBox x:Name="ProgramAspect" Grid.Column="2" HeaderHeight="28"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Margin="8,0,0,0">
@@ -68,12 +75,45 @@
                     </Border>
                 </preview:AspectBox>
             </Grid>
-            <DockPanel Grid.Row="1" Margin="0,8,0,0">
-                <TextBlock DockPanel.Dock="Top" Text="Scenes" FontWeight="Bold" Margin="0,0,0,6"/>
-                <ScrollViewer x:Name="SceneScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <StackPanel x:Name="SceneStrip" Orientation="Horizontal"/>
-                </ScrollViewer>
-            </DockPanel>
+            <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                          ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
+                          Background="#555"/>
+            <Grid Grid.Row="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" MinHeight="80"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="120" MinHeight="60"/>
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Button DockPanel.Dock="Right" Content="{Binding [switcher.manageScenes], Source={x:Static i18n:Loc.Source}}"
+                                Height="22" Padding="8,0" Click="ManageScenes_Click"/>
+                        <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ScrollViewer DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                  Margin="0,0,0,4">
+                        <StackPanel x:Name="SceneTabBar" Orientation="Horizontal"/>
+                    </ScrollViewer>
+                    <ScrollViewer x:Name="SceneScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <WrapPanel x:Name="SceneStrip"/>
+                    </ScrollViewer>
+                </DockPanel>
+                <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                              ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
+                              Background="#555"/>
+                <Border Grid.Row="2" Background="#161616" Padding="8,6">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <Button DockPanel.Dock="Right" Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}"
+                                    Width="88" Height="28" Click="OpenOverlay_Click"/>
+                            <TextBlock Text="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="OverlayTogglePanel" Orientation="Horizontal"/>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
         </Grid>
     </DockPanel>
 </Window>

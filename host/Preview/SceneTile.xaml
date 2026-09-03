@@ -2,7 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:preview="clr-namespace:Eiviz.Host.Preview"
-             Width="176" Margin="0,0,8,8">
+             Width="176" Height="140" Margin="0,0,8,8"
+             HorizontalAlignment="Left" VerticalAlignment="Top">
     <UserControl.Resources>
         <Style x:Key="TileBtn" TargetType="Button">
             <Setter Property="Height" Value="18"/>
@@ -12,28 +13,44 @@
             <Setter Property="Margin" Value="1,0,0,0"/>
         </Style>
     </UserControl.Resources>
-    <Border x:Name="Chrome" BorderThickness="3" BorderBrush="#555" Background="#111" Cursor="Hand">
-        <DockPanel>
-            <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3"
-                    MouseRightButtonUp="TitleBar_RightClick"
-                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
-                    <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
-                               Margin="0,0,6,0" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center"/>
-                </DockPanel>
-            </Border>
-            <StackPanel x:Name="Transport" DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="2,2,2,2">
-                <Button Style="{StaticResource TileBtn}" Content="CUT" Click="Cut_Click"/>
-                <Button x:Name="LoopButton" Style="{StaticResource TileBtn}" Content="Loop" Click="Loop_Click"/>
-                <Button x:Name="PlayButton" Style="{StaticResource TileBtn}" Content="▶" Click="Play_Click"/>
-                <Button x:Name="AudioButton" Style="{StaticResource TileBtn}" Content="Aud" Click="Audio_Click"/>
-                <Button Style="{StaticResource TileBtn}" Content="Prev" Click="Preview_Click"/>
-                <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"/>
-            </StackPanel>
-            <preview:ThumbView x:Name="Monitor" Height="90"/>
-        </DockPanel>
+    <Border x:Name="Chrome" BorderThickness="3" BorderBrush="#555" Background="#111" Cursor="Hand"
+            PreviewMouseRightButtonDown="Chrome_RightClick">
+        <Grid>
+            <DockPanel x:Name="ExpandedBody">
+                <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3"
+                        MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
+                        <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
+                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
+                </Border>
+                <StackPanel x:Name="Transport" DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="2,2,2,2">
+                    <Button Style="{StaticResource TileBtn}" Content="CUT" Click="Cut_Click"/>
+                    <Button x:Name="LoopButton" Style="{StaticResource TileBtn}" Content="Loop" Click="Loop_Click"/>
+                    <Button x:Name="PlayButton" Style="{StaticResource TileBtn}" Content="▶" Click="Play_Click"/>
+                    <Button x:Name="AudioButton" Style="{StaticResource TileBtn}" Content="Aud" Click="Audio_Click"/>
+                    <Button Style="{StaticResource TileBtn}" Content="Prev" Click="Preview_Click"/>
+                    <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"/>
+                </StackPanel>
+                <preview:ThumbView x:Name="Monitor" Height="90"/>
+            </DockPanel>
+            <DockPanel x:Name="CollapsedBody" Visibility="Collapsed" Background="#333"
+                       MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Button DockPanel.Dock="Top" Style="{StaticResource TileBtn}" Content="X"
+                        HorizontalAlignment="Center" Margin="0,4,0,2" Click="Close_Click"/>
+                <TextBlock x:Name="CollapsedNumber" DockPanel.Dock="Top" Text="1"
+                           Foreground="#EEE" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                <Viewbox Stretch="Uniform" Margin="4,0,4,6">
+                    <TextBlock x:Name="CollapsedTitle" Foreground="#EEE" FontSize="12">
+                        <TextBlock.LayoutTransform>
+                            <RotateTransform Angle="-90"/>
+                        </TextBlock.LayoutTransform>
+                    </TextBlock>
+                </Viewbox>
+            </DockPanel>
+        </Grid>
     </Border>
 </UserControl>
