@@ -41,7 +41,7 @@ internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : Mix
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
 internal sealed record RemoveOutputCommand(ulong OutputId) : MixerCommand;
 internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R, float G, float B, bool Scroll, float ToneHz = 0, float ToneLevelDbfs = -20) : MixerCommand;
-internal sealed record DefineMixInputCommand(ulong SourceId, ulong TargetId, uint SourceKind, uint Delay) : MixerCommand;
+internal sealed record DefineMixInputCommand(ulong SourceId, ulong TargetId, uint SourceKind, uint Delay, ulong AudioBusId) : MixerCommand;
 internal sealed record DropSourceCommand(ulong SourceId) : MixerCommand;
 
 internal sealed class CommandQueue : IAsyncDisposable
@@ -435,7 +435,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                 break;
             case DefineMixInputCommand mix:
                 MixerNative.ThrowIfFailed(
-                    MixerNative.DefineMixInput(mix.SourceId, mix.TargetId, mix.SourceKind, mix.Delay),
+                    MixerNative.DefineMixInput(mix.SourceId, mix.TargetId, mix.SourceKind, mix.Delay, mix.AudioBusId),
                     "Define Mix Input");
                 break;
             case DropSourceCommand drop:

@@ -201,7 +201,8 @@ public partial class App : Application
                         input.Id,
                         input.MixTargetId,
                         InputKindNames.MixSourceKind(input.MixSource),
-                        input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)));
+                        input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+                        input.MixAudioBusId));
                     break;
             }
         }

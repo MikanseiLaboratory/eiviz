@@ -309,10 +309,11 @@ pub struct MixInputSpec {
     pub target_id: u64,
     pub source_kind: u32,
     pub delay: u32,
+    pub audio_bus_id: u64,
 }
 
 impl MixInputSpec {
-    pub fn new(target_id: u64, source_kind: u32, delay: u32) -> Option<Self> {
+    pub fn new(target_id: u64, source_kind: u32, delay: u32, audio_bus_id: u64) -> Option<Self> {
         let source_kind = match source_kind {
             SRC_KIND_MU_PREVIEW | SRC_KIND_MU_PROGRAM | SRC_KIND_MU_MULTIVIEW => source_kind,
             _ => return None,
@@ -324,6 +325,7 @@ impl MixInputSpec {
             target_id,
             source_kind,
             delay: delay.clamp(1, 8),
+            audio_bus_id,
         })
     }
 

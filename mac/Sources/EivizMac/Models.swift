@@ -235,6 +235,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var tags: [String] = []
     var mixSource: MixSource = .muProgram
     var mixTargetId: UInt64 = 0
+    var mixAudioBusId: UInt64 = 0
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -244,7 +245,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
-        case mixSource, mixTargetId
+        case mixSource, mixTargetId, mixAudioBusId
     }
 
     init(
@@ -330,9 +331,13 @@ struct InputEntry: Identifiable, Codable, Hashable {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         mixSource = try container.decodeIfPresent(MixSource.self, forKey: .mixSource) ?? .muProgram
         mixTargetId = try container.decodeIfPresent(UInt64.self, forKey: .mixTargetId) ?? 0
+        mixAudioBusId = try container.decodeIfPresent(UInt64.self, forKey: .mixAudioBusId) ?? 0
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
+            mixAudioBusId = 0
+        } else {
+            busMask = 0
         }
     }
 }

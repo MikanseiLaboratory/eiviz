@@ -281,7 +281,7 @@ internal static partial class MixerNative
     internal static partial int DefineGenerator(ulong id, uint kind, float r, float g, float b, float a, uint scroll);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_define_mix_input")]
-    internal static partial int DefineMixInput(ulong id, ulong targetId, uint sourceKind, uint delay);
+    internal static partial int DefineMixInput(ulong id, ulong targetId, uint sourceKind, uint delay, ulong audioBusId);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_generator_set_tone")]
     internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);

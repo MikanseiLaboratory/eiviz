@@ -415,9 +415,9 @@ fn mix_input_define_and_self_cycle_rejected() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
     assert_eq!(mixer_create_unit(2, 320, 180), OK);
-    assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 2), OK);
-    assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PREVIEW, 1), OK);
-    assert_eq!(mixer_define_mix_input(0, 1, SRC_KIND_MU_PROGRAM, 1), ERR_INVALID_ARGUMENT);
+    assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 2, 0), OK);
+    assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PREVIEW, 1, 1), OK);
+    assert_eq!(mixer_define_mix_input(0, 1, SRC_KIND_MU_PROGRAM, 1, 0), ERR_INVALID_ARGUMENT);
 
     let mut cycle = UnitState {
         program_source: 20,

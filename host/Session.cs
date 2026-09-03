@@ -334,6 +334,7 @@ public sealed class InputEntry
     public List<string> Tags { get; set; } = [];
     public MixSource MixSource { get; set; } = MixSource.MuProgram;
     public ulong MixTargetId { get; set; }
+    public ulong MixAudioBusId { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;

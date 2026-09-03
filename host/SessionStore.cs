@@ -192,6 +192,7 @@ internal static class SessionStore
         public List<string> Tags { get; set; } = [];
         public MixSource MixSource { get; set; } = MixSource.MuProgram;
         public ulong MixTargetId { get; set; }
+        public ulong MixAudioBusId { get; set; }
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -206,7 +207,7 @@ internal static class SessionStore
             Scroll = input.Scroll,
             ToneHz = input.ToneHz,
             ToneLevelDbfs = input.ToneLevelDbfs,
-            BusMask = input.BusMask == 0 ? 1u : input.BusMask,
+            BusMask = input.Kind == InputKind.Mix ? 0u : (input.BusMask == 0 ? 1u : input.BusMask),
             Gain = input.Gain,
             Mute = input.Mute,
             UseGpu = input.UseGpu,
@@ -225,7 +226,8 @@ internal static class SessionStore
             CaptureFpsDen = input.CaptureFpsDen,
             Tags = [.. input.Tags],
             MixSource = input.Kind == InputKind.Mix ? input.MixSource : MixSource.MuProgram,
-            MixTargetId = input.Kind == InputKind.Mix ? input.MixTargetId : 0
+            MixTargetId = input.Kind == InputKind.Mix ? input.MixTargetId : 0,
+            MixAudioBusId = input.Kind == InputKind.Mix ? input.MixAudioBusId : 0
         };
 
         public InputEntry ToEntry() => new()
@@ -241,7 +243,7 @@ internal static class SessionStore
             Scroll = Scroll,
             ToneHz = ToneHz,
             ToneLevelDbfs = ToneLevelDbfs,
-            BusMask = BusMask == 0 ? 1u : BusMask,
+            BusMask = Kind == InputKind.Mix ? 0u : (BusMask == 0 ? 1u : BusMask),
             Gain = MixerNative.MixerGain(Gain),
             Mute = Mute,
             UseGpu = UseGpu,
@@ -260,7 +262,8 @@ internal static class SessionStore
             CaptureFpsDen = CaptureFpsDen,
             Tags = TagCatalog.NormalizeList(Tags),
             MixSource = Kind == InputKind.Mix ? MixSource : MixSource.MuProgram,
-            MixTargetId = Kind == InputKind.Mix ? MixTargetId : 0
+            MixTargetId = Kind == InputKind.Mix ? MixTargetId : 0,
+            MixAudioBusId = Kind == InputKind.Mix ? MixAudioBusId : 0
         };
     }
 

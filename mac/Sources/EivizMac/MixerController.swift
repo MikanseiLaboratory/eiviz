@@ -252,7 +252,7 @@ final class MixerController: ObservableObject {
             _ = mixer_audio_set_bus_gain(bus.id, max(0, bus.gain), bus.mute ? 1 : 0)
         }
         for input in session.inputs {
-            _ = mixer_audio_set_input(input.id, input.busMask == 0 ? 1 : input.busMask, max(0, input.gain), input.mute ? 1 : 0)
+            _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), input.mute ? 1 : 0)
         }
         for unit in session.units {
             _ = mixer_audio_set_unit_link(unit.id, unit.audioBusId == 0 ? 1 : unit.audioBusId, unit.audioLink.rawUInt)
@@ -513,7 +513,7 @@ final class MixerController: ObservableObject {
             guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { continue }
             session.inputs[index].mute = mute
             let input = session.inputs[index]
-            _ = mixer_audio_set_input(input.id, input.busMask == 0 ? 1 : input.busMask, max(0, input.gain), mute ? 1 : 0)
+            _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
         }
         objectWillChange.send()
     }
@@ -1181,13 +1181,18 @@ final class MixerController: ObservableObject {
                         input.id,
                         input.mixTargetId,
                         input.mixSource.sourceKind,
-                        max(1, min(8, input.frameBufferFrames))
+                        max(1, min(8, input.frameBufferFrames)),
+                        input.mixAudioBusId
                     ),
                     "Define Mix Input"
                 )
             }
         }
-        _ = mixer_audio_set_input(input.id, input.busMask, input.gain, input.mute ? 1 : 0)
+        _ = mixer_audio_set_input(input.id, audioMask(input), input.gain, input.mute ? 1 : 0)
+    }
+
+    private func audioMask(_ input: InputEntry) -> UInt32 {
+        input.kind == .mix ? 0 : (input.busMask == 0 ? 1 : input.busMask)
     }
 
     private func startCapture(_ input: InputEntry) {

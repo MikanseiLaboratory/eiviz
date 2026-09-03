@@ -886,8 +886,9 @@ pub extern "C" fn mixer_define_mix_input(
     target_id: u64,
     source_kind: u32,
     delay: u32,
+    audio_bus_id: u64,
 ) -> i32 {
-    let Some(spec) = MixInputSpec::new(target_id, source_kind, delay) else {
+    let Some(spec) = MixInputSpec::new(target_id, source_kind, delay, audio_bus_id) else {
         return ERR_INVALID_ARGUMENT;
     };
     if id == 0 {

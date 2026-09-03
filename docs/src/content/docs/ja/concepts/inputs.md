@@ -33,7 +33,7 @@ InputはMixing UnitとOutputにも直接載せられます。
 - 動画ファイル
 - UVC（キャプチャデバイス）
 - NDI/OMT
-- Mix（Mixing UnitのPreview/Program、またはセッションMultiviewと、1–8フレームのFrame Buffer）
+- Mix（Mixing UnitのPreview/Program、またはセッションMultiviewと、1–8フレームのFrame Buffer。音声は対象のAudio BusかNone）
 
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
 入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。

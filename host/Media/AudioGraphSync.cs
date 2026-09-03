@@ -58,7 +58,7 @@ internal static class AudioGraphSync
         {
             MixerNative.AudioSetInput(
                 input.Id,
-                input.BusMask == 0 ? 1u : input.BusMask,
+                input.Kind == InputKind.Mix ? 0u : (input.BusMask == 0 ? 1u : input.BusMask),
                 MixerNative.MixerGain(input.Gain),
                 input.Mute ? 1u : 0u);
         }

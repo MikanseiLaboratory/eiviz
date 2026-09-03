@@ -1395,7 +1395,7 @@ public partial class MainWindow : Window
             Id = id,
             Name = dialog.ResultName ?? $"Input {id}",
             Kind = dialog.Kind,
-            BusMask = 1
+            BusMask = dialog.Kind == InputKind.Mix ? 0u : 1u
         };
         try
         {
@@ -1507,6 +1507,7 @@ public partial class MainWindow : Window
                 || (dialog.Kind == InputKind.Mix
                     && input.MixSource == dialog.ResultMixSource
                     && input.MixTargetId == dialog.ResultMixTargetId
+                    && input.MixAudioBusId == dialog.ResultMixAudioBusId
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
@@ -1530,8 +1531,9 @@ public partial class MainWindow : Window
             : 1;
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
-        if (dialog.Kind == InputKind.Mix && dialog.ResultMixSource == MixSource.SessionMultiview)
-            input.Mute = true;
+        input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
+        if (dialog.Kind == InputKind.Mix)
+            input.BusMask = 0;
         input.BandwidthSave = dialog.Kind == InputKind.Omt
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
@@ -1621,7 +1623,8 @@ public partial class MainWindow : Window
                     input.Id,
                     dialog.ResultMixTargetId,
                     InputKindNames.MixSourceKind(dialog.ResultMixSource),
-                    dialog.ResultFrameBufferFrames));
+                    dialog.ResultFrameBufferFrames,
+                    dialog.ResultMixAudioBusId));
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");

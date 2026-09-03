@@ -66,11 +66,13 @@ public partial class AddInputWindow : Window
     public IReadOnlyList<string> ResultTags { get; private set; } = [];
     public MixSource ResultMixSource { get; private set; } = MixSource.MuProgram;
     public ulong ResultMixTargetId { get; private set; }
+    public ulong ResultMixAudioBusId { get; private set; }
 
     public void BindTags(Session session, IEnumerable<string>? selected = null)
     {
         _tags = new TagCheckPanel(TagPanel, session.InputTags, selected, this);
         BindMixTargets(session);
+        BindMixAudio(session);
     }
 
     public void BindMixTargets(Session session)
@@ -82,6 +84,15 @@ public partial class AddInputWindow : Window
             MixTargetBox.Items.Add(new MixTargetItem(layout.Name, layout.GpuId, true));
         if (MixTargetBox.Items.Count > 0)
             MixTargetBox.SelectedIndex = 0;
+    }
+
+    public void BindMixAudio(Session session)
+    {
+        MixAudioBox.Items.Clear();
+        MixAudioBox.Items.Add(new ComboBoxItem { Content = "None", Tag = "0" });
+        foreach (var bus in session.Buses)
+            MixAudioBox.Items.Add(new ComboBoxItem { Content = bus.Name, Tag = bus.Id.ToString() });
+        MixAudioBox.SelectedIndex = 0;
     }
 
     public void Load(InputEntry input)
@@ -130,6 +141,7 @@ public partial class AddInputWindow : Window
                 }
             }
             SelectTag(MixBusBox, input.MixSource == MixSource.MuPreview ? "preview" : "program");
+            SelectTag(MixAudioBox, input.MixAudioBusId.ToString());
             SelectTag(MixBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         }
         if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
@@ -372,6 +384,7 @@ public partial class AddInputWindow : Window
                     : MixBusBox.SelectedItem is ComboBoxItem { Tag: "preview" }
                         ? MixSource.MuPreview
                         : MixSource.MuProgram;
+                ResultMixAudioBusId = ReadMixAudioBusId();
                 ResultFrameBufferFrames = ReadBuffer(MixBufferBox, 1);
                 ResultPath = "";
                 ResultName = target.IsMultiview
@@ -406,6 +419,13 @@ public partial class AddInputWindow : Window
     }
 
     private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
+
+    private ulong ReadMixAudioBusId()
+    {
+        if (MixAudioBox.SelectedItem is ComboBoxItem item && item.Tag is string tag && ulong.TryParse(tag, out var id))
+            return id;
+        return 0;
+    }
 
     private static uint ReadBuffer(ComboBox box, uint fallback)
     {

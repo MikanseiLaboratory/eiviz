@@ -528,6 +528,7 @@ struct AddInputView: View {
     @State private var mixTargetId: UInt64 = 0
     @State private var mixIsMultiview = false
     @State private var mixPreview = false
+    @State private var mixAudioBusId: UInt64 = 0
     @State private var mixBuffer: UInt32 = 1
 
     var body: some View {
@@ -671,8 +672,14 @@ struct AddInputView: View {
                     Text("Preview").tag(true)
                 }
             }
+            Picker("Audio", selection: $mixAudioBusId) {
+                Text("None").tag(UInt64(0))
+                ForEach(mixer.session.buses) { bus in
+                    Text(bus.name).tag(bus.id)
+                }
+            }
             frameBufferPicker($mixBuffer)
-            Text("Mix Input reads N frames ago from the existing delay ring. Same Mixing Unit wiring is refused. Session Multiview Mix Inputs are muted by default.")
+            Text("Mix Input reads N frames ago from the existing delay ring. Audio is a delayed copy of the selected bus, or silence if None. Same Mixing Unit wiring is refused.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -788,6 +795,9 @@ struct AddInputView: View {
         mixTargetId = editing.mixTargetId
         mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == editing.mixTargetId }
         mixPreview = editing.mixSource == .muPreview
+        mixAudioBusId = mixer.session.buses.contains(where: { $0.id == editing.mixAudioBusId })
+            ? editing.mixAudioBusId
+            : 0
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
     }
 
@@ -882,10 +892,11 @@ struct AddInputView: View {
             input.kind = .mix
             input.mixTargetId = mixTargetId
             input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
+            input.mixAudioBusId = mixer.session.buses.contains(where: { $0.id == mixAudioBusId })
+                ? mixAudioBusId
+                : 0
+            input.busMask = 0
             input.frameBufferFrames = max(1, min(8, mixBuffer))
-            if mixIsMultiview {
-                input.mute = true
-            }
         default:
             guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
             input.kind = .uvc

@@ -419,6 +419,8 @@ pub struct InputDto {
     pub mix_source: MixSource,
     #[serde(default)]
     pub mix_target_id: u64,
+    #[serde(default)]
+    pub mix_audio_bus_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -871,7 +873,9 @@ impl Document {
         doc.settings.multiview_label_size =
             crate::labels::clamp_size(doc.settings.multiview_label_size);
         for input in &mut doc.inputs {
-            if input.bus_mask == 0 {
+            if input.kind == InputKind::Mix {
+                input.bus_mask = 0;
+            } else if input.bus_mask == 0 {
                 input.bus_mask = 1;
             }
             if input.frame_buffer_frames == 0 {
@@ -884,6 +888,7 @@ impl Document {
             if input.kind != InputKind::Mix {
                 input.mix_source = MixSource::MuProgram;
                 input.mix_target_id = 0;
+                input.mix_audio_bus_id = 0;
             }
         }
         for unit in &mut doc.units {
@@ -1126,6 +1131,7 @@ mod tests {
         let doc = parse(legacy.as_bytes()).unwrap();
         assert_eq!(doc.inputs[0].mix_source, MixSource::MuProgram);
         assert_eq!(doc.inputs[0].mix_target_id, 0);
+        assert_eq!(doc.inputs[0].mix_audio_bus_id, 0);
 
         let src = r#"{
   "version": 2,
@@ -1135,6 +1141,7 @@ mod tests {
     "kind": "Mix",
     "mixSource": "MuPreview",
     "mixTargetId": 1,
+    "mixAudioBusId": 2,
     "frameBufferFrames": 4
   }]
 }"#;
@@ -1142,13 +1149,17 @@ mod tests {
         assert_eq!(mix.inputs[0].kind, InputKind::Mix);
         assert_eq!(mix.inputs[0].mix_source, MixSource::MuPreview);
         assert_eq!(mix.inputs[0].mix_target_id, 1);
+        assert_eq!(mix.inputs[0].mix_audio_bus_id, 2);
         assert_eq!(mix.inputs[0].frame_buffer_frames, 4);
+        assert_eq!(mix.inputs[0].bus_mask, 0);
         let text = String::from_utf8(to_vec(&mix).unwrap()).unwrap();
         let again = parse(text.as_bytes()).unwrap();
         assert_eq!(again.inputs[0].kind, InputKind::Mix);
         assert_eq!(again.inputs[0].mix_source, MixSource::MuPreview);
         assert_eq!(again.inputs[0].mix_target_id, 1);
+        assert_eq!(again.inputs[0].mix_audio_bus_id, 2);
         assert_eq!(again.inputs[0].frame_buffer_frames, 4);
+        assert_eq!(again.inputs[0].bus_mask, 0);
     }
 
     #[test]
