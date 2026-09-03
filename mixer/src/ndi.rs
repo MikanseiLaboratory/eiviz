@@ -5,9 +5,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
-    ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source,
-    SourceAddress, VideoFrame,
+    AudioFrame, BorrowedVideoFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat,
+    Receiver, ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, ScanType, Sender,
+    SenderOptions, Source, SourceAddress, VideoFrame,
 };
 
 use crate::abi::FMT_BGRA;
@@ -182,9 +182,13 @@ impl Drop for NdiReceiver {
 }
 
 pub struct NdiSender {
-    sender: Arc<Sender>,
+    /// Kept until the next async submit (or drop) so the SDK can read it.
+    inflight: Option<Arc<[u8]>>,
+    sender: Option<Arc<Sender>>,
     audio_tx: Option<SyncSender<AudioPacket>>,
     audio_thread: Option<JoinHandle<()>>,
+    pack_ms: f32,
+    sdk_ms: f32,
 }
 
 impl NdiSender {
@@ -212,16 +216,25 @@ impl NdiSender {
             })
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            sender,
+            inflight: None,
+            sender: Some(sender),
             audio_tx: Some(audio_tx),
             audio_thread: Some(audio_thread),
+            pack_ms: 0.0,
+            sdk_ms: 0.0,
         })
+    }
+
+    fn sender(&self) -> Result<&Arc<Sender>, String> {
+        self.sender
+            .as_ref()
+            .ok_or_else(|| "ndi sender stopped".into())
     }
 
     pub fn pump(&mut self) -> Result<bool, String> {
         // Always encode. connection_count can stay 0 on macOS until a receiver
         // has already seen a source, so gating on it hides the sender entirely.
-        let _ = self.sender.connection_count(Duration::ZERO);
+        let _ = self.sender()?.connection_count(Duration::ZERO);
         Ok(true)
     }
 
@@ -231,25 +244,61 @@ impl NdiSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: &[u8],
+        pixels: Arc<[u8]>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {
-        let packed = pack_uyvy(width, height, stride, pixels);
-        let mut frame = VideoFrame::builder()
-            .resolution(width.max(1) as i32, height.max(1) as i32)
-            .pixel_format(PixelFormat::UYVY)
-            .frame_rate(fps_num.max(1) as i32, fps_den.max(1) as i32)
-            .aspect_ratio(width as f32 / height.max(1) as f32)
-            .timestamp(pts)
-            .timecode(pts)
-            .build()
-            .map_err(|error| error.to_string())?;
-        frame
-            .replace_data(packed)
-            .map_err(|error| error.to_string())?;
-        self.sender.send_video(&frame);
+        let timed = crate::diag::profile_send();
+        let t0 = timed.then(std::time::Instant::now);
+        let packed = packed_uyvy(width, height, stride, pixels);
+        if let Some(t0) = t0 {
+            self.pack_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        }
+        let width_i = width.max(1) as i32;
+        let height_i = height.max(1) as i32;
+        let packed_stride = width_i.saturating_mul(2);
+        let sender = Arc::clone(self.sender()?);
+        let t1 = timed.then(std::time::Instant::now);
+        {
+            // SAFETY: packed is tightly packed UYVY at width*2. The slice lives
+            // through send_video_async, then moves into inflight until the next
+            // submit or sender drop (Inner flushes the in-flight async frame).
+            let borrowed = unsafe {
+                BorrowedVideoFrame::from_parts_unchecked(
+                    packed.as_ref(),
+                    width_i,
+                    height_i,
+                    PixelFormat::UYVY.into(),
+                    fps_num.max(1) as i32,
+                    fps_den.max(1) as i32,
+                    width as f32 / height.max(1) as f32,
+                    ScanType::Progressive,
+                    pts,
+                    LineStrideOrSize::LineStrideBytes(packed_stride),
+                    None,
+                    pts,
+                )
+            };
+            // SAFETY: NDI documents concurrent send_video_async_v2 and send_audio_v3
+            // on one instance as thread-safe. grafton takes &mut Sender only to
+            // lifetime-bind AsyncVideoToken. We forget the token (its Drop would
+            // flush and wait) and keep `packed` in inflight; the next async submit
+            // waits for the previous buffer, then we replace inflight.
+            unsafe {
+                let sender_mut = &mut *(Arc::as_ptr(&sender) as *mut Sender);
+                let token = sender_mut.send_video_async(&borrowed);
+                std::mem::forget(token);
+            }
+        }
+        if let Some(t1) = t1 {
+            self.sdk_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        }
+        self.inflight = Some(packed);
         Ok(())
+    }
+
+    pub fn last_send_ms(&self) -> (f32, f32) {
+        (self.pack_ms, self.sdk_ms)
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
@@ -272,6 +321,9 @@ impl Drop for NdiSender {
         if let Some(handle) = self.audio_thread.take() {
             let _ = handle.join();
         }
+        // Flush in-flight async video before releasing the buffer.
+        self.sender.take();
+        self.inflight.take();
     }
 }
 
@@ -561,10 +613,29 @@ fn to_audio(frame: &AudioFrame) -> AudioPacket {
     }
 }
 
+fn packed_stride_bytes(width: u32) -> usize {
+    width.max(1) as usize * 2
+}
+
+fn uyvy_is_packed(width: u32, height: u32, stride: u32, pixels: &[u8]) -> bool {
+    let packed_stride = packed_stride_bytes(width);
+    let src_stride = stride.max(packed_stride as u32) as usize;
+    src_stride == packed_stride && pixels.len() >= packed_stride * height.max(1) as usize
+}
+
+/// Packed UYVY (stride = width*2) is sent as-is. Padded rows are copied once.
+fn packed_uyvy(width: u32, height: u32, stride: u32, pixels: Arc<[u8]>) -> Arc<[u8]> {
+    if uyvy_is_packed(width, height, stride, &pixels) {
+        pixels
+    } else {
+        Arc::from(pack_uyvy(width, height, stride, &pixels))
+    }
+}
+
 fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
     let width = width.max(1);
     let height = height.max(1);
-    let packed_stride = width.saturating_mul(2) as usize;
+    let packed_stride = packed_stride_bytes(width);
     let src_stride = stride.max(packed_stride as u32) as usize;
     let mut packed = vec![0u8; packed_stride * height as usize];
     crate::simd::copy_rows(
@@ -580,7 +651,35 @@ fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::pack_uyvy;
+    use super::{pack_uyvy, packed_uyvy};
+    use std::sync::Arc;
+
+    #[test]
+    fn packed_uyvy_reuses_arc_when_already_packed() {
+        let width = 4u32;
+        let height = 2u32;
+        let stride = 8u32;
+        let src: Arc<[u8]> = vec![1u8; (stride * height) as usize].into();
+        let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
+        assert!(Arc::ptr_eq(&src, &packed));
+    }
+
+    #[test]
+    fn packed_uyvy_copies_padded_stride() {
+        let width = 4u32;
+        let height = 2u32;
+        let stride = 16u32;
+        let mut src = vec![0u8; (stride * height) as usize];
+        src[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        let src: Arc<[u8]> = src.into();
+        let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
+        assert!(!Arc::ptr_eq(&src, &packed));
+        assert_eq!(
+            packed.as_ref(),
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+    }
 
     #[test]
     fn pack_uyvy_strips_padded_stride() {
