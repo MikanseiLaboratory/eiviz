@@ -21,6 +21,11 @@
                 <TextBlock Text="Name"/>
                 <TextBox x:Name="NameBox" Margin="0,4,0,0"/>
                 <TextBlock x:Name="IdLabel" Visibility="Collapsed" Margin="0,8,0,0" Foreground="#AAAAAA"/>
+                <TextBlock Text="Tags" Margin="0,8,0,4"/>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTag_Click"/>
+                    <WrapPanel x:Name="TagPanel" Margin="0,0,8,0"/>
+                </DockPanel>
             </StackPanel>
             <Grid>
                 <StackPanel x:Name="ColourPanel" Visibility="Collapsed">

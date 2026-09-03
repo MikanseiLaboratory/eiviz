@@ -323,6 +323,7 @@ public sealed class InputEntry
     public uint CaptureHeight { get; set; }
     public uint CaptureFpsNum { get; set; }
     public uint CaptureFpsDen { get; set; }
+    public List<string> Tags { get; set; } = [];
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
@@ -331,6 +332,16 @@ public sealed class InputEntry
 
 internal static class InputKindNames
 {
+    public static readonly InputKind[] TabKinds =
+    [
+        InputKind.Color,
+        InputKind.Still,
+        InputKind.Video,
+        InputKind.Omt,
+        InputKind.Ndi,
+        InputKind.Uvc
+    ];
+
     public static string Category(InputKind kind) => kind switch
     {
         InputKind.Color or InputKind.Bars or InputKind.Black => "Colours",
@@ -341,6 +352,12 @@ internal static class InputKindNames
         InputKind.Uvc => "Video Capture",
         _ => kind.ToString()
     };
+
+    public static bool SameCategory(InputKind left, InputKind right) =>
+        left == right || (IsColour(left) && IsColour(right));
+
+    public static bool IsColour(InputKind kind) =>
+        kind is InputKind.Color or InputKind.Bars or InputKind.Black;
 }
 
 public enum CropEdit
@@ -478,6 +495,8 @@ public sealed class SceneEntry
     public required string Name { get; set; }
     public ulong MonitorId { get; set; }
     public List<SceneLayer> Layers { get; } = [];
+    public List<string> Tags { get; set; } = [];
+    public bool PreviewCollapsed { get; set; }
     public ulong GpuId => MixerNative.SceneBase | Id;
     public override string ToString() => Name;
 }
@@ -720,6 +739,13 @@ public sealed class MultiviewLayout
     }
 }
 
+public enum SwitcherSceneFilter
+{
+    All,
+    Include,
+    Exclude
+}
+
 public sealed class MixingUnitEntry
 {
     public ulong Id { get; set; }
@@ -733,7 +759,16 @@ public sealed class MixingUnitEntry
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public bool AlwaysOnTop { get; set; } = true;
+    public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
+    public List<ulong> SwitcherSceneIds { get; } = [];
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
+
+    public bool ShowsOnSwitcher(SceneEntry scene) => SwitcherSceneFilter switch
+    {
+        SwitcherSceneFilter.Include => SwitcherSceneIds.Contains(scene.Id),
+        SwitcherSceneFilter.Exclude => !SwitcherSceneIds.Contains(scene.Id),
+        _ => true
+    };
 
     public string FormatFps()
     {
@@ -891,6 +926,8 @@ public sealed class Session
     public List<MultiviewLayout> Multiviews { get; } = [];
     public List<AudioBusEntry> Buses { get; } = [];
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
+    public List<string> InputTags { get; } = [];
+    public List<string> SceneTags { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
@@ -1007,6 +1044,26 @@ public sealed class Session
         {
             if (unit.AudioBusId == 0)
                 unit.AudioBusId = 1;
+        }
+    }
+
+    public void MergeTagCatalogs()
+    {
+        var inputCatalog = TagCatalog.NormalizeList(InputTags);
+        InputTags.Clear();
+        InputTags.AddRange(inputCatalog);
+        var sceneCatalog = TagCatalog.NormalizeList(SceneTags);
+        SceneTags.Clear();
+        SceneTags.AddRange(sceneCatalog);
+        foreach (var input in Inputs)
+        {
+            TagCatalog.Replace(input.Tags, input.Tags);
+            TagCatalog.MergeInto(InputTags, input.Tags);
+        }
+        foreach (var scene in Scenes)
+        {
+            TagCatalog.Replace(scene.Tags, scene.Tags);
+            TagCatalog.MergeInto(SceneTags, scene.Tags);
         }
     }
 

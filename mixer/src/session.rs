@@ -11,6 +11,10 @@ pub struct Document {
     #[serde(default)]
     pub scene_presets: Vec<SceneLayoutPreset>,
     #[serde(default)]
+    pub input_tags: Vec<String>,
+    #[serde(default)]
+    pub scene_tags: Vec<String>,
+    #[serde(default)]
     pub settings: SessionSettings,
     #[serde(default)]
     pub inputs: Vec<InputDto>,
@@ -400,6 +404,8 @@ pub struct InputDto {
     pub capture_fps_num: u32,
     #[serde(default)]
     pub capture_fps_den: u32,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -478,6 +484,10 @@ pub struct SceneDto {
     pub name: String,
     #[serde(default)]
     pub layers: Vec<SceneLayer>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub preview_collapsed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -719,6 +729,18 @@ pub struct UnitDto {
     pub audio_bus_id: u64,
     #[serde(default)]
     pub audio_link: AudioLinkMode,
+    #[serde(default)]
+    pub switcher_scene_filter: SwitcherSceneFilter,
+    #[serde(default)]
+    pub switcher_scene_ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SwitcherSceneFilter {
+    #[default]
+    All,
+    Include,
+    Exclude,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1045,6 +1067,71 @@ mod tests {
                 b: 64
             }
         );
+        assert!(doc.input_tags.is_empty());
+        assert!(doc.scene_tags.is_empty());
+        assert!(doc.inputs[0].tags.is_empty());
+        assert!(doc.scenes[0].tags.is_empty());
+        assert!(!doc.scenes[0].preview_collapsed);
+        assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
+        assert!(doc.units[0].switcher_scene_ids.is_empty());
+    }
+
+    #[test]
+    fn tags_and_preview_collapsed_roundtrip() {
+        let src = r#"{
+  "version": 2,
+  "inputTags": ["Cameras", "VTR"],
+  "sceneTags": ["Open"],
+  "inputs": [{ "id": 10, "name": "Cam 1", "kind": "Ndi", "tags": ["Cameras"] }],
+  "scenes": [{ "id": 1, "name": "Scene 1", "tags": ["Open"], "previewCollapsed": true }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.input_tags, vec!["Cameras", "VTR"]);
+        assert_eq!(doc.scene_tags, vec!["Open"]);
+        assert_eq!(doc.inputs[0].tags, vec!["Cameras"]);
+        assert_eq!(doc.scenes[0].tags, vec!["Open"]);
+        assert!(doc.scenes[0].preview_collapsed);
+        let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(again.input_tags, vec!["Cameras", "VTR"]);
+        assert_eq!(again.scene_tags, vec!["Open"]);
+        assert_eq!(again.inputs[0].tags, vec!["Cameras"]);
+        assert_eq!(again.scenes[0].tags, vec!["Open"]);
+        assert!(again.scenes[0].preview_collapsed);
+    }
+
+    #[test]
+    fn switcher_scene_filter_defaults_and_roundtrip() {
+        let missing = r#"{
+  "version": 2,
+  "units": [{ "id": 1, "name": "Mixing Unit 1" }]
+}"#;
+        let doc = parse(missing.as_bytes()).unwrap();
+        assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
+        assert!(doc.units[0].switcher_scene_ids.is_empty());
+
+        let src = r#"{
+  "version": 2,
+  "units": [{
+    "id": 1,
+    "name": "Mixing Unit 1",
+    "switcherSceneFilter": "Exclude",
+    "switcherSceneIds": [3, 5]
+  }]
+}"#;
+        let filtered = parse(src.as_bytes()).unwrap();
+        assert_eq!(
+            filtered.units[0].switcher_scene_filter,
+            SwitcherSceneFilter::Exclude
+        );
+        assert_eq!(filtered.units[0].switcher_scene_ids, vec![3, 5]);
+        let text = String::from_utf8(to_vec(&filtered).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(
+            again.units[0].switcher_scene_filter,
+            SwitcherSceneFilter::Exclude
+        );
+        assert_eq!(again.units[0].switcher_scene_ids, vec![3, 5]);
     }
 
     #[test]

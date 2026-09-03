@@ -14,6 +14,7 @@ public partial class AddInputWindow : Window
     private static List<string> VideoHistory => AppPrefs.Current.RecentVideos;
     private InputKind _kind = InputKind.Still;
     private bool _lockKind;
+    private TagCheckPanel? _tags;
 
     public AddInputWindow()
     {
@@ -62,6 +63,10 @@ public partial class AddInputWindow : Window
     public uint ResultCaptureHeight { get; private set; }
     public uint ResultCaptureFpsNum { get; private set; } = 60;
     public uint ResultCaptureFpsDen { get; private set; } = 1;
+    public IReadOnlyList<string> ResultTags { get; private set; } = [];
+
+    public void BindTags(Session session, IEnumerable<string>? selected = null) =>
+        _tags = new TagCheckPanel(TagPanel, session.InputTags, selected, this);
 
     public void Load(InputEntry input)
     {
@@ -345,8 +350,11 @@ public partial class AddInputWindow : Window
         }
         if (!string.IsNullOrWhiteSpace(NameBox.Text))
             ResultName = NameBox.Text.Trim();
+        ResultTags = _tags?.Selected.ToArray() ?? [];
         DialogResult = true;
     }
+
+    private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
 
     private static uint ReadBuffer(ComboBox box, uint fallback)
     {

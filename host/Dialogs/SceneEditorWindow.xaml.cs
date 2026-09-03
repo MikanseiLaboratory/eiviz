@@ -24,6 +24,7 @@ public partial class SceneEditorWindow : Window
     private DateTime _lastGpuPush;
     private TextBox? _meterBox;
     private string _meterFormat = "0.#";
+    private TagCheckPanel? _tags;
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
@@ -36,6 +37,7 @@ public partial class SceneEditorWindow : Window
         _original = scene.Layers.Select(Clone).ToList();
         _selected = scene.Layers.FirstOrDefault();
         NameBox.Text = scene.Name;
+        _tags = new TagCheckPanel(TagPanel, session.SceneTags, scene.Tags, this);
         WireCanvas.Width = width;
         WireCanvas.Height = height;
         WireLabel.Text = $"Wireframe ({width}x{height})";
@@ -831,9 +833,13 @@ public partial class SceneEditorWindow : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         _scene.Name = string.IsNullOrWhiteSpace(NameBox.Text) ? _scene.Name : NameBox.Text.Trim();
+        if (_tags is { } tags)
+            TagCatalog.Replace(_scene.Tags, tags.Selected);
         PushGpu();
         DialogResult = true;
     }
+
+    private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
 
     protected override void OnClosed(EventArgs e)
     {

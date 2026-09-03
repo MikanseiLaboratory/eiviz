@@ -37,4 +37,8 @@ InputはMixing UnitとOutputにも直接載せられます。
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
 入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。
 
+## タグ
+
+Inputには複数のタグを付けられます。一覧上部のタブでAll、各タグ、Kind（Colours/Still/Video/OMT/NDI®/Video Capture）を切り替えます。タブ帯を右クリックしてタグの追加、名前変更、削除ができます。
+
 詳細は[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご参照ください。

@@ -16,6 +16,9 @@ Audio Follow on a layer ties that Input’s sound to the picture.
 
 Use it on a Mixing Unit bus, as an [Overlay](/eiviz/en/concepts/overlays/) source, on a [Multiview](/eiviz/en/concepts/multiviews/) tile, or as an Output source.
 
-## Tiles on the desk
+## Tags and tiles
+
+A Scene can have more than one tag. Tabs above the list switch All and each tag.  
+Right-click the name bar to collapse the preview and cut thumb load. When collapsed, click selects Preview and double-click opens settings.
 
 Scene-list and switcher thumbs are GPU readbacks. Adding scenes does not use the video output destination window limit. Only the live Preview/Program buses take those slots.

@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -40,11 +41,16 @@ public partial class MainWindow : Window
     private ulong _shownProgramId;
     private ulong _shownPreviewId;
     private bool _fatalHandled;
+    private ListFilter _inputFilter = ListFilter.All;
+    private ListFilter _sceneFilter = ListFilter.All;
+    private ICollectionView? _inputView;
 
     public MainWindow()
     {
         InitializeComponent();
-        InputList.ItemsSource = _session.Inputs;
+        BindInputList();
+        RebuildInputTabs();
+        RebuildSceneTabs();
         UnitBox.ItemsSource = _session.Units;
         _suppressUnitChange = true;
         UnitBox.SelectedIndex = 0;
@@ -87,6 +93,180 @@ public partial class MainWindow : Window
     private uint SceneWidth => SelectedUnit.Width;
     private uint SceneHeight => SelectedUnit.Height;
 
+    private void BindInputList()
+    {
+        _inputView = CollectionViewSource.GetDefaultView(_session.Inputs);
+        _inputView.Filter = item => item is InputEntry input && _inputFilter.MatchesInput(input);
+        InputList.ItemsSource = _inputView;
+    }
+
+    private void RefreshInputList()
+    {
+        EnsureInputFilter();
+        _inputView?.Refresh();
+        RebuildInputTabs();
+    }
+
+    private void RefreshSceneList()
+    {
+        EnsureSceneFilter();
+        RebuildSceneTabs();
+        RebuildScenes();
+    }
+
+    private void EnsureInputFilter()
+    {
+        if (_inputFilter.Mode == ListFilterMode.Tag
+            && (_inputFilter.Tag is not { } tag || !_session.InputTags.Contains(tag, StringComparer.Ordinal)))
+            _inputFilter = ListFilter.All;
+    }
+
+    private void EnsureSceneFilter()
+    {
+        if (_sceneFilter.Mode == ListFilterMode.Tag
+            && (_sceneFilter.Tag is not { } tag || !_session.SceneTags.Contains(tag, StringComparer.Ordinal)))
+            _sceneFilter = ListFilter.All;
+    }
+
+    private void RebuildInputTabs()
+    {
+        InputTabBar.Children.Clear();
+        AddFilterTab(InputTabBar, Loc.T("tag.all"), _inputFilter.SameAs(ListFilter.All), ListFilter.All, input: true);
+        foreach (var tag in _session.InputTags)
+        {
+            var filter = ListFilter.ForTag(tag);
+            AddFilterTab(InputTabBar, tag, _inputFilter.SameAs(filter), filter, input: true);
+        }
+        foreach (var kind in InputKindNames.TabKinds)
+        {
+            var filter = ListFilter.ForKind(kind);
+            var on = _inputFilter.Mode == ListFilterMode.Kind
+                && _inputFilter.Kind is { } selected
+                && InputKindNames.SameCategory(selected, kind);
+            AddFilterTab(InputTabBar, InputKindNames.Category(kind), on, filter, input: true);
+        }
+    }
+
+    private void RebuildSceneTabs()
+    {
+        SceneTabBar.Children.Clear();
+        AddFilterTab(SceneTabBar, Loc.T("tag.all"), _sceneFilter.SameAs(ListFilter.All), ListFilter.All, input: false);
+        foreach (var tag in _session.SceneTags)
+        {
+            var filter = ListFilter.ForTag(tag);
+            AddFilterTab(SceneTabBar, tag, _sceneFilter.SameAs(filter), filter, input: false);
+        }
+    }
+
+    private void AddFilterTab(Panel bar, string label, bool on, ListFilter filter, bool input)
+    {
+        var button = TransitionGroupTab(label, on);
+        button.Click += (_, _) => SelectListFilter(filter, input);
+        button.MouseRightButtonUp += (_, e) =>
+        {
+            OpenTagMenu(button, filter, input);
+            e.Handled = true;
+        };
+        bar.Children.Add(button);
+    }
+
+    private void SelectListFilter(ListFilter filter, bool input)
+    {
+        if (input)
+        {
+            _inputFilter = filter;
+            RefreshInputList();
+        }
+        else
+        {
+            _sceneFilter = filter;
+            RefreshSceneList();
+        }
+    }
+
+    private void OpenTagMenu(FrameworkElement target, ListFilter filter, bool input)
+    {
+        var menu = new ContextMenu();
+        var add = new MenuItem { Header = Loc.T("tag.add") };
+        add.Click += (_, _) => AddCatalogTag(input);
+        menu.Items.Add(add);
+        if (filter.Mode == ListFilterMode.Tag && filter.Tag is { } tag)
+        {
+            var rename = new MenuItem { Header = Loc.T("tag.rename") };
+            rename.Click += (_, _) => RenameCatalogTag(input, tag);
+            var delete = new MenuItem { Header = Loc.T("tag.delete") };
+            delete.Click += (_, _) => DeleteCatalogTag(input, tag);
+            menu.Items.Add(rename);
+            menu.Items.Add(delete);
+        }
+        menu.PlacementTarget = target;
+        menu.IsOpen = true;
+    }
+
+    private void AddCatalogTag(bool input)
+    {
+        if (!TextPromptWindow.TryPrompt(this, Loc.T("tag.add"), Loc.T("tag.name"), "", out var name))
+            return;
+        var catalog = input ? _session.InputTags : _session.SceneTags;
+        if (!TagCatalog.TryAdd(catalog, name, out _))
+        {
+            MessageBox.Show(this, Loc.T("tag.duplicate"), Loc.T("tag.add"));
+            return;
+        }
+        if (input)
+            RefreshInputList();
+        else
+            RefreshSceneList();
+    }
+
+    private void RenameCatalogTag(bool input, string current)
+    {
+        if (!TextPromptWindow.TryPrompt(this, Loc.T("tag.rename"), Loc.T("tag.name"), current, out var name))
+            return;
+        var catalog = input ? _session.InputTags : _session.SceneTags;
+        var owners = input
+            ? _session.Inputs.Select(item => item.Tags)
+            : _session.Scenes.Select(item => item.Tags);
+        if (!TagCatalog.Rename(catalog, owners, current, name))
+        {
+            MessageBox.Show(this, Loc.T("tag.duplicate"), Loc.T("tag.rename"));
+            return;
+        }
+        if (input)
+        {
+            if (_inputFilter.Mode == ListFilterMode.Tag && _inputFilter.Tag == current)
+                _inputFilter = ListFilter.ForTag(name);
+            RefreshInputList();
+        }
+        else
+        {
+            if (_sceneFilter.Mode == ListFilterMode.Tag && _sceneFilter.Tag == current)
+                _sceneFilter = ListFilter.ForTag(name);
+            RefreshSceneList();
+        }
+    }
+
+    private void DeleteCatalogTag(bool input, string name)
+    {
+        var confirm = MessageBox.Show(
+            this,
+            Loc.Format("tag.deleteConfirm", name),
+            Loc.T("tag.delete"),
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes)
+            return;
+        var catalog = input ? _session.InputTags : _session.SceneTags;
+        var owners = input
+            ? _session.Inputs.Select(item => item.Tags)
+            : _session.Scenes.Select(item => item.Tags);
+        TagCatalog.Remove(catalog, owners, name);
+        if (input)
+            RefreshInputList();
+        else
+            RefreshSceneList();
+    }
+
     private SceneTile CreateSceneTile()
     {
         var tile = new SceneTile();
@@ -98,6 +278,12 @@ public partial class MainWindow : Window
         tile.SceneAudioRequested += (_, selected) => ToggleSceneAudio(selected);
         tile.ScenePreviewRequested += (_, selected) => OpenSourcePreview(selected.GpuId, selected.Name);
         tile.SceneCloseRequested += (_, selected) => DeleteScene(selected);
+        tile.SceneCollapseToggled += (_, _) =>
+        {
+            tile.ApplyCollapsed();
+            ApplySceneTileThumbs();
+            NotifySwitcherCollapsed();
+        };
         return tile;
     }
 
@@ -107,30 +293,51 @@ public partial class MainWindow : Window
         var byId = existing
             .Where(tile => tile.Scene is not null)
             .ToDictionary(tile => tile.Scene!.Id);
-        var keep = _session.Scenes.Select(scene => scene.Id).ToHashSet();
+        var visible = _session.Scenes.Where(_sceneFilter.MatchesScene).ToList();
+        var keep = visible.Select(scene => scene.Id).ToHashSet();
         foreach (var tile in existing)
         {
             if (tile.Scene is not { } scene || !keep.Contains(scene.Id))
                 ScenePanel.Children.Remove(tile);
         }
 
-        var index = 1;
         var interval = _session.Settings.ResolvedPresentInterval();
         var preview = BusTheme.Preview(_session.Settings);
         var inactive = BusTheme.Inactive(_session.Settings);
-        foreach (var scene in _session.Scenes)
+        foreach (var scene in visible)
         {
+            var index = _session.Scenes.IndexOf(scene) + 1;
             var selected = _selectedScene?.Id == scene.Id;
             if (byId.TryGetValue(scene.Id, out var tile) && ScenePanel.Children.Contains(tile))
-                tile.Bind(scene, index++, selected, interval, preview, inactive);
+                tile.Bind(scene, index, selected, interval, preview, inactive);
             else
             {
                 tile = CreateSceneTile();
-                tile.Bind(scene, index++, selected, interval, preview, inactive);
+                tile.Bind(scene, index, selected, interval, preview, inactive);
                 ScenePanel.Children.Add(tile);
             }
         }
         RefreshSceneTiles();
+        NotifySwitchers();
+    }
+
+    internal void NotifySceneTilesFromSwitcher()
+    {
+        foreach (SceneTile tile in ScenePanel.Children)
+            tile.ApplyCollapsed();
+        ApplySceneTileThumbs();
+    }
+
+    private void NotifySwitcherCollapsed()
+    {
+        foreach (var switcher in _switchers.Values)
+            switcher.ApplySceneCollapsed();
+    }
+
+    private void NotifySwitchers()
+    {
+        foreach (var switcher in _switchers.Values)
+            switcher.SyncFromUnit();
     }
 
     private void PushScenePresentIntervals()
@@ -177,6 +384,12 @@ public partial class MainWindow : Window
         foreach (var tile in tiles)
         {
             var scene = tile.Scene!;
+            tile.ApplyCollapsed();
+            if (scene.PreviewCollapsed)
+            {
+                tile.SetThumbWanted(false);
+                continue;
+            }
             var pinned = scene.Id == _shownProgramId
                 || scene.Id == _shownPreviewId
                 || scene.Id == selectedId;
@@ -730,28 +943,37 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() =>
         {
             RebuildOverlayToggles();
+            foreach (var switcher in _switchers.Values)
+                switcher.RebuildOverlays();
             _overlay?.RefreshEnabled();
         });
     }
 
-    private void OpenOverlay_Click(object sender, RoutedEventArgs e)
+    private void OpenOverlay_Click(object sender, RoutedEventArgs e) =>
+        OpenOverlayFor(SelectedUnit);
+
+    internal void OpenOverlayFor(MixingUnitEntry unit)
     {
         if (_overlay is not null)
         {
-            _overlay.Reload(SelectedUnit);
+            _overlay.Reload(unit);
             _overlay.Activate();
             return;
         }
         if (!FlipBudget.TryOpen(1, this))
             return;
-        _overlay = new OverlayWindow(_session, SelectedUnit) { Owner = this };
+        _overlay = new OverlayWindow(_session, unit) { Owner = this };
         _overlay.Closed += (_, _) =>
         {
             _overlay = null;
             RebuildOverlayToggles();
+            foreach (var switcher in _switchers.Values)
+                switcher.RebuildOverlays();
         };
         _overlay.Show();
     }
+
+    internal void EditSceneFromSwitcher(SceneEntry scene) => OpenSceneEditor(scene);
 
     private void OpenMultiview_Click(object sender, RoutedEventArgs e)
     {
@@ -1162,6 +1384,7 @@ public partial class MainWindow : Window
     private void AddInput_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new AddInputWindow { Owner = this };
+        dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
         if (dialog.Kind is not (InputKind.Color or InputKind.Bars) && dialog.ResultPath is null)
@@ -1185,7 +1408,7 @@ public partial class MainWindow : Window
         }
         _session.Inputs.Add(input);
         MixerNative.AudioSetInput(input.Id, input.BusMask, 1, 0);
-        InputList.Items.Refresh();
+        RefreshInputList();
         RebuildMeters();
     }
 
@@ -1199,6 +1422,7 @@ public partial class MainWindow : Window
             return;
         }
         var dialog = new AddInputWindow { Owner = this };
+        dialog.BindTags(_session, input.Tags);
         dialog.Load(input);
         if (dialog.ShowDialog() != true)
             return;
@@ -1213,7 +1437,7 @@ public partial class MainWindow : Window
             MessageBox.Show(this, ex.Message, Loc.T("msg.editInput"));
             return;
         }
-        InputList.Items.Refresh();
+        RefreshInputList();
         RebuildMeters();
         TickVideo();
         RefreshMultiviewLabels();
@@ -1286,6 +1510,8 @@ public partial class MainWindow : Window
             MixerNative.FlushAudio(input.Id);
         }
         input.Name = dialog.ResultName ?? input.Name;
+        TagCatalog.Replace(input.Tags, dialog.ResultTags);
+        TagCatalog.MergeInto(_session.InputTags, input.Tags);
         input.Kind = dialog.Kind;
         input.PathOrAddress = dialog.ResultPath;
         input.ColorR = dialog.ColorR;
@@ -1419,7 +1645,7 @@ public partial class MainWindow : Window
         foreach (var scene in _session.Scenes)
             Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
         _session.Inputs.Remove(input);
-        InputList.Items.Refresh();
+        RefreshInputList();
         RebuildMeters();
         RebuildScenes();
         _overlay?.Reload(SelectedUnit);
@@ -1507,7 +1733,7 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
         if (Application.Current is not App appAfter || appAfter.Session is null || _fatalHandled)
             return;
-        RebuildScenes();
+        RefreshSceneList();
         SelectScene(scene);
         RefreshMultiviewLabels();
     }

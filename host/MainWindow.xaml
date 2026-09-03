@@ -139,6 +139,10 @@
                     </Grid.ColumnDefinitions>
                     <DockPanel>
                         <TextBlock DockPanel.Dock="Top" Text="{Binding [chrome.inputs], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" Margin="0,0,0,6"/>
+                        <ScrollViewer DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                      Margin="0,0,0,4">
+                            <StackPanel x:Name="InputTabBar" Orientation="Horizontal"/>
+                        </ScrollViewer>
                         <Grid DockPanel.Dock="Bottom">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -170,6 +174,10 @@
                             </StackPanel>
                             <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                         </DockPanel>
+                        <ScrollViewer DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                      Margin="0,0,0,4">
+                            <StackPanel x:Name="SceneTabBar" Orientation="Horizontal"/>
+                        </ScrollViewer>
                         <ScrollViewer x:Name="SceneScroll" VerticalScrollBarVisibility="Auto">
                             <WrapPanel x:Name="ScenePanel"/>
                         </ScrollViewer>

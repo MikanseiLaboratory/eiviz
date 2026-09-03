@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace Eiviz.Host.Preview;
@@ -22,13 +23,17 @@ public partial class SceneTile : UserControl
     public event EventHandler<SceneEntry>? SceneAudioRequested;
     public event EventHandler<SceneEntry>? ScenePreviewRequested;
     public event EventHandler<SceneEntry>? SceneCloseRequested;
+    public event EventHandler<SceneEntry>? SceneCollapseToggled;
 
     public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3, Color? previewColor = null, Color? inactiveColor = null)
     {
         Scene = scene;
         Title.Text = scene.Name;
+        CollapsedTitle.Text = scene.Name;
         Number.Text = number.ToString();
+        CollapsedNumber.Text = number.ToString();
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
+        ApplyCollapsed();
     }
 
     public void SetPresentInterval(uint presentInterval) =>
@@ -67,6 +72,51 @@ public partial class SceneTile : UserControl
         LoopButton.Opacity = loop ? 1 : 0.55;
         PlayButton.Content = playing ? "❚❚" : "▶";
         AudioButton.Opacity = muted ? 0.45 : 1;
+    }
+
+    public void ApplyCollapsed()
+    {
+        var collapsed = Scene?.PreviewCollapsed == true;
+        Width = collapsed ? 40 : 176;
+        Height = 140;
+        ExpandedBody.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        CollapsedBody.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+        if (collapsed)
+            SetThumbWanted(false);
+        InvalidateMeasure();
+        InvalidateArrange();
+    }
+
+    private void Chrome_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null)
+            return;
+        if (Scene is not { } scene)
+            return;
+        scene.PreviewCollapsed = !scene.PreviewCollapsed;
+        ApplyCollapsed();
+        SceneCollapseToggled?.Invoke(this, scene);
+        e.Handled = true;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match)
+                return match;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount >= 2)
+        {
+            Raise(SceneEditRequested);
+            e.Handled = true;
+        }
     }
 
     private void Select()

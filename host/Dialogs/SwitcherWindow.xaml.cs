@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Eiviz.Host;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Preview;
 
@@ -15,6 +16,7 @@ public partial class SwitcherWindow : Window
     private bool _tbarLatching;
     private bool _tbarLocked;
     private readonly Dictionary<ulong, SceneThumb> _thumbs = [];
+    private ListFilter _sceneFilter = ListFilter.All;
 
     public SwitcherWindow(MixingUnitEntry unit)
     {
@@ -26,8 +28,10 @@ public partial class SwitcherWindow : Window
         PreviewAspect.RatioHeight = unit.Height;
         ProgramAspect.RatioWidth = unit.Width;
         ProgramAspect.RatioHeight = unit.Height;
+        RebuildSceneTabs();
         RebuildScenes();
         RebuildTransitions();
+        RebuildOverlays();
         SceneScroll.ScrollChanged += (_, _) => ApplyThumbSubscriptions();
         OnTopBox.IsChecked = unit.AlwaysOnTop;
         ApplyTopmost();
@@ -78,8 +82,10 @@ public partial class SwitcherWindow : Window
         PreviewAspect.RatioHeight = _unit.Height;
         ProgramAspect.RatioWidth = _unit.Width;
         ProgramAspect.RatioHeight = _unit.Height;
+        RebuildSceneTabs();
         RebuildScenes();
         RebuildTransitions();
+        RebuildOverlays();
         ApplyBusColors();
         RefreshBusTitles();
         RefreshSceneThumbs();
@@ -90,12 +96,90 @@ public partial class SwitcherWindow : Window
         BusTheme.Apply(Session.Settings, PreviewFrame, PreviewHeader, PreviewHeaderText, preview: true);
         BusTheme.Apply(Session.Settings, ProgramFrame, ProgramHeader, ProgramHeaderText, preview: false);
         RebuildTransitions();
+        RebuildSceneTabs();
         RefreshSceneThumbs();
+    }
+
+    internal void RebuildOverlays()
+    {
+        OverlayTogglePanel.Children.Clear();
+        if (_unit.Overlays.Count == 0)
+            return;
+        var main = Application.Current.MainWindow as MainWindow;
+        for (var i = 0; i < _unit.Overlays.Count; i++)
+        {
+            var slot = _unit.Overlays[i];
+            var name = slot.DisplayName(Session);
+            OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
+            {
+                main?.ToggleOverlay(_unit, slot, enabled);
+            }));
+        }
+    }
+
+    private IEnumerable<SceneEntry> VisibleScenes()
+    {
+        if (_sceneFilter.Mode == ListFilterMode.Tag
+            && (_sceneFilter.Tag is not { } tag || !Session.SceneTags.Contains(tag, StringComparer.Ordinal)))
+            _sceneFilter = ListFilter.All;
+        return Session.Scenes.Where(scene => _unit.ShowsOnSwitcher(scene) && _sceneFilter.MatchesScene(scene));
+    }
+
+    private void RebuildSceneTabs()
+    {
+        SceneTabBar.Children.Clear();
+        AddSceneTab(Loc.T("tag.all"), _sceneFilter.SameAs(ListFilter.All), ListFilter.All);
+        foreach (var tag in Session.SceneTags)
+        {
+            var filter = ListFilter.ForTag(tag);
+            AddSceneTab(tag, _sceneFilter.SameAs(filter), filter);
+        }
+    }
+
+    private void AddSceneTab(string label, bool on, ListFilter filter)
+    {
+        var button = new Button
+        {
+            Content = label,
+            Height = 20,
+            FontSize = 11,
+            FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal,
+            Margin = new Thickness(1, 0, 1, 2),
+            Padding = new Thickness(2, 0, 2, 0),
+            Foreground = on ? Brushes.White : Brushes.Silver,
+            Background = Brushes.Transparent,
+            BorderBrush = on
+                ? BusTheme.PreviewBrush(Session.Settings)
+                : Brushes.Transparent,
+            BorderThickness = new Thickness(0, 0, 0, 2),
+            Cursor = Cursors.Hand
+        };
+        button.Click += (_, _) =>
+        {
+            _sceneFilter = filter;
+            RebuildSceneTabs();
+            RebuildScenes();
+        };
+        SceneTabBar.Children.Add(button);
+    }
+
+    private void ManageScenes_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SwitcherScenesWindow(_unit, Session) { Owner = this };
+        if (dialog.ShowDialog() == true)
+            RebuildScenes();
+    }
+
+    private void OpenOverlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (Application.Current.MainWindow is MainWindow main)
+            main.OpenOverlayFor(_unit);
     }
 
     private void RebuildScenes()
     {
-        var keep = Session.Scenes.Select(scene => scene.Id).ToHashSet();
+        var visible = VisibleScenes().ToList();
+        var keep = visible.Select(scene => scene.Id).ToHashSet();
         foreach (var id in _thumbs.Keys.Where(id => !keep.Contains(id)).ToList())
         {
             _thumbs[id].Host.SetWanted(false);
@@ -104,12 +188,15 @@ public partial class SwitcherWindow : Window
         }
 
         var interval = Session.Settings.ResolvedPresentInterval();
-        foreach (var scene in Session.Scenes)
+        var index = 0;
+        foreach (var scene in visible)
         {
             if (_thumbs.TryGetValue(scene.Id, out var thumb))
             {
                 thumb.Label.Text = scene.Name;
+                thumb.CollapsedLabel.Text = scene.Name;
                 thumb.Host.Bind(scene.GpuId, 148, 80, interval);
+                ApplyCollapsed(thumb, scene);
             }
             else
             {
@@ -117,7 +204,14 @@ public partial class SwitcherWindow : Window
                 _thumbs[scene.Id] = thumb;
                 SceneStrip.Children.Add(thumb.Chrome);
             }
+            var current = SceneStrip.Children.IndexOf(thumb.Chrome);
+            if (current != index)
+            {
+                SceneStrip.Children.Remove(thumb.Chrome);
+                SceneStrip.Children.Insert(index, thumb.Chrome);
+            }
             thumb.Host.SetPresentInterval(interval);
+            index++;
         }
         RefreshSceneThumbs();
     }
@@ -132,31 +226,128 @@ public partial class SwitcherWindow : Window
             Foreground = Brushes.White,
             FontSize = 11,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(4, 4, 4, 0)
+            VerticalAlignment = VerticalAlignment.Center
         };
+        var titleBar = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+            Padding = new Thickness(6, 3, 6, 3)
+        };
+        titleBar.Child = label;
         var chrome = new Border
         {
             Width = 148,
-            Margin = new Thickness(0, 0, 8, 0),
+            Height = 104,
+            Margin = new Thickness(0, 0, 8, 8),
             BorderThickness = new Thickness(2),
             BorderBrush = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
             Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11)),
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
         };
-        var panel = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(label, Dock.Bottom);
-        panel.Children.Add(label);
-        panel.Children.Add(host);
-        chrome.Child = panel;
+        var expanded = new StackPanel();
+        expanded.Children.Add(titleBar);
+        expanded.Children.Add(host);
+        var collapsedLabel = new TextBlock
+        {
+            Text = scene.Name,
+            Foreground = Brushes.White,
+            FontSize = 12,
+            LayoutTransform = new RotateTransform(-90)
+        };
+        var collapsed = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+            Visibility = Visibility.Collapsed,
+            Child = new Viewbox
+            {
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(4, 8, 4, 8),
+                Child = collapsedLabel
+            }
+        };
+        var root = new Grid();
+        root.Children.Add(expanded);
+        root.Children.Add(collapsed);
+        chrome.Child = root;
+        chrome.PreviewMouseRightButtonDown += (_, e) =>
+        {
+            scene.PreviewCollapsed = !scene.PreviewCollapsed;
+            if (_thumbs.TryGetValue(scene.Id, out var live))
+                ApplyCollapsed(live, scene);
+            ApplyThumbSubscriptions();
+            if (Application.Current.MainWindow is MainWindow main)
+                main.NotifySceneTilesFromSwitcher();
+            e.Handled = true;
+        };
         chrome.MouseLeftButtonUp += (_, _) => PreviewScene(scene.Id);
-        return new SceneThumb
+        titleBar.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ClickCount >= 2)
+            {
+                if (Application.Current.MainWindow is MainWindow main)
+                    main.EditSceneFromSwitcher(scene);
+                e.Handled = true;
+            }
+        };
+        chrome.ContextMenu = ThumbMenu(scene);
+        var thumb = new SceneThumb
         {
             SceneId = scene.Id,
             Chrome = chrome,
             Host = host,
-            Label = label
+            Label = label,
+            Expanded = expanded,
+            Collapsed = collapsed,
+            CollapsedLabel = collapsedLabel
         };
+        ApplyCollapsed(thumb, scene);
+        return thumb;
+    }
+
+    private ContextMenu ThumbMenu(SceneEntry scene)
+    {
+        var menu = new ContextMenu();
+        var hide = new MenuItem { Header = Loc.T("switcher.hideHere") };
+        hide.Click += (_, _) =>
+        {
+            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.All)
+            {
+                _unit.SwitcherSceneFilter = SwitcherSceneFilter.Exclude;
+                _unit.SwitcherSceneIds.Clear();
+            }
+            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.Exclude
+                && !_unit.SwitcherSceneIds.Contains(scene.Id))
+                _unit.SwitcherSceneIds.Add(scene.Id);
+            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.Include)
+                _unit.SwitcherSceneIds.Remove(scene.Id);
+            RebuildScenes();
+        };
+        menu.Items.Add(hide);
+        return menu;
+    }
+
+    internal void ApplySceneCollapsed()
+    {
+        foreach (var scene in Session.Scenes)
+        {
+            if (!_thumbs.TryGetValue(scene.Id, out var thumb))
+                continue;
+            ApplyCollapsed(thumb, scene);
+        }
+        ApplyThumbSubscriptions();
+    }
+
+    private static void ApplyCollapsed(SceneThumb thumb, SceneEntry scene)
+    {
+        var collapsed = scene.PreviewCollapsed;
+        thumb.Chrome.Width = collapsed ? 32 : 148;
+        thumb.Chrome.Height = 104;
+        thumb.Expanded.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        thumb.Collapsed.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+        if (collapsed)
+            thumb.Host.SetWanted(false);
     }
 
     private void PreviewScene(ulong sceneId)
@@ -195,6 +386,11 @@ public partial class SwitcherWindow : Window
         {
             if (!_thumbs.TryGetValue(scene.Id, out var thumb))
                 continue;
+            if (scene.PreviewCollapsed)
+            {
+                thumb.Host.SetWanted(false);
+                continue;
+            }
             var pinned = scene.GpuId == programId || scene.GpuId == previewId;
             thumb.Host.SetWanted(pinned || ThumbViewport.Intersects(thumb.Chrome, SceneScroll));
         }
@@ -238,14 +434,14 @@ public partial class SwitcherWindow : Window
             {
                 BorderBrush = selected
                     ? BusTheme.PreviewBrush(Session.Settings)
-                    : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+                    : new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
                 BorderThickness = new Thickness(1),
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
+                Background = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)),
                 Padding = new Thickness(6, 4, 6, 4),
                 Child = new TextBlock
                 {
                     Text = $"{preset.Label}  {preset.DurationValue}{(preset.DurationUnit == MixerNative.DurationMs ? "ms" : "f")}",
-                    Foreground = System.Windows.Media.Brushes.White
+                    Foreground = Brushes.White
                 }
             };
             label.MouseLeftButtonDown += (_, _) =>
@@ -332,5 +528,8 @@ public partial class SwitcherWindow : Window
         public Border Chrome = null!;
         public ThumbView Host = null!;
         public TextBlock Label = null!;
+        public StackPanel Expanded = null!;
+        public Border Collapsed = null!;
+        public TextBlock CollapsedLabel = null!;
     }
 }
