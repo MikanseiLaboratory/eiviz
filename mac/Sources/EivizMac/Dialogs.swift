@@ -158,29 +158,29 @@ struct SettingsView: View {
     private var webApi: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(L10n.t("settings.webApiEnabled"), isOn: Binding(
-                get: { AppPrefs.shared.vmixApiEnabled },
-                set: { AppPrefs.shared.vmixApiEnabled = $0 }
+                get: { mixer.session.settings.vmixApiEnabled },
+                set: { mixer.session.settings.vmixApiEnabled = $0 }
             ))
             Text(L10n.t("settings.webApiPort"))
             TextField("", text: Binding(
-                get: { String(AppPrefs.shared.vmixApiPort) },
+                get: { String(mixer.session.settings.vmixApiPort) },
                 set: {
                     if let value = UInt32($0), value > 0, value <= 65_535 {
-                        AppPrefs.shared.vmixApiPort = value
+                        mixer.session.settings.vmixApiPort = value
                     }
                 }
             ))
             .frame(width: 220, alignment: .leading)
             Text(L10n.t("settings.webApiUser"))
             TextField("", text: Binding(
-                get: { AppPrefs.shared.vmixApiUser },
-                set: { AppPrefs.shared.vmixApiUser = $0 }
+                get: { mixer.session.settings.vmixApiUser },
+                set: { mixer.session.settings.vmixApiUser = $0 }
             ))
             .frame(width: 220, alignment: .leading)
             Text(L10n.t("settings.webApiPassword"))
             SecureField("", text: Binding(
-                get: { AppPrefs.shared.vmixApiPassword },
-                set: { AppPrefs.shared.vmixApiPassword = $0 }
+                get: { mixer.session.settings.vmixApiPassword },
+                set: { mixer.session.settings.vmixApiPassword = $0 }
             ))
             .frame(width: 220, alignment: .leading)
             Text(L10n.t("settings.webApiHelp"))

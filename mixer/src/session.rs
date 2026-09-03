@@ -92,6 +92,14 @@ pub struct SessionSettings {
     #[serde(default)]
     pub multiview_label_anchor: MvLabelAnchor,
     pub last_session_path: Option<String>,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub vmix_api_enabled: bool,
+    #[serde(default = "api_port")]
+    pub vmix_api_port: u32,
+    #[serde(default)]
+    pub vmix_api_user: String,
+    #[serde(default)]
+    pub vmix_api_password: String,
 }
 
 impl Default for SessionSettings {
@@ -117,6 +125,10 @@ impl Default for SessionSettings {
             multiview_label_unit: MvLabelUnit::Px,
             multiview_label_anchor: MvLabelAnchor::Bottom,
             last_session_path: None,
+            vmix_api_enabled: true,
+            vmix_api_port: api_port(),
+            vmix_api_user: String::new(),
+            vmix_api_password: String::new(),
         }
     }
 }
@@ -210,6 +222,10 @@ fn de_bool_null_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
 }
 fn three() -> u32 {
     3
+}
+
+fn api_port() -> u32 {
+    8088
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -871,6 +887,9 @@ impl Document {
         }
         if doc.settings.theme.is_empty() {
             doc.settings.theme = theme_charcoal();
+        }
+        if doc.settings.vmix_api_port == 0 || doc.settings.vmix_api_port > 65535 {
+            doc.settings.vmix_api_port = api_port();
         }
         doc.settings.multiview_label_size =
             crate::labels::clamp_size(doc.settings.multiview_label_size);

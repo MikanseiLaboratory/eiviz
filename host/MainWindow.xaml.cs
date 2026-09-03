@@ -1990,6 +1990,10 @@ public partial class MainWindow : Window
         _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
         _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
         _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
+        _session.Settings.VmixApiEnabled = dialog.Settings.VmixApiEnabledValue;
+        _session.Settings.VmixApiPort = dialog.Settings.VmixApiPort == 0 ? 8088 : dialog.Settings.VmixApiPort;
+        _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
+        _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         RefreshSceneTiles();

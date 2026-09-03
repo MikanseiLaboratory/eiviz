@@ -113,7 +113,7 @@ At the limit, a new window will not open. Close one to free a slot. The host pat
 
 ## Web API
 
-vMix-compatible HTTP listen settings. These are per machine and are not stored in the session file.
+vMix-compatible HTTP listen settings. These are stored in the session file.
 
 - Enabled: start the HTTP server when the mixer starts. Default on
 - Port: default 8088

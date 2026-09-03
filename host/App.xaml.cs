@@ -139,13 +139,13 @@ public partial class App : Application
 
     internal static void ApplyVmixApi()
     {
-        var prefs = AppPrefs.Current;
+        var settings = ((App)Current).Session.Settings;
         MixerNative.ThrowIfFailed(
             MixerNative.ApiConfigure(
-                prefs.VmixApiEnabled ? 1u : 0u,
-                prefs.VmixApiPort == 0 ? 8088 : prefs.VmixApiPort,
-                prefs.VmixApiUser ?? "",
-                prefs.VmixApiPassword ?? ""),
+                settings.VmixApiEnabledValue ? 1u : 0u,
+                settings.VmixApiPort == 0 ? 8088 : settings.VmixApiPort,
+                settings.VmixApiUser ?? "",
+                settings.VmixApiPassword ?? ""),
             "Configure vMix HTTP API");
     }
 

@@ -924,6 +924,11 @@ public sealed class SessionSettings
     public float MultiviewLabelSize { get; set; } = 18;
     public MvLabelUnit MultiviewLabelUnit { get; set; } = MvLabelUnit.Px;
     public MvLabelAnchor MultiviewLabelAnchor { get; set; } = MvLabelAnchor.Bottom;
+    public bool? VmixApiEnabled { get; set; }
+    public uint VmixApiPort { get; set; } = 8088;
+    public string VmixApiUser { get; set; } = "";
+    public string VmixApiPassword { get; set; } = "";
+    public bool VmixApiEnabledValue => VmixApiEnabled != false;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;

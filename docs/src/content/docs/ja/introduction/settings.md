@@ -114,7 +114,7 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 
 ## Web API
 
-vMix互換HTTP APIの待ち受けです。マシン単位の設定で、セッションファイルには入りません。
+vMix互換HTTP APIの待ち受けです。セッションファイルに保存されます。
 
 - 有効: Mixer起動時にHTTPサーバーを開く。既定はオン
 - ポート: 既定は8088

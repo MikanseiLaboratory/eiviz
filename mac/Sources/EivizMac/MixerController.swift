@@ -97,11 +97,11 @@ final class MixerController: ObservableObject {
     }
 
     func applyVmixApi() {
-        let prefs = AppPrefs.shared
-        let port = prefs.vmixApiPort == 0 ? 8088 : prefs.vmixApiPort
-        _ = MixerFFI.withCString(prefs.vmixApiUser) { user in
-            MixerFFI.withCString(prefs.vmixApiPassword) { pass in
-                mixer_api_configure(prefs.vmixApiEnabled ? 1 : 0, port, user, pass)
+        let settings = session.settings
+        let port = settings.vmixApiPort == 0 ? 8088 : settings.vmixApiPort
+        _ = MixerFFI.withCString(settings.vmixApiUser) { user in
+            MixerFFI.withCString(settings.vmixApiPassword) { pass in
+                mixer_api_configure(settings.vmixApiEnabled ? 1 : 0, port, user, pass)
             }
         }
     }
@@ -238,6 +238,7 @@ final class MixerController: ObservableObject {
         }
         selectedSceneId = session.scenes.first?.id
         selectedUnitId = session.selectedUnitId == 0 ? (session.units.first?.id ?? 1) : session.selectedUnitId
+        applyVmixApi()
         publishSession()
     }
 
