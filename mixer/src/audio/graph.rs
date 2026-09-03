@@ -2,9 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::abi::{
-    MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source,
-};
+use crate::abi::{MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
 use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, SampleRing, UploadStore};
 
 use super::AUDIO_PRIME_FRAMES;
@@ -323,7 +321,8 @@ impl AudioGraph {
                     ids.push(*id);
                 }
             }
-            self.popped.retain(|id, _| ids.contains(id) || mix_inputs.contains_key(id));
+            self.popped
+                .retain(|id, _| ids.contains(id) || mix_inputs.contains_key(id));
             for id in ids {
                 if mix_inputs.contains_key(&id) {
                     continue;
@@ -355,13 +354,7 @@ impl AudioGraph {
                     self.scratch_mixed.extend_from_slice(&self.scratch_master);
                     crate::simd::scale_f32(&mut self.scratch_mixed, fader);
                     self.push_mix_from_bus(bus_id, mix_inputs);
-                    self.mix_self_copies(
-                        bus_id,
-                        role,
-                        snapshot,
-                        &spec_map,
-                        mix_inputs,
-                    );
+                    self.mix_self_copies(bus_id, role, snapshot, &spec_map, mix_inputs);
                     if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
                         bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                     }
@@ -382,13 +375,7 @@ impl AudioGraph {
                 }
                 crate::simd::scale_f32(&mut self.scratch_mixed, fader);
                 self.push_mix_from_bus(bus_id, mix_inputs);
-                self.mix_self_copies(
-                    bus_id,
-                    role,
-                    snapshot,
-                    &spec_map,
-                    mix_inputs,
-                );
+                self.mix_self_copies(bus_id, role, snapshot, &spec_map, mix_inputs);
                 if role == ROLE_MASTER {
                     self.scratch_master.copy_from_slice(&self.scratch_mixed);
                     self.master_peak = crate::simd::peak_interleaved(&self.scratch_mixed);
@@ -738,7 +725,11 @@ fn add_source(
         if spec.audio_bus_id == 0 || spec.audio_bus_id == bus_id {
             return;
         }
-        let level = gain * inputs.get(&id).map(|input| input.gain.max(0.0)).unwrap_or(1.0);
+        let level = gain
+            * inputs
+                .get(&id)
+                .map(|input| input.gain.max(0.0))
+                .unwrap_or(1.0);
         gains
             .entry(id)
             .and_modify(|current| *current = (*current).max(level))
@@ -797,7 +788,11 @@ fn add_self_mix(
     if spec.audio_bus_id == 0 || spec.audio_bus_id != bus_id {
         return;
     }
-    let level = gain * inputs.get(&id).map(|input| input.gain.max(0.0)).unwrap_or(1.0);
+    let level = gain
+        * inputs
+            .get(&id)
+            .map(|input| input.gain.max(0.0))
+            .unwrap_or(1.0);
     gains
         .entry(id)
         .and_modify(|current| *current = (*current).max(level))

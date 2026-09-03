@@ -293,7 +293,10 @@ impl FrameDelay {
         let depth = self.depth;
         let cap = depth + 1;
         let recreate = self.scenes.get(&scene_id).is_none_or(|ring| {
-            ring.width != width || ring.height != height || ring.depth != depth || ring.slots.len() != cap
+            ring.width != width
+                || ring.height != height
+                || ring.depth != depth
+                || ring.slots.len() != cap
         });
         if !recreate {
             return;
