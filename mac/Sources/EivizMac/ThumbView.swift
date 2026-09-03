@@ -35,9 +35,10 @@ final class ThumbImageView: NSView {
     }
 
     deinit {
+        let id = sourceId
         ThumbPump.unregister(self)
-        if sourceId != 0 {
-            ThumbSubscriptions.release(self, sourceId: sourceId)
+        if id != 0 {
+            ThumbSubscriptions.release(self, sourceId: id)
         }
     }
 

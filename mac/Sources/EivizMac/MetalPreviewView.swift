@@ -67,10 +67,12 @@ final class MetalSurfaceView: NSView {
     }
 
     deinit {
-        if attached {
+        let wasAttached = attached
+        let wasBudgeted = budgeted
+        if wasAttached {
             detachMixerOnly()
         }
-        if budgeted {
+        if wasBudgeted {
             FlipBudget.end(self)
         }
     }
@@ -86,7 +88,7 @@ final class MetalSurfaceView: NSView {
         }
     }
 
-    private func detachMixerOnly() {
+    nonisolated private func detachMixerOnly() {
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         if detachIsMonitor {
             _ = mixer_detach_monitor(detachMonitorId)
