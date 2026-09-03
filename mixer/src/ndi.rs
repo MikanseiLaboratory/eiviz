@@ -187,9 +187,13 @@ pub struct NdiSender {
 impl NdiSender {
     pub fn start(name: &str) -> Result<Self, String> {
         let ndi = runtime()?;
+        // Render already paces to the master frame rate. Clock video, not audio:
+        // send_audio with clock_audio blocks on the shared send thread after
+        // CPU/GPU encode, which NDI receivers hear as stutter (issue 141).
+        // grafton-ndi requires at least one clock; both-true double-waits.
         let options = SenderOptions::builder(name)
-            .clock_video(false)
-            .clock_audio(true)
+            .clock_video(true)
+            .clock_audio(false)
             .build();
         let sender = Sender::new(ndi, &options).map_err(|error| error.to_string())?;
         Ok(Self { sender })
@@ -564,5 +568,29 @@ mod tests {
             grafton_ndi::SourceAddress::Ip(ip) => assert!(ip.starts_with("192.168.0.10")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn send_audio_does_not_block_on_sample_clock() {
+        use std::time::{Duration, Instant};
+
+        let name = format!("eiviz-ndi-audio-clock-{}", std::process::id());
+        let mut sender = super::NdiSender::start(&name).expect("ndi sender");
+        let samples = 48_000i32;
+        let packet = crate::upload::AudioPacket {
+            timestamp: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            samples_per_channel: samples,
+            pcm_planar_f32: vec![0.0; samples as usize * 2],
+        };
+        let start = Instant::now();
+        sender.send_audio(&packet).expect("send 1");
+        sender.send_audio(&packet).expect("send 2");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "NDI send_audio must not clock to sample rate (took {elapsed:?})"
+        );
     }
 }

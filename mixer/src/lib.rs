@@ -4150,6 +4150,7 @@ fn collect_live_ids(
 
 fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu) {
     let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
+    let mut batch = Vec::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         loop {
             match rx.try_recv() {
@@ -4159,25 +4160,63 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
                         if let SendCmd::GpuVideo { busy, .. } = &cmd {
                             busy.store(false, Ordering::Release);
                         }
-                        if matches!(cmd, SendCmd::Shutdown) {
-                            return;
-                        }
                         continue;
                     }
-                    dispatch_send_cmd(&mut senders, cmd, &omt_gpu);
+                    batch.push(cmd);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
+        dispatch_send_batch(&mut senders, &mut batch, &omt_gpu);
         pump_senders(&mut senders);
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(SendCmd::Shutdown) => return,
-            Ok(cmd) => dispatch_send_cmd(&mut senders, cmd, &omt_gpu),
+            Ok(cmd) => {
+                if stop.load(Ordering::Relaxed) {
+                    if let SendCmd::GpuVideo { busy, .. } = &cmd {
+                        busy.store(false, Ordering::Release);
+                    }
+                    continue;
+                }
+                batch.push(cmd);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
     }
+}
+
+fn dispatch_send_batch(
+    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
+    batch: &mut Vec<SendCmd>,
+    omt_gpu: &OmtGpu,
+) {
+    if batch.is_empty() {
+        return;
+    }
+    for cmd in take_audio_first(std::mem::take(batch)) {
+        dispatch_send_cmd(senders, cmd, omt_gpu);
+    }
+}
+
+/// Send audio before CPU/GPU video in a drain so NDI `send_audio` is not delayed
+/// behind encode. Add/Remove stay barriers so a new sender is inserted first.
+fn take_audio_first(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
+    let mut out = Vec::with_capacity(cmds.len());
+    let mut pending_video = Vec::new();
+    for cmd in cmds {
+        match &cmd {
+            SendCmd::Add { .. } | SendCmd::Remove { .. } | SendCmd::Shutdown => {
+                out.append(&mut pending_video);
+                out.push(cmd);
+            }
+            SendCmd::Audio { .. } => out.push(cmd),
+            SendCmd::Video { .. } | SendCmd::GpuVideo { .. } => pending_video.push(cmd),
+        }
+    }
+    out.append(&mut pending_video);
+    out
 }
 
 fn dispatch_send_cmd(
@@ -4482,5 +4521,71 @@ mod tests {
                 ERR_INVALID_ARGUMENT
             );
         }
+    }
+
+    fn dummy_video(output_id: u64) -> SendCmd {
+        SendCmd::Video {
+            output_id,
+            width: 2,
+            height: 2,
+            stride: 4,
+            pts: 0,
+            data: Arc::from([0u8; 8]),
+            fps_n: 60,
+            fps_d: 1,
+        }
+    }
+
+    fn dummy_audio(output_id: u64) -> SendCmd {
+        SendCmd::Audio {
+            output_id,
+            packet: AudioPacket {
+                timestamp: 0,
+                sample_rate: AUDIO_RATE,
+                channels: 2,
+                samples_per_channel: 1,
+                pcm_planar_f32: vec![0.0, 0.0],
+            },
+        }
+    }
+
+    fn send_kind(cmd: &SendCmd) -> (u8, u64) {
+        match cmd {
+            SendCmd::Audio { output_id, .. } => (0, *output_id),
+            SendCmd::Video { output_id, .. } => (1, *output_id),
+            SendCmd::Remove { output_id } => (2, *output_id),
+            SendCmd::Add { output_id, .. } => (3, *output_id),
+            SendCmd::GpuVideo { output_id, .. } => (4, *output_id),
+            SendCmd::Shutdown => (5, 0),
+        }
+    }
+
+    #[test]
+    fn take_audio_first_sends_audio_before_video() {
+        let out = take_audio_first(vec![
+            dummy_video(1),
+            dummy_audio(1),
+            dummy_video(2),
+            dummy_audio(2),
+        ]);
+        assert_eq!(
+            out.iter().map(send_kind).collect::<Vec<_>>(),
+            vec![(0, 1), (0, 2), (1, 1), (1, 2)]
+        );
+    }
+
+    #[test]
+    fn take_audio_first_keeps_remove_as_barrier() {
+        let out = take_audio_first(vec![
+            dummy_video(1),
+            dummy_audio(1),
+            SendCmd::Remove { output_id: 1 },
+            dummy_video(2),
+            dummy_audio(2),
+        ]);
+        assert_eq!(
+            out.iter().map(send_kind).collect::<Vec<_>>(),
+            vec![(0, 1), (1, 1), (2, 1), (0, 2), (1, 2)]
+        );
     }
 }
