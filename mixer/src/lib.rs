@@ -80,7 +80,9 @@ use media::VideoPump;
 use media_macos::VideoPump;
 #[cfg(any(windows, target_os = "macos"))]
 use ndi::{NdiReceiver, NdiSender};
-use omt::{GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_from_device};
+use omt::{
+    GpuSendStore, OmtGpu, OmtReceiver, ProgramSender, omt_gpu_for_send, omt_gpu_from_device,
+};
 use present::Presenters;
 use readback::ReadbackStore;
 use save::{LiveSave, collect_source_roles, want_full};
@@ -268,6 +270,14 @@ impl OutputHandle {
             }
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.pump(),
+        }
+    }
+
+    fn pump_accept(&mut self) -> Result<(), String> {
+        match self {
+            Self::Omt(sender) => sender.pump_accept(),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => Ok(()),
         }
     }
 
@@ -610,7 +620,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
             return ERR_DEVICE;
         }
     };
-    let omt_gpu = omt_gpu_from_device(&device);
+    let omt_recv_gpu = omt_gpu_from_device(&device);
+    let omt_send_gpu = omt_gpu_for_send(&device);
     let rebar = crate::rebar::probe(&device);
     let gpu_ingest = GpuIngest {
         device: device.device.clone(),
@@ -643,7 +654,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         gpu_ingest,
         #[cfg(windows)]
         gpu_video,
-        omt_gpu: omt_gpu.clone(),
+        omt_gpu: omt_recv_gpu,
         receivers: HashMap::new(),
         #[cfg(any(windows, target_os = "macos"))]
         videos: HashMap::new(),
@@ -689,7 +700,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         })
         .expect("render thread");
     let send_stop = Arc::clone(&stop);
-    let send_gpu = omt_gpu;
+    let send_gpu = omt_send_gpu;
     let send = thread::Builder::new()
         .name("eiviz-omt-send".into())
         .spawn(move || send_loop(send_rx, send_stop, send_gpu))
@@ -4248,11 +4259,27 @@ fn dispatch_send_cmd(
 ) {
     let heavy = matches!(cmd, SendCmd::GpuVideo { .. });
     if heavy {
-        pump_senders(senders);
+        // Accept only: metadata `read` shares the peer lock with writers and
+        // used to stall GPU encode when a socket was left blocking.
+        pump_accept_senders(senders);
     }
     apply_send_cmd(senders, cmd, omt_gpu);
     if heavy {
-        pump_senders(senders);
+        pump_accept_senders(senders);
+    }
+}
+
+fn pump_accept_senders(senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>) {
+    let mut dead = Vec::new();
+    for (&id, (sender, _)) in senders.iter_mut() {
+        let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump_accept()));
+        match pumped {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => dead.push(id),
+        }
+    }
+    for id in dead {
+        senders.remove(&id);
     }
 }
 

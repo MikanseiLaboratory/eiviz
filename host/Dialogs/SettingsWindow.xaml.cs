@@ -687,7 +687,7 @@ public partial class SettingsWindow : Window
         box.ItemsSource = items;
         box.DisplayMemberPath = "Name";
         box.SelectedValuePath = "Id";
-        box.SelectedValue = output.AudioBusId;
+        box.SelectedItem = items.FirstOrDefault(item => item.Id == output.AudioBusId);
         if (box.SelectedItem is AudioBusEntry bus)
             output.AudioBusId = bus.Id;
         else

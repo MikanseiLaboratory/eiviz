@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,17 @@ pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
         device: Arc::new(device.device.clone()),
         queue: Arc::new(device.queue.clone()),
         gpu_lock: Some(crate::device::gpu_queue_lock_handle()),
+    }
+}
+
+/// Send-side VMX encode must not hold the compose `Queue::submit` lock across
+/// GPU readback. Receive still uses [`omt_gpu_from_device`] so decode cannot
+/// race `Surface::configure`.
+pub fn omt_gpu_for_send(device: &GpuDevice) -> OmtGpu {
+    GpuVideoContext {
+        device: Arc::new(device.device.clone()),
+        queue: Arc::new(device.queue.clone()),
+        gpu_lock: None,
     }
 }
 
@@ -192,7 +204,9 @@ impl Drop for OmtReceiver {
 }
 
 pub struct ProgramSender {
-    pub sender: Sender,
+    sender: Arc<Mutex<Sender>>,
+    audio_tx: Option<SyncSender<AudioPacket>>,
+    audio_thread: Option<JoinHandle<()>>,
     pub unit_id: u64,
     name: String,
     discovery: Option<Discovery>,
@@ -212,24 +226,48 @@ impl ProgramSender {
         }))
         .ok()
         .flatten();
+        let sender = Arc::new(Mutex::new(sender));
+        let (audio_tx, audio_rx) = sync_channel::<AudioPacket>(8);
+        let worker = Arc::clone(&sender);
+        let audio_thread = thread::Builder::new()
+            .name("eiviz-omt-audio".into())
+            .spawn(move || {
+                while let Ok(audio) = audio_rx.recv() {
+                    if let Err(error) = send_omt_audio(&worker, &audio) {
+                        crate::diag::error(&format!("omt send audio: {error}"));
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             sender,
+            audio_tx: Some(audio_tx),
+            audio_thread: Some(audio_thread),
             unit_id: 0,
             name: name.to_string(),
             discovery,
         })
     }
 
-    pub fn pump(&mut self) -> Result<(), String> {
-        self.sender.poll_accept().map_err(|e| e.to_string())?;
+    fn lock_sender(&self) -> MutexGuard<'_, Sender> {
         self.sender
-            .poll_peer_metadata()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Non-blocking accept only. Safe around GPU encode (no peer-lock reads).
+    pub fn pump_accept(&mut self) -> Result<(), String> {
+        self.lock_sender()
+            .poll_accept()
             .map_err(|e| e.to_string())?;
-        // Studio Monitor often subscribes video first. send_audio is a no-op
-        // until audio_subscribed, so PGM/MV stay silent without this.
-        if self.sender.video_subscribed() && !self.sender.audio_subscribed() {
-            self.sender.force_subscribe(true, true, false);
-        }
+        Ok(())
+    }
+
+    pub fn pump(&mut self) -> Result<(), String> {
+        let mut sender = self.lock_sender();
+        sender.poll_accept().map_err(|e| e.to_string())?;
+        sender.poll_peer_metadata().map_err(|e| e.to_string())?;
+        sender.enable_audio_output();
         Ok(())
     }
 
@@ -257,7 +295,9 @@ impl ProgramSender {
             data,
             ..Default::default()
         };
-        self.sender.send_video(frame).map_err(|e| e.to_string())
+        self.lock_sender()
+            .send_video(frame)
+            .map_err(|e| e.to_string())
     }
 
     pub fn send_video_texture(
@@ -278,43 +318,61 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
-        self.sender
+        self.lock_sender()
             .send_video_texture(ctx, texture, meta)
             .map_err(|e| e.to_string())
     }
 
     pub fn video_subscribed(&self) -> bool {
-        self.sender.video_subscribed()
+        self.lock_sender().video_subscribed()
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
         if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
             return Ok(());
         }
-        let frame = MediaFrame {
-            frame_type: FrameType::AUDIO,
-            timestamp: audio.timestamp,
-            codec: Codec::Fpa1 as i32,
-            sample_rate: audio.sample_rate,
-            channels: audio.channels,
-            samples_per_channel: audio.samples_per_channel,
-            data: audio
-                .pcm_planar_f32
-                .iter()
-                .flat_map(|sample| sample.to_le_bytes())
-                .collect(),
-            ..Default::default()
+        let Some(tx) = self.audio_tx.as_ref() else {
+            return Err("omt audio thread stopped".into());
         };
-        self.sender.send_audio(frame).map_err(|e| e.to_string())
+        match tx.try_send(audio.clone()) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err("omt audio thread stopped".into()),
+        }
     }
 }
 
 impl Drop for ProgramSender {
     fn drop(&mut self) {
+        self.audio_tx.take();
+        if let Some(handle) = self.audio_thread.take() {
+            crate::diag::join_timeout(handle, Duration::from_secs(2), "omt-send-audio");
+        }
         if let Some(discovery) = self.discovery.as_mut() {
             let _ = discovery.deregister(&self.name);
         }
     }
+}
+
+fn send_omt_audio(sender: &Mutex<Sender>, audio: &AudioPacket) -> Result<(), String> {
+    let frame = MediaFrame {
+        frame_type: FrameType::AUDIO,
+        timestamp: audio.timestamp,
+        codec: Codec::Fpa1 as i32,
+        sample_rate: audio.sample_rate,
+        channels: audio.channels,
+        samples_per_channel: audio.samples_per_channel,
+        data: audio
+            .pcm_planar_f32
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect(),
+        ..Default::default()
+    };
+    sender
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .send_audio(frame)
+        .map_err(|e| e.to_string())
 }
 
 const SEND_SLOTS: usize = 3;
