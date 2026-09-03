@@ -1090,6 +1090,11 @@ public sealed class Session
             if (unit.AudioBusId == 0)
                 unit.AudioBusId = 1;
         }
+        foreach (var output in Outputs)
+        {
+            if (output.SourceKind == OutputSourceKind.Multiview)
+                output.AudioBusId = 0;
+        }
     }
 
     public void MergeTagCatalogs()

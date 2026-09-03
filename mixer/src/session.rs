@@ -933,6 +933,11 @@ impl Document {
                 }
             }
         }
+        for output in &mut doc.outputs {
+            if output.source_kind == OutputSourceKind::Multiview {
+                output.audio_bus_id = 0;
+            }
+        }
         for layout in &mut doc.multiviews {
             if layout.present_interval > 0 {
                 layout.present_interval = layout.present_interval.clamp(1, 8);
@@ -1106,6 +1111,16 @@ mod tests {
         let src = r#"{
   "version": 2,
   "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "audioBusId": 0 }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.outputs[0].audio_bus_id, 0);
+    }
+
+    #[test]
+    fn multiview_output_audio_is_forced_silent() {
+        let src = r#"{
+  "version": 2,
+  "outputs": [{ "id": 100, "name": "eiviz-mv", "transport": "Omt", "sourceKind": "Multiview", "audioBusId": 1 }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.outputs[0].audio_bus_id, 0);

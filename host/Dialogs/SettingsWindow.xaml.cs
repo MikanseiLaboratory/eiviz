@@ -616,7 +616,12 @@ public partial class SettingsWindow : Window
         {
             if (_suppressOutputs)
                 return;
+            var wasMultiview = output.SourceKind == OutputSourceKind.Multiview;
             output.SourceKind = kind;
+            if (kind == OutputSourceKind.Multiview)
+                output.AudioBusId = 0;
+            else if (wasMultiview)
+                output.AudioBusId = 1;
             RebuildOutputs();
         };
         panel.Children.Add(radio);
@@ -687,6 +692,16 @@ public partial class SettingsWindow : Window
         box.ItemsSource = items;
         box.DisplayMemberPath = "Name";
         box.SelectedValuePath = "Id";
+        // Multiview senders stay silent (NDI and OMT). A bus could be
+        // attached, but mosaic encode vs PCM timing on the shared send
+        // thread is too messy, so the picker is locked to None.
+        if (output.SourceKind == OutputSourceKind.Multiview)
+        {
+            output.AudioBusId = 0;
+            box.IsEnabled = false;
+        }
+        else
+            box.IsEnabled = true;
         box.SelectedItem = items.FirstOrDefault(item => item.Id == output.AudioBusId);
         if (box.SelectedItem is AudioBusEntry bus)
             output.AudioBusId = bus.Id;

@@ -91,6 +91,7 @@ internal sealed class CommandQueue : IAsyncDisposable
     public void AddOutputNow(OutputEntry output)
     {
         NormalizeOutputSource(output);
+        var audioBusId = output.SourceKind == OutputSourceKind.Multiview ? 0uL : output.AudioBusId;
         var code = MixerNative.OutputAdd(
             output.Id,
             (uint)output.Transport,
@@ -99,7 +100,7 @@ internal sealed class CommandQueue : IAsyncDisposable
             output.SourceId,
             output.UnitId,
             output.UseGpu ? 1u : 0u,
-            output.AudioBusId);
+            audioBusId);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }

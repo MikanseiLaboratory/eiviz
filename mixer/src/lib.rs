@@ -2149,6 +2149,11 @@ pub unsafe extern "C" fn mixer_output_add(
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
+    let audio_bus_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
+        0
+    } else {
+        audio_bus_id
+    };
     let handle = match transport {
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
@@ -2177,7 +2182,13 @@ pub unsafe extern "C" fn mixer_output_add(
         OUT_OMT => {
             let started = panic::catch_unwind(AssertUnwindSafe(|| ProgramSender::start(&name)));
             match started {
-                Ok(Ok(sender)) => OutputHandle::Omt(sender),
+                Ok(Ok(mut sender)) => {
+                    // Hold PCM until this sender's own video goes out so a
+                    // slow encode does not let audio lead. Multiview never
+                    // emits audio (see render-loop skip).
+                    sender.set_pair_after_video(true);
+                    OutputHandle::Omt(sender)
+                }
                 Ok(Err(error)) => {
                     let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
@@ -3789,7 +3800,17 @@ fn render_loop(
             }
             if audio_frames > 0 {
                 for output in &outputs_snap {
-                    if output.audio_bus_id == 0 {
+                    // Multiview stays silent on NDI and OMT. Wiring a bus is
+                    // technically possible (same SendCmd::Audio as PGM), but
+                    // A/V sync on the shared send thread is messy: mosaic
+                    // encode is heavy, CPU Multiview uses irregular async
+                    // readback, and pairing PCM before/after that encode
+                    // either buffers at the receiver or waits behind the
+                    // mosaic (and other outputs). Skip it rather than add a
+                    // second clocked audio path.
+                    if output.audio_bus_id == 0
+                        || output.source_kind == SRC_KIND_MU_MULTIVIEW
+                    {
                         continue;
                     }
                     let packet = interleaved_to_packet(mixed.for_bus(output.audio_bus_id), pts);

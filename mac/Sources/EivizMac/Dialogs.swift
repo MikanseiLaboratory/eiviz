@@ -224,7 +224,13 @@ struct SettingsView: View {
                 Picker("", selection: Binding(
                     get: { output.wrappedValue.sourceKind },
                     set: { kind in
+                        let wasMultiview = output.wrappedValue.sourceKind == .multiview
                         output.wrappedValue.sourceKind = kind
+                        if kind == .multiview {
+                            output.wrappedValue.audioBusId = 0
+                        } else if wasMultiview {
+                            output.wrappedValue.audioBusId = 1
+                        }
                         switch kind {
                         case .multiview:
                             if mixer.session.multiviews.first(where: { $0.gpuId == output.wrappedValue.sourceId }) == nil {
@@ -250,12 +256,16 @@ struct SettingsView: View {
                     Text("Multiview").tag(OutputSourceKind.multiview)
                 }
                 outputSourcePick(output)
+                // Multiview senders stay silent (NDI and OMT). A bus could
+                // be attached, but mosaic encode vs PCM timing on the shared
+                // send thread is too messy, so the picker is locked to None.
                 Picker("Audio", selection: output.audioBusId) {
                     Text("None").tag(UInt64(0))
                     ForEach(mixer.session.buses) { bus in
                         Text(bus.name).tag(bus.id)
                     }
                 }
+                .disabled(output.wrappedValue.sourceKind == .multiview)
             }
         }
         .padding(6)
