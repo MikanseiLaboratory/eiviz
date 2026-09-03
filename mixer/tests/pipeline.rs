@@ -284,18 +284,27 @@ fn omt_program_shows_fade_during_auto() {
         baseline.0
     );
 
-    let remain =
-        Duration::from_millis(u64::from(AUTO_MS) + 250).saturating_sub(auto_started.elapsed());
-    if !remain.is_zero() {
-        thread::sleep(remain);
+    // Drain through the rest of Auto so the FIFO cannot replay early-fade red.
+    while auto_started.elapsed() < Duration::from_millis(u64::from(AUTO_MS) + 200) {
+        let _ = session.recv_video_timeout(Duration::from_millis(20));
     }
-    let after = wait_omt_sample(&session, Duration::from_secs(2));
+    let after = wait_omt_until(
+        &session,
+        |sample| sample.1 > 160.0 && sample.0 < 80.0,
+        Duration::from_secs(2),
+    );
     assert!(
         after.1 > 160.0 && after.0 < 80.0,
         "program should finish on Blue, got r={} b={}",
         after.0,
         after.1
     );
+    let mut out = UnitState::default();
+    unsafe {
+        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
+    }
+    assert_eq!(out.program_source, SRC_BLUE);
+    assert_eq!(out.mix, 0.0);
     mixer_destroy();
 }
 
@@ -549,6 +558,24 @@ fn wait_omt_fade(
         }
     }
     samples
+}
+
+fn wait_omt_until(
+    session: &ReceiverSession,
+    done: impl Fn((f32, f32)) -> bool,
+    budget: Duration,
+) -> (f32, f32) {
+    let deadline = Instant::now() + budget;
+    let mut last = (0.0, 0.0);
+    while Instant::now() < deadline {
+        if let Some(frame) = session.recv_video_timeout(Duration::from_millis(20)) {
+            last = mean_red_blue(&frame);
+            if done(last) {
+                return last;
+            }
+        }
+    }
+    last
 }
 
 unsafe fn try_acquire(unit: u64) {
