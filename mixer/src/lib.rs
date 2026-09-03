@@ -40,9 +40,9 @@ pub use abi::{
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
     ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MixerRebarInfo,
     MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
-    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
-    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW,
+    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
     SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
     TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
@@ -3328,13 +3328,12 @@ fn render_loop(
                 .collect();
             frame_i = frame_i.wrapping_add(1);
             // Three lanes:
-            // 1. Playout/upload — every master frame (FIFOs and live pixels).
+            // 1. On-air playout/upload — every master frame (FIFOs and live pixels).
             // 2. On-air compose (Preview/Program/outputs) — every master frame.
-            // 3. Monitor compose (scene tiles, input preview) — present_interval only.
-            // Lane 3 uses due monitors only; every attached monitor still uploads.
-            let monitor_sources = presenters.attached_monitor_sources();
+            // 3. Monitor compose and GUI-only upload — present_interval only.
+            // Save roles still see every attached monitor/thumb so OMT quality
+            // does not flap on skipped present ticks.
             let due_monitors = presenters.attached_monitor_sources_due(frame_i);
-            let thumb_ids: Vec<u64> = thumbs_snap.keys().copied().collect();
             let due_thumbs: Vec<u64> = thumbs_snap
                 .iter()
                 .filter(|(_, sub)| frame_i % u64::from(sub.interval) == 0)
@@ -3342,29 +3341,21 @@ fn render_loop(
                 .collect();
             let mut compose_sources = due_monitors;
             compose_sources.extend_from_slice(&due_thumbs);
-            let mut upload_sources = monitor_sources.clone();
-            upload_sources.extend_from_slice(&thumb_ids);
-            let (mut used_scenes, mut used_uploads) = collect_live_ids(
+            let (mut used_scenes, used_uploads) = collect_frame_live_ids(
                 &scene_specs,
                 &snapshot,
                 &compose_sources,
                 &outputs_snap,
                 &mix_inputs,
+                compose_dirty,
             );
-            let (_, monitor_uploads) =
-                collect_live_ids(&scene_specs, &[], &upload_sources, &[], &mix_inputs);
-            used_uploads.extend(monitor_uploads);
-            if compose_dirty {
-                for (id, ..) in &scene_specs {
-                    used_scenes.insert(*id);
-                }
-            }
+            let mut role_sources = presenters.attached_monitor_sources();
+            role_sources.extend(thumbs_snap.keys().copied());
             let output_refs: Vec<(u32, u64)> = outputs_snap
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
                 .collect();
-            let roles =
-                collect_source_roles(&scene_specs, &snapshot, &upload_sources, &output_refs);
+            let roles = collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
             {
                 let guard = shared.lock().expect("shared");
                 for (id, receiver) in &guard.receivers {
@@ -3980,9 +3971,10 @@ fn mix_source_cycles(
         return true;
     }
     if let Some(scene) = scenes.get(&source_id) {
-        return scene.layers.iter().any(|layer| {
-            mix_source_cycles(layer.source_id, unit_id, mix_inputs, scenes, seen)
-        });
+        return scene
+            .layers
+            .iter()
+            .any(|layer| mix_source_cycles(layer.source_id, unit_id, mix_inputs, scenes, seen));
     }
     false
 }
@@ -4020,6 +4012,25 @@ fn mix_rgba_at<'a>(
     } else {
         None
     }
+}
+
+fn collect_frame_live_ids(
+    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, MvLabelStyle)],
+    snapshot: &[UnitSnap],
+    due_gui: &[u64],
+    outputs: &[OutputSnap],
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    compose_dirty: bool,
+) -> (HashSet<u64>, HashSet<u64>) {
+    let (mut scenes, mut uploads) =
+        collect_live_ids(scene_specs, snapshot, due_gui, outputs, mix_inputs);
+    if compose_dirty {
+        let dirty: Vec<u64> = scene_specs.iter().map(|spec| spec.0).collect();
+        scenes.extend(dirty.iter().copied());
+        let (_, dirty_uploads) = collect_live_ids(scene_specs, &[], &dirty, &[], mix_inputs);
+        uploads.extend(dirty_uploads);
+    }
+    (scenes, uploads)
 }
 
 fn collect_live_ids(
@@ -4295,6 +4306,53 @@ mod tests {
         let specs = [(idle, 1920, 1080, empty, MvLabelStyle::default())];
         let (scenes, _) = collect_live_ids(&specs, &[], &[idle], &[], &HashMap::new());
         assert!(scenes.contains(&idle));
+    }
+
+    #[test]
+    fn collect_frame_live_ids_uploads_on_air_not_idle_gui() {
+        let on_air = 20;
+        let idle = 21;
+        let snapshot = [(
+            1,
+            1920,
+            1080,
+            60_000,
+            1_001,
+            crate::abi::UnitState {
+                program_source: on_air,
+                preview_source: on_air,
+                ..crate::abi::UnitState::default()
+            },
+            0,
+            None,
+        )];
+        let (_, uploads) = collect_frame_live_ids(&[], &snapshot, &[], &[], &HashMap::new(), false);
+        assert!(uploads.contains(&on_air));
+        assert!(!uploads.contains(&idle));
+        let (_, uploads) =
+            collect_frame_live_ids(&[], &snapshot, &[idle], &[], &HashMap::new(), false);
+        assert!(uploads.contains(&on_air));
+        assert!(uploads.contains(&idle));
+    }
+
+    #[test]
+    fn collect_frame_live_ids_dirty_uploads_idle_scene_layers() {
+        let layer = 22;
+        let idle = SCENE_BASE | 4;
+        let layers: std::sync::Arc<[crate::abi::OverlayDesc]> =
+            std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: layer,
+                ..crate::abi::OverlayDesc::default()
+            }]);
+        let specs = [(idle, 1920, 1080, layers, MvLabelStyle::default())];
+        let (scenes, uploads) =
+            collect_frame_live_ids(&specs, &[], &[], &[], &HashMap::new(), false);
+        assert!(!scenes.contains(&idle));
+        assert!(!uploads.contains(&layer));
+        let (scenes, uploads) =
+            collect_frame_live_ids(&specs, &[], &[], &[], &HashMap::new(), true);
+        assert!(scenes.contains(&idle));
+        assert!(uploads.contains(&layer));
     }
 
     #[test]

@@ -80,9 +80,72 @@ flowchart LR
   compose --> mu
 ```
 
+## テキスチャ
+
+Input、Scene、Mixing UnitのPreview/Program、Multiviewは、同じソースID空間の**GPUテキスチャ**として持ちます。合成とGUIは画素を複製せず、その`TextureView`をサンプリングします。
+
+| 種別 | 実体 |
+| --- | --- |
+| Input | 取り込み結果。GPU経路はハンドル共有、CPU経路は1枚へ上書き |
+| Scene | レイヤーを描いた合成結果 |
+| Multiview | Sceneと同じ実体。ラベルとタリーを足す |
+| Preview | Mixing Unitのpreview |
+| Program | mixとオーバーレイ後のmixed。GUIと送出が指す |
+
+Program用に切替前の`program`と、本線の`mixed`を分けます。未使用のSceneはVRAMに残しますが、描き直しません。
+
+### GUIへの経路
+
+ホストはライブ面以外にGPUポインタを渡しません。経路は2本です。
+
+```mermaid
+flowchart TB
+  inp["Input"]
+  sc["Scene / MV"]
+  prv["MU preview"]
+  pgm["MU mixed"]
+  delay["Frame Delay"]
+  inp --> sc
+  inp --> prv
+  sc --> prv
+  prv --> pgm
+  pgm --> delay
+  prv --> delay
+  delay --> swap["swapchain blit"]
+  pgm --> swap
+  sc --> swap
+  inp --> swap
+  sc --> thumb["縮小blit + 読み戻し"]
+  inp --> thumb
+  swap --> live["ライブ面"]
+  thumb --> tiles["一覧サムネ"]
+```
+
+ライブのPreview/Program、開いているMultiview、Scene Editor、Overlay窓は、既存のViewをHWND/NSViewのswapchainへblitします。ソースのフル解像度コピーは作りません。同じソースを複数面に出しても、増えるのはblit回数です。
+
+Input一覧、Scene一覧、スイッチャーのソースボタンは、最大960×540へ縮小してGPUから読み戻します。swapchain枠は使いません。
+
+### 帯域を使うコピー
+
+GUI用のフル解像度複製はありません。帯域を使うコピーは次です。
+
+- Frame Delay。`mixed`と`preview`をリングへコピーし、音声と揃えます。GUIのPreview/Programもこの遅延面を見ます
+- トランジション履歴。`mixed`を`prev`へコピーします
+- 送出。CPU経路はUYVYへパックし、GPU経路のOMTは非同期送出用にコピーします
+
+sort/flow/bloomなどの中間バッファはVRAMに確保しますが、該当トランジションのときだけ計算します。
+
 ## 1フレーム
 
-1フレームの流れは次のとおりです。
+1フレームは次の3レーンです。
+
+1. 本線の取り込み。毎マスターフレーム
+2. 本線の合成（Preview/Program/出力）。毎マスターフレーム
+3. 監視用の合成（Sceneタイル、入力プレビュー）と、GUI専用ソースの取り込み。更新間隔のときだけ
+
+本線に乗っているソースは毎フレームGPUへ載せます。Monitorやサムネにだけ載っているInputは、更新間隔が来るまで書きません。OMT受信の品質判定は、開いている監視面を毎フレーム見ます。TAKEやTバーで品質がちらつかないようにするためです。
+
+そのうえで流れは次のとおりです。
 
 1. 入力スレッドが最新フレームを置く
 2. Mixing UnitごとにPreviewとProgramを描き、TバーやAUTOのmixで混ぜ、オーバーレイとマルチビューを載せる

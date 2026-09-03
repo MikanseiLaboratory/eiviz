@@ -79,9 +79,72 @@ flowchart LR
   compose --> mu
 ```
 
+## Textures
+
+Inputs, scenes, a Mixing Unit’s Preview/Program, and Multiview all live in one source-id space as **GPU textures**. Compose and the GUI sample the `TextureView`; they do not clone the pixels.
+
+| Kind | What it is |
+| --- | --- |
+| Input | Ingest result. GPU ingest shares the handle; CPU ingest overwrites one texture |
+| Scene | Composited layers |
+| Multiview | The same scene object, plus labels and tallies |
+| Preview | The Mixing Unit `preview` bus |
+| Program | `mixed` after mix and overlays. GUI and send point here |
+
+Program keeps a pre-mix `program` target and the on-air `mixed` target. Unused scenes stay in VRAM but are not redrawn.
+
+### Path to the GUI
+
+The host never receives GPU pointers except live preview surfaces. There are two paths.
+
+```mermaid
+flowchart TB
+  inp["Input"]
+  sc["Scene / MV"]
+  prv["MU preview"]
+  pgm["MU mixed"]
+  delay["Frame Delay"]
+  inp --> sc
+  inp --> prv
+  sc --> prv
+  prv --> pgm
+  pgm --> delay
+  prv --> delay
+  delay --> swap["swapchain blit"]
+  pgm --> swap
+  sc --> swap
+  inp --> swap
+  sc --> thumb["downscale blit + readback"]
+  inp --> thumb
+  swap --> live["Live surfaces"]
+  thumb --> tiles["List thumbnails"]
+```
+
+Live Preview/Program, an open Multiview, Scene Editor, and the Overlay window blit an existing view into an HWND / NSView swapchain. That does not create a full-resolution copy of the source. Showing the same source on several surfaces adds blits, not extra source textures.
+
+Input lists, scene lists, and switcher source buttons read back a downscale (up to 960×540). They do not use a swapchain slot.
+
+### Copies that cost bandwidth
+
+There is no full-resolution GUI duplicate. Bandwidth copies are:
+
+- Frame Delay. Copies `mixed` and `preview` into a ring so picture lines up with audio. GUI Preview/Program sample that delayed surface
+- Transition history. Copies `mixed` into `prev`
+- Send. The CPU path packs UYVY; GPU OMT copies into an async send slot
+
+Intermediate buffers such as sort / flow / bloom stay in VRAM, but the compute runs only for those transitions.
+
 ## One frame
 
-A frame goes like this:
+A frame has three lanes:
+
+1. On-air ingest — every master frame
+2. On-air compose (Preview/Program/outputs) — every master frame
+3. Monitor compose (scene tiles, input preview) and GUI-only ingest — present interval only
+
+Sources on-air upload every frame. An Input that lives only on a monitor or thumbnail waits for its interval before the GPU write. OMT receive quality still sees every attached monitor and thumb each tick, so TAKE and the T-bar do not flap quality.
+
+Then the picture moves like this:
 
 1. An ingest thread deposits the latest frame
 2. Each Mixing Unit draws Preview and Program, mixes with the T-bar or AUTO, then overlays and multiview
