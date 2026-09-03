@@ -1,0 +1,42 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const version = import.meta.env.PUBLIC_EIVIZ_VERSION as string;
+const locale = Astro.locals.starlightRoute.lang ?? 'ja';
+const english = locale.startsWith('en');
+---
+
+<Default>
+	<slot />
+</Default>
+{
+	version && (
+		<p class="eiviz-version">
+			{
+				english ? (
+					<>
+						Latest:{' '}
+						<a href="https://github.com/MikanseiLaboratory/eiviz/releases/latest">
+							{version}
+						</a>
+					</>
+				) : (
+					<a href="https://github.com/MikanseiLaboratory/eiviz/releases/latest">
+						最新リリース（{version}）
+					</a>
+				)
+			}
+		</p>
+	)
+}
+
+<style>
+	.eiviz-version {
+		margin-block-start: 1rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.eiviz-version a {
+		color: inherit;
+	}
+</style>
