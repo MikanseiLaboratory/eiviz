@@ -15,3 +15,7 @@ Audio Follow on a layer ties that Input’s sound to the picture.
 ## Where it goes
 
 Use it on a Mixing Unit bus, as an [Overlay](/eiviz/en/concepts/overlays/) source, on a [Multiview](/eiviz/en/concepts/multiviews/) tile, or as an Output source.
+
+## Tiles on the desk
+
+Scene-list and switcher thumbs are GPU readbacks. Adding scenes does not use the video output destination window limit. Only the live Preview/Program buses take those slots.

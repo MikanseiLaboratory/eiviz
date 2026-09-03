@@ -98,6 +98,16 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
 
+## 詳細
+
+### 映像出力先ウィンドウの上限
+
+Preview/Program/Multiviewをリアルタイムに表示するのに使います。  
+たとえばSwitcher UIはPreviewとProgramを出すので、2スロット使います。本体のPreview/Program、開いているMultiview、Scene Editor、Overlay窓も同様に数えます。シーンタイルと入力プレビューのサムネは数えません。
+
+自動は6からです。設定から上げられますが、不安定になる可能性があります。  
+上限に達すると新しい窓は開きません。どれかを閉じると枠が空きます。技術的な背景は[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)のホストです。
+
 ## 環境設定
 
 <img src="/eiviz/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />

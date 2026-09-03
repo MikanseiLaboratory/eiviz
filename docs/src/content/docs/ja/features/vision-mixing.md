@@ -24,7 +24,7 @@ CUTやTバーで混ざったあとのProgramに載ります。Previewバスに�
 ### Multiview
 
 監視用のモザイクはMixing Unitのバスではなく、セッション単位の[Multiviews](/eiviz/ja/concepts/multiviews/)です。  
-Mixing Unitと同じく本数に上限はなく、[設定](/eiviz/ja/introduction/settings/)からPC性能が許す限り追加できます。タイルにはInput、Scene、MU Preview、MU Programを置けます。
+セッションへ置ける数に上限はありません。同時に開く監視窓は[設定](/eiviz/ja/introduction/settings/)の映像出力先ウィンドウの上限に入ります。タイルにはInput、Scene、MU Preview、MU Programを置けます。
 
 ## Transition
 

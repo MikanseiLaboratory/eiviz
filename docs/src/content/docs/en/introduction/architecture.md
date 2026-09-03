@@ -40,9 +40,10 @@ flowchart TB
 | --- | --- | --- |
 | Compose and transitions | Yes | Sends the gesture |
 | GPU and audio devices | Yes | Passes settings |
-| Preview | Draws into a native surface | Supplies the surface (HWND / NSView) |
+| Live preview | Draws into a native surface | Supplies the surface (HWND / NSView) |
+| Scene tiles and similar | Reads back from the GPU | Shows the thumbnail |
 
-There is one mixer per process. The host never receives GPU pointers except the preview surface. Inputs, scenes, and Mixing Units are integer ids.
+There is one mixer per process. The host never receives GPU pointers except live preview surfaces. Inputs, scenes, and Mixing Units are integer ids.
 
 ## Concurrency
 
@@ -146,5 +147,10 @@ Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI /
 
 ## Hosts
 
-Windows binds a video texture to a child window (HWND).  
-macOS creates an NSView; wgpu attaches a Metal layer the same way.
+Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
+
+Scene tiles, switcher scene thumbs, and input previews are GPU readback thumbnails. Adding scenes does not add swapchains.
+
+Windows cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open. They are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process.
+
+Reloading a session rebuilds the main window so preview surfaces attach on first layout. HWNDs are not reused across mixer lifetimes.

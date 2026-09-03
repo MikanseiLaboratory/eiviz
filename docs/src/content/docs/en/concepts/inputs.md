@@ -34,6 +34,7 @@ Add them from Inputs in the main window.
 - UVC (capture device)
 - NDI/OMT
 
-Use an Input as a Scene layer, a Mixing Unit bus, a Multiview tile, or an Output source.
+Use an Input as a Scene layer, a Mixing Unit bus, a Multiview tile, or an Output source.  
+Input preview is a GPU readback thumbnail and does not use the video output destination window limit.
 
 Detail is in [Scenes](/eiviz/en/concepts/scenes/), [Mixing Unit](/eiviz/en/concepts/mixing-unit/), and [Outputs](/eiviz/en/concepts/outputs/).

@@ -11,4 +11,5 @@ description: PreviewとProgramでSceneを切り替える単位
 
 [Overlay](/eiviz/ja/concepts/overlays/)はこのユニットのProgramに載ります。あるユニットのProgramを、別ユニットの入力やOutputのソースにもできます。
 
-切替用の映像バスはPreviewとProgramです。
+切替用の映像バスはPreviewとProgramです。  
+Switcher UIはPreviewとProgramを表示するので、映像出力先ウィンドウを2スロット使います。閉じると枠が空きます。

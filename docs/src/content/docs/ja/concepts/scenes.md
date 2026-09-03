@@ -16,3 +16,7 @@ Scenesから追加し、編集で使用するInputと位置、サイズ、不透
 ## 使い先
 
 Mixing Unitのバス、[Overlay](/eiviz/ja/concepts/overlays/)のソース、[Multiview](/eiviz/ja/concepts/multiviews/)のタイル、Outputのソースとして使います。
+
+## メインUIのタイル
+
+シーン一覧とスイッチャーのサムネはGPUから読み戻した絵です。シーンを増やしても映像出力先ウィンドウは増えません。本線のPreview/Programだけがリアルタイム表示の枠を使います。
