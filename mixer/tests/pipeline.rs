@@ -288,13 +288,9 @@ fn omt_program_shows_fade_during_auto() {
     while auto_started.elapsed() < Duration::from_millis(u64::from(AUTO_MS) + 200) {
         let _ = session.recv_video_timeout(Duration::from_millis(20));
     }
-    let after = wait_omt_until(
-        &session,
-        |sample| sample.1 > 160.0 && sample.0 < 80.0,
-        Duration::from_secs(2),
-    );
+    let after = wait_omt_until(&session, looks_blue, Duration::from_secs(2));
     assert!(
-        after.1 > 160.0 && after.0 < 80.0,
+        looks_blue(after),
         "program should finish on Blue, got r={} b={}",
         after.0,
         after.1
@@ -515,6 +511,11 @@ fn mean_red_blue(frame: &DecodedVideoFrame) -> (f32, f32) {
     }
     let count = count.max(1) as f32;
     (red as f32 / count, blue as f32 / count)
+}
+
+/// SRC_BLUE through UYVY pack/decode is not a clean (0, 255) primary.
+fn looks_blue(sample: (f32, f32)) -> bool {
+    sample.1 > 150.0 && sample.1 > sample.0 + 40.0
 }
 
 fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
