@@ -225,6 +225,11 @@ impl ProgramSender {
         self.sender
             .poll_peer_metadata()
             .map_err(|e| e.to_string())?;
+        // Studio Monitor often subscribes video first. send_audio is a no-op
+        // until audio_subscribed, so PGM/MV stay silent without this.
+        if self.sender.video_subscribed() && !self.sender.audio_subscribed() {
+            self.sender.force_subscribe(true, true, false);
+        }
         Ok(())
     }
 
@@ -283,6 +288,9 @@ impl ProgramSender {
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
+        if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
+            return Ok(());
+        }
         let frame = MediaFrame {
             frame_type: FrameType::AUDIO,
             timestamp: audio.timestamp,

@@ -250,6 +250,12 @@ struct SettingsView: View {
                     Text("Multiview").tag(OutputSourceKind.multiview)
                 }
                 outputSourcePick(output)
+                Picker("Audio", selection: output.audioBusId) {
+                    Text("None").tag(UInt64(0))
+                    ForEach(mixer.session.buses) { bus in
+                        Text(bus.name).tag(bus.id)
+                    }
+                }
             }
         }
         .padding(6)

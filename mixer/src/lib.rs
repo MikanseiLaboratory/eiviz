@@ -123,6 +123,7 @@ struct LiveOutput {
     source_kind: u32,
     source_id: u64,
     unit_id: u64,
+    audio_bus_id: u64,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
 }
@@ -133,6 +134,7 @@ struct OutputSnap {
     source_kind: u32,
     source_id: u64,
     unit_id: u64,
+    audio_bus_id: u64,
     fps_n: u32,
     fps_d: u32,
     video_sub: Arc<AtomicBool>,
@@ -2092,7 +2094,18 @@ pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char)
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    unsafe { mixer_output_add(unit_id, OUT_OMT, name, SRC_KIND_MU_PROGRAM, 0, unit_id, 0) }
+    unsafe {
+        mixer_output_add(
+            unit_id,
+            OUT_OMT,
+            name,
+            SRC_KIND_MU_PROGRAM,
+            0,
+            unit_id,
+            0,
+            0,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2104,6 +2117,7 @@ pub unsafe extern "C" fn mixer_output_add(
     source_id: u64,
     unit_id: u64,
     use_gpu: u32,
+    audio_bus_id: u64,
 ) -> i32 {
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -2176,6 +2190,7 @@ pub unsafe extern "C" fn mixer_output_add(
                 source_kind,
                 source_id,
                 unit_id,
+                audio_bus_id,
                 video_sub: Arc::clone(&video_sub),
                 use_gpu,
             },
@@ -3287,6 +3302,7 @@ fn render_loop(
                     source_kind: output.source_kind,
                     source_id: output.source_id,
                     unit_id: output.unit_id,
+                    audio_bus_id: output.audio_bus_id,
                     fps_n: guard
                         .units
                         .get(&output.unit_id)
@@ -3745,7 +3761,7 @@ fn render_loop(
                 .saturating_add(send_vram);
             {
                 let mut guard = telemetry.lock().expect("telemetry");
-                guard.monitor_pcm.extend(mixed.iter().copied());
+                guard.monitor_pcm.extend(mixed.master.iter().copied());
                 let cap = AUDIO_RATE as usize;
                 while guard.monitor_pcm.len() > cap {
                     guard.monitor_pcm.pop_front();
@@ -3761,11 +3777,17 @@ fn render_loop(
                 guard.scene_usage = composer.scene_usages();
             }
             if audio_frames > 0 {
-                let packet = interleaved_to_packet(&mixed, pts);
                 for output in &outputs_snap {
+                    if output.audio_bus_id == 0 {
+                        continue;
+                    }
+                    let packet = interleaved_to_packet(mixed.for_bus(output.audio_bus_id), pts);
+                    if packet.samples_per_channel <= 0 {
+                        continue;
+                    }
                     let _ = send_tx.send(SendCmd::Audio {
                         output_id: output.output_id,
-                        packet: packet.clone(),
+                        packet,
                     });
                 }
             }
@@ -4307,8 +4329,10 @@ fn apply_send_cmd(
         }
         SendCmd::Audio { output_id, packet } => {
             if let Some((sender, _)) = senders.get_mut(&output_id) {
-                if panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet))).is_err() {
-                    crate::diag::mark_fatal("omt send audio panicked");
+                match panic::catch_unwind(AssertUnwindSafe(|| sender.send_audio(&packet))) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => crate::diag::error(&format!("send audio: {error}")),
+                    Err(_) => crate::diag::mark_fatal("send audio panicked"),
                 }
             }
         }
@@ -4395,6 +4419,7 @@ mod tests {
             source_kind: SRC_KIND_MU_MULTIVIEW,
             source_id: mv,
             unit_id: 1,
+            audio_bus_id: 1,
             fps_n: 60,
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(true)),

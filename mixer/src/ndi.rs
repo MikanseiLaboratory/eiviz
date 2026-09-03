@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -181,22 +182,40 @@ impl Drop for NdiReceiver {
 }
 
 pub struct NdiSender {
-    sender: Sender,
+    sender: Arc<Sender>,
+    audio_tx: Option<SyncSender<AudioPacket>>,
+    audio_thread: Option<JoinHandle<()>>,
 }
 
 impl NdiSender {
     pub fn start(name: &str) -> Result<Self, String> {
         let ndi = runtime()?;
-        // Render already paces to the master frame rate. Clock video, not audio:
-        // send_audio with clock_audio blocks on the shared send thread after
-        // CPU/GPU encode, which NDI receivers hear as stutter (issue 141).
-        // grafton-ndi requires at least one clock; both-true double-waits.
+        // Video stays clocked so the source stays visible when no audio is
+        // sent (None / silent Master). Audio clocks on a dedicated thread
+        // would be fine, but clock_audio on the shared send thread blocked
+        // after GPU encode (issue 141). grafton-ndi requires one clock.
         let options = SenderOptions::builder(name)
             .clock_video(true)
             .clock_audio(false)
             .build();
-        let sender = Sender::new(ndi, &options).map_err(|error| error.to_string())?;
-        Ok(Self { sender })
+        let sender = Arc::new(Sender::new(ndi, &options).map_err(|error| error.to_string())?);
+        let (audio_tx, audio_rx) = sync_channel::<AudioPacket>(8);
+        let worker = Arc::clone(&sender);
+        let audio_thread = thread::Builder::new()
+            .name("eiviz-ndi-audio".into())
+            .spawn(move || {
+                while let Ok(audio) = audio_rx.recv() {
+                    if let Ok(frame) = build_audio_frame(&audio) {
+                        worker.send_audio(&frame);
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            sender,
+            audio_tx: Some(audio_tx),
+            audio_thread: Some(audio_thread),
+        })
     }
 
     pub fn pump(&mut self) -> Result<bool, String> {
@@ -234,33 +253,53 @@ impl NdiSender {
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
-        let channels = audio.channels.max(1);
-        let samples = audio.samples_per_channel.max(1);
-        let floats = &audio.pcm_planar_f32;
-        if floats.is_empty() {
+        if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
             return Ok(());
         }
-        let expected = channels as usize * samples as usize;
-        let data = if floats.len() == expected {
-            floats.clone()
-        } else {
-            let n = floats.len().min(expected);
-            let mut trimmed = vec![0.0f32; expected];
-            trimmed[..n].copy_from_slice(&floats[..n]);
-            trimmed
+        let Some(tx) = self.audio_tx.as_ref() else {
+            return Err("ndi audio thread stopped".into());
         };
-        let frame = AudioFrame::builder()
-            .sample_rate(audio.sample_rate.max(1))
-            .channels(channels)
-            .samples(samples)
-            .timestamp(audio.timestamp)
-            .timecode(audio.timestamp)
-            .data(data)
-            .build()
-            .map_err(|error| error.to_string())?;
-        self.sender.send_audio(&frame);
-        Ok(())
+        match tx.try_send(audio.clone()) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err("ndi audio thread stopped".into()),
+        }
     }
+}
+
+impl Drop for NdiSender {
+    fn drop(&mut self) {
+        self.audio_tx.take();
+        if let Some(handle) = self.audio_thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn build_audio_frame(audio: &AudioPacket) -> Result<AudioFrame, String> {
+    let channels = audio.channels.max(1);
+    let samples = audio.samples_per_channel.max(1);
+    let floats = &audio.pcm_planar_f32;
+    if floats.is_empty() {
+        return Err("empty audio".into());
+    }
+    let expected = channels as usize * samples as usize;
+    let data = if floats.len() == expected {
+        floats.clone()
+    } else {
+        let n = floats.len().min(expected);
+        let mut trimmed = vec![0.0f32; expected];
+        trimmed[..n].copy_from_slice(&floats[..n]);
+        trimmed
+    };
+    AudioFrame::builder()
+        .sample_rate(audio.sample_rate.max(1))
+        .channels(channels)
+        .samples(samples)
+        .timestamp(audio.timestamp)
+        .timecode(audio.timestamp)
+        .data(data)
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 fn open_receiver(

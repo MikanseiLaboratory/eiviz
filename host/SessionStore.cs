@@ -78,7 +78,8 @@ internal static class SessionStore
                 SourceId = output.SourceId,
                 UnitId = output.UnitId,
                 UseGpu = output.UseGpu,
-                Enabled = output.Enabled
+                Enabled = output.Enabled,
+                AudioBusId = output.AudioBusId
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),

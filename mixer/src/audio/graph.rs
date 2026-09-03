@@ -18,6 +18,38 @@ pub const DEVICE_NONE: u32 = 0;
 pub const DEVICE_WASAPI: u32 = 1;
 pub const DEVICE_ASIO: u32 = 2;
 pub const DEVICE_COREAUDIO: u32 = 3;
+
+pub struct MixedAudio {
+    pub master: Vec<f32>,
+    pub by_bus: HashMap<u64, Vec<f32>>,
+}
+
+impl Default for MixedAudio {
+    fn default() -> Self {
+        Self {
+            master: Vec::new(),
+            by_bus: HashMap::new(),
+        }
+    }
+}
+
+impl MixedAudio {
+    pub fn for_bus(&self, audio_bus_id: u64) -> &[f32] {
+        if audio_bus_id == 0 {
+            return &[];
+        }
+        let id = resolve_output_audio_bus(audio_bus_id);
+        self.by_bus
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or(self.master.as_slice())
+    }
+}
+
+pub fn resolve_output_audio_bus(audio_bus_id: u64) -> u64 {
+    audio_bus_id
+}
+
 pub const LINK_FOLLOW: u32 = 0;
 #[allow(dead_code)]
 pub const LINK_INDEPENDENT: u32 = 1;
@@ -151,17 +183,9 @@ impl AudioGraph {
             mix_last: HashMap::new(),
             mix_peaks: HashMap::new(),
         };
-        // Tests must not open the machine's output. HAL Start can block forever
-        // on CI runners, and AudioEngine used to join that thread from Drop.
-        let master_kind = if cfg!(test) {
-            DEVICE_NONE
-        } else if cfg!(windows) {
-            DEVICE_WASAPI
-        } else if cfg!(target_os = "macos") {
-            DEVICE_COREAUDIO
-        } else {
-            DEVICE_NONE
-        };
+        // Default Master is Enabled (no device). Opening WASAPI/HAL here
+        // grabbed the machine output before the host could apply session buses.
+        let master_kind = DEVICE_NONE;
         graph.upsert_bus(
             MASTER_BUS,
             "Master",
@@ -308,9 +332,9 @@ impl AudioGraph {
         mix_inputs: &HashMap<u64, MixInputSpec>,
         fps_num: u32,
         fps_den: u32,
-    ) -> Vec<f32> {
+    ) -> MixedAudio {
         if frames == 0 {
-            return Vec::new();
+            return MixedAudio::default();
         }
         self.scratch_master.clear();
         self.scratch_master.resize(frames * 2, 0.0);
@@ -386,20 +410,22 @@ impl AudioGraph {
                 delay.push(bus_id, &self.scratch_mixed);
             }
         }
-        let mut master = vec![0.0f32; frames * 2];
+        let mut by_bus = HashMap::new();
         let bus_ids: Vec<(u64, u32, Arc<BusRing>)> = self
             .buses
             .iter()
             .map(|bus| (bus.id, bus.role, Arc::clone(&bus.ring)))
             .collect();
-        for (bus_id, role, ring) in bus_ids {
+        for (bus_id, _role, ring) in bus_ids {
             let delayed = delay.pop(bus_id, frames, !produce);
-            if role == ROLE_MASTER {
-                master.copy_from_slice(&delayed);
-            }
             ring.push(&delayed);
+            by_bus.insert(bus_id, delayed);
         }
-        master
+        let master = by_bus
+            .get(&MASTER_BUS)
+            .cloned()
+            .unwrap_or_else(|| vec![0.0; frames * 2]);
+        MixedAudio { master, by_bus }
     }
 
     fn gains_for_bus(
@@ -797,4 +823,28 @@ fn add_self_mix(
         .entry(id)
         .and_modify(|current| *current = (*current).max(level))
         .or_insert(level);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_output_audio_bus_keeps_none() {
+        assert_eq!(resolve_output_audio_bus(0), 0);
+        assert_eq!(resolve_output_audio_bus(MASTER_BUS), MASTER_BUS);
+        assert_eq!(resolve_output_audio_bus(3), 3);
+    }
+
+    #[test]
+    fn mixed_audio_for_bus_falls_back_to_master() {
+        let mixed = MixedAudio {
+            master: vec![0.5, -0.5],
+            by_bus: HashMap::from([(3, vec![0.25, 0.25])]),
+        };
+        assert!(mixed.for_bus(0).is_empty());
+        assert_eq!(mixed.for_bus(1), &[0.5, -0.5]);
+        assert_eq!(mixed.for_bus(3), &[0.25, 0.25]);
+        assert_eq!(mixed.for_bus(9), &[0.5, -0.5]);
+    }
 }

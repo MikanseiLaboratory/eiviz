@@ -776,6 +776,8 @@ pub struct OutputDto {
     pub use_gpu: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "one")]
+    pub audio_bus_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1074,6 +1076,7 @@ mod tests {
         assert_eq!(a, b);
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.inputs[0].kind, InputKind::Bars);
+        assert_eq!(doc.outputs[0].audio_bus_id, 1);
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(doc.units[0].transitions.len(), 2);
         assert!(doc.settings.rebar_optimization);
@@ -1096,6 +1099,16 @@ mod tests {
         assert!(!doc.scenes[0].preview_collapsed);
         assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
         assert!(doc.units[0].switcher_scene_ids.is_empty());
+    }
+
+    #[test]
+    fn explicit_output_audio_none_is_kept() {
+        let src = r#"{
+  "version": 2,
+  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "audioBusId": 0 }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.outputs[0].audio_bus_id, 0);
     }
 
     #[test]

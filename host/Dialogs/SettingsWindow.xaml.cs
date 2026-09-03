@@ -51,8 +51,6 @@ public partial class SettingsWindow : Window
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
-        RebuildOutputs();
-        RebuildLayouts();
         _nextBusId = session.NextBusId;
         session.EnsureDefaultBuses();
         foreach (var bus in session.Buses)
@@ -60,6 +58,8 @@ public partial class SettingsWindow : Window
         _nextBusId = Math.Max(_nextBusId, Buses.Count == 0 ? 3 : Buses.Max(item => item.Id) + 1);
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
         _devices = AudioGraphSync.EnumerateDevices(0);
+        RebuildOutputs();
+        RebuildLayouts();
         RebuildBuses();
         FillRebar();
         PaintBusColors();
@@ -441,7 +441,8 @@ public partial class SettingsWindow : Window
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
-            UseGpu = true
+            UseGpu = true,
+            AudioBusId = 1
         });
         RebuildOutputs();
     }
@@ -466,6 +467,7 @@ public partial class SettingsWindow : Window
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
@@ -510,6 +512,14 @@ public partial class SettingsWindow : Window
             FillOutputPick(pick, output);
             pick.SelectionChanged += (_, _) => ApplyOutputPick(pick, output);
 
+            var audio = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            FillOutputAudio(audio, output);
+            audio.SelectionChanged += (_, _) =>
+            {
+                if (audio.SelectedItem is AudioBusEntry bus)
+                    output.AudioBusId = bus.Id;
+            };
+
             var enabled = new CheckBox
             {
                 Content = "Enabled",
@@ -541,6 +551,8 @@ public partial class SettingsWindow : Window
             Grid.SetColumnSpan(kinds, 4);
             Grid.SetRow(pick, 3);
             Grid.SetColumnSpan(pick, 3);
+            Grid.SetRow(audio, 4);
+            Grid.SetColumnSpan(audio, 3);
             grid.Children.Add(name);
             grid.Children.Add(remove);
             grid.Children.Add(transport);
@@ -548,6 +560,7 @@ public partial class SettingsWindow : Window
             grid.Children.Add(enabled);
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
+            grid.Children.Add(audio);
             box.Child = grid;
             OutputRows.Children.Add(box);
         }
@@ -667,6 +680,23 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void FillOutputAudio(ComboBox box, OutputEntry output)
+    {
+        var items = new List<AudioBusEntry> { new() { Id = 0, Name = "None" } };
+        items.AddRange(Buses);
+        box.ItemsSource = items;
+        box.DisplayMemberPath = "Name";
+        box.SelectedValuePath = "Id";
+        box.SelectedValue = output.AudioBusId;
+        if (box.SelectedItem is AudioBusEntry bus)
+            output.AudioBusId = bus.Id;
+        else
+        {
+            box.SelectedIndex = 0;
+            output.AudioBusId = 0;
+        }
+    }
+
     private static void ApplyOutputPick(ComboBox box, OutputEntry output)
     {
         switch (output.SourceKind)
@@ -714,7 +744,8 @@ public partial class SettingsWindow : Window
         SourceId = output.SourceId,
         UnitId = output.UnitId,
         UseGpu = output.UseGpu,
-        Enabled = output.Enabled
+        Enabled = output.Enabled,
+        AudioBusId = output.AudioBusId
     };
 
     private static void SelectTag(ComboBox box, string tag)

@@ -644,9 +644,10 @@ final class MixerController: ObservableObject {
         let sourceId = entry.sourceId
         let unitId = entry.unitId
         let useGpu: UInt32 = entry.useGpu ? 1 : 0
+        let audioBusId = entry.audioBusId
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
-                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu)
+                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu, audioBusId)
                 if code != 0 {
                     DispatchQueue.main.async {
                         _ = self?.fail(code, "Add output")
