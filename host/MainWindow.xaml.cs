@@ -62,6 +62,9 @@ public partial class MainWindow : Window
             _tbarTimer.Stop();
             _meterTimer.Stop();
             _resources.Dispose();
+            if (!ReferenceEquals(Application.Current?.MainWindow, this))
+                return;
+            CloseOwnedSurfaces();
         };
         SceneScroll.ScrollChanged += (_, _) => ApplySceneTileThumbs();
         Loaded += (_, _) =>

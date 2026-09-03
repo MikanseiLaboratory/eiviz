@@ -10,7 +10,7 @@ internal static class FlipBudget
 
     private static uint _limitSetting;
     private static int _ceiling = AutoDefault;
-    private static int _attached;
+    private static readonly HashSet<SwapchainHost> Live = [];
     private static SwapchainHost? _lastAttach;
     private static long _attachTick;
     private static ulong _seenLost;
@@ -19,7 +19,7 @@ internal static class FlipBudget
     {
         _limitSetting = IsAllowed(limit) ? limit : 0u;
         _ceiling = _limitSetting == 0
-            ? Math.Min(GpuPresentStore.ObservedCeiling ?? AutoDefault, AutoDefault)
+            ? Math.Max(AutoDefault, GpuPresentStore.ObservedCeiling ?? AutoDefault)
             : (int)_limitSetting;
     }
 
@@ -27,7 +27,7 @@ internal static class FlipBudget
     {
         if (!OperatingSystem.IsWindows() || surfaces <= 0)
             return true;
-        if (_attached + surfaces <= EffectiveMax())
+        if (Live.Count + surfaces <= EffectiveMax())
             return true;
         ShowRefuse(owner);
         return false;
@@ -37,9 +37,11 @@ internal static class FlipBudget
     {
         if (!OperatingSystem.IsWindows())
             return true;
-        if (_attached >= EffectiveMax())
+        if (Live.Contains(host))
+            return true;
+        if (Live.Count >= EffectiveMax())
             return false;
-        _attached++;
+        Live.Add(host);
         _lastAttach = host;
         _attachTick = Environment.TickCount64;
         return true;
@@ -49,8 +51,7 @@ internal static class FlipBudget
     {
         if (!OperatingSystem.IsWindows())
             return;
-        if (_attached > 0)
-            _attached--;
+        Live.Remove(host);
         if (ReferenceEquals(_lastAttach, host))
             _lastAttach = null;
     }
@@ -67,15 +68,16 @@ internal static class FlipBudget
         _seenLost = total;
         if (_lastAttach is null)
             return;
-        if (_attached <= 2)
+        if (Live.Count <= 2)
             return;
         if (Environment.TickCount64 - _attachTick > LearnWindowMs)
             return;
         var victim = _lastAttach;
         victim.ReleaseNative();
-        if (_limitSetting == 0 && _attached >= 2)
-            GpuPresentStore.Save(_attached);
-        _ceiling = Math.Max(2, _attached);
+        // Do not ratchet the ceiling down to the remaining count. That leftover
+        // cap survives after the extra window is closed and blocks Scene Editor.
+        if (_limitSetting == 0 && Live.Count >= AutoDefault)
+            GpuPresentStore.Save(Live.Count);
     }
 
     private static int EffectiveMax() =>
