@@ -35,7 +35,7 @@ internal sealed record ConnectOmtCommand(ulong SourceId, string Address, bool Us
 internal sealed record ConnectNdiCommand(ulong SourceId, string Address, uint FrameBufferFrames, NdiBandwidth Bandwidth) : MixerCommand;
 internal sealed record LiveSaveCommand(ulong SourceId, BandwidthSave SaveMode, bool KeepFullOnMultiview, OmtQuality? OmtQuality = null) : MixerCommand;
 internal sealed record LoadStillCommand(ulong SourceId, string Path) : MixerCommand;
-internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true, uint FrameBufferFrames = 3) : MixerCommand;
+internal sealed record StartVideoCommand(ulong SourceId, string Path, bool Loop = true, bool Playing = true, uint FrameBufferFrames = 3, long PositionHns = 0) : MixerCommand;
 internal sealed record StartUvcCommand(ulong SourceId, string SymbolicLink, uint Width, uint Height, uint FpsNum, uint FpsDen, uint FrameBufferFrames = 3) : MixerCommand;
 internal sealed record PatchAuxCommand(ulong UnitId, MixingUnitEntry Unit) : MixerCommand;
 internal sealed record AddOutputCommand(OutputEntry Output) : MixerCommand;
@@ -393,6 +393,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                     "Video start");
                 MixerNative.VideoSetLoop(video.SourceId, video.Loop ? 1u : 0u);
                 MixerNative.VideoSetPlaying(video.SourceId, video.Playing ? 1u : 0u);
+                if (video.PositionHns > 0)
+                    MixerNative.VideoSeek(video.SourceId, video.PositionHns);
                 break;
             case StartUvcCommand uvc:
                 MixerNative.ThrowIfFailed(

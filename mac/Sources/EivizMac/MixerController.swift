@@ -1403,9 +1403,11 @@ final class MixerController: ObservableObject {
 
     private func tickVideoTransport() {
         var roles: [UInt64: (program: Bool, preview: Bool)] = [:]
+        var unitsRead = 0
         for unit in session.units {
             var state = MixerFFI.emptyState()
-            _ = mixer_unit_get_state(unit.id, &state)
+            guard mixer_unit_get_state(unit.id, &state) == EIVIZ_OK else { continue }
+            unitsRead += 1
             markVideoRole(&roles, state.program_source, program: true, preview: false)
             markVideoRole(&roles, state.preview_source, program: false, preview: true)
             if state.mix > 0.001 {
@@ -1415,6 +1417,9 @@ final class MixerController: ObservableObject {
             for slot in unit.overlays where slot.enabled && slot.sceneGpuId != 0 {
                 markVideoRole(&roles, slot.sceneGpuId, program: true, preview: false)
             }
+        }
+        if !session.units.isEmpty && unitsRead == 0 {
+            return
         }
         for id in inputPreviewWindows.keys {
             markVideoRole(&roles, id, program: false, preview: true)

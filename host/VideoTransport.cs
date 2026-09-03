@@ -10,7 +10,8 @@ internal sealed class VideoTransport
 
     public void Tick(Session session, IEnumerable<ulong> previewWindows)
     {
-        var roles = Collect(session, previewWindows);
+        if (!TryCollect(session, previewWindows, out var roles))
+            return;
         foreach (var input in session.Inputs)
         {
             if (input.Kind != InputKind.Video)
@@ -52,9 +53,10 @@ internal sealed class VideoTransport
             _ => false
         };
 
-    internal static Dictionary<ulong, VideoRoles> Collect(Session session, IEnumerable<ulong> previewWindows)
+    internal static bool TryCollect(Session session, IEnumerable<ulong> previewWindows, out Dictionary<ulong, VideoRoles> roles)
     {
-        var roles = new Dictionary<ulong, VideoRoles>();
+        roles = new Dictionary<ulong, VideoRoles>();
+        var unitsRead = 0;
         foreach (var unit in session.Units)
         {
             UnitState state = default;
@@ -63,6 +65,7 @@ internal sealed class VideoTransport
                 if (MixerNative.GetUnitState(unit.Id, &state) != 0)
                     continue;
             }
+            unitsRead++;
             Mark(session, roles, state.ProgramSource, program: true, preview: false);
             Mark(session, roles, state.PreviewSource, program: false, preview: true);
             if (state.Mix > 0.001f)
@@ -75,7 +78,7 @@ internal sealed class VideoTransport
         }
         foreach (var id in previewWindows)
             Mark(session, roles, id, program: false, preview: true);
-        return roles;
+        return session.Units.Count == 0 || unitsRead > 0;
     }
 
     private static void Mark(Session session, Dictionary<ulong, VideoRoles> roles, ulong id, bool program, bool preview)

@@ -1961,6 +1961,8 @@ public partial class MainWindow : Window
         var dialog = new SettingsWindow(_session) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
+        var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
+            || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
         _session.Settings.MasterFpsNum = dialog.Settings.MasterFpsNum;
         _session.Settings.MasterFpsDen = dialog.Settings.MasterFpsDen;
         _session.Settings.DefaultWidth = dialog.Settings.DefaultWidth;
@@ -2007,27 +2009,38 @@ public partial class MainWindow : Window
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
         PushScenePresentIntervals();
-        RestartMediaPumps();
+        MixerNative.VideoFormat = _session.Settings.InternalColorFormat == InternalColorFormat.Bgra
+            ? MixerNative.FormatBgra
+            : MixerNative.FormatUyvy;
+        if (restartMedia)
+            RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
     }
 
     private void RestartMediaPumps()
     {
-        MixerNative.VideoFormat = _session.Settings.InternalColorFormat == InternalColorFormat.Bgra
-            ? MixerNative.FormatBgra
-            : MixerNative.FormatUyvy;
         foreach (var input in _session.Inputs)
         {
             if (string.IsNullOrWhiteSpace(input.PathOrAddress))
                 continue;
             if (input.Kind == InputKind.Video)
+            {
+                var playing = input.VideoStartsPlaying;
+                var position = 0L;
+                if (TryVideoInfo(input.Id, out var info))
+                {
+                    playing = info.Playing != 0;
+                    position = info.PositionHns;
+                }
                 Commands.TryEnqueue(new StartVideoCommand(
                     input.Id,
                     input.PathOrAddress,
                     input.VideoLoop,
-                    input.VideoStartsPlaying,
-                    input.FrameBufferFrames));
+                    playing,
+                    input.FrameBufferFrames,
+                    position));
+            }
             else if (input.Kind == InputKind.Uvc)
                 Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
         }

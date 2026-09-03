@@ -332,7 +332,7 @@ fn run_loop(
         let mut clock_pts = -1i64;
         let mut seek_base = 0i64;
         let mut clock_start = Instant::now();
-        let mut need_frame = false;
+        let mut need_frame = !capture;
         let mut was_playing = false;
         loop {
             if stop.load(Ordering::Relaxed) {
