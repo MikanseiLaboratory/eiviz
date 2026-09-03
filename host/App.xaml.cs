@@ -133,6 +133,20 @@ public partial class App : Application
                 continue;
             Commands.TryEnqueue(new AddOutputCommand(output));
         }
+        ApplyVmixApi();
+        SessionStore.Publish(Session);
+    }
+
+    internal static void ApplyVmixApi()
+    {
+        var prefs = AppPrefs.Current;
+        MixerNative.ThrowIfFailed(
+            MixerNative.ApiConfigure(
+                prefs.VmixApiEnabled ? 1u : 0u,
+                prefs.VmixApiPort == 0 ? 8088 : prefs.VmixApiPort,
+                prefs.VmixApiUser ?? "",
+                prefs.VmixApiPassword ?? ""),
+            "Configure vMix HTTP API");
     }
 
     private void AttachInputs()

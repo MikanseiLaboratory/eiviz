@@ -34,6 +34,10 @@ internal sealed class AppPrefs
     public List<string> RecentSessions { get; set; } = [];
     public List<string> RecentStills { get; set; } = [];
     public List<string> RecentVideos { get; set; } = [];
+    public bool VmixApiEnabled { get; set; } = true;
+    public uint VmixApiPort { get; set; } = 8088;
+    public string VmixApiUser { get; set; } = "";
+    public string VmixApiPassword { get; set; } = "";
 
     public static AppPrefs Current { get; private set; } = Load();
 

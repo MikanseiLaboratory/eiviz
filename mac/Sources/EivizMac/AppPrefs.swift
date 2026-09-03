@@ -23,6 +23,10 @@ final class AppPrefs: ObservableObject {
     @Published var recentSessions: [String]
     @Published var recentStills: [String]
     @Published var recentVideos: [String]
+    @Published var vmixApiEnabled: Bool
+    @Published var vmixApiPort: UInt32
+    @Published var vmixApiUser: String
+    @Published var vmixApiPassword: String
     @Published var localeRevision = 0
 
     private static var storeURL: URL {
@@ -38,6 +42,10 @@ final class AppPrefs: ObservableObject {
         recentSessions = loaded.recentSessions
         recentStills = loaded.recentStills
         recentVideos = loaded.recentVideos
+        vmixApiEnabled = loaded.vmixApiEnabled ?? true
+        vmixApiPort = loaded.vmixApiPort ?? 8088
+        vmixApiUser = loaded.vmixApiUser ?? ""
+        vmixApiPassword = loaded.vmixApiPassword ?? ""
     }
 
     func save() {
@@ -47,6 +55,10 @@ final class AppPrefs: ObservableObject {
         dto.recentSessions = recentSessions
         dto.recentStills = recentStills
         dto.recentVideos = recentVideos
+        dto.vmixApiEnabled = vmixApiEnabled
+        dto.vmixApiPort = vmixApiPort
+        dto.vmixApiUser = vmixApiUser
+        dto.vmixApiPassword = vmixApiPassword
         do {
             try FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(dto).write(to: Self.storeURL, options: .atomic)
@@ -99,5 +111,9 @@ final class AppPrefs: ObservableObject {
         var recentSessions: [String] = []
         var recentStills: [String] = []
         var recentVideos: [String] = []
+        var vmixApiEnabled: Bool? = true
+        var vmixApiPort: UInt32? = 8088
+        var vmixApiUser: String? = ""
+        var vmixApiPassword: String? = ""
     }
 }

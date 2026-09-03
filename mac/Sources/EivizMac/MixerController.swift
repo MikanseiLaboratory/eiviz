@@ -91,7 +91,27 @@ final class MixerController: ObservableObject {
             }
         }
         booted = true
+        applyVmixApi()
+        publishSession()
         updateStatus()
+    }
+
+    func applyVmixApi() {
+        let prefs = AppPrefs.shared
+        let port = prefs.vmixApiPort == 0 ? 8088 : prefs.vmixApiPort
+        _ = MixerFFI.withCString(prefs.vmixApiUser) { user in
+            MixerFFI.withCString(prefs.vmixApiPassword) { pass in
+                mixer_api_configure(prefs.vmixApiEnabled ? 1 : 0, port, user, pass)
+            }
+        }
+    }
+
+    func publishSession() {
+        session.selectedUnitId = selectedUnitId
+        guard let json = try? SessionFile.encode(session) else { return }
+        json.withUnsafeBytes { ptr in
+            _ = mixer_session_publish(ptr.bindMemory(to: UInt8.self).baseAddress, json.count)
+        }
     }
 
     func shutdown() {
@@ -218,6 +238,7 @@ final class MixerController: ObservableObject {
         }
         selectedSceneId = session.scenes.first?.id
         selectedUnitId = session.selectedUnitId == 0 ? (session.units.first?.id ?? 1) : session.selectedUnitId
+        publishSession()
     }
 
     func pushAudio() {

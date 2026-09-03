@@ -356,6 +356,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_canonicalize")]
     internal static unsafe partial int SessionCanonicalize(byte* json, nuint length, byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_publish")]
+    internal static unsafe partial int SessionPublish(byte* json, nuint length);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_api_configure", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ApiConfigure(uint enabled, uint port, string user, string pass);
+
     internal static string LastErrorText()
     {
         var buffer = new byte[1024];
@@ -405,6 +411,18 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionSave(path, ptr, (nuint)bytes.Length), "Save session");
+            }
+        }
+    }
+
+    internal static void SessionPublishText(string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionPublish(ptr, (nuint)bytes.Length), "Publish session");
             }
         }
     }

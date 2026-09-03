@@ -584,7 +584,7 @@ fn softness_default() -> f32 {
     0.02
 }
 
-fn transition_label(kind: u32) -> &'static str {
+pub(crate) fn transition_label(kind: u32) -> &'static str {
     match kind {
         0 => "Cut",
         2 => "Dip",

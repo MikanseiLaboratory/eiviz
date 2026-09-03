@@ -22,6 +22,11 @@ internal static class SessionStore
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
+    public static void Publish(Session session)
+    {
+        MixerNative.SessionPublishText(JsonSerializer.Serialize(Document.From(session), Json));
+    }
+
     public static Session Load(string path)
     {
         try

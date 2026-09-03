@@ -6,30 +6,29 @@ description: vMix HTTP/TCP and OBS WebSocket compatible APIs
 eiviz exposes APIs compatible with some existing software vision mixers, so assets built for those desks can keep working.
 
 :::caution
-This feature is still in progress.
+These compatibility APIs do not guarantee behaviour against the original APIs. Some data is incomplete or not a full match.
 :::
 
-## vMix API (HTTP/TCP)
+## vMix API (HTTP)
 
-### HTTP API
+The mixer hosts an HTTP server in-process. The default is all interfaces on port `8088`. Settings → Web API controls enable, port, and BasicAuth. Empty username and password means no auth.
 
-An HTTP API that returns vMix-compatible XML.  
-Shortcut Functions are supported; the main vMix shortcuts work.
+| Item | Value |
+| --- | --- |
+| Endpoint | `GET /api` or `GET /API` |
+| State | No query. Returns vMix-shaped XML as `application/xml` |
+| Function | Query such as `?Function=Fade&Duration=500`. Success returns the same XML |
 
-XML is flattened to the vMix shape, so Inputs and Scenes are all treated as Inputs. Scenes are mixed into the XML as a Blank input plus layers.
+XML is built with `vmix-core`. Inputs and Scenes are flattened as Inputs; a Scene is a Blank input plus layers. `preview` / `active` are the selected Mixing Unit’s flat numbers. Extra Mixing Units appear as `<mix>`.
 
-### TCP API
+Supported Functions are in the [Function Reference](/eiviz/en/developers/function-reference/). Unknown Functions return 404; bad arguments return 400. Unlike vMix, a known Function that fails is not reported as success.
 
-A vMix TCP API compatible endpoint.  
-FUNCTION and ACTS send and receive work. eiviz event updates and hooks go out in the vMix TCP API shape.  
-Aimed at embedded or low-memory hosts.
+HTTP access is written to `eiviz-mixer-http.log`, separate from the mixer log. Bare polling `GET /api` is not logged.
+
+## vMix API (TCP)
+
+Not implemented. TCP for embedded hosts is tracked in [#107](https://github.com/MikanseiLaboratory/eiviz/issues/107).
 
 ## OBS WebSocket API
 
-An OBS Studio WebSocket API compatible endpoint.
-
-It uses the same auth as OBS WebSocket, plus the main event data, and can control eiviz.
-
-:::caution
-These compatibility APIs do not guarantee behaviour against the original APIs. Some data is incomplete or not a full match.
-:::
+Not implemented. See [#79](https://github.com/MikanseiLaboratory/eiviz/issues/79).

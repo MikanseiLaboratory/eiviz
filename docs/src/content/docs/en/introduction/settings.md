@@ -111,6 +111,16 @@ A Switcher UI shows Preview and Program, so it uses 2 slots. The main Preview/Pr
 Auto starts at 6. You can raise it in Settings, but it may become unstable.  
 At the limit, a new window will not open. Close one to free a slot. The host path is in [System architecture](/eiviz/en/introduction/architecture/).
 
+## Web API
+
+vMix-compatible HTTP listen settings. These are per machine and are not stored in the session file.
+
+- Enabled: start the HTTP server when the mixer starts. Default on
+- Port: default 8088
+- Username / password: BasicAuth if either is set. Both empty means no auth
+
+Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
+
 ## Preferences
 
 <img src="/eiviz/images/en/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />

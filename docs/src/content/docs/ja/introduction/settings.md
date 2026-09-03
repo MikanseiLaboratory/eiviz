@@ -112,6 +112,16 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 自動は6からです。設定から上げられますが、不安定になる可能性があります。  
 上限に達すると新しい窓は開きません。どれかを閉じると枠が空きます。技術的な背景は[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)のホストです。
 
+## Web API
+
+vMix互換HTTP APIの待ち受けです。マシン単位の設定で、セッションファイルには入りません。
+
+- 有効: Mixer起動時にHTTPサーバーを開く。既定はオン
+- ポート: 既定は8088
+- ユーザー名/パスワード: どちらか入っていればBasicAuth。両方空なら認証なし
+
+エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
+
 ## 環境設定
 
 <img src="/eiviz/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />

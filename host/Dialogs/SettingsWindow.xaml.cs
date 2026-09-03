@@ -63,6 +63,10 @@ public partial class SettingsWindow : Window
         RebuildBuses();
         FillRebar();
         PaintBusColors();
+        WebApiEnabledBox.IsChecked = AppPrefs.Current.VmixApiEnabled;
+        WebApiPortBox.Text = AppPrefs.Current.VmixApiPort.ToString();
+        WebApiUserBox.Text = AppPrefs.Current.VmixApiUser;
+        WebApiPasswordBox.Password = AppPrefs.Current.VmixApiPassword;
     }
 
     public SessionSettings Settings { get; }
@@ -76,7 +80,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -85,6 +89,7 @@ public partial class SettingsWindow : Window
         MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+        WebApiPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -599,6 +604,12 @@ public partial class SettingsWindow : Window
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
+        AppPrefs.Current.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
+        if (uint.TryParse(WebApiPortBox.Text.Trim(), out var apiPort) && apiPort is > 0 and <= 65535)
+            AppPrefs.Current.VmixApiPort = apiPort;
+        AppPrefs.Current.VmixApiUser = WebApiUserBox.Text ?? "";
+        AppPrefs.Current.VmixApiPassword = WebApiPasswordBox.Password ?? "";
+        AppPrefs.Current.Save();
         DialogResult = true;
     }
 

@@ -34,6 +34,8 @@ mod session;
 pub mod simd;
 mod thumb;
 mod upload;
+mod vmix_api;
+mod vmix_xml;
 
 pub use abi::{
     AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
@@ -484,6 +486,41 @@ fn with_mixer<T>(f: impl FnOnce(&mut Mixer) -> T) -> Result<T, i32> {
     crate::diag::lock_held("mixer_slot", start, result)
 }
 
+pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let mut snap = crate::vmix_xml::LiveSnapshot::default();
+        for (id, unit) in &shared.units {
+            snap.units.insert(*id, live_unit_from(unit));
+        }
+        snap
+    })
+    .unwrap_or_default()
+}
+
+pub(crate) fn live_unit(unit_id: u64) -> Option<crate::vmix_xml::UnitLive> {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        shared.units.get(&unit_id).map(live_unit_from)
+    })
+    .ok()
+    .flatten()
+}
+
+fn live_unit_from(unit: &LiveUnit) -> crate::vmix_xml::UnitLive {
+    crate::vmix_xml::UnitLive {
+        program_source: unit.state.program_source,
+        preview_source: unit.state.preview_source,
+        overlay_sources: unit
+            .state
+            .overlays
+            .iter()
+            .take(unit.state.overlay_count as usize)
+            .map(|overlay| overlay.source_id)
+            .collect(),
+    }
+}
+
 fn report_io(error: impl Into<String>) -> i32 {
     let error = error.into();
     crate::diag::error(&error);
@@ -753,6 +790,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
+    crate::vmix_api::shutdown();
     crate::diag::info("mixer_destroy begin");
     let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
         return;
@@ -2452,6 +2490,21 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
             -ERR_INVALID_ARGUMENT
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_publish(json: *const u8, len: usize) -> i32 {
+    unsafe { crate::vmix_api::publish_c(json, len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_api_configure(
+    enabled: u32,
+    port: u32,
+    user: *const c_char,
+    pass: *const c_char,
+) -> i32 {
+    unsafe { crate::vmix_api::configure_c(enabled, port, user, pass) }
 }
 
 #[unsafe(no_mangle)]
