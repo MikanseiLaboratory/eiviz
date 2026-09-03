@@ -4152,9 +4152,6 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
     let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         loop {
-            // Pump between commands so a slow GPU encode of Program+Multiview
-            // cannot starve poll_accept for a newly advertised sender.
-            pump_senders(&mut senders);
             match rx.try_recv() {
                 Ok(SendCmd::Shutdown) => return,
                 Ok(cmd) => {
@@ -4167,21 +4164,34 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
                         }
                         continue;
                     }
-                    apply_send_cmd(&mut senders, cmd, &omt_gpu);
+                    dispatch_send_cmd(&mut senders, cmd, &omt_gpu);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
+        pump_senders(&mut senders);
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(SendCmd::Shutdown) => return,
-            Ok(cmd) => {
-                apply_send_cmd(&mut senders, cmd, &omt_gpu);
-                pump_senders(&mut senders);
-            }
+            Ok(cmd) => dispatch_send_cmd(&mut senders, cmd, &omt_gpu),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+fn dispatch_send_cmd(
+    senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>,
+    cmd: SendCmd,
+    omt_gpu: &OmtGpu,
+) {
+    let heavy = matches!(cmd, SendCmd::GpuVideo { .. });
+    if heavy {
+        pump_senders(senders);
+    }
+    apply_send_cmd(senders, cmd, omt_gpu);
+    if heavy {
+        pump_senders(senders);
     }
 }
 
