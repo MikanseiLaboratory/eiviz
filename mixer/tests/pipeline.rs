@@ -3,10 +3,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
-    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo,
-    OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
-    TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
+    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MULTIVIEW_BASE,
+    MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM,
+    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
     TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
@@ -301,6 +301,62 @@ fn omt_program_shows_fade_during_auto() {
     }
     assert_eq!(out.program_source, SRC_BLUE);
     assert_eq!(out.mix, 0.0);
+    mixer_destroy();
+}
+
+/// Multiview OMT must keep accepting peers while Program GPU encode is also live.
+/// A raw layout id (not `MULTIVIEW_BASE | id`) must still address the mosaic.
+#[test]
+fn omt_multiview_output_is_received() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let mv = MULTIVIEW_BASE | 1;
+    let color = full_layer(SRC_COLOR);
+    let pgm = format!("eiviz-mv-pgm-{}", std::process::id());
+    let name = format!("eiviz-mv-out-{}", std::process::id());
+    unsafe {
+        assert_eq!(mixer_define_scene(mv, 320, 180, 1, &color), OK);
+        assert_eq!(
+            mixer_output_add(
+                401,
+                OUT_OMT,
+                CString::new(pgm.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1,
+                1
+            ),
+            OK
+        );
+        assert_eq!(
+            mixer_output_add(
+                402,
+                OUT_OMT,
+                CString::new(name.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_MULTIVIEW,
+                1,
+                1,
+                0
+            ),
+            OK
+        );
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    let session = connect_omt_named(&name);
+    let sample = wait_omt_sample(&session, Duration::from_secs(4));
+    assert!(
+        sample.0 > 160.0 && sample.1 < 80.0,
+        "multiview OMT should show Color (red), got r={} b={}",
+        sample.0,
+        sample.1
+    );
     mixer_destroy();
 }
 

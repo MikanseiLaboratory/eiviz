@@ -38,11 +38,11 @@ mod upload;
 pub use abi::{
     AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MixerRebarInfo,
-    MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
-    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW,
-    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
+    MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
+    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
     SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
     TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
@@ -2123,6 +2123,7 @@ pub unsafe extern "C" fn mixer_output_add(
         return ERR_IO;
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
+    let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
     let handle = match transport {
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
@@ -4151,6 +4152,9 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
     let mut senders: HashMap<u64, (OutputHandle, Arc<AtomicBool>)> = HashMap::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         loop {
+            // Pump between commands so a slow GPU encode of Program+Multiview
+            // cannot starve poll_accept for a newly advertised sender.
+            pump_senders(&mut senders);
             match rx.try_recv() {
                 Ok(SendCmd::Shutdown) => return,
                 Ok(cmd) => {
@@ -4169,23 +4173,29 @@ fn send_loop(rx: mpsc::Receiver<SendCmd>, stop: Arc<AtomicBool>, omt_gpu: OmtGpu
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
-        let mut dead = Vec::new();
-        for (&id, (sender, video_sub)) in senders.iter_mut() {
-            let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump()));
-            match pumped {
-                Ok(Ok(subscribed)) => video_sub.store(subscribed, Ordering::Relaxed),
-                Ok(Err(_)) | Err(_) => dead.push(id),
-            }
-        }
-        for id in dead {
-            senders.remove(&id);
-        }
         match rx.recv_timeout(Duration::from_millis(2)) {
             Ok(SendCmd::Shutdown) => return,
-            Ok(cmd) => apply_send_cmd(&mut senders, cmd, &omt_gpu),
+            Ok(cmd) => {
+                apply_send_cmd(&mut senders, cmd, &omt_gpu);
+                pump_senders(&mut senders);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+fn pump_senders(senders: &mut HashMap<u64, (OutputHandle, Arc<AtomicBool>)>) {
+    let mut dead = Vec::new();
+    for (&id, (sender, video_sub)) in senders.iter_mut() {
+        let pumped = panic::catch_unwind(AssertUnwindSafe(|| sender.pump()));
+        match pumped {
+            Ok(Ok(subscribed)) => video_sub.store(subscribed, Ordering::Relaxed),
+            Ok(Err(_)) | Err(_) => dead.push(id),
+        }
+    }
+    for id in dead {
+        senders.remove(&id);
     }
 }
 
@@ -4320,6 +4330,50 @@ mod tests {
         let specs = [(idle, 1920, 1080, empty, MvLabelStyle::default())];
         let (scenes, _) = collect_live_ids(&specs, &[], &[idle], &[], &HashMap::new());
         assert!(scenes.contains(&idle));
+    }
+
+    #[test]
+    fn collect_live_ids_keeps_multiview_output() {
+        let mv = MULTIVIEW_BASE | 1;
+        let layers: std::sync::Arc<[crate::abi::OverlayDesc]> =
+            std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: SRC_COLOR,
+                ..crate::abi::OverlayDesc::default()
+            }]);
+        let specs = [(mv, 1920, 1080, layers, MvLabelStyle::default())];
+        let outputs = [OutputSnap {
+            output_id: 1,
+            source_kind: SRC_KIND_MU_MULTIVIEW,
+            source_id: mv,
+            unit_id: 1,
+            fps_n: 60,
+            fps_d: 1,
+            video_sub: Arc::new(AtomicBool::new(true)),
+            use_gpu: false,
+        }];
+        let (scenes, uploads) = collect_live_ids(&specs, &[], &[], &outputs, &HashMap::new());
+        assert!(scenes.contains(&mv));
+        assert!(uploads.contains(&SRC_COLOR));
+    }
+
+    #[test]
+    fn resolve_output_source_id_promotes_raw_multiview() {
+        assert_eq!(
+            crate::abi::resolve_output_source_id(SRC_KIND_MU_MULTIVIEW, 1),
+            MULTIVIEW_BASE | 1
+        );
+        assert_eq!(
+            crate::abi::resolve_output_source_id(SRC_KIND_MU_MULTIVIEW, MULTIVIEW_BASE | 1),
+            MULTIVIEW_BASE | 1
+        );
+        assert_eq!(
+            crate::abi::resolve_output_source_id(SRC_KIND_SCENE, 2),
+            SCENE_BASE | 2
+        );
+        assert_eq!(
+            crate::abi::resolve_output_source_id(SRC_KIND_MU_PROGRAM, 0),
+            0
+        );
     }
 
     #[test]

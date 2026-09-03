@@ -101,6 +101,7 @@ internal static partial class MixerNative
     internal static float MixerGain(float gain) => gain < 0f ? 1f : gain;
 
     internal static ulong SceneGpuId(ulong sceneId) => SceneBase | sceneId;
+    internal static ulong MultiviewGpuId(ulong layoutId) => MultiviewBase | layoutId;
     internal static ulong MuProgram(ulong unitId) => MuSourceFlag | (unitId & MuIdMask);
     internal static ulong MuPreview(ulong unitId) => MuSourceFlag | MuBusPreview | (unitId & MuIdMask);
 

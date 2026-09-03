@@ -390,6 +390,7 @@ public partial class SettingsWindow : Window
         if (Owner is MainWindow main)
             main.OpenNewMultiview(Settings.DefaultMultiviewUnitId);
         RebuildLayouts();
+        RebuildOutputs();
     }
 
     private void OpenMv_Click(object sender, RoutedEventArgs e)
@@ -626,6 +627,8 @@ public partial class SettingsWindow : Window
                 }
                 break;
             case OutputSourceKind.Scene:
+                if (output.SourceId != 0 && output.SourceId < MixerNative.SceneBase)
+                    output.SourceId = MixerNative.SceneGpuId(output.SourceId);
                 box.ItemsSource = _session.Scenes;
                 box.DisplayMemberPath = "Name";
                 box.SelectedValuePath = "GpuId";
@@ -639,6 +642,8 @@ public partial class SettingsWindow : Window
                 }
                 break;
             case OutputSourceKind.Multiview:
+                if (output.SourceId != 0 && output.SourceId < MixerNative.MultiviewBase)
+                    output.SourceId = MixerNative.MultiviewGpuId(output.SourceId);
                 box.ItemsSource = _session.Multiviews;
                 box.DisplayMemberPath = "Name";
                 box.SelectedValuePath = "GpuId";

@@ -627,6 +627,11 @@ final class MixerController: ObservableObject {
         if entry.transport != .omt {
             entry.useGpu = false
         }
+        if entry.sourceKind == .multiview, entry.sourceId != 0, entry.sourceId < EIVIZ_MULTIVIEW_BASE {
+            entry.sourceId = EIVIZ_MULTIVIEW_BASE | entry.sourceId
+        } else if entry.sourceKind == .scene, entry.sourceId != 0, entry.sourceId < EIVIZ_SCENE_BASE {
+            entry.sourceId = EIVIZ_SCENE_BASE | entry.sourceId
+        }
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
         }

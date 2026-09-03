@@ -350,6 +350,19 @@ pub fn is_multiview(source_id: u64) -> bool {
     source_id >= MULTIVIEW_BASE && source_id < LABEL_BASE
 }
 
+/// Hosts should pass GPU ids (`SCENE_BASE | id`, `MULTIVIEW_BASE | id`).
+/// Older sessions sometimes stored the raw layout/scene number instead.
+pub fn resolve_output_source_id(source_kind: u32, source_id: u64) -> u64 {
+    if source_id == 0 {
+        return 0;
+    }
+    match source_kind {
+        SRC_KIND_MU_MULTIVIEW if source_id < MULTIVIEW_BASE => MULTIVIEW_BASE | source_id,
+        SRC_KIND_SCENE if source_id < SCENE_BASE => SCENE_BASE | source_id,
+        _ => source_id,
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AudioPeak {

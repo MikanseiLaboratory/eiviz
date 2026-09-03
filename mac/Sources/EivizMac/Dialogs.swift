@@ -221,7 +221,28 @@ struct SettingsView: View {
                 }
             }
             HStack {
-                Picker("", selection: output.sourceKind) {
+                Picker("", selection: Binding(
+                    get: { output.wrappedValue.sourceKind },
+                    set: { kind in
+                        output.wrappedValue.sourceKind = kind
+                        switch kind {
+                        case .multiview:
+                            if mixer.session.multiviews.first(where: { $0.gpuId == output.wrappedValue.sourceId }) == nil {
+                                output.wrappedValue.sourceId = mixer.session.multiviews.first?.gpuId ?? 0
+                            }
+                        case .scene:
+                            if mixer.session.scenes.first(where: { $0.gpuId == output.wrappedValue.sourceId }) == nil {
+                                output.wrappedValue.sourceId = mixer.session.scenes.first?.gpuId ?? 0
+                            }
+                        case .input:
+                            if mixer.session.inputs.first(where: { $0.id == output.wrappedValue.sourceId }) == nil {
+                                output.wrappedValue.sourceId = mixer.session.inputs.first?.id ?? 0
+                            }
+                        case .muPreview, .muProgram:
+                            break
+                        }
+                    }
+                )) {
                     Text("Input").tag(OutputSourceKind.input)
                     Text("Scene").tag(OutputSourceKind.scene)
                     Text("MU PRV").tag(OutputSourceKind.muPreview)

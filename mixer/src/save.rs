@@ -119,6 +119,17 @@ fn add(
     roles: &mut HashMap<u64, SourceRoles>,
 ) {
     if crate::abi::is_multiview(id) {
+        // Mosaic ids are not ingest sources. Walk tiles; monitor/output stay
+        // Multiview so the window does not count as Preview by itself.
+        let role = match role {
+            Role::Program => Role::Program,
+            _ => Role::Multiview,
+        };
+        if let Some(layers) = spec_map.get(&id) {
+            for layer in *layers {
+                add(layer.source_id, role, spec_map, roles);
+            }
+        }
         return;
     }
     if is_scene(id) {
@@ -146,7 +157,9 @@ fn add(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{SCENE_BASE, SRC_BLUE, SRC_COLOR, UnitState};
+    use crate::abi::{
+        MULTIVIEW_BASE, SCENE_BASE, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW, UnitState,
+    };
 
     fn scene(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle) {
         let overlays: Arc<[OverlayDesc]> = layers
@@ -184,6 +197,12 @@ mod tests {
         )
     }
 
+    fn mosaic(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle) {
+        let mut spec = scene(id, layers);
+        spec.0 = MULTIVIEW_BASE | id;
+        spec
+    }
+
     #[test]
     fn nested_scene_on_program_counts_inputs() {
         let specs = [scene(1, &[SRC_COLOR, 20])];
@@ -193,6 +212,41 @@ mod tests {
         assert!(!roles.get(&20).is_some_and(|item| item.on_preview));
         assert!(roles.get(&SRC_BLUE).is_some_and(|item| item.on_preview));
         assert!(!roles.get(&SRC_BLUE).is_some_and(|item| item.on_program));
+    }
+
+    #[test]
+    fn multiview_output_marks_tile_inputs() {
+        let mv = MULTIVIEW_BASE | 1;
+        let specs = [mosaic(1, &[20, SRC_COLOR])];
+        let roles = collect_source_roles(&specs, &[], &[], &[(SRC_KIND_MU_MULTIVIEW, mv)]);
+        assert!(
+            roles
+                .get(&20)
+                .is_some_and(|item| item.on_multiview && !item.on_preview && !item.on_program)
+        );
+        assert!(roles.get(&SRC_COLOR).is_some_and(|item| item.on_multiview));
+    }
+
+    #[test]
+    fn multiview_monitor_does_not_count_as_preview() {
+        let mv = MULTIVIEW_BASE | 1;
+        let specs = [mosaic(1, &[20])];
+        let roles = collect_source_roles(&specs, &[], &[mv], &[]);
+        assert!(
+            roles
+                .get(&20)
+                .is_some_and(|item| item.on_multiview && !item.on_preview)
+        );
+    }
+
+    #[test]
+    fn multiview_on_program_marks_tile_inputs_on_program() {
+        let mv = MULTIVIEW_BASE | 1;
+        let specs = [mosaic(1, &[20])];
+        let snapshot = [unit(mv, SRC_BLUE, 0.0)];
+        let roles = collect_source_roles(&specs, &snapshot, &[], &[]);
+        assert!(roles.get(&20).is_some_and(|item| item.on_program));
+        assert!(!roles.get(&20).is_some_and(|item| item.on_preview));
     }
 
     #[test]
