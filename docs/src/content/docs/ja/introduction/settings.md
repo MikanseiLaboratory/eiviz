@@ -102,16 +102,6 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
 
-## 詳細
-
-### 映像出力先ウィンドウの上限
-
-Preview/Program/Multiviewをリアルタイムに表示するのに使います。  
-たとえばSwitcher UIはPreviewとProgramを出すので、2スロット使います。本体のPreview/Program、開いているMultiview、Scene Editor、Overlay窓も同様に数えます。シーンタイルと入力プレビューのサムネは数えません。
-
-自動は6からです。設定から上げられますが、不安定になる可能性があります。  
-上限に達すると新しい窓は開きません。どれかを閉じると枠が空きます。技術的な背景は[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)のホストです。
-
 ## Web API
 
 vMix互換HTTP APIの待ち受けです。セッションファイルに保存されます。
@@ -121,6 +111,16 @@ vMix互換HTTP APIの待ち受けです。セッションファイルに保存�
 - ユーザー名/パスワード: どちらか入っていればBasicAuth。両方空なら認証なし
 
 エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
+
+## 詳細
+
+### 映像出力先ウィンドウの上限
+
+Preview/Program/Multiviewをリアルタイムに表示するのに使います。  
+たとえばSwitcher UIはPreviewとProgramを出すので、2スロット使います。本体のPreview/Program、開いているMultiview、Scene Editor、Overlay窓も同様に数えます。シーンタイルと入力プレビューのサムネは数えません。
+
+自動は6からです。設定から上げられますが、不安定になる可能性があります。  
+上限に達すると新しい窓は開きません。どれかを閉じると枠が空きます。技術的な背景は[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)のホストです。
 
 ## 環境設定
 

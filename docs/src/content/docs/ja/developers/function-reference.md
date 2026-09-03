@@ -3,7 +3,7 @@ title: Function Reference
 description: eivizの関数リファレンス
 ---
 
-vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Input`はフラット番号、名前、GUIDのいずれかです。`0`は現在のPreview、`-1`は現在のProgramです。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`始まりはMixing Unitの並びです。
+vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。Input単体はMixing Unitに載せられないので拒否します。存在しない番号も拒否します。`0`は現在のPreview、`-1`は現在のProgramです。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`始まりはMixing Unitの並びです。
 
 | Function | 引数 | 動作 |
 | --- | --- | --- |

@@ -3,7 +3,7 @@ title: Function Reference
 description: eiviz function reference
 ---
 
-Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `Input` is a flat number, name, or GUID. `0` is the current Preview, `-1` is the current Program. Omit `Mix` or use `0` for the selected Mixing Unit; `1` and up index Mixing Units in session order.
+Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `Input` is a Scene's flat number, name, or GUID. A raw Input is rejected because a Mixing Unit cannot take it. Unknown numbers are also rejected. `0` is the current Preview, `-1` is the current Program. Omit `Mix` or use `0` for the selected Mixing Unit; `1` and up index Mixing Units in session order.
 
 | Function | Parameters | Action |
 | --- | --- | --- |

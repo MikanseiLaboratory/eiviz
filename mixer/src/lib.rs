@@ -790,7 +790,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
-    crate::vmix_api::shutdown();
+    crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
     let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
         return;

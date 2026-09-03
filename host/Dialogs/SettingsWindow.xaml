@@ -18,8 +18,8 @@
                 <ListBoxItem Content="{Binding [settings.outputs], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.multiview], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.audioAux], Source={x:Static i18n:Loc.Source}}"/>
-                <ListBoxItem Content="{Binding [settings.advanced], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.webApi], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.advanced], Source={x:Static i18n:Loc.Source}}"/>
             </ListBox>
         </Border>
         <DockPanel Grid.Column="1">

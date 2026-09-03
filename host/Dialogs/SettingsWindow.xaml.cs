@@ -92,8 +92,8 @@ public partial class SettingsWindow : Window
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
-        WebApiPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
+        WebApiPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)

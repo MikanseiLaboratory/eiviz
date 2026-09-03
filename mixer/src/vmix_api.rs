@@ -37,6 +37,7 @@ struct ApiState {
     config: ApiConfig,
     document: Option<Document>,
     stop: Arc<AtomicBool>,
+    server: Option<Arc<Server>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -47,6 +48,7 @@ fn api_slot() -> &'static Mutex<ApiState> {
             config: ApiConfig::default(),
             document: None,
             stop: Arc::new(AtomicBool::new(false)),
+            server: None,
             join: None,
         })
     })
@@ -78,16 +80,39 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         user: user.to_string(),
         pass: pass.to_string(),
     };
-    stop_server();
+    stop_worker();
     let Ok(mut slot) = api_slot().lock() else {
         return ERR_INVALID_ARGUMENT;
     };
     slot.config = config.clone();
     if !enabled {
+        slot.server = None;
         crate::diag::http_info("disabled");
         return OK;
     }
-    match start_server(config, Arc::clone(&slot.stop)) {
+    let reuse = slot
+        .server
+        .as_ref()
+        .and_then(|server| server.server_addr().to_ip())
+        .is_some_and(|addr| addr.port() == config.port);
+    if !reuse {
+        slot.server = None;
+        let addr = format!("0.0.0.0:{}", config.port);
+        match Server::http(&addr) {
+            Ok(server) => {
+                crate::diag::http_info(&format!("listen {addr}"));
+                slot.server = Some(Arc::new(server));
+            }
+            Err(error) => {
+                crate::diag::http_error(&format!("listen {addr}: {error}"));
+                return crate::abi::ERR_IO;
+            }
+        }
+    } else {
+        crate::diag::http_info(&format!("restart 0.0.0.0:{}", config.port));
+    }
+    let server = slot.server.clone().expect("http listener");
+    match spawn_worker(server, Arc::clone(&slot.stop), config) {
         Ok(join) => {
             slot.join = Some(join);
             OK
@@ -99,25 +124,37 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
     }
 }
 
-pub fn shutdown() {
-    stop_server();
+pub fn suspend() {
+    stop_worker();
 }
 
-fn stop_server() {
+#[cfg(test)]
+pub fn shutdown() {
+    stop_worker();
+    if let Ok(mut slot) = api_slot().lock() {
+        slot.server = None;
+    }
+}
+
+fn stop_worker() {
     let Ok(mut slot) = api_slot().lock() else {
         return;
     };
     slot.stop.store(true, Ordering::Relaxed);
+    if let Some(server) = slot.server.as_ref() {
+        server.unblock();
+    }
     if let Some(join) = slot.join.take() {
         let _ = join.join();
     }
     slot.stop.store(false, Ordering::Relaxed);
 }
 
-fn start_server(config: ApiConfig, stop: Arc<AtomicBool>) -> Result<JoinHandle<()>, String> {
-    let addr = format!("0.0.0.0:{}", config.port);
-    let server = Server::http(&addr).map_err(|error| format!("listen {addr}: {error}"))?;
-    crate::diag::http_info(&format!("listen {addr}"));
+fn spawn_worker(
+    server: Arc<Server>,
+    stop: Arc<AtomicBool>,
+    config: ApiConfig,
+) -> Result<JoinHandle<()>, String> {
     thread::Builder::new()
         .name("eiviz-vmix-http".into())
         .spawn(move || {
@@ -296,9 +333,8 @@ fn resolve_incoming(flat: &FlatMap, raw: &str, live: &UnitLive) -> Result<u64, D
         return Ok(live.program_source);
     }
     let input = flat
-        .resolve_input(raw)
-        .map_err(DispatchError::BadRequest)?
-        .ok_or_else(|| DispatchError::BadRequest("unknown Input".into()))?;
+        .resolve_scene(raw)
+        .map_err(DispatchError::BadRequest)?;
     Ok(input.source_id)
 }
 
@@ -515,6 +551,7 @@ mod tests {
     #[test]
     fn http_auth_xml_and_unknown_function() {
         let port = 18721;
+        assert_eq!(configure(true, port, "user", "secret"), crate::abi::OK);
         assert_eq!(configure(true, port, "user", "secret"), crate::abi::OK);
         std::thread::sleep(Duration::from_millis(80));
         let unauth = http_get(port, None, "/api");

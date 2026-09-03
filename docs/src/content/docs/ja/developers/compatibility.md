@@ -19,7 +19,7 @@ Mixerがプロセス内でHTTPサーバーを公開します。既定はすべ�
 | 状態取得 | クエリなし。`application/xml`でvMix形のXMLを返す |
 | Function | `?Function=Fade&Duration=500` のようにクエリで実行し、成功時は同じXMLを返す |
 
-XMLは`vmix-core`で生成します。InputとSceneはフラットなInputsとして並べ、SceneはBlank Input+レイヤーです。`preview`/`active`は選択中のMixing Unitのフラット番号です。追加のMixing Unitは`<mix>`です。
+XMLは`vmix-core`で生成します。Sceneを先に、そのあとInputをフラットなInputsとして並べます。SceneはBlank Input+レイヤーです。`preview`/`active`は選択中のMixing Unitのフラット番号です。追加のMixing Unitは`<mix>`です。
 
 対応Functionは[Function Reference](/eiviz/ja/developers/function-reference/)です。未知のFunctionは404、引数不正は400を返します。vMixのように「存在するFunctionなら失敗しても成功」にはしません。
 

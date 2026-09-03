@@ -19,7 +19,7 @@ The mixer hosts an HTTP server in-process. The default is all interfaces on port
 | State | No query. Returns vMix-shaped XML as `application/xml` |
 | Function | Query such as `?Function=Fade&Duration=500`. Success returns the same XML |
 
-XML is built with `vmix-core`. Inputs and Scenes are flattened as Inputs; a Scene is a Blank input plus layers. `preview` / `active` are the selected Mixing Unit’s flat numbers. Extra Mixing Units appear as `<mix>`.
+XML is built with `vmix-core`. Scenes come first, then Inputs, as a flat Inputs list. A Scene is a Blank input plus layers. `preview` / `active` are the selected Mixing Unit’s flat numbers. Extra Mixing Units appear as `<mix>`.
 
 Supported Functions are in the [Function Reference](/eiviz/en/developers/function-reference/). Unknown Functions return 404; bad arguments return 400. Unlike vMix, a known Function that fails is not reported as success.
 

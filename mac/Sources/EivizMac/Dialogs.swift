@@ -17,8 +17,8 @@ struct SettingsView: View {
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
                 Text("Audio Auxiliary").tag(4)
-                Text(L10n.t("settings.advanced")).tag(5)
-                Text(L10n.t("settings.webApi")).tag(6)
+                Text(L10n.t("settings.webApi")).tag(5)
+                Text(L10n.t("settings.advanced")).tag(6)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -29,8 +29,8 @@ struct SettingsView: View {
                     else if category == 2 { outputs }
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
-                    else if category == 5 { advanced }
-                    else { webApi }
+                    else if category == 5 { webApi }
+                    else { advanced }
                 }
                 Spacer()
                 HStack {

@@ -32,6 +32,7 @@ pub struct FlatInput {
     pub title: String,
     pub input_type: String,
     pub source_id: u64,
+    pub is_scene: bool,
     pub overlays: Vec<InputOverlay>,
 }
 
@@ -44,17 +45,6 @@ impl FlatMap {
     pub fn build(doc: &Document) -> Self {
         let mut inputs = Vec::new();
         let mut number = 1u32;
-        for input in &doc.inputs {
-            inputs.push(FlatInput {
-                number,
-                key: guid_or_fallback(&input.guid, input.id, false),
-                title: title_or_fallback(&input.name, input.id, false),
-                input_type: input_type(input.kind),
-                source_id: input.id,
-                overlays: Vec::new(),
-            });
-            number += 1;
-        }
         let key_by_input_id: HashMap<u64, String> = doc
             .inputs
             .iter()
@@ -87,7 +77,20 @@ impl FlatMap {
                 title: title_or_fallback(&scene.name, scene.id, true),
                 input_type: "Blank".into(),
                 source_id: SCENE_BASE | scene.id,
+                is_scene: true,
                 overlays,
+            });
+            number += 1;
+        }
+        for input in &doc.inputs {
+            inputs.push(FlatInput {
+                number,
+                key: guid_or_fallback(&input.guid, input.id, false),
+                title: title_or_fallback(&input.name, input.id, false),
+                input_type: input_type(input.kind),
+                source_id: input.id,
+                is_scene: false,
+                overlays: Vec::new(),
             });
             number += 1;
         }
@@ -126,6 +129,16 @@ impl FlatMap {
             return Ok(Some(found));
         }
         Err(format!("unknown Input {raw}"))
+    }
+
+    pub fn resolve_scene(&self, raw: &str) -> Result<&FlatInput, String> {
+        let input = self
+            .resolve_input(raw)?
+            .ok_or_else(|| format!("unknown Input {raw}"))?;
+        if !input.is_scene {
+            return Err(format!("Input {raw} is not a Scene"));
+        }
+        Ok(input)
     }
 }
 
@@ -454,18 +467,19 @@ mod tests {
     }
 
     #[test]
-    fn flatten_numbers_inputs_then_scenes() {
+    fn flatten_numbers_scenes_then_inputs() {
         let doc = sample_doc();
         let flat = FlatMap::build(&doc);
         assert_eq!(flat.inputs.len(), 3);
         assert_eq!(flat.inputs[0].number, 1);
-        assert_eq!(flat.inputs[0].source_id, 1);
+        assert_eq!(flat.inputs[0].input_type, "Blank");
+        assert_eq!(flat.inputs[0].source_id, SCENE_BASE | 1);
+        assert_eq!(flat.inputs[0].overlays.len(), 1);
+        assert_eq!(flat.inputs[0].overlays[0].key, "bbb");
         assert_eq!(flat.inputs[1].number, 2);
+        assert_eq!(flat.inputs[1].source_id, 1);
         assert_eq!(flat.inputs[2].number, 3);
-        assert_eq!(flat.inputs[2].input_type, "Blank");
-        assert_eq!(flat.inputs[2].source_id, SCENE_BASE | 1);
-        assert_eq!(flat.inputs[2].overlays.len(), 1);
-        assert_eq!(flat.inputs[2].overlays[0].key, "bbb");
+        assert_eq!(flat.inputs[2].source_id, 2);
     }
 
     #[test]
@@ -484,11 +498,11 @@ mod tests {
         assert!(xml.contains("<vmix>"), "{xml}");
         let parsed =
             vmix_core::from_str(&xml).unwrap_or_else(|error| panic!("parse {error}: {xml}"));
-        assert_eq!(parsed.preview, "1");
-        assert_eq!(parsed.active, "3");
+        assert_eq!(parsed.preview, "2");
+        assert_eq!(parsed.active, "1");
         assert_eq!(parsed.inputs.input.len(), 3);
-        assert_eq!(parsed.inputs.input[2].input_type, "Blank");
-        assert_eq!(parsed.inputs.input[2].overlay.len(), 1);
+        assert_eq!(parsed.inputs.input[0].input_type, "Blank");
+        assert_eq!(parsed.inputs.input[0].overlay.len(), 1);
     }
 
     #[test]
@@ -498,9 +512,12 @@ mod tests {
         assert_eq!(resolve_mix(&doc, None).unwrap(), 1);
         assert_eq!(resolve_mix(&doc, Some("1")).unwrap(), 1);
         assert!(resolve_mix(&doc, Some("9")).is_err());
-        assert_eq!(flat.resolve_input("2").unwrap().unwrap().title, "Bars");
-        assert_eq!(flat.resolve_input("aaa").unwrap().unwrap().number, 1);
+        assert_eq!(flat.resolve_input("3").unwrap().unwrap().title, "Bars");
+        assert_eq!(flat.resolve_input("aaa").unwrap().unwrap().number, 2);
         assert!(flat.resolve_input("missing").is_err());
+        assert!(flat.resolve_scene("3").is_err());
+        assert_eq!(flat.resolve_scene("1").unwrap().title, "Scene One");
+        assert!(flat.resolve_scene("missing").is_err());
     }
 
     #[test]
