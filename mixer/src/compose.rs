@@ -144,7 +144,6 @@ pub struct UnitTargets {
     preview_view: wgpu::TextureView,
     mixed_view: wgpu::TextureView,
     prev_view: wgpu::TextureView,
-    sort_a_view: wgpu::TextureView,
     sort_b_view: wgpu::TextureView,
     flow_view: wgpu::TextureView,
     bloom_a_view: wgpu::TextureView,
@@ -178,7 +177,6 @@ pub struct Composer {
     sampler: wgpu::Sampler,
     nearest: wgpu::Sampler,
     mix_time: f32,
-    color_bg_layout: wgpu::BindGroupLayout,
     blit_bg_layout: wgpu::BindGroupLayout,
     mix_bg_layout: wgpu::BindGroupLayout,
     pack_bg_layout: wgpu::BindGroupLayout,
@@ -196,9 +194,6 @@ pub struct Composer {
     program_rgb: [u8; 3],
     inactive_rgb: [u8; 3],
     label_cache: HashMap<LabelTexKey, (wgpu::Texture, wgpu::TextureView)>,
-    label_size: f32,
-    label_percent: bool,
-    label_top: bool,
     pool: UniformPool,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
@@ -407,7 +402,6 @@ impl Composer {
             sampler,
             nearest,
             mix_time: 0.0,
-            color_bg_layout,
             blit_bg_layout,
             mix_bg_layout,
             pack_bg_layout,
@@ -425,9 +419,6 @@ impl Composer {
             program_rgb: [255, 0, 0],
             inactive_rgb: [64, 64, 64],
             label_cache: HashMap::new(),
-            label_size: 18.0,
-            label_percent: false,
-            label_top: false,
             pool,
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
@@ -755,20 +746,6 @@ impl Composer {
         self.clear_labels();
     }
 
-    pub fn set_mv_label(&mut self, size: f32, percent: bool, top: bool) {
-        let size = crate::labels::clamp_size(size);
-        let same = (self.label_size - size).abs() < f32::EPSILON && self.label_percent == percent;
-        if same && self.label_top == top {
-            return;
-        }
-        self.label_size = size;
-        self.label_percent = percent;
-        self.label_top = top;
-        if !same {
-            self.clear_labels();
-        }
-    }
-
     fn clear_labels(&mut self) {
         for key in self.label_cache.keys() {
             self.blit_groups.remove(&label_cache_key(key));
@@ -846,12 +823,6 @@ impl Composer {
                 label_top: style.top,
             },
         );
-    }
-
-    pub fn destroy_scene(&mut self, scene_id: u64) {
-        self.scenes.remove(&scene_id);
-        self.blit_groups.remove(&scene_id);
-        self.pack_groups.remove(&scene_id);
     }
 
     pub fn render_scenes(
@@ -2542,7 +2513,6 @@ impl UnitTargets {
             preview_view: preview.create_view(&Default::default()),
             mixed_view: mixed.create_view(&Default::default()),
             prev_view: prev.create_view(&Default::default()),
-            sort_a_view: sort_a.create_view(&Default::default()),
             sort_b_view: sort_b.create_view(&Default::default()),
             flow_view: flow.create_view(&Default::default()),
             bloom_a_view: bloom_a.create_view(&Default::default()),

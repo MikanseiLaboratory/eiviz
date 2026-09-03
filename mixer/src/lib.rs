@@ -121,7 +121,6 @@ struct LiveUnit {
 }
 
 struct LiveOutput {
-    transport: u32,
     source_kind: u32,
     source_id: u64,
     unit_id: u64,
@@ -254,8 +253,9 @@ struct Telemetry {
 
 enum LiveReceiver {
     Omt(OmtReceiver),
+    /// Held so `Drop` joins the ingest thread. Bandwidth save needs Advanced SDK.
     #[cfg(any(windows, target_os = "macos"))]
-    Ndi(NdiReceiver),
+    Ndi(#[allow(dead_code)] NdiReceiver),
 }
 
 impl LiveReceiver {
@@ -2250,7 +2250,6 @@ pub unsafe extern "C" fn mixer_output_add(
         mixer.shared.lock().expect("shared").outputs.insert(
             output_id,
             LiveOutput {
-                transport,
                 source_kind,
                 source_id,
                 unit_id,

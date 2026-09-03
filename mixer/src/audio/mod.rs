@@ -20,7 +20,7 @@ use crate::upload::{AUDIO_RATE, UploadStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
     AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS, MixedAudio, resolve_output_audio_bus,
+    MASTER_BUS, MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 

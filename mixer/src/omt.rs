@@ -217,7 +217,6 @@ pub struct ProgramSender {
     encoder: VmxEncoder,
     pair_after_video: bool,
     held_audio: VecDeque<AudioPacket>,
-    pub unit_id: u64,
     name: String,
     discovery: Option<Discovery>,
 }
@@ -241,7 +240,6 @@ impl ProgramSender {
             encoder: VmxEncoder::new(),
             pair_after_video: false,
             held_audio: VecDeque::new(),
-            unit_id: 0,
             name: name.to_string(),
             discovery,
         })

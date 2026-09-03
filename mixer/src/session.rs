@@ -1038,11 +1038,6 @@ pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
     to_vec(&parse(bytes)?)
 }
 
-pub fn load_file(path: &str) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    canonicalize_bytes(&bytes)
-}
-
 pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     let canonical = canonicalize_bytes(bytes)?;
     if let Some(parent) = std::path::Path::new(path).parent() {

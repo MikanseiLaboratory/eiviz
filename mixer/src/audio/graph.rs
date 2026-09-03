@@ -77,21 +77,6 @@ impl BusRing {
         }
     }
 
-    pub fn pop_stereo(&self) -> (f32, f32) {
-        if !self.primed.load(Ordering::Relaxed) {
-            return (0.0, 0.0);
-        }
-        let mut pcm = self.pcm.lock().expect("bus ring");
-        if pcm.len() >= 2 {
-            let left = pcm.pop_front().unwrap_or(0.0);
-            let right = pcm.pop_front().unwrap_or(left);
-            *self.last.lock().expect("bus last") = (left, right);
-            (left, right)
-        } else {
-            *self.last.lock().expect("bus last")
-        }
-    }
-
     pub fn skip_frames(&self, frames: usize) {
         if frames == 0 {
             return;

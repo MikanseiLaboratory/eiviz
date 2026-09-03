@@ -81,6 +81,8 @@ pub const DURATION_MS: u32 = 1;
 
 pub const OUTPUT_PROGRAM: u32 = 0;
 pub const OUTPUT_PREVIEW: u32 = 1;
+/// Host/C ABI bus id for a Multiview surface (`EIVIZ_OUTPUT_MULTIVIEW`).
+#[allow(dead_code)]
 pub const OUTPUT_MULTIVIEW: u32 = 2;
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
@@ -252,7 +254,7 @@ pub struct UnitState {
     pub overlay_count: u32,
     pub mv_slot_count: u32,
     pub overlays: [OverlayDesc; 8],
-    pub mv_slots: [u64; 16],
+    pub mv_slots: [u64; MV_SLOT_MAX],
     pub transition_easing: u32,
     pub transition_direction: u32,
     pub keep_preview: u32,

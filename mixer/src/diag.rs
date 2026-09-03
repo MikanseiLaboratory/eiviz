@@ -216,6 +216,7 @@ static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
 
+#[allow(dead_code)]
 pub fn mark_gpu_fault(message: &str) {
     GPU_FAULT.store(true, Ordering::Release);
     error(message);

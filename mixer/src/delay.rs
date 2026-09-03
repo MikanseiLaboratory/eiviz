@@ -27,7 +27,6 @@ struct UnitRing {
 
 struct SceneSlot {
     texture: wgpu::Texture,
-    view: wgpu::TextureView,
 }
 
 struct SceneRing {
@@ -188,20 +187,6 @@ impl FrameDelay {
         })
     }
 
-    pub fn view_at(&self, unit_id: u64, kind: u32, offset: u32) -> Option<wgpu::TextureView> {
-        let ring = self.units.get(&unit_id)?;
-        let slot = ring.slot_at(offset)?;
-        Some(match kind {
-            OUTPUT_PREVIEW => slot.preview_view.clone(),
-            _ => slot.mixed_view.clone(),
-        })
-    }
-
-    pub fn scene_view_at(&self, scene_id: u64, offset: u32) -> Option<wgpu::TextureView> {
-        let ring = self.scenes.get(&scene_id)?;
-        Some(ring.slot_at(offset)?.view.clone())
-    }
-
     pub fn packed(&self, unit_id: u64, kind: u32) -> Option<&wgpu::Texture> {
         let ring = self.units.get(&unit_id)?;
         let slot = ring.display_slot()?;
@@ -305,10 +290,8 @@ impl FrameDelay {
             scene_id,
             SceneRing {
                 slots: (0..cap)
-                    .map(|_| {
-                        let texture = make_delay_texture(device, width, height, false);
-                        let view = texture.create_view(&Default::default());
-                        SceneSlot { texture, view }
+                    .map(|_| SceneSlot {
+                        texture: make_delay_texture(device, width, height, false),
                     })
                     .collect(),
                 write: 0,

@@ -277,7 +277,6 @@ pub struct RebarUploader {
 struct StagingSlot {
     resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     imported: wgpu::Texture,
-    view: wgpu::TextureView,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
@@ -478,11 +477,9 @@ impl RebarUploader {
                     },
                 )
         };
-        let view = imported.create_view(&Default::default());
         Ok(StagingSlot {
             resource,
             imported,
-            view,
             width,
             height,
             format,
