@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::abi::{mixing_unit_bus, mixing_unit_from_source, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW};
+use crate::abi::{OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, mixing_unit_bus, mixing_unit_from_source};
 use crate::compose::{Composer, UnitTargets};
 use crate::device::GpuDevice;
 use crate::upload::texture_bytes;
@@ -172,12 +172,22 @@ impl FrameDelay {
         let depth = self.depth;
         let cap = depth + 1;
         let recreate = self.units.get(&unit_id).is_none_or(|ring| {
-            ring.width != src.width || ring.height != src.height || ring.depth != depth || ring.slots.len() != cap
+            ring.width != src.width
+                || ring.height != src.height
+                || ring.depth != depth
+                || ring.slots.len() != cap
         });
         if !recreate {
             let ring = self.units.get_mut(&unit_id).expect("ring");
             for slot in &mut ring.slots {
-                ensure_optional(device, src.packed.as_ref(), &mut slot.packed, src.width / 2, src.height, true);
+                ensure_optional(
+                    device,
+                    src.packed.as_ref(),
+                    &mut slot.packed,
+                    src.width / 2,
+                    src.height,
+                    true,
+                );
                 ensure_optional(
                     device,
                     src.packed_prv.as_ref(),

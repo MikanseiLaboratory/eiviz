@@ -3,16 +3,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::abi::{
-    is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_multiview,
-    mixing_unit_preview, mixing_unit_source, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX,
-    OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    SourceUsage,
-    TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN,
-    TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
+    GEN_BARS, GEN_SOLID, LABEL_BASE, MV_SLOT_MAX, OUTPUT_MULTIVIEW, OUTPUT_PREVIEW, OUTPUT_PROGRAM,
+    OverlayDesc, Rect, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM,
+    TRANSITION_CUSTOM, TRANSITION_DATAMOSH, TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW,
+    TRANSITION_STINGER, UnitState, is_multiview, is_scene, mixing_unit_bus,
+    mixing_unit_from_source, mixing_unit_multiview, mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
-use crate::pool::{uniform_dyn, UniformPool};
-use crate::upload::{texture_bytes, CpuFormat, CpuFrameSnap};
+use crate::pool::{UniformPool, uniform_dyn};
+use crate::upload::{CpuFormat, CpuFrameSnap, texture_bytes};
 
 const KEY_TALLY_RED: u64 = LABEL_BASE + 0xFF01;
 const KEY_TALLY_GREEN: u64 = LABEL_BASE + 0xFF02;
@@ -229,60 +228,79 @@ pub struct Composer {
 
 impl Composer {
     pub fn new(device: &GpuDevice) -> Result<Self, String> {
-        let color_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("color"),
-            entries: &[uniform_dyn(0)],
-        });
-        let blit_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("blit"),
-            entries: &[sampled(0), sampler_entry(1), uniform_dyn(2)],
-        });
-        let mix_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mix"),
-            entries: &[
-                sampled(0),
-                sampled(1),
-                sampler_entry(2),
-                uniform_dyn(3),
-                sampled(4),
-                sampler_entry(5),
-                sampled(6),
-                sampled(7),
-                sampled(8),
-                sampled(9),
-            ],
-        });
-        let fx1_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("fx1"),
-            entries: &[sampled_compute(0), storage_write(1), uniform_dyn(2)],
-        });
-        let fx2_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("fx2"),
-            entries: &[
-                sampled_compute(0),
-                sampled_compute(1),
-                storage_write(2),
-                uniform_dyn(3),
-            ],
-        });
-        let user_cs_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("user-cs"),
-            entries: &[
-                sampled_compute(0),
-                sampled_compute(1),
-                sampler_compute(2),
-                uniform_dyn(3),
-                sampled_compute(4),
-                sampler_compute(5),
-                sampled_compute(6),
-                sampled_compute(7),
-                storage_write(8),
-            ],
-        });
-        let pack_bg_layout = device.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("pack"),
-            entries: &[sampled(0), sampler_entry(1)],
-        });
+        let color_bg_layout =
+            device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("color"),
+                    entries: &[uniform_dyn(0)],
+                });
+        let blit_bg_layout =
+            device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("blit"),
+                    entries: &[sampled(0), sampler_entry(1), uniform_dyn(2)],
+                });
+        let mix_bg_layout =
+            device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("mix"),
+                    entries: &[
+                        sampled(0),
+                        sampled(1),
+                        sampler_entry(2),
+                        uniform_dyn(3),
+                        sampled(4),
+                        sampler_entry(5),
+                        sampled(6),
+                        sampled(7),
+                        sampled(8),
+                        sampled(9),
+                    ],
+                });
+        let fx1_layout = device
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fx1"),
+                entries: &[sampled_compute(0), storage_write(1), uniform_dyn(2)],
+            });
+        let fx2_layout = device
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fx2"),
+                entries: &[
+                    sampled_compute(0),
+                    sampled_compute(1),
+                    storage_write(2),
+                    uniform_dyn(3),
+                ],
+            });
+        let user_cs_layout =
+            device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("user-cs"),
+                    entries: &[
+                        sampled_compute(0),
+                        sampled_compute(1),
+                        sampler_compute(2),
+                        uniform_dyn(3),
+                        sampled_compute(4),
+                        sampler_compute(5),
+                        sampled_compute(6),
+                        sampled_compute(7),
+                        storage_write(8),
+                    ],
+                });
+        let pack_bg_layout =
+            device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("pack"),
+                    entries: &[sampled(0), sampler_entry(1)],
+                });
 
         let sampler = device.device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
@@ -295,16 +313,82 @@ impl Composer {
             ..Default::default()
         });
 
-        let color = pipeline(device, "color", include_str!("../shaders/color.wgsl"), &color_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
-        let bars = pipeline(device, "bars", include_str!("../shaders/bars.wgsl"), &color_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
-        let blit = pipeline(device, "blit", include_str!("../shaders/blit.wgsl"), &blit_bg_layout, wgpu::TextureFormat::Rgba8Unorm, true)?;
-        let uyvy = pipeline(device, "uyvy", include_str!("../shaders/uyvy_to_rgba.wgsl"), &blit_bg_layout, wgpu::TextureFormat::Rgba8Unorm, true)?;
-        let mix = pipeline(device, "mix", include_str!("../shaders/mix.wgsl"), &mix_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
-        let pack = pipeline(device, "pack", include_str!("../shaders/rgba_to_uyvy.wgsl"), &pack_bg_layout, wgpu::TextureFormat::Rgba8Unorm, false)?;
-        let sort_cs = compute_pipeline(device, "sort", include_str!("../shaders/sort.wgsl"), &fx1_layout, "cs_main")?;
-        let flow_cs = compute_pipeline(device, "flow", include_str!("../shaders/flow.wgsl"), &fx2_layout, "cs_main")?;
-        let bloom_cs = compute_pipeline(device, "bloom", include_str!("../shaders/bloom.wgsl"), &fx2_layout, "cs_main")?;
-        let bloom_blur_cs = compute_pipeline(device, "bloom-blur", include_str!("../shaders/bloom_blur.wgsl"), &fx1_layout, "cs_main")?;
+        let color = pipeline(
+            device,
+            "color",
+            include_str!("../shaders/color.wgsl"),
+            &color_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )?;
+        let bars = pipeline(
+            device,
+            "bars",
+            include_str!("../shaders/bars.wgsl"),
+            &color_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )?;
+        let blit = pipeline(
+            device,
+            "blit",
+            include_str!("../shaders/blit.wgsl"),
+            &blit_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            true,
+        )?;
+        let uyvy = pipeline(
+            device,
+            "uyvy",
+            include_str!("../shaders/uyvy_to_rgba.wgsl"),
+            &blit_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            true,
+        )?;
+        let mix = pipeline(
+            device,
+            "mix",
+            include_str!("../shaders/mix.wgsl"),
+            &mix_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )?;
+        let pack = pipeline(
+            device,
+            "pack",
+            include_str!("../shaders/rgba_to_uyvy.wgsl"),
+            &pack_bg_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )?;
+        let sort_cs = compute_pipeline(
+            device,
+            "sort",
+            include_str!("../shaders/sort.wgsl"),
+            &fx1_layout,
+            "cs_main",
+        )?;
+        let flow_cs = compute_pipeline(
+            device,
+            "flow",
+            include_str!("../shaders/flow.wgsl"),
+            &fx2_layout,
+            "cs_main",
+        )?;
+        let bloom_cs = compute_pipeline(
+            device,
+            "bloom",
+            include_str!("../shaders/bloom.wgsl"),
+            &fx2_layout,
+            "cs_main",
+        )?;
+        let bloom_blur_cs = compute_pipeline(
+            device,
+            "bloom-blur",
+            include_str!("../shaders/bloom_blur.wgsl"),
+            &fx1_layout,
+            "cs_main",
+        )?;
         let pool = UniformPool::new(device);
         let color_group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("color pool"),
@@ -384,7 +468,11 @@ impl Composer {
     }
 
     pub fn ensure_unit(&mut self, device: &GpuDevice, unit_id: u64, width: u32, height: u32) {
-        if self.units.get(&unit_id).is_some_and(|unit| unit.width == width && unit.height == height) {
+        if self
+            .units
+            .get(&unit_id)
+            .is_some_and(|unit| unit.width == width && unit.height == height)
+        {
             return;
         }
         self.mix_groups.remove(&unit_id);
@@ -394,7 +482,8 @@ impl Composer {
         self.blit_groups.remove(&mixing_unit_source(unit_id));
         self.blit_groups.remove(&mixing_unit_preview(unit_id));
         self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-        self.units.insert(unit_id, UnitTargets::new(device, width, height));
+        self.units
+            .insert(unit_id, UnitTargets::new(device, width, height));
     }
 
     fn ensure_packed(&mut self, device: &GpuDevice, unit_id: u64) {
@@ -541,7 +630,11 @@ impl Composer {
                         device,
                         id,
                         pixels,
-                        if packed { snap.width * 2 } else { snap.width * 4 },
+                        if packed {
+                            snap.width * 2
+                        } else {
+                            snap.width * 4
+                        },
                         snap.height,
                         tex_w,
                         format,
@@ -598,12 +691,21 @@ impl Composer {
                     },
                 );
             }
-            let texture = self.sources.get(&id).expect("source inserted").texture.clone();
+            let texture = self
+                .sources
+                .get(&id)
+                .expect("source inserted")
+                .texture
+                .clone();
             write_aligned_texture(
                 device,
                 &texture,
                 pixels,
-                if packed { snap.width * 2 } else { snap.width * 4 },
+                if packed {
+                    snap.width * 2
+                } else {
+                    snap.width * 4
+                },
                 snap.height,
                 tex_w,
                 format,
@@ -621,7 +723,9 @@ impl Composer {
     }
 
     pub fn set_bus_colors(&mut self, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) {
-        if self.preview_rgb == preview && self.program_rgb == program && self.inactive_rgb == inactive
+        if self.preview_rgb == preview
+            && self.program_rgb == program
+            && self.inactive_rgb == inactive
         {
             return;
         }
@@ -663,10 +767,7 @@ impl Composer {
         let keep: std::collections::HashSet<u64> = specs.iter().map(|spec| spec.0).collect();
         self.scenes.retain(|id, _| keep.contains(id));
         for (id, width, height, layers, style) in specs {
-            let scene_labels = labels
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| Arc::from([]));
+            let scene_labels = labels.get(id).cloned().unwrap_or_else(|| Arc::from([]));
             if let Some(existing) = self.scenes.get_mut(id) {
                 existing.label_size = style.size;
                 existing.label_percent = style.percent;
@@ -753,7 +854,11 @@ impl Composer {
             let weight = self.draw_scene(device, encoder, id, tallies)?;
             weights.push((id, weight));
         }
-        let total = weights.iter().map(|(_, weight)| *weight).sum::<u64>().max(1);
+        let total = weights
+            .iter()
+            .map(|(_, weight)| *weight)
+            .sum::<u64>()
+            .max(1);
         self.scene_gpu_pct.clear();
         for (id, weight) in weights {
             self.scene_gpu_pct
@@ -813,7 +918,12 @@ impl Composer {
                         continue;
                     }
                     let (dest, uv) = crop_blit(
-                        [layer.rect.x, layer.rect.y, layer.rect.width, layer.rect.height],
+                        [
+                            layer.rect.x,
+                            layer.rect.y,
+                            layer.rect.width,
+                            layer.rect.height,
+                        ],
                         layer.crop,
                     );
                     self.draw_source_pass(
@@ -861,15 +971,25 @@ impl Composer {
         label_percent: bool,
         label_top: bool,
     ) {
-        let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
+        let video: Vec<_> = layers
+            .iter()
+            .filter(|layer| layer.z < 100)
+            .copied()
+            .collect();
         for (index, layer) in video.iter().enumerate() {
-            let rgb = mv_label_rgb(layer.source_id, self.preview_rgb, self.program_rgb, self.inactive_rgb);
+            let rgb = mv_label_rgb(
+                layer.source_id,
+                self.preview_rgb,
+                self.program_rgb,
+                self.inactive_rgb,
+            );
             let text = labels.get(index).map(String::as_str).unwrap_or("");
             let tile_h = layer.rect.height * canvas_h.max(1) as f32;
             let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
             let font_px = crate::labels::font_px(label_size, label_percent, tile_h);
             let dest_h = crate::labels::band_height(font_px);
-            let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h) else {
+            let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h)
+            else {
                 continue;
             };
             let key = LabelTexKey::new(text, rgb, font_px, dest_w);
@@ -933,15 +1053,25 @@ impl Composer {
         self.ensure_tally_swatches(device);
         let tx = 3.0 / width.max(1) as f32;
         let ty = 3.0 / height.max(1) as f32;
-        let video: Vec<_> = layers.iter().filter(|layer| layer.z < 100).copied().collect();
+        let video: Vec<_> = layers
+            .iter()
+            .filter(|layer| layer.z < 100)
+            .copied()
+            .collect();
         for layer in video {
             let Some(use_red) = mv_tally_program(layer.source_id, tallies) else {
                 continue;
             };
             let (key, swatch) = if use_red {
-                (KEY_TALLY_RED, self.tally_red.as_ref().map(|item| item.1.clone()))
+                (
+                    KEY_TALLY_RED,
+                    self.tally_red.as_ref().map(|item| item.1.clone()),
+                )
             } else {
-                (KEY_TALLY_GREEN, self.tally_green.as_ref().map(|item| item.1.clone()))
+                (
+                    KEY_TALLY_GREEN,
+                    self.tally_green.as_ref().map(|item| item.1.clone()),
+                )
             };
             let Some(swatch) = swatch else {
                 continue;
@@ -951,9 +1081,25 @@ impl Composer {
             let w = layer.rect.width;
             let h = layer.rect.height;
             self.blit_pass(device, pass, key, &swatch, [x, y, w, ty], 1.0, false);
-            self.blit_pass(device, pass, key, &swatch, [x, y + h - ty, w, ty], 1.0, false);
+            self.blit_pass(
+                device,
+                pass,
+                key,
+                &swatch,
+                [x, y + h - ty, w, ty],
+                1.0,
+                false,
+            );
             self.blit_pass(device, pass, key, &swatch, [x, y, tx, h], 1.0, false);
-            self.blit_pass(device, pass, key, &swatch, [x + w - tx, y, tx, h], 1.0, false);
+            self.blit_pass(
+                device,
+                pass,
+                key,
+                &swatch,
+                [x + w - tx, y, tx, h],
+                1.0,
+                false,
+            );
         }
     }
 
@@ -964,13 +1110,23 @@ impl Composer {
         if self.tally_red.is_none() {
             self.tally_red = Some(solid_swatch(
                 device,
-                [self.program_rgb[0], self.program_rgb[1], self.program_rgb[2], 255],
+                [
+                    self.program_rgb[0],
+                    self.program_rgb[1],
+                    self.program_rgb[2],
+                    255,
+                ],
             ));
         }
         if self.tally_green.is_none() {
             self.tally_green = Some(solid_swatch(
                 device,
-                [self.preview_rgb[0], self.preview_rgb[1], self.preview_rgb[2], 255],
+                [
+                    self.preview_rgb[0],
+                    self.preview_rgb[1],
+                    self.preview_rgb[2],
+                    255,
+                ],
             ));
         }
     }
@@ -1004,7 +1160,13 @@ impl Composer {
             let cs = custom_compute_source(user_wgsl);
             self.custom_compute.insert(
                 unit_id,
-                compute_pipeline(device, "mix-custom-cs", &cs, &self.user_cs_layout, "cs_user")?,
+                compute_pipeline(
+                    device,
+                    "mix-custom-cs",
+                    &cs,
+                    &self.user_cs_layout,
+                    "cs_user",
+                )?,
             );
         } else {
             self.custom_compute.remove(&unit_id);
@@ -1045,7 +1207,15 @@ impl Composer {
             let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
             (unit.width, unit.height)
         };
-        self.draw_bus(device, encoder, unit_id, state.program_source, true, width, height)?;
+        self.draw_bus(
+            device,
+            encoder,
+            unit_id,
+            state.program_source,
+            true,
+            width,
+            height,
+        )?;
         let mix_source = if mix_preview == 0 {
             state.preview_source
         } else {
@@ -1081,7 +1251,15 @@ impl Composer {
             self.draw_mix(device, encoder, unit_id, state)?;
         }
         if state.preview_source != mix_source {
-            self.draw_bus(device, encoder, unit_id, state.preview_source, false, width, height)?;
+            self.draw_bus(
+                device,
+                encoder,
+                unit_id,
+                state.preview_source,
+                false,
+                width,
+                height,
+            )?;
         }
         self.draw_overlays_on_program(device, encoder, unit_id, state)?;
         if compose_mv {
@@ -1123,7 +1301,14 @@ impl Composer {
             return Ok(());
         }
         let mut pass = begin_clear(encoder, &target_view);
-        self.draw_source_pass(device, &mut pass, source_id, [0.0, 0.0, 1.0, 1.0], 1.0, FULL_UV)?;
+        self.draw_source_pass(
+            device,
+            &mut pass,
+            source_id,
+            [0.0, 0.0, 1.0, 1.0],
+            1.0,
+            FULL_UV,
+        )?;
         drop(pass);
         Ok(())
     }
@@ -1142,7 +1327,8 @@ impl Composer {
             let unit = self.units.get(&unit_id).ok_or("unit missing")?;
             unit.mixed_view.clone()
         };
-        let mut overlays: Vec<OverlayDesc> = state.overlays[..state.overlay_count as usize].to_vec();
+        let mut overlays: Vec<OverlayDesc> =
+            state.overlays[..state.overlay_count as usize].to_vec();
         overlays.sort_by_key(|overlay| overlay.z);
         {
             let mut pass = begin(encoder, &dest);
@@ -1179,7 +1365,11 @@ impl Composer {
         unit_id: u64,
         state: &UnitState,
     ) -> Result<(), String> {
-        let Some(dest) = self.units.get(&unit_id).and_then(|unit| unit.multiview_view.clone()) else {
+        let Some(dest) = self
+            .units
+            .get(&unit_id)
+            .and_then(|unit| unit.multiview_view.clone())
+        else {
             return Ok(());
         };
         let preview = self.units[&unit_id].preview_view.clone();
@@ -1258,7 +1448,13 @@ impl Composer {
         );
     }
 
-    fn mix_params(state: &UnitState, mix_time: f32, width: f32, height: f32, direction: Option<u32>) -> MixParams {
+    fn mix_params(
+        state: &UnitState,
+        mix_time: f32,
+        width: f32,
+        height: f32,
+        direction: Option<u32>,
+    ) -> MixParams {
         MixParams {
             mix: state.mix,
             kind: if state.transition_kind == TRANSITION_STINGER {
@@ -1319,14 +1515,30 @@ impl Composer {
                 &device.queue,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
-            self.dispatch_fx2(device, encoder, Fx2Kind::Flow, unit_id, offset, half_w, half_h);
+            self.dispatch_fx2(
+                device,
+                encoder,
+                Fx2Kind::Flow,
+                unit_id,
+                offset,
+                half_w,
+                half_h,
+            );
         }
         if need_bloom {
             let extract = self.pool.push(
                 &device.queue,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
-            self.dispatch_fx2(device, encoder, Fx2Kind::Bloom, unit_id, extract, half_w, half_h);
+            self.dispatch_fx2(
+                device,
+                encoder,
+                Fx2Kind::Bloom,
+                unit_id,
+                extract,
+                half_w,
+                half_h,
+            );
             let blur_h = self.pool.push(
                 &device.queue,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, Some(0)),
@@ -1597,13 +1809,19 @@ impl Composer {
                 resolution: [width, height],
             },
         );
-        let dest = self.units.get(&unit_id).ok_or("unit missing")?.mixed_view.clone();
+        let dest = self
+            .units
+            .get(&unit_id)
+            .ok_or("unit missing")?
+            .mixed_view
+            .clone();
         let group = self
             .mix_groups
             .get(&unit_id)
             .ok_or("mix bind group missing")?;
         let mut pass = begin(encoder, &dest);
-        let use_custom = state.transition_kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
+        let use_custom =
+            state.transition_kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
         if use_custom {
             pass.set_pipeline(self.custom_mix.get(&unit_id).unwrap());
         } else {
@@ -1653,14 +1871,17 @@ impl Composer {
             }
         }
         if let Some(other) = mixing_unit_from_source(source_id) {
-            let view = self.units.get(&other).map(|unit| match mixing_unit_bus(source_id) {
-                OUTPUT_PREVIEW => unit.preview_view.clone(),
-                OUTPUT_MULTIVIEW => unit
-                    .multiview_view
-                    .clone()
-                    .unwrap_or_else(|| unit.mixed_view.clone()),
-                _ => unit.mixed_view.clone(),
-            });
+            let view = self
+                .units
+                .get(&other)
+                .map(|unit| match mixing_unit_bus(source_id) {
+                    OUTPUT_PREVIEW => unit.preview_view.clone(),
+                    OUTPUT_MULTIVIEW => unit
+                        .multiview_view
+                        .clone()
+                        .unwrap_or_else(|| unit.mixed_view.clone()),
+                    _ => unit.mixed_view.clone(),
+                });
             if let Some(view) = view {
                 self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
                 return Ok(());
@@ -1919,13 +2140,16 @@ impl Composer {
         pass.draw(0..3, 0..1);
     }
 
-
     pub fn ensure_builtins(&mut self, device: &GpuDevice) {
         for id in [SRC_COLOR, SRC_BARS, SRC_BLACK, SRC_BLUE] {
             if self.sources.contains_key(&id) {
                 continue;
             }
-            let (width, height) = if id == SRC_BARS { (1920, 1080) } else { (128, 72) };
+            let (width, height) = if id == SRC_BARS {
+                (1920, 1080)
+            } else {
+                (128, 72)
+            };
             let texture = make_texture(
                 device,
                 width,
@@ -1957,9 +2181,17 @@ impl Composer {
     }
 
     pub fn bake_generators(&mut self, device: &GpuDevice, encoder: &mut wgpu::CommandEncoder) {
-        let gens: Vec<(u64, Generator)> = self.generators.iter().map(|(id, spec)| (*id, *spec)).collect();
+        let gens: Vec<(u64, Generator)> = self
+            .generators
+            .iter()
+            .map(|(id, spec)| (*id, *spec))
+            .collect();
         for (id, spec) in gens {
-            let (width, height) = if spec.kind == GEN_BARS { (1920, 1080) } else { (128, 72) };
+            let (width, height) = if spec.kind == GEN_BARS {
+                (1920, 1080)
+            } else {
+                (128, 72)
+            };
             let size_ok = self
                 .sources
                 .get(&id)
@@ -2033,7 +2265,10 @@ impl Composer {
         let unit = self.units.get(&unit_id)?;
         Some(match kind {
             OUTPUT_PREVIEW => unit.preview_view.clone(),
-            OUTPUT_MULTIVIEW => unit.multiview_view.clone().unwrap_or_else(|| unit.mixed_view.clone()),
+            OUTPUT_MULTIVIEW => unit
+                .multiview_view
+                .clone()
+                .unwrap_or_else(|| unit.mixed_view.clone()),
             _ => unit.mixed_view.clone(),
         })
     }
@@ -2087,14 +2322,16 @@ impl Composer {
             return Some(gpu.view.clone());
         }
         mixing_unit_from_source(source_id).and_then(|unit_id| {
-            self.units.get(&unit_id).map(|unit| match mixing_unit_bus(source_id) {
-                OUTPUT_PREVIEW => unit.preview_view.clone(),
-                OUTPUT_MULTIVIEW => unit
-                    .multiview_view
-                    .clone()
-                    .unwrap_or_else(|| unit.mixed_view.clone()),
-                _ => unit.mixed_view.clone(),
-            })
+            self.units
+                .get(&unit_id)
+                .map(|unit| match mixing_unit_bus(source_id) {
+                    OUTPUT_PREVIEW => unit.preview_view.clone(),
+                    OUTPUT_MULTIVIEW => unit
+                        .multiview_view
+                        .clone()
+                        .unwrap_or_else(|| unit.mixed_view.clone()),
+                    _ => unit.mixed_view.clone(),
+                })
         })
     }
 
@@ -2131,7 +2368,11 @@ impl Composer {
     }
 
     pub fn vram_bytes(&self) -> u64 {
-        let mut total = self.units.values().map(UnitTargets::vram_bytes).sum::<u64>();
+        let mut total = self
+            .units
+            .values()
+            .map(UnitTargets::vram_bytes)
+            .sum::<u64>();
         for source in self.sources.values() {
             if source.owned {
                 total += texture_bytes(&source.texture);
@@ -2188,7 +2429,10 @@ impl Composer {
                     return;
                 };
                 match unit.packed_prv.as_ref() {
-                    Some(packed) => (unit.preview_view.clone(), packed.create_view(&Default::default())),
+                    Some(packed) => (
+                        unit.preview_view.clone(),
+                        packed.create_view(&Default::default()),
+                    ),
                     None => return,
                 }
             };
@@ -2221,9 +2465,10 @@ impl Composer {
         let view = self.view_for_source(source_id)?;
         let packed_w = (width / 2).max(1);
         let packed_h = height.max(1);
-        let reuse = self.input_packed.get(&source_id).is_some_and(|tex| {
-            tex.size().width == packed_w && tex.size().height == packed_h
-        });
+        let reuse = self
+            .input_packed
+            .get(&source_id)
+            .is_some_and(|tex| tex.size().width == packed_w && tex.size().height == packed_h);
         if !reuse {
             let packed = make_texture(
                 device,
@@ -2234,7 +2479,8 @@ impl Composer {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
             );
             self.input_packed.insert(source_id, packed);
-            self.pack_groups.remove(&(0x4000_0000_0000_0000 | source_id));
+            self.pack_groups
+                .remove(&(0x4000_0000_0000_0000 | source_id));
         }
         let dest = self
             .input_packed
@@ -2262,7 +2508,9 @@ impl Composer {
             (scene.view.clone(), scene.packed_view.clone()?)
         };
         self.pack_to(device, encoder, scene_id, &src, &dest);
-        self.scenes.get(&scene_id).and_then(|scene| scene.packed.as_ref())
+        self.scenes
+            .get(&scene_id)
+            .and_then(|scene| scene.packed.as_ref())
     }
 
     fn ensure_scene_packed(&mut self, device: &GpuDevice, scene_id: u64) {
@@ -2544,8 +2792,19 @@ fn color_for(id: u64) -> [f32; 4] {
     }
 }
 
-fn make_texture(device: &GpuDevice, width: u32, height: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
-    make_texture_format(device, width, height, usage, wgpu::TextureFormat::Rgba8Unorm)
+fn make_texture(
+    device: &GpuDevice,
+    width: u32,
+    height: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    make_texture_format(
+        device,
+        width,
+        height,
+        usage,
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
 }
 
 fn make_texture_format(
@@ -2557,7 +2816,11 @@ fn make_texture_format(
 ) -> wgpu::Texture {
     device.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("eiviz target"),
-        size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -2575,40 +2838,46 @@ fn pipeline(
     format: wgpu::TextureFormat,
     blend: bool,
 ) -> Result<wgpu::RenderPipeline, String> {
-    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    let pipeline_layout = device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(label),
-        bind_group_layouts: &[Some(layout)],
-        immediate_size: 0,
-    });
-    Ok(device.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    }))
+    let shader = device
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+    let pipeline_layout = device
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(label),
+            bind_group_layouts: &[Some(layout)],
+            immediate_size: 0,
+        });
+    Ok(device
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        }))
 }
 
 fn compute_pipeline(
@@ -2618,26 +2887,35 @@ fn compute_pipeline(
     layout: &wgpu::BindGroupLayout,
     entry: &str,
 ) -> Result<wgpu::ComputePipeline, String> {
-    let shader = device.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    let pipeline_layout = device.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(label),
-        bind_group_layouts: &[Some(layout)],
-        immediate_size: 0,
-    });
-    Ok(device.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pipeline_layout),
-        module: &shader,
-        entry_point: Some(entry),
-        compilation_options: Default::default(),
-        cache: None,
-    }))
+    let shader = device
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+    let pipeline_layout = device
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(label),
+            bind_group_layouts: &[Some(layout)],
+            immediate_size: 0,
+        });
+    Ok(device
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        }))
 }
 
-fn begin_clear<'a>(encoder: &'a mut wgpu::CommandEncoder, view: &'a wgpu::TextureView) -> wgpu::RenderPass<'a> {
+fn begin_clear<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &'a wgpu::TextureView,
+) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("eiviz clear"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2741,7 +3019,10 @@ fn solid_swatch(device: &GpuDevice, rgba: [u8; 4]) -> (wgpu::Texture, wgpu::Text
     (texture, view)
 }
 
-fn begin<'a>(encoder: &'a mut wgpu::CommandEncoder, view: &'a wgpu::TextureView) -> wgpu::RenderPass<'a> {
+fn begin<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &'a wgpu::TextureView,
+) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("eiviz pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2856,7 +3137,7 @@ fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_blit, FULL_UV};
+    use super::{FULL_UV, crop_blit};
     use crate::abi::Rect;
 
     #[test]
@@ -2957,4 +3238,3 @@ fn mv_tally_program(source_id: u64, tallies: &[(u64, u64)]) -> Option<bool> {
     }
     None
 }
-

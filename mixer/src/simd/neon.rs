@@ -6,7 +6,14 @@ use std::arch::aarch64::*;
 
 use super::scalar;
 
-pub fn yuv422_to_bgra(src: &[u8], width: u32, height: u32, stride: usize, uyvy: bool, dst: &mut [u8]) {
+pub fn yuv422_to_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    uyvy: bool,
+    dst: &mut [u8],
+) {
     scalar::yuv422_to_bgra(src, width, height, stride, uyvy, dst);
 }
 

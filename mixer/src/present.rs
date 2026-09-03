@@ -223,9 +223,9 @@ impl Presenters {
             .filter(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
             .collect();
         let (tiles, previews): (Vec<u64>, Vec<u64>) = due.into_iter().partition(|id| {
-            self.monitors
-                .get(id)
-                .is_some_and(|presenter| !is_preview_surface(presenter.config.width, presenter.config.height))
+            self.monitors.get(id).is_some_and(|presenter| {
+                !is_preview_surface(presenter.config.width, presenter.config.height)
+            })
         });
         present_monitor_group(self, device, epoch, &tiles, &source_view)?;
         for id in previews {
@@ -779,7 +779,7 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_present_mode, BlitParams};
+    use super::{BlitParams, pick_present_mode};
 
     #[test]
     fn present_params_match_uyvy_shader() {
@@ -802,5 +802,4 @@ mod tests {
         ];
         assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Mailbox);
     }
-
 }

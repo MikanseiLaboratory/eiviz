@@ -251,7 +251,7 @@ fn pack_bgra(src: &[u8], width: u32, height: u32, gpu_stride: u32) -> ThumbPixel
 
 #[cfg(test)]
 mod tests {
-    use super::{aligned_stride, pack_bgra, ThumbSub, MAX_HEIGHT, MAX_WIDTH};
+    use super::{MAX_HEIGHT, MAX_WIDTH, ThumbSub, aligned_stride, pack_bgra};
 
     #[test]
     fn unsubscribe_when_size_is_zero() {

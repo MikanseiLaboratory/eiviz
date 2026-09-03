@@ -531,4 +531,3 @@ fn add_source(
         .and_modify(|current| *current = (*current).max(level))
         .or_insert(level);
 }
-

@@ -297,7 +297,10 @@ impl GpuUploadRing {
     }
 
     pub fn vram_bytes(&self) -> u64 {
-        self.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum()
+        self.slots
+            .iter()
+            .map(|slot| texture_bytes(&slot.texture))
+            .sum()
     }
 }
 
@@ -696,7 +699,8 @@ impl UploadStore {
 
     pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
         match self.sources.get(&id) {
-            Some(ring) if ring.width == width && ring.height == height && ring.format == format => {}
+            Some(ring) if ring.width == width && ring.height == height && ring.format == format => {
+            }
             _ => self.register(id, width, height, format),
         }
     }
@@ -821,13 +825,20 @@ impl UploadStore {
     }
 
     pub fn memory_bytes(&self) -> (u64, u64) {
-        self.sources.values().fold((0u64, 0u64), |(ram, vram), ring| {
-            (ram + ring.ram_bytes(), vram + ring.vram_actual())
-        })
+        self.sources
+            .values()
+            .fold((0u64, 0u64), |(ram, vram), ring| {
+                (ram + ring.ram_bytes(), vram + ring.vram_actual())
+            })
     }
 
     pub fn push_gpu(&mut self, id: u64, frame: GpuVideoFrame) -> Result<(), String> {
-        self.ensure(id, frame.width.max(2), frame.height.max(2), CpuFormat::GpuRgba);
+        self.ensure(
+            id,
+            frame.width.max(2),
+            frame.height.max(2),
+            CpuFormat::GpuRgba,
+        );
         let ring = self
             .sources
             .get_mut(&id)
@@ -975,7 +986,10 @@ impl UploadStore {
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
-        self.sources.get(&id).map(|ring| ring.fifo.len() / 2).unwrap_or(0)
+        self.sources
+            .get(&id)
+            .map(|ring| ring.fifo.len() / 2)
+            .unwrap_or(0)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -1212,7 +1226,9 @@ pub(crate) fn write_slot(
     }
     let needed_src = match height {
         0 => 0,
-        h => (h as usize - 1).saturating_mul(stride).saturating_add(row_bytes),
+        h => (h as usize - 1)
+            .saturating_mul(stride)
+            .saturating_add(row_bytes),
     };
     let needed_dst = slot_bytes(width, height, format);
     if src.len() < needed_src || dst.len() < needed_dst {

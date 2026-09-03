@@ -3,20 +3,20 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
-    ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo, OK, OUT_DECKLINK,
-    OUT_OMT,
-    OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_PROGRAM, UnitState,
-    VideoCaptureInfo, mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
+    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo,
+    OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM,
+    TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
+    TRANSITION_HEART, TRANSITION_LOREZ, TRANSITION_METAMIX, TRANSITION_MULTITASK,
+    TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
+    TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
+    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
+    mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
     mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
     mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
     mixer_video_enum_captures, mixer_video_start,
-    EASING_IN_OUT, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
-    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
-    TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
-    TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
-    TRANSITION_BLOOM, TRANSITION_OPTICAL_FLOW, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -111,7 +111,22 @@ fn dx12_compose_omt_and_program_out() {
     }
     assert_eq!(mixer_unit_cut(1, 1, 0), OK);
     assert_eq!(
-        mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+        mixer_unit_auto(
+            1,
+            TRANSITION_FADE,
+            200,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
         OK
     );
 
@@ -398,7 +413,10 @@ fn missing_video_file_returns_io_error() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     let path = CString::new(r"C:\eiviz-missing-file-does-not-exist.mp4").unwrap();
     unsafe {
-        assert_eq!(mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0, 0), ERR_IO);
+        assert_eq!(
+            mixer_video_start(99, path.as_ptr(), 0, 0, 0, 0, 0, 0, 0),
+            ERR_IO
+        );
     }
     mixer_destroy();
 }
@@ -483,7 +501,22 @@ fn keep_preview_freezes_incoming_source() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 400, 1, 1, 0, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+            mixer_unit_auto(
+                1,
+                TRANSITION_FADE,
+                400,
+                1,
+                1,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0,
+                0.02,
+                0.0
+            ),
             OK
         );
         state.preview_source = SRC_BARS;
@@ -514,7 +547,22 @@ fn easing_completes_with_cut() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 1, EASING_IN_OUT, 0, 0.0, 0.0, 0.0, 1.0, 0, 0.02, 0.0),
+            mixer_unit_auto(
+                1,
+                TRANSITION_FADE,
+                200,
+                1,
+                1,
+                EASING_IN_OUT,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0,
+                0.02,
+                0.0
+            ),
             OK
         );
     }
@@ -634,7 +682,22 @@ fn dip_uses_preset_color() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_DIP, 300, 1, 1, 0, 0, 0.2, 0.4, 0.8, 1.0, 0, 0.02, 0.0),
+            mixer_unit_auto(
+                1,
+                TRANSITION_DIP,
+                300,
+                1,
+                1,
+                0,
+                0,
+                0.2,
+                0.4,
+                0.8,
+                1.0,
+                0,
+                0.02,
+                0.0
+            ),
             OK
         );
         let mut out = UnitState::default();
@@ -663,7 +726,22 @@ fn auto_uses_incoming_source_instead_of_preview() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(1, TRANSITION_FADE, 200, 1, 0, 0, 0, 0.0, 0.0, 0.0, 1.0, SRC_BARS, 0.02, 0.0),
+            mixer_unit_auto(
+                1,
+                TRANSITION_FADE,
+                200,
+                1,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                SRC_BARS,
+                0.02,
+                0.0
+            ),
             OK
         );
     }

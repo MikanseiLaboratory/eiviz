@@ -1,6 +1,12 @@
 use crate::upload::{AUDIO_RATE, AudioPacket};
 
-pub fn sine_packet(phase: &mut f64, hz: f32, level_dbfs: f32, frames: usize, pts: i64) -> AudioPacket {
+pub fn sine_packet(
+    phase: &mut f64,
+    hz: f32,
+    level_dbfs: f32,
+    frames: usize,
+    pts: i64,
+) -> AudioPacket {
     let amplitude = 10f32.powf(level_dbfs.clamp(-120.0, 0.0) / 20.0);
     let rate = f64::from(AUDIO_RATE);
     let mut left = vec![0.0f32; frames];

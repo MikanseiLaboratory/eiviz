@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use eiviz_mixer::simd;
 use eiviz_mixer::{
-    mixer_copy_stats, mixer_create, mixer_create_unit, mixer_define_generator,
-    mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_unit_configure,
-    mixer_unit_set_state, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
-    MixerStats, OverlayDesc, Rect, UnitState, GEN_BARS, GEN_SOLID, OK, SCENE_BASE,
+    GEN_BARS, GEN_SOLID, MixerStats, OK, OverlayDesc, Rect, SCENE_BASE, UnitState,
+    mixer_copy_stats, mixer_create, mixer_create_unit, mixer_define_generator, mixer_define_scene,
+    mixer_destroy, mixer_generator_set_tone, mixer_unit_configure, mixer_unit_set_state,
+    mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
 };
 
 const FRAMES: usize = 1601;
@@ -161,7 +161,10 @@ fn eightme_scroll_tone_render() {
     ];
     let scene = SCENE_BASE | 1;
     unsafe {
-        assert_eq!(mixer_define_scene(scene, 1920, 1080, 2, layers.as_ptr()), OK);
+        assert_eq!(
+            mixer_define_scene(scene, 1920, 1080, 2, layers.as_ptr()),
+            OK
+        );
     }
     assert_eq!(mixer_create_unit(1, 1920, 1080), OK);
     assert_eq!(mixer_unit_configure(1, 1920, 1080, 60_000, 1_001), OK);
@@ -174,9 +177,10 @@ fn eightme_scroll_tone_render() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
     }
-    if let Some(path) = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).map(|home| {
-        home.join("Videos").join("機銃.mp4")
-    }) {
+    if let Some(path) = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join("Videos").join("機銃.mp4"))
+    {
         if path.is_file() {
             let cpath = std::ffi::CString::new(path.to_string_lossy().as_ref()).unwrap();
             unsafe {

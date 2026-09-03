@@ -1,14 +1,21 @@
 mod dispatch;
 mod scalar;
 
-#[cfg(target_arch = "x86_64")]
-mod x86;
 #[cfg(target_arch = "aarch64")]
 mod neon;
+#[cfg(target_arch = "x86_64")]
+mod x86;
 
-pub use dispatch::{path, SimdPath};
+pub use dispatch::{SimdPath, path};
 
-pub fn yuv422_to_bgra(src: &[u8], width: u32, height: u32, stride: usize, uyvy: bool, dst: &mut [u8]) {
+pub fn yuv422_to_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    uyvy: bool,
+    dst: &mut [u8],
+) {
     #[cfg(target_arch = "x86_64")]
     {
         x86::yuv422_to_bgra(src, width, height, stride, uyvy, dst);
@@ -119,7 +126,13 @@ pub fn resample_planar_to_stereo(
     scalar::resample_planar_to_stereo(planar, src_frames, channels, src_rate, dst_rate, out);
 }
 
-pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: u32, out: &mut [f32]) {
+pub fn resample_stereo(
+    src: &[f32],
+    src_rate: u32,
+    dst_frames: usize,
+    dst_rate: u32,
+    out: &mut [f32],
+) {
     scalar::resample_stereo(src, src_rate, dst_frames, dst_rate, out);
 }
 

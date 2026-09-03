@@ -15,7 +15,14 @@ fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
     ]
 }
 
-pub fn yuv422_to_bgra(src: &[u8], width: u32, height: u32, stride: usize, uyvy: bool, dst: &mut [u8]) {
+pub fn yuv422_to_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    uyvy: bool,
+    dst: &mut [u8],
+) {
     let w = (width as usize) & !1;
     let h = height as usize;
     let dst_stride = w * 4;
@@ -171,7 +178,13 @@ pub fn resample_planar_to_stereo(
     }
 }
 
-pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: u32, out: &mut [f32]) {
+pub fn resample_stereo(
+    src: &[f32],
+    src_rate: u32,
+    dst_frames: usize,
+    dst_rate: u32,
+    out: &mut [f32],
+) {
     let src_frames = src.len() / 2;
     if dst_frames == 0 || out.len() < dst_frames * 2 {
         return;
@@ -199,7 +212,14 @@ pub fn blend_u8(bg: u8, fg: u8, cover: u16) -> u8 {
     ((fg as u16 * cover + bg as u16 * (255 - cover)) / 255) as u8
 }
 
-pub fn copy_rows(src: &[u8], src_stride: usize, dst: &mut [u8], dst_stride: usize, row_bytes: usize, rows: usize) {
+pub fn copy_rows(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    row_bytes: usize,
+    rows: usize,
+) {
     for y in 0..rows {
         let s = y * src_stride;
         let d = y * dst_stride;

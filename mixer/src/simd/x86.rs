@@ -6,7 +6,14 @@ use std::arch::x86_64::*;
 
 use super::scalar;
 
-pub fn yuv422_to_bgra(src: &[u8], width: u32, height: u32, stride: usize, uyvy: bool, dst: &mut [u8]) {
+pub fn yuv422_to_bgra(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    uyvy: bool,
+    dst: &mut [u8],
+) {
     if is_x86_feature_detected!("avx2") {
         unsafe { yuv422_to_bgra_avx2(src, width, height, stride, uyvy, dst) }
     } else if is_x86_feature_detected!("sse2") {
@@ -175,7 +182,10 @@ unsafe fn mix_gain_avx2(dest: &mut [f32], src: &[f32], gain: f32) {
     while i < end {
         let d = _mm256_loadu_ps(dest.as_ptr().add(i));
         let s = _mm256_loadu_ps(src.as_ptr().add(i));
-        _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(d, _mm256_mul_ps(s, g)));
+        _mm256_storeu_ps(
+            dest.as_mut_ptr().add(i),
+            _mm256_add_ps(d, _mm256_mul_ps(s, g)),
+        );
         i += 8;
     }
     if i < n {

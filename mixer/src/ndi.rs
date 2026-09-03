@@ -4,15 +4,15 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, PixelFormat, Receiver, ReceiverBandwidth,
-    ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source, SourceAddress, VideoFrame,
-    NDI,
+    AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
+    ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source,
+    SourceAddress, VideoFrame,
 };
 
 use crate::abi::FMT_BGRA;
 use crate::upload::{
-    ingest_audio_throttled, write_slot, AudioPacket, CpuFormat, GpuIngest, GpuUploadRing,
-    GpuVideoFrame, UploadStore,
+    AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, GpuVideoFrame, UploadStore,
+    ingest_audio_throttled, write_slot,
 };
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
@@ -280,7 +280,9 @@ fn open_receiver(
 
 pub fn discover_sources() -> Result<Vec<String>, String> {
     let sources = with_finder(|finder| {
-        let snapshot = finder.current_sources().map_err(|error| error.to_string())?;
+        let snapshot = finder
+            .current_sources()
+            .map_err(|error| error.to_string())?;
         if !snapshot.is_empty() {
             return Ok(snapshot);
         }
@@ -290,7 +292,10 @@ pub fn discover_sources() -> Result<Vec<String>, String> {
             .find_sources(Duration::from_secs(5))
             .map_err(|error| error.to_string())
     })?;
-    let names: Vec<String> = sources.into_iter().map(|source| source.to_string()).collect();
+    let names: Vec<String> = sources
+        .into_iter()
+        .map(|source| source.to_string())
+        .collect();
     eprintln!("eiviz ndi discover count={}", names.len());
     Ok(names)
 }
@@ -300,7 +305,8 @@ fn resolve_source(query: &str) -> Result<Source, String> {
     if trimmed.is_empty() {
         return Err("NDI source name is empty".into());
     }
-    if let Ok(sources) = with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
+    if let Ok(sources) =
+        with_finder(|finder| finder.current_sources().map_err(|error| error.to_string()))
     {
         if let Some(source) = sources.iter().find(|source| {
             source.to_string().eq_ignore_ascii_case(trimmed)
@@ -459,7 +465,15 @@ fn ingest_video(
             None => return,
         }
     };
-    write_slot(&mut pixels, frame.data(), stride, width, height, format, opaque_x);
+    write_slot(
+        &mut pixels,
+        frame.data(),
+        stride,
+        width,
+        height,
+        format,
+        opaque_x,
+    );
     let mut store = uploads.lock().expect("uploads lock");
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
 }
@@ -534,7 +548,10 @@ mod tests {
         src[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
         let packed = pack_uyvy(width, height, stride, &src);
-        assert_eq!(packed, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(
+            packed,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::abi::{
-    is_scene, mixing_unit_from_source, OverlayDesc, SAVE_ALWAYS_FULL, SAVE_ALWAYS_LOW,
-    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SAVE_NOT_ON_PROGRAM, SRC_KIND_INPUT,
-    SRC_KIND_MU_MULTIVIEW, SRC_KIND_SCENE,
+    OverlayDesc, SAVE_ALWAYS_FULL, SAVE_ALWAYS_LOW, SAVE_FLAG_MULTIVIEW,
+    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SAVE_NOT_ON_PROGRAM, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_SCENE, is_scene, mixing_unit_from_source,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,9 +64,7 @@ pub fn want_full(save: LiveSave, roles: SourceRoles) -> bool {
         SAVE_ALWAYS_LOW => false,
         SAVE_ALWAYS_FULL => true,
         SAVE_NOT_ON_PROGRAM => roles.on_program || keep_mv,
-        SAVE_NOT_ON_PREVIEW_OR_PROGRAM => {
-            roles.on_program || roles.on_preview || keep_mv
-        }
+        SAVE_NOT_ON_PREVIEW_OR_PROGRAM => roles.on_program || roles.on_preview || keep_mv,
         _ => roles.on_program || roles.on_preview || keep_mv,
     }
 }
@@ -77,8 +75,10 @@ pub fn collect_source_roles(
     monitor_sources: &[u64],
     outputs: &[(u32, u64)],
 ) -> HashMap<u64, SourceRoles> {
-    let spec_map: HashMap<u64, &[OverlayDesc]> =
-        scene_specs.iter().map(|spec| (spec.0, spec.3.as_ref())).collect();
+    let spec_map: HashMap<u64, &[OverlayDesc]> = scene_specs
+        .iter()
+        .map(|spec| (spec.0, spec.3.as_ref()))
+        .collect();
     let mut roles = HashMap::<u64, SourceRoles>::new();
     for (_, _, _, _, _, state, _, _) in snapshot {
         add(state.program_source, Role::Program, &spec_map, &mut roles);
@@ -160,7 +160,13 @@ mod tests {
                 ..OverlayDesc::default()
             })
             .collect();
-        (SCENE_BASE | id, 1920, 1080, overlays, crate::MvLabelStyle::default())
+        (
+            SCENE_BASE | id,
+            1920,
+            1080,
+            overlays,
+            crate::MvLabelStyle::default(),
+        )
     }
 
     fn unit(program: u64, preview: u64, mix: f32) -> crate::abi::UnitSnap {
@@ -195,7 +201,11 @@ mod tests {
     #[test]
     fn input_monitor_counts_as_preview() {
         let roles = collect_source_roles(&[], &[], &[20, SRC_COLOR], &[]);
-        assert!(roles.get(&20).is_some_and(|item| item.on_preview && !item.on_program));
+        assert!(
+            roles
+                .get(&20)
+                .is_some_and(|item| item.on_preview && !item.on_program)
+        );
         assert!(roles.get(&SRC_COLOR).is_some_and(|item| item.on_preview));
     }
 
@@ -203,7 +213,11 @@ mod tests {
     fn tbar_mix_puts_preview_on_program() {
         let snapshot = [unit(SRC_COLOR, 20, 0.4)];
         let roles = collect_source_roles(&[], &snapshot, &[], &[]);
-        assert!(roles.get(&20).is_some_and(|item| item.on_program && item.on_preview));
+        assert!(
+            roles
+                .get(&20)
+                .is_some_and(|item| item.on_program && item.on_preview)
+        );
     }
 
     #[test]

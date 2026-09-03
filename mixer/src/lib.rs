@@ -28,11 +28,11 @@ mod omt;
 mod pool;
 mod present;
 mod readback;
-mod thumb;
 mod rebar;
 mod save;
 mod session;
 pub mod simd;
+mod thumb;
 mod upload;
 
 pub use abi::{
@@ -3217,23 +3217,25 @@ fn render_loop(
             generators.clear();
             generators.extend(guard.generators.iter().map(|(id, spec)| (*id, *spec)));
             outputs_snap.clear();
-            outputs_snap.extend(guard.outputs.iter().map(|(id, output)| OutputSnap {
-                output_id: *id,
-                source_kind: output.source_kind,
-                source_id: output.source_id,
-                unit_id: output.unit_id,
-                fps_n: guard
-                    .units
-                    .get(&output.unit_id)
-                    .map(|u| u.fps_num)
-                    .unwrap_or(fps_num),
-                fps_d: guard
-                    .units
-                    .get(&output.unit_id)
-                    .map(|u| u.fps_den)
-                    .unwrap_or(fps_den),
-                video_sub: Arc::clone(&output.video_sub),
-                use_gpu: output.use_gpu,
+            outputs_snap.extend(guard.outputs.iter().map(|(id, output)| {
+                OutputSnap {
+                    output_id: *id,
+                    source_kind: output.source_kind,
+                    source_id: output.source_id,
+                    unit_id: output.unit_id,
+                    fps_n: guard
+                        .units
+                        .get(&output.unit_id)
+                        .map(|u| u.fps_num)
+                        .unwrap_or(fps_num),
+                    fps_d: guard
+                        .units
+                        .get(&output.unit_id)
+                        .map(|u| u.fps_den)
+                        .unwrap_or(fps_den),
+                    video_sub: Arc::clone(&output.video_sub),
+                    use_gpu: output.use_gpu,
+                }
             }));
             let compose_dirty = guard.compose_dirty;
             guard.compose_dirty = false;
@@ -3280,8 +3282,7 @@ fn render_loop(
             upload_sources.extend_from_slice(&thumb_ids);
             let (mut used_scenes, mut used_uploads) =
                 collect_live_ids(&scene_specs, &snapshot, &compose_sources, &outputs_snap);
-            let (_, monitor_uploads) =
-                collect_live_ids(&scene_specs, &[], &upload_sources, &[]);
+            let (_, monitor_uploads) = collect_live_ids(&scene_specs, &[], &upload_sources, &[]);
             used_uploads.extend(monitor_uploads);
             if compose_dirty {
                 for (id, ..) in &scene_specs {
@@ -3446,11 +3447,7 @@ fn render_loop(
                 emit_gpu(&gpu_copies, &send_tx, pts);
             }
             frame_delay.consume_display(false);
-            composer.set_bus_colors(
-                bus_colors.preview,
-                bus_colors.program,
-                bus_colors.inactive,
-            );
+            composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
             composer.sync_scenes(&device, &scene_specs, &scene_labels);
             let mut encoder =
                 device
@@ -3468,11 +3465,9 @@ fn render_loop(
                 Vec::new();
             for (unit_id, width, height, _, _, state, mix_preview, custom) in &snapshot {
                 composer.ensure_unit(&device, *unit_id, *width, *height);
-                if let Err(error) = composer.set_custom_mix(
-                    &device,
-                    *unit_id,
-                    custom.as_deref().unwrap_or(""),
-                ) {
+                if let Err(error) =
+                    composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
+                {
                     crate::diag::error(&format!("custom wgsl: {error}"));
                 }
                 let pack_pgm = outputs_snap.iter().any(|item| {

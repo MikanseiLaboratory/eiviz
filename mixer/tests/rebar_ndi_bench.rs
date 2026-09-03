@@ -6,12 +6,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
+    MixerRebarInfo, MixerStats, OK, OverlayDesc, Rect, SCENE_BASE, SourceUsage, UnitState,
     enumerate_video_captures, mixer_copy_rebar_info, mixer_copy_source_usage, mixer_copy_stats,
     mixer_create, mixer_create_unit, mixer_define_scene, mixer_destroy, mixer_last_error,
     mixer_ndi_connect, mixer_ndi_discover, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_configure, mixer_unit_set_state, mixer_video_set_loop, mixer_video_set_playing,
-    mixer_video_start, MixerRebarInfo, MixerStats, OK, OverlayDesc, Rect, SCENE_BASE, SourceUsage,
-    UnitState,
+    mixer_video_start,
 };
 
 const SOURCE_BASE: u64 = 40;
@@ -129,18 +129,22 @@ fn lan_ndi_rebar_modes() {
     }
     println!("compose             : {width}x{height} 2x2");
 
-    for (name, gpu, rebar) in [
-        ("cpu", 0u32, 0u32),
-        ("gpu", 1, 0),
-        ("gpu_rebar", 1, 1),
-    ] {
+    for (name, gpu, rebar) in [("cpu", 0u32, 0u32), ("gpu", 1, 0), ("gpu_rebar", 1, 1)] {
         assert_eq!(mixer_set_ndi_gpu_upload(gpu), OK);
         assert_eq!(mixer_set_rebar_optimization(rebar), OK);
         thread::sleep(WARMUP);
         let stats = sample_render();
         println!(
             "=== {name} === n={} mean={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} over={}/{} budget={:.3}",
-            stats.n, stats.mean, stats.p50, stats.p95, stats.min, stats.max, stats.overruns, stats.n, stats.budget
+            stats.n,
+            stats.mean,
+            stats.p50,
+            stats.p95,
+            stats.min,
+            stats.max,
+            stats.overruns,
+            stats.n,
+            stats.budget
         );
     }
     mixer_destroy();
@@ -174,7 +178,10 @@ fn find_facecam() -> Option<(String, String)> {
     if let Some(cam) = usb3 {
         return Some(cam.clone());
     }
-    if cams.iter().any(|(name, _)| name.to_ascii_lowercase().contains("usb2")) {
+    if cams
+        .iter()
+        .any(|(name, _)| name.to_ascii_lowercase().contains("usb2"))
+    {
         println!("=== UVC === SKIPPED (Facecam is still USB2)");
     }
     None
@@ -195,7 +202,12 @@ fn start_media(id: u64, path: &str, capture: u32) {
 }
 
 fn fullscreen(source: u64, width: u32, height: u32) {
-    assert_eq!(mixer_create_unit(UNIT_ID, width, height), OK, "{}", last_error());
+    assert_eq!(
+        mixer_create_unit(UNIT_ID, width, height),
+        OK,
+        "{}",
+        last_error()
+    );
     assert_eq!(
         mixer_unit_configure(UNIT_ID, width, height, 60_000, 1_001),
         OK
@@ -216,13 +228,28 @@ fn video_file_section(path: &std::path::Path) {
     let path_str = path.to_string_lossy();
     start_media(VIDEO_SRC, path_str.as_ref(), 0);
     let usage = wait_for_ids(&[VIDEO_SRC]);
-    println!("frame              : {}x{}", usage[0].width, usage[0].height);
-    fullscreen(VIDEO_SRC, usage[0].width.max(1280), usage[0].height.max(720));
+    println!(
+        "frame              : {}x{}",
+        usage[0].width, usage[0].height
+    );
+    fullscreen(
+        VIDEO_SRC,
+        usage[0].width.max(1280),
+        usage[0].height.max(720),
+    );
     thread::sleep(WARMUP);
     let stats = sample_render();
     println!(
         "=== video_file === n={} mean={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} over={}/{} budget={:.3}",
-        stats.n, stats.mean, stats.p50, stats.p95, stats.min, stats.max, stats.overruns, stats.n, stats.budget
+        stats.n,
+        stats.mean,
+        stats.p50,
+        stats.p95,
+        stats.min,
+        stats.max,
+        stats.overruns,
+        stats.n,
+        stats.budget
     );
 }
 
@@ -230,13 +257,24 @@ fn uvc_section(name: &str, link: &str) {
     println!("=== UVC === {name}");
     start_media(UVC_SRC, link, 1);
     let usage = wait_for_ids(&[UVC_SRC]);
-    println!("frame              : {}x{}", usage[0].width, usage[0].height);
+    println!(
+        "frame              : {}x{}",
+        usage[0].width, usage[0].height
+    );
     fullscreen(UVC_SRC, usage[0].width.max(1280), usage[0].height.max(720));
     thread::sleep(WARMUP);
     let stats = sample_render();
     println!(
         "=== uvc_facecam === n={} mean={:.3} p50={:.3} p95={:.3} min={:.3} max={:.3} over={}/{} budget={:.3}",
-        stats.n, stats.mean, stats.p50, stats.p95, stats.min, stats.max, stats.overruns, stats.n, stats.budget
+        stats.n,
+        stats.mean,
+        stats.p50,
+        stats.p95,
+        stats.min,
+        stats.max,
+        stats.overruns,
+        stats.n,
+        stats.budget
     );
 }
 
@@ -328,7 +366,11 @@ fn wait_for_frames(count: usize) -> Vec<SourceUsage> {
             return found;
         }
         if Instant::now() >= deadline {
-            panic!("need {count} NDI frames, got {} ({})", found.len(), last_error());
+            panic!(
+                "need {count} NDI frames, got {} ({})",
+                found.len(),
+                last_error()
+            );
         }
         thread::sleep(Duration::from_millis(80));
     }

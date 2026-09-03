@@ -46,7 +46,10 @@ pub fn log_dir() -> PathBuf {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let mac = PathBuf::from(&home).join("Library").join("Logs").join("eiviz");
+        let mac = PathBuf::from(&home)
+            .join("Library")
+            .join("Logs")
+            .join("eiviz");
         if cfg!(target_os = "macos") || mac.parent().is_some_and(|p| p.exists()) {
             return mac;
         }
@@ -121,11 +124,7 @@ fn open_log() -> Option<std::fs::File> {
             let _ = fs::rename(&path, old);
         }
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()
+    OpenOptions::new().create(true).append(true).open(path).ok()
 }
 
 fn install_panic_hook() {
@@ -225,5 +224,9 @@ pub fn take_fatal() -> Option<String> {
     if FATAL_TAKEN.swap(true, Ordering::AcqRel) {
         return None;
     }
-    FATAL_MSG.lock().ok().map(|slot| slot.clone()).filter(|msg| !msg.is_empty())
+    FATAL_MSG
+        .lock()
+        .ok()
+        .map(|slot| slot.clone())
+        .filter(|msg| !msg.is_empty())
 }

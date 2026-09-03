@@ -135,19 +135,29 @@ fn program_color() -> RgbColor {
     RgbColor { r: 255, g: 0, b: 0 }
 }
 
-fn de_preview_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+fn de_preview_color<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RgbColor, D::Error> {
     Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(preview_color))
 }
 
-fn de_program_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+fn de_program_color<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RgbColor, D::Error> {
     Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(program_color))
 }
 
 fn inactive_color() -> RgbColor {
-    RgbColor { r: 64, g: 64, b: 64 }
+    RgbColor {
+        r: 64,
+        g: 64,
+        b: 64,
+    }
 }
 
-fn de_inactive_color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<RgbColor, D::Error> {
+fn de_inactive_color<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RgbColor, D::Error> {
     Ok(Option::<RgbColor>::deserialize(deserializer)?.unwrap_or_else(inactive_color))
 }
 
@@ -823,7 +833,8 @@ impl Document {
         if doc.settings.theme.is_empty() {
             doc.settings.theme = theme_charcoal();
         }
-        doc.settings.multiview_label_size = crate::labels::clamp_size(doc.settings.multiview_label_size);
+        doc.settings.multiview_label_size =
+            crate::labels::clamp_size(doc.settings.multiview_label_size);
         for input in &mut doc.inputs {
             if input.bus_mask == 0 {
                 input.bus_mask = 1;
@@ -913,7 +924,8 @@ impl Document {
             doc.next_output_id = doc.outputs.iter().map(|item| item.id).max().unwrap_or(99) + 1;
         }
         if doc.next_multiview_id == 0 {
-            doc.next_multiview_id = doc.multiviews.iter().map(|item| item.id).max().unwrap_or(0) + 1;
+            doc.next_multiview_id =
+                doc.multiviews.iter().map(|item| item.id).max().unwrap_or(0) + 1;
         }
         if doc.next_bus_id == 0 {
             doc.next_bus_id = doc.buses.iter().map(|item| item.id).max().unwrap_or(2) + 1;
@@ -1025,7 +1037,14 @@ mod tests {
         assert!(doc.settings.ndi_gpu_upload);
         assert_eq!(doc.settings.preview_color, RgbColor { r: 0, g: 255, b: 0 });
         assert_eq!(doc.settings.program_color, RgbColor { r: 255, g: 0, b: 0 });
-        assert_eq!(doc.settings.inactive_color, RgbColor { r: 64, g: 64, b: 64 });
+        assert_eq!(
+            doc.settings.inactive_color,
+            RgbColor {
+                r: 64,
+                g: 64,
+                b: 64
+            }
+        );
     }
 
     #[test]
@@ -1038,13 +1057,48 @@ mod tests {
   }
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
-        assert_eq!(doc.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
-        assert_eq!(doc.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
+        assert_eq!(
+            doc.settings.preview_color,
+            RgbColor {
+                r: 10,
+                g: 20,
+                b: 30
+            }
+        );
+        assert_eq!(
+            doc.settings.program_color,
+            RgbColor {
+                r: 40,
+                g: 50,
+                b: 60
+            }
+        );
         let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
         let again = parse(text.as_bytes()).unwrap();
-        assert_eq!(again.settings.preview_color, RgbColor { r: 10, g: 20, b: 30 });
-        assert_eq!(again.settings.program_color, RgbColor { r: 40, g: 50, b: 60 });
-        assert_eq!(again.settings.inactive_color, RgbColor { r: 64, g: 64, b: 64 });
+        assert_eq!(
+            again.settings.preview_color,
+            RgbColor {
+                r: 10,
+                g: 20,
+                b: 30
+            }
+        );
+        assert_eq!(
+            again.settings.program_color,
+            RgbColor {
+                r: 40,
+                g: 50,
+                b: 60
+            }
+        );
+        assert_eq!(
+            again.settings.inactive_color,
+            RgbColor {
+                r: 64,
+                g: 64,
+                b: 64
+            }
+        );
         assert_eq!(again.settings.multiview_label_size, 18.0);
         assert_eq!(again.settings.multiview_label_unit, MvLabelUnit::Px);
         assert_eq!(again.settings.multiview_label_anchor, MvLabelAnchor::Bottom);
@@ -1085,7 +1139,10 @@ mod tests {
         assert!(doc.multiviews[0].program_label_follow);
         assert!(!doc.multiviews[0].tiles[0].label_follow);
         assert_eq!(doc.multiviews[0].tiles[0].label, "Cam 1");
-        assert_eq!(doc.multiviews[0].template, MultiviewTemplate::PreviewProgram8);
+        assert_eq!(
+            doc.multiviews[0].template,
+            MultiviewTemplate::PreviewProgram8
+        );
         assert_eq!(doc.multiviews[0].label_anchor, None);
         assert_eq!(doc.multiviews[0].label_size, None);
         assert_eq!(doc.multiviews[0].label_unit, None);
