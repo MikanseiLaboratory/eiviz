@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Eiviz.Host;
 
 namespace Eiviz.Host.Dialogs;
@@ -42,7 +43,6 @@ public partial class SceneEditorWindow : Window
         LayerInputBox.ItemsSource = session.Inputs;
         if (session.Inputs.Count > 0)
             InputPick.SelectedIndex = 0;
-        PreviewHost.RetargetMonitor(monitorId, scene.GpuId);
         PreviewAspect.RatioWidth = width;
         PreviewAspect.RatioHeight = height;
         Loaded += (_, _) =>
@@ -54,6 +54,9 @@ public partial class SceneEditorWindow : Window
             PushGpu();
             AttachDrags();
             ListReorder.Attach(LayerList, MoveLayer);
+            Dispatcher.BeginInvoke(
+                () => PreviewHost.RetargetMonitor(monitorId, scene.GpuId),
+                DispatcherPriority.Loaded);
         };
     }
 

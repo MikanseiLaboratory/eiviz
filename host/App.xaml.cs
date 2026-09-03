@@ -38,7 +38,7 @@ public partial class App : Application
         }
     }
 
-    internal void ReplaceSession(Session session)
+    private void ReplaceSession(Session session)
     {
         var previous = Commands;
         Commands = null!;
@@ -48,6 +48,38 @@ public partial class App : Application
         MixerNative.Destroy();
         Session = session;
         BootMixer();
+    }
+
+    /// Restart the mixer and replace the main window so surfaces attach on first
+    /// layout, the same as a cold start. Do not reuse HWNDs across mixer lifetimes.
+    internal void ReloadSession(Session session)
+    {
+        var previous = MainWindow as MainWindow;
+        previous?.CloseOwnedSurfaces();
+        ReplaceSession(session);
+        var next = new MainWindow();
+        if (previous is not null)
+        {
+            next.WindowStartupLocation = WindowStartupLocation.Manual;
+            if (previous.WindowState == WindowState.Normal)
+            {
+                next.Left = previous.Left;
+                next.Top = previous.Top;
+                next.Width = previous.Width;
+                next.Height = previous.Height;
+            }
+            else
+            {
+                next.Left = previous.RestoreBounds.Left;
+                next.Top = previous.RestoreBounds.Top;
+                next.Width = previous.RestoreBounds.Width;
+                next.Height = previous.RestoreBounds.Height;
+            }
+            next.WindowState = previous.WindowState;
+        }
+        MainWindow = next;
+        next.Show();
+        previous?.Close();
     }
 
     private void BootMixer()

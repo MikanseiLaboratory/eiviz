@@ -78,12 +78,6 @@ internal sealed partial class SwapchainHost : HwndHost
         ApplySize();
     }
 
-    public void ForceReattach()
-    {
-        DetachNative();
-        ApplySize();
-    }
-
     public bool HasMonitor(ulong monitorId, ulong sourceId) =>
         _attached && IsMonitor && MonitorId == monitorId && SourceId == sourceId;
 
@@ -117,6 +111,8 @@ internal sealed partial class SwapchainHost : HwndHost
     private void ApplySize()
     {
         if (_hwnd == nint.Zero)
+            return;
+        if (ActualWidth < 8 || ActualHeight < 8)
             return;
         var (width, height) = PixelSize();
         MoveWindow(_hwnd, 0, 0, (int)width, (int)height, true);

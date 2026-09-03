@@ -1625,7 +1625,7 @@ public partial class MainWindow : Window
 
     private void NewSession_Click(object sender, RoutedEventArgs e)
     {
-        ApplySession(Session.Default());
+        ((App)Application.Current).ReloadSession(Session.Default());
     }
 
     private void LoadSession_Click(object sender, RoutedEventArgs e)
@@ -1640,7 +1640,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            ApplySession(SessionStore.Load(path));
+            ((App)Application.Current).ReloadSession(SessionStore.Load(path));
             AppPrefs.Current.RememberSession(path);
         }
         catch (Exception ex)
@@ -1649,9 +1649,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ApplySession(Session session)
+    internal void CloseOwnedSurfaces()
     {
         _overlay?.Close();
+        _resourcesWindow?.Close();
+        _logWindow?.Close();
         CloseAllSwitchers();
         foreach (var window in _multiviews.ToArray())
             window.Close();
@@ -1659,32 +1661,8 @@ public partial class MainWindow : Window
             preview.Close();
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
-        ScenePanel.Children.Clear();
-        _selectedScene = null;
-        _lastProgramId = 0;
-        _shownProgramId = 0;
-        _shownPreviewId = 0;
-        ((App)Application.Current).ReplaceSession(session);
-        InputList.ItemsSource = _session.Inputs;
-        UnitBox.ItemsSource = _session.Units;
-        _suppressUnitChange = true;
-        UnitBox.SelectedIndex = 0;
-        _suppressUnitChange = false;
-        RebuildScenes();
-        RebuildTransitions();
-        RebuildOverlayToggles();
-        RebuildMeters();
-        if (_session.Scenes.Count > 0)
-            SelectScene(_session.Scenes[0]);
-        PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
-        ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
-        Dispatcher.BeginInvoke(() =>
-        {
-            PreviewHost.ForceReattach();
-            ProgramHost.ForceReattach();
-        }, DispatcherPriority.Loaded);
-        ApplyBusColors();
-        ApplyAspect();
+        foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
+            tile.Monitor.ReleaseNative();
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e)

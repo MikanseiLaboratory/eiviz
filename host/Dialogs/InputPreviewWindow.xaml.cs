@@ -37,7 +37,6 @@ public partial class InputPreviewWindow : Window
         TitleText.Text = name;
         VideoAspect.RatioWidth = _ratioW;
         VideoAspect.RatioHeight = _ratioH;
-        PreviewHost.RetargetMonitor(_monitorId, _sourceId);
         SourceInitialized += (_, _) =>
         {
             if (PresentationSource.FromVisual(this) is HwndSource source)
@@ -46,8 +45,11 @@ public partial class InputPreviewWindow : Window
         Loaded += (_, _) =>
         {
             SnapWindowToAspect();
-            PreviewHost.RetargetMonitor(_monitorId, _sourceId);
-            MixerNative.SetMonitorPresentInterval(_monitorId, 1);
+            Dispatcher.BeginInvoke(() =>
+            {
+                PreviewHost.RetargetMonitor(_monitorId, _sourceId);
+                MixerNative.SetMonitorPresentInterval(_monitorId, 1);
+            }, DispatcherPriority.Loaded);
         };
         Closed += (_, _) => PreviewHost.ReleaseNative();
     }

@@ -73,7 +73,12 @@ impl GpuDevice {
                 SURFACE_CONFIGURE_FAILED.set(true);
                 return;
             }
-            crate::diag::mark_gpu_fault(&format!("wgpu: {error}"));
+            let text = format!("{error}");
+            if is_surface_local_error(&text) {
+                crate::diag::error(&format!("wgpu surface: {text}"));
+                return;
+            }
+            crate::diag::mark_fatal(format!("GPU device error: {text}"));
         }));
 
         Ok(Self {
@@ -106,4 +111,11 @@ impl GpuDevice {
             Err(DeviceError::UnsupportedPlatform)
         }
     }
+}
+
+fn is_surface_local_error(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("surface is not configured")
+        || text.contains("surface does not exist")
+        || (text.contains("surface") && (text.contains("outdated") || text.contains("lost")))
 }
