@@ -240,11 +240,15 @@ fn omt_program_shows_fade_during_auto() {
         baseline.1
     );
 
+    // Long enough that CI UYVY readback lag still lands inside the fade,
+    // not on the post-auto cut. The freeze bug stays red for the whole Auto.
+    const AUTO_MS: u32 = 2000;
+    let auto_started = Instant::now();
     assert_eq!(
         mixer_unit_auto(
             1,
             TRANSITION_FADE,
-            600,
+            AUTO_MS,
             1,
             1,
             0,
@@ -260,7 +264,8 @@ fn omt_program_shows_fade_during_auto() {
         OK
     );
 
-    let during = drain_omt_means(&session, Duration::from_millis(420));
+    let _ = drain_omt_means(&session, Duration::from_millis(80));
+    let during = wait_omt_fade(&session, baseline, Duration::from_millis(1500));
     assert!(
         during.len() >= 5,
         "OMT should keep emitting during auto, got {} frames",
@@ -279,7 +284,11 @@ fn omt_program_shows_fade_during_auto() {
         baseline.0
     );
 
-    thread::sleep(Duration::from_millis(250));
+    let remain =
+        Duration::from_millis(u64::from(AUTO_MS) + 250).saturating_sub(auto_started.elapsed());
+    if !remain.is_zero() {
+        thread::sleep(remain);
+    }
     let after = wait_omt_sample(&session, Duration::from_secs(2));
     assert!(
         after.1 > 160.0 && after.0 < 80.0,
@@ -518,6 +527,25 @@ fn drain_omt_means(session: &ReceiverSession, budget: Duration) -> Vec<(f32, f32
     while Instant::now() < deadline {
         if let Some(frame) = session.recv_video_timeout(Duration::from_millis(20)) {
             samples.push(mean_red_blue(&frame));
+        }
+    }
+    samples
+}
+
+fn wait_omt_fade(
+    session: &ReceiverSession,
+    baseline: (f32, f32),
+    budget: Duration,
+) -> Vec<(f32, f32)> {
+    let deadline = Instant::now() + budget;
+    let mut samples = Vec::new();
+    while Instant::now() < deadline {
+        if let Some(frame) = session.recv_video_timeout(Duration::from_millis(20)) {
+            let sample = mean_red_blue(&frame);
+            samples.push(sample);
+            if sample.1 > baseline.1 + 40.0 && sample.0 < baseline.0 - 40.0 {
+                break;
+            }
         }
     }
     samples
