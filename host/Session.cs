@@ -11,7 +11,15 @@ public enum InputKind
     Video,
     Omt,
     Ndi,
-    Uvc
+    Uvc,
+    Mix
+}
+
+public enum MixSource
+{
+    MuPreview,
+    MuProgram,
+    SessionMultiview
 }
 
 public enum BandwidthSave
@@ -324,6 +332,8 @@ public sealed class InputEntry
     public uint CaptureFpsNum { get; set; }
     public uint CaptureFpsDen { get; set; }
     public List<string> Tags { get; set; } = [];
+    public MixSource MixSource { get; set; } = MixSource.MuProgram;
+    public ulong MixTargetId { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
@@ -339,7 +349,8 @@ internal static class InputKindNames
         InputKind.Video,
         InputKind.Omt,
         InputKind.Ndi,
-        InputKind.Uvc
+        InputKind.Uvc,
+        InputKind.Mix
     ];
 
     public static string Category(InputKind kind) => kind switch
@@ -350,8 +361,39 @@ internal static class InputKindNames
         InputKind.Omt => "OMT",
         InputKind.Ndi => "NDI®",
         InputKind.Uvc => "Video Capture",
+        InputKind.Mix => "Mix",
         _ => kind.ToString()
     };
+
+    public static uint MixSourceKind(MixSource source) => source switch
+    {
+        MixSource.MuPreview => MixerNative.SrcKindMuPreview,
+        MixSource.SessionMultiview => MixerNative.SrcKindMuMultiview,
+        _ => MixerNative.SrcKindMuProgram
+    };
+
+    public static bool UnitUsesSource(Session session, MixingUnitEntry unit, ulong sourceId)
+    {
+        if (unit.Overlays.Any(overlay => overlay.SceneGpuId == sourceId))
+            return true;
+        unsafe
+        {
+            var state = new UnitState();
+            if (MixerNative.GetUnitState(unit.Id, &state) == 0)
+            {
+                if (state.ProgramSource == sourceId || state.PreviewSource == sourceId)
+                    return true;
+                if (SceneUses(session, state.ProgramSource, sourceId)
+                    || SceneUses(session, state.PreviewSource, sourceId))
+                    return true;
+            }
+        }
+        return unit.Overlays.Any(overlay => SceneUses(session, overlay.SceneGpuId, sourceId));
+    }
+
+    private static bool SceneUses(Session session, ulong sceneGpuId, ulong sourceId) =>
+        session.Scenes.Any(scene =>
+            scene.GpuId == sceneGpuId && scene.Layers.Any(layer => layer.InputId == sourceId));
 
     public static bool SameCategory(InputKind left, InputKind right) =>
         left == right || (IsColour(left) && IsColour(right));

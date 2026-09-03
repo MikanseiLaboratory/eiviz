@@ -110,7 +110,6 @@ pub const SAVE_FLAG_MULTIVIEW: u32 = 1;
 
 pub const MV_SLOT_MAX: usize = 16;
 pub const MU_BUS_PREVIEW: u64 = 0x1000_0000_0000_0000;
-pub const MU_BUS_MULTIVIEW: u64 = 0x2000_0000_0000_0000;
 pub const MU_ID_MASK: u64 = 0x0FFF_FFFF_FFFF_FFFF;
 
 pub const NATIVE_WIN32_HWND: u32 = 1;
@@ -289,10 +288,6 @@ pub fn mixing_unit_preview(unit_id: u64) -> u64 {
     MU_SOURCE_FLAG | MU_BUS_PREVIEW | (unit_id & MU_ID_MASK)
 }
 
-pub fn mixing_unit_multiview(unit_id: u64) -> u64 {
-    MU_SOURCE_FLAG | MU_BUS_MULTIVIEW | (unit_id & MU_ID_MASK)
-}
-
 pub fn mixing_unit_from_source(source_id: u64) -> Option<u64> {
     if source_id & MU_SOURCE_FLAG == 0 {
         None
@@ -302,12 +297,46 @@ pub fn mixing_unit_from_source(source_id: u64) -> Option<u64> {
 }
 
 pub fn mixing_unit_bus(source_id: u64) -> u32 {
-    if source_id & MU_BUS_MULTIVIEW != 0 {
-        OUTPUT_MULTIVIEW
-    } else if source_id & MU_BUS_PREVIEW != 0 {
+    if source_id & MU_BUS_PREVIEW != 0 {
         OUTPUT_PREVIEW
     } else {
         OUTPUT_PROGRAM
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MixInputSpec {
+    pub target_id: u64,
+    pub source_kind: u32,
+    pub delay: u32,
+}
+
+impl MixInputSpec {
+    pub fn new(target_id: u64, source_kind: u32, delay: u32) -> Option<Self> {
+        let source_kind = match source_kind {
+            SRC_KIND_MU_PREVIEW | SRC_KIND_MU_PROGRAM | SRC_KIND_MU_MULTIVIEW => source_kind,
+            _ => return None,
+        };
+        if target_id == 0 {
+            return None;
+        }
+        Some(Self {
+            target_id,
+            source_kind,
+            delay: delay.clamp(1, 8),
+        })
+    }
+
+    pub fn is_session_multiview(self) -> bool {
+        self.source_kind == SRC_KIND_MU_MULTIVIEW
+    }
+
+    pub fn unit_bus(self) -> Option<u32> {
+        match self.source_kind {
+            SRC_KIND_MU_PREVIEW => Some(OUTPUT_PREVIEW),
+            SRC_KIND_MU_PROGRAM => Some(OUTPUT_PROGRAM),
+            _ => None,
+        }
     }
 }
 

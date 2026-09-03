@@ -229,6 +229,15 @@ pub enum InputKind {
     Omt,
     Ndi,
     Uvc,
+    Mix,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MixSource {
+    MuPreview,
+    #[default]
+    MuProgram,
+    SessionMultiview,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -406,6 +415,10 @@ pub struct InputDto {
     pub capture_fps_den: u32,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub mix_source: MixSource,
+    #[serde(default)]
+    pub mix_target_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -868,6 +881,10 @@ impl Document {
             if input.gain < 0.0 {
                 input.gain = 1.0;
             }
+            if input.kind != InputKind::Mix {
+                input.mix_source = MixSource::MuProgram;
+                input.mix_target_id = 0;
+            }
         }
         for unit in &mut doc.units {
             if unit.width == 0 {
@@ -1098,6 +1115,40 @@ mod tests {
         assert_eq!(again.inputs[0].tags, vec!["Cameras"]);
         assert_eq!(again.scenes[0].tags, vec!["Open"]);
         assert!(again.scenes[0].preview_collapsed);
+    }
+
+    #[test]
+    fn mix_input_roundtrip_and_legacy_defaults() {
+        let legacy = r#"{
+  "version": 2,
+  "inputs": [{ "id": 2, "name": "SMPTE Bars", "kind": "Bars" }]
+}"#;
+        let doc = parse(legacy.as_bytes()).unwrap();
+        assert_eq!(doc.inputs[0].mix_source, MixSource::MuProgram);
+        assert_eq!(doc.inputs[0].mix_target_id, 0);
+
+        let src = r#"{
+  "version": 2,
+  "inputs": [{
+    "id": 20,
+    "name": "MU1 PGM",
+    "kind": "Mix",
+    "mixSource": "MuPreview",
+    "mixTargetId": 1,
+    "frameBufferFrames": 4
+  }]
+}"#;
+        let mix = parse(src.as_bytes()).unwrap();
+        assert_eq!(mix.inputs[0].kind, InputKind::Mix);
+        assert_eq!(mix.inputs[0].mix_source, MixSource::MuPreview);
+        assert_eq!(mix.inputs[0].mix_target_id, 1);
+        assert_eq!(mix.inputs[0].frame_buffer_frames, 4);
+        let text = String::from_utf8(to_vec(&mix).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert_eq!(again.inputs[0].kind, InputKind::Mix);
+        assert_eq!(again.inputs[0].mix_source, MixSource::MuPreview);
+        assert_eq!(again.inputs[0].mix_target_id, 1);
+        assert_eq!(again.inputs[0].frame_buffer_frames, 4);
     }
 
     #[test]

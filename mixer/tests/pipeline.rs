@@ -5,14 +5,16 @@ use std::time::{Duration, Instant};
 use eiviz_mixer::{
     EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo,
     OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
+    TRANSITION_CUBE_ZOOM,
     TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
     TRANSITION_HEART, TRANSITION_LOREZ, TRANSITION_METAMIX, TRANSITION_MULTITASK,
     TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
     TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
     TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
-    mixer_define_scene, mixer_destroy, mixer_omt_connect, mixer_omt_start_send, mixer_output_add,
+    mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_omt_connect,
+    mixer_omt_start_send, mixer_output_add,
     mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
     mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
@@ -403,6 +405,41 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
             ),
             ERR_IO
         );
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn mix_input_define_and_self_cycle_rejected() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(mixer_create_unit(2, 320, 180), OK);
+    assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 2), OK);
+    assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PREVIEW, 1), OK);
+    assert_eq!(mixer_define_mix_input(0, 1, SRC_KIND_MU_PROGRAM, 1), ERR_INVALID_ARGUMENT);
+
+    let mut cycle = UnitState {
+        program_source: 20,
+        preview_source: SRC_BARS,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &cycle), ERR_INVALID_ARGUMENT);
+    }
+
+    let nested = UnitState {
+        program_source: 20,
+        preview_source: SRC_COLOR,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(2, &nested), OK);
+    }
+
+    cycle.program_source = SRC_BARS;
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &cycle), OK);
     }
     mixer_destroy();
 }

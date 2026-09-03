@@ -10,6 +10,7 @@ enum InputKind: String, Codable, CaseIterable {
     case omt = "Omt"
     case ndi = "Ndi"
     case uvc = "Uvc"
+    case mix = "Mix"
 
     var category: String {
         switch self {
@@ -19,6 +20,21 @@ enum InputKind: String, Codable, CaseIterable {
         case .omt: return "OMT"
         case .ndi: return "NDI®"
         case .uvc: return "Video Capture"
+        case .mix: return "Mix"
+        }
+    }
+}
+
+enum MixSource: String, Codable {
+    case muPreview = "MuPreview"
+    case muProgram = "MuProgram"
+    case sessionMultiview = "SessionMultiview"
+
+    var sourceKind: UInt32 {
+        switch self {
+        case .muPreview: return EIVIZ_SRC_KIND_MU_PREVIEW
+        case .sessionMultiview: return EIVIZ_SRC_KIND_MU_MULTIVIEW
+        case .muProgram: return EIVIZ_SRC_KIND_MU_PROGRAM
         }
     }
 }
@@ -217,6 +233,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var captureFpsNum: UInt32 = 0
     var captureFpsDen: UInt32 = 0
     var tags: [String] = []
+    var mixSource: MixSource = .muProgram
+    var mixTargetId: UInt64 = 0
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -226,6 +244,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
+        case mixSource, mixTargetId
     }
 
     init(
@@ -309,6 +328,12 @@ struct InputEntry: Identifiable, Codable, Hashable {
         captureFpsNum = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsNum) ?? 0
         captureFpsDen = try container.decodeIfPresent(UInt32.self, forKey: .captureFpsDen) ?? 0
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        mixSource = try container.decodeIfPresent(MixSource.self, forKey: .mixSource) ?? .muProgram
+        mixTargetId = try container.decodeIfPresent(UInt64.self, forKey: .mixTargetId) ?? 0
+        if kind != .mix {
+            mixSource = .muProgram
+            mixTargetId = 0
+        }
     }
 }
 

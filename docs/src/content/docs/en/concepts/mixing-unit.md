@@ -13,3 +13,5 @@ Each unit has its own resolution and output frame rate.
 
 The switching buses are Preview and Program.  
 A Switcher UI shows Preview and Program, so it uses 2 slots of the video output destination window limit. Closing it frees those slots.
+
+Add Input can wrap this unit’s Preview or Program as a Mix Input. That Input reads the existing FrameDelay ring (1–8 frames) and does not add a swapchain. Put it on another Mixing Unit for a nested M/E. Wiring it back onto the same unit is refused.

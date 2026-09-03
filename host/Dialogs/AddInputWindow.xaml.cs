@@ -19,7 +19,7 @@ public partial class AddInputWindow : Window
     public AddInputWindow()
     {
         InitializeComponent();
-        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.Omt, InputKind.Ndi, InputKind.Uvc })
+        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.Omt, InputKind.Ndi, InputKind.Uvc, InputKind.Mix })
         {
             var button = new Button
             {
@@ -64,9 +64,25 @@ public partial class AddInputWindow : Window
     public uint ResultCaptureFpsNum { get; private set; } = 60;
     public uint ResultCaptureFpsDen { get; private set; } = 1;
     public IReadOnlyList<string> ResultTags { get; private set; } = [];
+    public MixSource ResultMixSource { get; private set; } = MixSource.MuProgram;
+    public ulong ResultMixTargetId { get; private set; }
 
-    public void BindTags(Session session, IEnumerable<string>? selected = null) =>
+    public void BindTags(Session session, IEnumerable<string>? selected = null)
+    {
         _tags = new TagCheckPanel(TagPanel, session.InputTags, selected, this);
+        BindMixTargets(session);
+    }
+
+    public void BindMixTargets(Session session)
+    {
+        MixTargetBox.Items.Clear();
+        foreach (var unit in session.Units)
+            MixTargetBox.Items.Add(new MixTargetItem(unit.Name, unit.Id, false));
+        foreach (var layout in session.Multiviews)
+            MixTargetBox.Items.Add(new MixTargetItem(layout.Name, layout.GpuId, true));
+        if (MixTargetBox.Items.Count > 0)
+            MixTargetBox.SelectedIndex = 0;
+    }
 
     public void Load(InputEntry input)
     {
@@ -103,6 +119,19 @@ public partial class AddInputWindow : Window
         SelectTag(NdiBandwidthBox, ((int)input.NdiBandwidth).ToString());
         SelectTag(OmtSaveBox, ((int)input.BandwidthSave).ToString());
         OmtMvBox.IsChecked = input.KeepFullOnMultiview;
+        if (input.Kind == InputKind.Mix)
+        {
+            foreach (MixTargetItem item in MixTargetBox.Items)
+            {
+                if (item.Id == input.MixTargetId)
+                {
+                    MixTargetBox.SelectedItem = item;
+                    break;
+                }
+            }
+            SelectTag(MixBusBox, input.MixSource == MixSource.MuPreview ? "preview" : "program");
+            SelectTag(MixBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
+        }
         if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
@@ -139,6 +168,8 @@ public partial class AddInputWindow : Window
         OmtPanel.Visibility = VisibleIf(InputKind.Omt);
         NdiPanel.Visibility = VisibleIf(InputKind.Ndi);
         UvcPanel.Visibility = VisibleIf(InputKind.Uvc);
+        MixPanel.Visibility = VisibleIf(InputKind.Mix);
+        MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
         foreach (Button button in CategoryPanel.Children)
             button.Background = Equals(button.Tag, _kind)
                 ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0x6B, 0x3C))
@@ -332,6 +363,21 @@ public partial class AddInputWindow : Window
                 ResultFrameBufferFrames = ReadBuffer(NdiBufferBox, 1);
                 ResultNdiBandwidth = ReadNdiBandwidth(NdiBandwidthBox);
                 break;
+            case InputKind.Mix:
+                if (MixTargetBox.SelectedItem is not MixTargetItem target)
+                    return;
+                ResultMixTargetId = target.Id;
+                ResultMixSource = target.IsMultiview
+                    ? MixSource.SessionMultiview
+                    : MixBusBox.SelectedItem is ComboBoxItem { Tag: "preview" }
+                        ? MixSource.MuPreview
+                        : MixSource.MuProgram;
+                ResultFrameBufferFrames = ReadBuffer(MixBufferBox, 1);
+                ResultPath = "";
+                ResultName = target.IsMultiview
+                    ? $"{target.Name} MV"
+                    : $"{target.Name} {(ResultMixSource == MixSource.MuPreview ? "PRV" : "PGM")}";
+                break;
             case InputKind.Uvc:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
                     return;
@@ -352,6 +398,11 @@ public partial class AddInputWindow : Window
             ResultName = NameBox.Text.Trim();
         ResultTags = _tags?.Selected.ToArray() ?? [];
         DialogResult = true;
+    }
+
+    private void MixTarget_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
     }
 
     private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
@@ -439,5 +490,10 @@ public partial class AddInputWindow : Window
     private sealed record CameraItem(string Name, string Link)
     {
         public override string ToString() => Name;
+    }
+
+    private sealed record MixTargetItem(string Name, ulong Id, bool IsMultiview)
+    {
+        public override string ToString() => IsMultiview ? $"{Name} (Multiview)" : Name;
     }
 }

@@ -525,10 +525,14 @@ struct AddInputView: View {
     @State private var videoPlayWhen: VideoPlayWhen = .never
     @State private var videoRestartWhen: VideoTriggerWhen = .never
     @State private var videoPauseWhen: VideoTriggerWhen = .never
+    @State private var mixTargetId: UInt64 = 0
+    @State private var mixIsMultiview = false
+    @State private var mixPreview = false
+    @State private var mixBuffer: UInt32 = 1
 
     var body: some View {
         HStack(spacing: 0) {
-            List(["Colours", "Still", "Video", "OMT", "NDI®", "Video Capture"], id: \.self, selection: $category) { item in
+            List(["Colours", "Still", "Video", "OMT", "NDI®", "Video Capture", "Mix"], id: \.self, selection: $category) { item in
                 Text(item).tag(item)
             }
             .frame(width: 200)
@@ -555,7 +559,15 @@ struct AddInputView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
-        .onAppear(perform: loadEditing)
+        .onAppear {
+            loadEditing()
+            if mixTargetId == 0 {
+                mixTargetId = mixer.session.units.first?.id
+                    ?? mixer.session.multiviews.first?.gpuId
+                    ?? 0
+                mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == mixTargetId }
+            }
+        }
     }
 
     @ViewBuilder
@@ -624,7 +636,7 @@ struct AddInputView: View {
             frameBufferPicker($buffer)
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
-        default:
+        case "Video Capture":
             Button("Refresh devices") { refreshUvc() }
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
@@ -639,6 +651,28 @@ struct AddInputView: View {
             }
             frameBufferPicker($mediaBuffer)
             Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        default:
+            Picker("Source", selection: $mixTargetId) {
+                ForEach(mixer.session.units) { unit in
+                    Text(unit.name).tag(unit.id)
+                }
+                ForEach(mixer.session.multiviews) { layout in
+                    Text("\(layout.name) (Multiview)").tag(layout.gpuId)
+                }
+            }
+            .onChange(of: mixTargetId) { _, id in
+                mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == id }
+            }
+            if !mixIsMultiview {
+                Picker("Bus", selection: $mixPreview) {
+                    Text("Program").tag(false)
+                    Text("Preview").tag(true)
+                }
+            }
+            frameBufferPicker($mixBuffer)
+            Text("Mix Input reads N frames ago from the existing delay ring. Same Mixing Unit wiring is refused. Session Multiview Mix Inputs are muted by default.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -751,6 +785,10 @@ struct AddInputView: View {
         videoPlayWhen = editing.videoPlayWhen
         videoRestartWhen = editing.videoRestartWhen
         videoPauseWhen = editing.videoPauseWhen
+        mixTargetId = editing.mixTargetId
+        mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == editing.mixTargetId }
+        mixPreview = editing.mixSource == .muPreview
+        mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
     }
 
     private func defaultName() -> String {
@@ -768,6 +806,12 @@ struct AddInputView: View {
             return omtAddress
         case "NDI®":
             return ndiAddress
+        case "Mix":
+            if mixIsMultiview {
+                return mixer.session.multiviews.first { $0.gpuId == mixTargetId }.map { "\($0.name) MV" } ?? "Mix"
+            }
+            let unit = mixer.session.units.first { $0.id == mixTargetId }?.name ?? "Mix"
+            return "\(unit) \(mixPreview ? "PRV" : "PGM")"
         default:
             return uvcList.first { $0.id == selectedUvc }?.name ?? "Video Capture"
         }
@@ -827,6 +871,21 @@ struct AddInputView: View {
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
             input.useGpu = false
+        case "Mix":
+            if mixTargetId == 0 {
+                mixTargetId = mixer.session.units.first?.id
+                    ?? mixer.session.multiviews.first?.gpuId
+                    ?? 0
+            }
+            guard mixTargetId != 0 else { return false }
+            mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == mixTargetId }
+            input.kind = .mix
+            input.mixTargetId = mixTargetId
+            input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
+            input.frameBufferFrames = max(1, min(8, mixBuffer))
+            if mixIsMultiview {
+                input.mute = true
+            }
         default:
             guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
             input.kind = .uvc

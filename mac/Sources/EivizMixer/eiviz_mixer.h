@@ -237,6 +237,7 @@ int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, 
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
 int32_t mixer_destroy_scene(uint64_t scene_id);
 int32_t mixer_define_generator(uint64_t id, uint32_t kind, float r, float g, float b, float a, uint32_t scroll);
+int32_t mixer_define_mix_input(uint64_t id, uint64_t target_id, uint32_t source_kind, uint32_t delay);
 int32_t mixer_generator_set_tone(uint64_t id, float hz, float level_dbfs);
 int32_t mixer_unit_attach_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);
 int32_t mixer_unit_resize_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);

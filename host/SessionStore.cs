@@ -190,6 +190,8 @@ internal static class SessionStore
         public uint CaptureFpsNum { get; set; }
         public uint CaptureFpsDen { get; set; }
         public List<string> Tags { get; set; } = [];
+        public MixSource MixSource { get; set; } = MixSource.MuProgram;
+        public ulong MixTargetId { get; set; }
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -221,7 +223,9 @@ internal static class SessionStore
             CaptureHeight = input.CaptureHeight,
             CaptureFpsNum = input.CaptureFpsNum,
             CaptureFpsDen = input.CaptureFpsDen,
-            Tags = [.. input.Tags]
+            Tags = [.. input.Tags],
+            MixSource = input.Kind == InputKind.Mix ? input.MixSource : MixSource.MuProgram,
+            MixTargetId = input.Kind == InputKind.Mix ? input.MixTargetId : 0
         };
 
         public InputEntry ToEntry() => new()
@@ -254,7 +258,9 @@ internal static class SessionStore
             CaptureHeight = CaptureHeight,
             CaptureFpsNum = CaptureFpsNum,
             CaptureFpsDen = CaptureFpsDen,
-            Tags = TagCatalog.NormalizeList(Tags)
+            Tags = TagCatalog.NormalizeList(Tags),
+            MixSource = Kind == InputKind.Mix ? MixSource : MixSource.MuProgram,
+            MixTargetId = Kind == InputKind.Mix ? MixTargetId : 0
         };
     }
 

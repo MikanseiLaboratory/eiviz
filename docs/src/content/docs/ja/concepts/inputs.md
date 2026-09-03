@@ -33,12 +33,15 @@ InputはMixing UnitとOutputにも直接載せられます。
 - 動画ファイル
 - UVC（キャプチャデバイス）
 - NDI/OMT
+- Mix（Mixing UnitのPreview/Program、またはセッションMultiviewと、1–8フレームのFrame Buffer）
+
+Mix Inputは既存バスの遅延付き再ルートです。FrameDelayリングのNフレーム前を参照し、swapchainは増やしません。同じMixing Unitに、そのユニットを対象とするMix Inputは載せられません。入れ子のM/E（ユニットAのMixをユニットBへ）は、その遅延で安定します。セッションMultiviewのMix Inputは最初からミュートです。
 
 Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
 入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。
 
 ## タグ
 
-Inputには複数のタグを付けられます。一覧上部のタブでAll、各タグ、Kind（Colours/Still/Video/OMT/NDI®/Video Capture）を切り替えます。タブ帯を右クリックしてタグの追加、名前変更、削除ができます。
+Inputには複数のタグを付けられます。一覧上部のタブでAll、各タグ、Kind（Colours/Still/Video/OMT/NDI®/Video Capture/Mix）を切り替えます。タブ帯を右クリックしてタグの追加、名前変更、削除ができます。
 
 詳細は[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご参照ください。

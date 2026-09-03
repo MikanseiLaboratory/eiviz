@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::abi::{OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
-use crate::upload::{AUDIO_FIFO_FRAMES, SampleRing, UploadStore};
+use crate::abi::{
+    MixInputSpec, OverlayDesc, SRC_KIND_MU_PREVIEW, UnitState, is_scene, mixing_unit_from_source,
+};
+use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, SampleRing, UploadStore};
 
 use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
@@ -130,6 +132,8 @@ pub struct AudioGraph {
     scratch_master: Vec<f32>,
     scratch_mixed: Vec<f32>,
     popped: HashMap<u64, Vec<f32>>,
+    mix_fifos: HashMap<u64, VecDeque<f32>>,
+    mix_last: HashMap<u64, (f32, f32)>,
 }
 
 impl AudioGraph {
@@ -144,6 +148,8 @@ impl AudioGraph {
             scratch_master: Vec::new(),
             scratch_mixed: Vec::new(),
             popped: HashMap::new(),
+            mix_fifos: HashMap::new(),
+            mix_last: HashMap::new(),
         };
         // Tests must not open the machine's output. HAL Start can block forever
         // on CI runners, and AudioEngine used to join that thread from Drop.
@@ -292,6 +298,9 @@ impl AudioGraph {
         frames: usize,
         delay: &mut AudioDelay,
         produce: bool,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
+        fps_num: u32,
+        fps_den: u32,
     ) -> Vec<f32> {
         if frames == 0 {
             return Vec::new();
@@ -305,8 +314,11 @@ impl AudioGraph {
                     ids.push(*id);
                 }
             }
-            self.popped.retain(|id, _| ids.contains(id));
+            self.popped.retain(|id, _| ids.contains(id) || mix_inputs.contains_key(id));
             for id in ids {
+                if mix_inputs.contains_key(&id) {
+                    continue;
+                }
                 let slot = self.popped.entry(id).or_default();
                 uploads.pop_frames_into(id, frames, slot);
             }
@@ -314,6 +326,7 @@ impl AudioGraph {
                 .iter()
                 .map(|spec| (spec.0, spec.3.as_ref()))
                 .collect();
+            self.feed_mix_inputs(snapshot, &spec_map, mix_inputs, frames, fps_num, fps_den);
             let bus_ids: Vec<u64> = self.buses.iter().map(|bus| bus.id).collect();
             for bus_id in bus_ids {
                 let (role, bit, copy_master, fader) = {
@@ -442,6 +455,7 @@ impl AudioGraph {
                     &self.inputs,
                     bit,
                     &mut gains,
+                    None,
                 );
                 add_source(
                     state.mix_incoming(),
@@ -450,6 +464,7 @@ impl AudioGraph {
                     &self.inputs,
                     bit,
                     &mut gains,
+                    None,
                 );
                 for overlay in state.overlays.iter().take(state.overlay_count as usize) {
                     if overlay.audio_follow == 0 {
@@ -462,6 +477,7 @@ impl AudioGraph {
                         &self.inputs,
                         bit,
                         &mut gains,
+                        None,
                     );
                 }
             } else {
@@ -469,6 +485,130 @@ impl AudioGraph {
             }
         }
         gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
+    }
+
+    fn feed_mix_inputs(
+        &mut self,
+        snapshot: &[crate::abi::UnitSnap],
+        spec_map: &HashMap<u64, &[OverlayDesc]>,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
+        frames: usize,
+        fps_num: u32,
+        fps_den: u32,
+    ) {
+        self.mix_fifos.retain(|id, _| mix_inputs.contains_key(id));
+        self.mix_last.retain(|id, _| mix_inputs.contains_key(id));
+        let live: HashSet<u64> = mix_inputs.keys().copied().collect();
+        for (mix_id, spec) in mix_inputs {
+            if spec.is_session_multiview() {
+                let slot = self.popped.entry(*mix_id).or_default();
+                slot.clear();
+                slot.resize(frames * 2, 0.0);
+                continue;
+            }
+            let skip: HashSet<u64> = mix_inputs
+                .iter()
+                .filter(|(_, other)| {
+                    !other.is_session_multiview() && other.target_id == spec.target_id
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            let Some((_, _, _, _, _, state, mix_preview, _)) =
+                snapshot.iter().find(|(id, ..)| *id == spec.target_id)
+            else {
+                let slot = self.popped.entry(*mix_id).or_default();
+                slot.clear();
+                slot.resize(frames * 2, 0.0);
+                continue;
+            };
+            let bit = self
+                .unit_links
+                .get(&spec.target_id)
+                .and_then(|link| self.buses.iter().find(|bus| bus.id == link.bus_id))
+                .map(|bus| bus.bit)
+                .unwrap_or(0);
+            let mut gains = HashMap::<u64, f32>::new();
+            if spec.source_kind == SRC_KIND_MU_PREVIEW {
+                let incoming = if *mix_preview != 0 {
+                    *mix_preview
+                } else {
+                    state.mix_incoming()
+                };
+                add_source(
+                    incoming,
+                    1.0,
+                    spec_map,
+                    &self.inputs,
+                    bit,
+                    &mut gains,
+                    Some(&skip),
+                );
+            } else {
+                add_source(
+                    state.program_source,
+                    1.0,
+                    spec_map,
+                    &self.inputs,
+                    bit,
+                    &mut gains,
+                    Some(&skip),
+                );
+                for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+                    if overlay.audio_follow == 0 {
+                        continue;
+                    }
+                    add_source(
+                        overlay.source_id,
+                        overlay.opacity.max(0.0),
+                        spec_map,
+                        &self.inputs,
+                        bit,
+                        &mut gains,
+                        Some(&skip),
+                    );
+                }
+            }
+            self.scratch_mixed.clear();
+            self.scratch_mixed.resize(frames * 2, 0.0);
+            for (id, gain) in gains {
+                if gain.abs() < 1e-6 || live.contains(&id) && skip.contains(&id) {
+                    continue;
+                }
+                let Some(samples) = self.popped.get(&id) else {
+                    continue;
+                };
+                crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
+            }
+            let delay_samples = (AUDIO_RATE as u64
+                * u64::from(spec.delay.max(1))
+                * u64::from(fps_den.max(1))
+                / u64::from(fps_num.max(1))) as usize;
+            let fifo = self.mix_fifos.entry(*mix_id).or_default();
+            fifo.extend(self.scratch_mixed.iter().copied());
+            let cap = delay_samples
+                .saturating_mul(2)
+                .saturating_add((AUDIO_RATE as usize / 5) * 2);
+            while fifo.len() > cap {
+                fifo.pop_front();
+            }
+            let slot = self.popped.entry(*mix_id).or_default();
+            slot.clear();
+            slot.reserve(frames * 2);
+            for _ in 0..frames {
+                let queued = fifo.len() / 2;
+                if queued > delay_samples && fifo.len() >= 2 {
+                    let left = fifo.pop_front().unwrap_or(0.0);
+                    let right = fifo.pop_front().unwrap_or(left);
+                    self.mix_last.insert(*mix_id, (left, right));
+                    slot.push(left);
+                    slot.push(right);
+                } else {
+                    let (left, right) = self.mix_last.get(mix_id).copied().unwrap_or((0.0, 0.0));
+                    slot.push(left);
+                    slot.push(right);
+                }
+            }
+        }
     }
 
     fn add_independent(&self, bit: u32, gains: &mut HashMap<u64, f32>) {
@@ -489,8 +629,12 @@ fn add_source(
     inputs: &HashMap<u64, InputAudio>,
     bit: u32,
     gains: &mut HashMap<u64, f32>,
+    skip: Option<&HashSet<u64>>,
 ) {
     if gain.abs() < 1e-4 {
+        return;
+    }
+    if skip.is_some_and(|set| set.contains(&id)) {
         return;
     }
     if is_scene(id) {
@@ -506,6 +650,7 @@ fn add_source(
                     inputs,
                     bit,
                     gains,
+                    skip,
                 );
             }
         }
