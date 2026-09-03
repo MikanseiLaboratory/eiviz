@@ -5,7 +5,7 @@ namespace Eiviz.Host.Preview;
 
 internal static class FlipBudget
 {
-    public const int AutoDefault = 8;
+    public const int AutoDefault = 6;
     private const long LearnWindowMs = 3000;
 
     private static uint _limitSetting;
@@ -14,14 +14,23 @@ internal static class FlipBudget
     private static SwapchainHost? _lastAttach;
     private static long _attachTick;
     private static ulong _seenLost;
-    private static bool _refusedOnce;
 
     public static void Configure(uint limit)
     {
         _limitSetting = IsAllowed(limit) ? limit : 0u;
         _ceiling = _limitSetting == 0
-            ? GpuPresentStore.ObservedCeiling ?? AutoDefault
+            ? Math.Min(GpuPresentStore.ObservedCeiling ?? AutoDefault, AutoDefault)
             : (int)_limitSetting;
+    }
+
+    public static bool TryOpen(int surfaces, Window? owner = null)
+    {
+        if (!OperatingSystem.IsWindows() || surfaces <= 0)
+            return true;
+        if (_attached + surfaces <= EffectiveMax())
+            return true;
+        ShowRefuse(owner);
+        return false;
     }
 
     public static bool TryBegin(SwapchainHost host)
@@ -29,10 +38,7 @@ internal static class FlipBudget
         if (!OperatingSystem.IsWindows())
             return true;
         if (_attached >= EffectiveMax())
-        {
-            ShowRefuse();
             return false;
-        }
         _attached++;
         _lastAttach = host;
         _attachTick = Environment.TickCount64;
@@ -78,21 +84,12 @@ internal static class FlipBudget
     private static bool IsAllowed(uint limit) =>
         limit is 0 or 4 or 6 or 8 or 10 or 12 or 16;
 
-    private static void ShowRefuse()
+    private static void ShowRefuse(Window? owner)
     {
-        if (_refusedOnce)
-            return;
-        _refusedOnce = true;
-        var app = Application.Current;
-        if (app is null)
-            return;
-        app.Dispatcher.BeginInvoke(() =>
-        {
-            var owner = app.MainWindow;
-            if (owner is null)
-                MessageBox.Show(Loc.T("msg.flipBudget"));
-            else
-                MessageBox.Show(owner, Loc.T("msg.flipBudget"));
-        });
+        owner ??= Application.Current?.MainWindow;
+        if (owner is null)
+            MessageBox.Show(Loc.T("msg.flipBudget"));
+        else
+            MessageBox.Show(owner, Loc.T("msg.flipBudget"));
     }
 }

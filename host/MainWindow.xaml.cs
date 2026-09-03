@@ -739,6 +739,8 @@ public partial class MainWindow : Window
             _overlay.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         _overlay = new OverlayWindow(_session, SelectedUnit) { Owner = this };
         _overlay.Closed += (_, _) =>
         {
@@ -792,6 +794,8 @@ public partial class MainWindow : Window
 
     internal void OpenNewMultiview(ulong unitId)
     {
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
         var layout = _session.AddMultiview(unitId: unit.Id);
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
@@ -806,6 +810,8 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var unit = SelectedUnit;
         Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
         var window = new MultiviewWindow(_session, layout);
@@ -1491,6 +1497,8 @@ public partial class MainWindow : Window
 
     private void OpenSceneEditor(SceneEntry scene)
     {
+        if (!FlipBudget.TryOpen(1, this))
+            return;
         var monitorId = _session.NextMonitorId++;
         var dialog = new SceneEditorWindow(scene, _session, SceneWidth, SceneHeight, monitorId) { Owner = this };
         dialog.ShowDialog();
@@ -1528,6 +1536,8 @@ public partial class MainWindow : Window
             existing.Activate();
             return;
         }
+        if (!FlipBudget.TryOpen(2, this))
+            return;
         var window = new SwitcherWindow(unit);
         if (unit.AlwaysOnTop)
             window.Owner = this;
