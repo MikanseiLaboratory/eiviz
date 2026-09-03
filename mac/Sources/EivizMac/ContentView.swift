@@ -398,8 +398,7 @@ struct ContentView: View {
                         Button("+") { mixer.addScene() }
                         Button("−") { mixer.removeScene() }
                         Button("Edit") {
-                            mixer.editingScene = mixer.session.scenes.first { $0.id == mixer.selectedSceneId }
-                            mixer.showSceneEditor = true
+                            mixer.openSceneEditor(mixer.session.scenes.first { $0.id == mixer.selectedSceneId })
                         }
                     }
                     .buttonStyle(MixerButtonStyle())
@@ -428,12 +427,13 @@ struct ContentView: View {
         let video = mixer.sceneVideo(scene)
         return EquatableView(content: ScenePreviewTile(
             sceneId: scene.id,
-            monitorId: scene.monitorId,
             gpuId: scene.gpuId,
             name: scene.name,
             number: number,
             preview: preview,
             program: program,
+            selected: mixer.selectedSceneId == scene.id,
+            interval: mixer.session.settings.resolvedPresentInterval,
             loopOn: video?.videoLoop == true,
             playing: mixer.scenePlaying(scene),
             muted: mixer.sceneInputs(scene).allSatisfy(\.mute),
@@ -447,10 +447,7 @@ struct ContentView: View {
             onPlay: { mixer.toggleScenePlay(scene) },
             onAudio: { mixer.toggleSceneAudio(scene) },
             onOpenPreview: { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) },
-            onEdit: {
-                mixer.editingScene = scene
-                mixer.showSceneEditor = true
-            },
+            onEdit: { mixer.openSceneEditor(scene) },
             onDelete: { mixer.deleteScene(scene) }
         ))
     }
@@ -508,7 +505,7 @@ struct ContentView: View {
                 Text(L10n.t("chrome.multiview"))
             }
             .buttonStyle(MixerButtonStyle())
-            Button(L10n.t("chrome.overlay")) { mixer.showOverlay = true }
+            Button(L10n.t("chrome.overlay")) { mixer.openOverlay() }
                 .buttonStyle(MixerButtonStyle())
         }
         .padding(8)

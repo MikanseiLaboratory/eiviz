@@ -17,6 +17,7 @@ struct SettingsView: View {
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
                 Text("Audio Auxiliary").tag(4)
+                Text(L10n.t("settings.advanced")).tag(5)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -26,7 +27,8 @@ struct SettingsView: View {
                     else if category == 1 { performance }
                     else if category == 2 { outputs }
                     else if category == 3 { multiview }
-                    else { audio }
+                    else if category == 4 { audio }
+                    else { advanced }
                 }
                 Spacer()
                 HStack {
@@ -39,6 +41,7 @@ struct SettingsView: View {
                         mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
                         _ = mixer_set_ndi_gpu_upload(mixer.session.settings.ndiGpuUploadEnabled ? 1 : 0)
+                        FlipBudget.configure(mixer.session.settings.flipSwapchainLimit)
                         for layout in mixer.session.multiviews {
                             mixer.pushMultiview(layout)
                         }
@@ -125,6 +128,23 @@ struct SettingsView: View {
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
             ))
             Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var advanced: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.t("settings.flipBudget"))
+            Picker("", selection: $mixer.session.settings.flipSwapchainLimit) {
+                Text(L10n.t("settings.flipBudgetAuto")).tag(UInt32(0))
+                ForEach([UInt32(4), 6, 8, 10, 12, 16], id: \.self) { value in
+                    Text("\(value)").tag(value)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 280, alignment: .leading)
+            Text(L10n.t("settings.flipBudgetHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }

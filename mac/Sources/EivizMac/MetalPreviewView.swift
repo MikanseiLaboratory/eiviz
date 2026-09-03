@@ -13,6 +13,7 @@ final class MetalSurfaceView: NSView {
         }
     }
     private var attached = false
+    private var budgeted = false
     private var attachedWidth: UInt32 = 0
     private var attachedHeight: UInt32 = 0
     private var attachedKey: String = ""
@@ -66,6 +67,26 @@ final class MetalSurfaceView: NSView {
     }
 
     deinit {
+        if attached {
+            detachMixerOnly()
+        }
+        if budgeted {
+            FlipBudget.end(self)
+        }
+    }
+
+    func releaseNative() {
+        guard attached || budgeted else { return }
+        detachMixerOnly()
+        attached = false
+        attachedKey = ""
+        if budgeted {
+            FlipBudget.end(self)
+            budgeted = false
+        }
+    }
+
+    private func detachMixerOnly() {
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         if detachIsMonitor {
             _ = mixer_detach_monitor(detachMonitorId)
@@ -84,13 +105,11 @@ final class MetalSurfaceView: NSView {
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         let key = "\(role.key)#\(surfaceEpoch)"
         if !attached || attachedKey != key {
-            if attached {
-                if detachIsMonitor {
-                    _ = mixer_detach_monitor(detachMonitorId)
-                } else {
-                    _ = mixer_unit_detach_native(detachUnitId, detachKind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
-                }
+            if attached || budgeted {
+                releaseNative()
             }
+            guard FlipBudget.tryBegin(self) else { return }
+            budgeted = true
             let code: Int32
             switch role {
             case .unit(let unitId, let kind):
@@ -101,8 +120,13 @@ final class MetalSurfaceView: NSView {
                     _ = mixer_monitor_set_source(monitorId, sourceId)
                 }
             }
-            attached = code == EIVIZ_OK
-            if attached, case .monitor(let monitorId, _) = role {
+            if code != EIVIZ_OK {
+                FlipBudget.cancel(self)
+                budgeted = false
+                return
+            }
+            attached = true
+            if case .monitor(let monitorId, _) = role {
                 _ = mixer_set_monitor_present_interval(monitorId, max(1, min(8, presentInterval)))
             }
             attachedWidth = width

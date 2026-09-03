@@ -1110,6 +1110,7 @@ struct SessionSettings: Codable {
     var defaultMultiviewUnitId: UInt64 = 1
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
+    var flipSwapchainLimit: UInt32 = 0
     var internalColorFormat: InternalColorFormat = .uyvy
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
@@ -1142,6 +1143,8 @@ struct SessionSettings: Codable {
         defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
         defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        let flip = try container.decodeIfPresent(UInt32.self, forKey: .flipSwapchainLimit) ?? 0
+        flipSwapchainLimit = [0, 4, 6, 8, 10, 12, 16].contains(flip) ? flip : 0
         internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
         rebarOptimization = try container.decodeIfPresent(Bool.self, forKey: .rebarOptimization)
         rebarDirectSample = try container.decodeIfPresent(Bool.self, forKey: .rebarDirectSample)
