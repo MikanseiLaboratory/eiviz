@@ -130,7 +130,7 @@ These copies run in the frame:
 
 - Frame Delay. Copies `mixed` and `preview` into a ring so picture lines up with audio. GUI Preview/Program sample that delayed surface
 - Transition history. Copies `mixed` into `prev`
-- Send. The CPU path packs UYVY; GPU OMT copies into a per-output async send slot. Encode and SDK send run on that output’s send thread
+- Send. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread. GPU OMT copies into a per-output send slot
 
 Intermediate buffers such as sort / flow / bloom stay in VRAM. Their compute runs during those transitions.
 
@@ -149,8 +149,8 @@ Then the picture moves like this:
 1. An ingest thread deposits the latest frame
 2. Each Mixing Unit draws Preview and Program, mixes with the T-bar or AUTO, then overlays and multiview
 3. Outputs that send pack UYVY or copy into a GPU slot
-4. Each output’s send thread compresses and transmits
-5. Audio buses mix on the same master tick and ride those outputs. A Multiview output is silent
+4. One thread is assigned per output to compress and transmit
+5. Audio buses mix on the same master tick and ride those outputs. When Multiview is selected as the video source, audio cannot be sent
 
 ```mermaid
 sequenceDiagram
@@ -199,11 +199,11 @@ Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/).
 
 | | Video | Status |
 | --- | --- | --- |
-| OMT | Stay on the GPU, or read back and encode on the send thread | Shipped |
-| NDI | CPU path. Video-clocked; PCM on a side thread; SDK send is async | Shipped |
+| OMT | Stay on the GPU, or read back as UYVY and convert to VMX on a dedicated send thread | Shipped |
+| NDI | CPU path | Shipped |
 | DeckLink | — | In progress |
 
-Each output has its own send thread. The mix clock packs and copies; one output’s encode wait does not stall another output’s accept or audio.
+One thread is assigned per output.
 
 OMT receive stays full quality on Preview/Program and drops bandwidth otherwise.  
 Full quality holds a short time after leaving those buses so TAKE and the T-bar do not rebuild the receiver.

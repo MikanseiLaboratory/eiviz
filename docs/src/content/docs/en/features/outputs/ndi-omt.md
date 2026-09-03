@@ -9,14 +9,14 @@ The exit that puts a chosen source on the network. How to add a row and pick a s
 
 Transport is OMT or NDI.
 
-OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to VMX. CPU encode packs UYVY, reads back, and compresses to VMX on the send thread. PCM is posted right after video on that thread and is not held for the next picture.  
-NDI is always a CPU path. UYVY is handed to the SDK without waiting for encode to finish on the send thread. The sender is clocked from video; PCM goes out on a side thread.
+OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to VMX. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
+NDI is always a CPU path.
 
-Each output has its own send thread. One output’s encode wait does not stall another output’s accept or audio.
+One thread is assigned per output.
 
 ## Audio
 
-The row’s audio is Master or None. Default is Master.  
-An output whose source is a Multiview is silent. Mosaic encode and PCM do not share a path.
+Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
+When Multiview is selected as the video source, audio cannot be sent.
 
 Device mix is [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/). Network PCM is taken from that internal mix.

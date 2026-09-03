@@ -34,4 +34,4 @@ Transitionは複数種類選択可能であり、WGSLを使った合成処理を
 
 ## 出力との関係
 
-Outputに使用可能な映像ソースはInput、Scene、Mixing UnitのPreview・Program、Multiviewです。既定はMixing UnitのProgramです。Multiviewをソースにした出力は無音です。流れは[Inputs](/eiviz/ja/concepts/inputs/)と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
+Outputに使用可能な映像ソースはInput、Scene、Mixing UnitのPreview・Program、Multiviewです。既定はMixing UnitのProgramです。Multiviewを映像ソースに選択した場合、音声の送出は出来ません。流れは[Inputs](/eiviz/ja/concepts/inputs/)と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
