@@ -13,14 +13,17 @@ use eiviz_mixer::{
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
     mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_omt_connect,
-    mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
+    mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
     mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_unit_acquire_frame,
     mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
     mixer_unit_set_state, mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
-use openmediatransport::{Codec, FrameType, MediaFrame, Sender};
+use openmediatransport::{
+    Codec, DecodedVideoFrame, Discovery, FrameType, MediaFrame, ReceiverConfig, ReceiverSession,
+    Sender,
+};
 
 #[test]
 fn video_captures_enum_is_safe() {
@@ -197,6 +200,96 @@ fn dx12_compose_omt_and_program_out() {
     mixer_destroy();
 }
 
+/// Auto must keep sending mixed Program frames. A mix tick flushes the delay
+/// ring; without a live-compose fallback NDI/OMT freeze on the last cut.
+#[test]
+fn omt_program_shows_fade_during_auto() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let name = format!("eiviz-fade-pgm-{}", std::process::id());
+    unsafe {
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            transition_kind: TRANSITION_FADE,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_output_add(
+                301,
+                OUT_OMT,
+                CString::new(name.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1,
+                0
+            ),
+            OK
+        );
+    }
+
+    let session = connect_omt_named(&name);
+    let baseline = wait_omt_sample(&session, Duration::from_secs(4));
+    assert!(
+        baseline.0 > 160.0 && baseline.1 < 80.0,
+        "program should start on Color (red), got r={} b={}",
+        baseline.0,
+        baseline.1
+    );
+
+    assert_eq!(
+        mixer_unit_auto(
+            1,
+            TRANSITION_FADE,
+            600,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
+        OK
+    );
+
+    let during = drain_omt_means(&session, Duration::from_millis(420));
+    assert!(
+        during.len() >= 5,
+        "OMT should keep emitting during auto, got {} frames",
+        during.len()
+    );
+    let max_blue = during.iter().map(|(_, blue)| *blue).fold(0.0f32, f32::max);
+    let min_red = during.iter().map(|(red, _)| *red).fold(f32::MAX, f32::min);
+    assert!(
+        max_blue > baseline.1 + 40.0,
+        "fade must raise blue on Program out (baseline b={} max b={max_blue})",
+        baseline.1
+    );
+    assert!(
+        min_red < baseline.0 - 40.0,
+        "fade must lower red on Program out (baseline r={} min r={min_red})",
+        baseline.0
+    );
+
+    thread::sleep(Duration::from_millis(250));
+    let after = wait_omt_sample(&session, Duration::from_secs(2));
+    assert!(
+        after.1 > 160.0 && after.0 < 80.0,
+        "program should finish on Blue, got r={} b={}",
+        after.0,
+        after.1
+    );
+    mixer_destroy();
+}
+
 #[test]
 fn dx12_omt_gpu_in_and_out() {
     mixer_destroy();
@@ -338,6 +431,96 @@ fn full_layer(source_id: u64) -> OverlayDesc {
         z: 0,
         ..Default::default()
     }
+}
+
+fn omt_receiver_config() -> ReceiverConfig {
+    ReceiverConfig {
+        frame_types: FrameType::VIDEO,
+        connect_timeout: Duration::from_secs(2),
+        auto_reconnect: false,
+        ..ReceiverConfig::default()
+    }
+}
+
+fn connect_omt_named(name: &str) -> ReceiverSession {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Ok(mut discovery) = Discovery::new()
+            && discovery.refresh_for(Duration::from_millis(250)).is_ok()
+            && let Some(source) = discovery.sources().iter().find(|source| {
+                source.instance_name().contains(name)
+                    || source.to_url().contains(name)
+                    || source.to_string().contains(name)
+            })
+        {
+            if let Ok(session) =
+                ReceiverSession::connect_from_address(source, omt_receiver_config())
+            {
+                return session;
+            }
+        }
+        let mut buf = vec![0u8; 4096];
+        let n = unsafe { mixer_omt_discover(buf.as_mut_ptr(), buf.len()) };
+        if n > 0 {
+            let text = String::from_utf8_lossy(&buf[..n as usize]);
+            for url in text.lines() {
+                if url.contains(name)
+                    && let Ok(session) = ReceiverSession::connect(url, omt_receiver_config())
+                {
+                    return session;
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "OMT output {name} was not discovered"
+        );
+        thread::sleep(Duration::from_millis(40));
+    }
+}
+
+fn mean_red_blue(frame: &DecodedVideoFrame) -> (f32, f32) {
+    let stride = frame.stride as usize;
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let mut red = 0u64;
+    let mut blue = 0u64;
+    let mut count = 0u64;
+    for y in 0..height {
+        let row = &frame.pixels[y * stride..];
+        for x in 0..width {
+            let i = x * 4;
+            blue += u64::from(row[i]);
+            red += u64::from(row[i + 2]);
+            count += 1;
+        }
+    }
+    let count = count.max(1) as f32;
+    (red as f32 / count, blue as f32 / count)
+}
+
+fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        if let Some(frame) = session.recv_video_timeout(Duration::from_millis(40)) {
+            let sample = mean_red_blue(&frame);
+            if sample.0 + sample.1 > 16.0 {
+                return sample;
+            }
+        }
+    }
+    panic!("OMT receiver did not get a Program frame");
+}
+
+fn drain_omt_means(session: &ReceiverSession, budget: Duration) -> Vec<(f32, f32)> {
+    let deadline = Instant::now() + budget;
+    let mut samples = Vec::new();
+    while Instant::now() < deadline {
+        if let Some(frame) = session.recv_video_timeout(Duration::from_millis(20)) {
+            samples.push(mean_red_blue(&frame));
+        }
+    }
+    samples
 }
 
 unsafe fn try_acquire(unit: u64) {
