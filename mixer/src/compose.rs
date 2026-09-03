@@ -214,6 +214,7 @@ pub struct Composer {
     fx2_layout: wgpu::BindGroupLayout,
     user_cs_layout: wgpu::BindGroupLayout,
     pack_groups: HashMap<u64, wgpu::BindGroup>,
+    mix_textures: HashMap<u64, wgpu::Texture>,
     mix_aliases: HashMap<u64, wgpu::TextureView>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
@@ -442,6 +443,7 @@ impl Composer {
             fx2_layout,
             user_cs_layout,
             pack_groups: HashMap::new(),
+            mix_textures: HashMap::new(),
             mix_aliases: HashMap::new(),
             color_group,
             gpu_epoch: 1,
@@ -514,8 +516,44 @@ impl Composer {
         }
     }
 
-    pub fn set_mix_aliases(&mut self, aliases: HashMap<u64, wgpu::TextureView>) {
-        self.mix_aliases = aliases;
+    /// Copy each Mix Input's delay-ring slot into a stable texture so blit /
+    /// pack bind groups stay valid. Ring wrap must not drop the update rate.
+    pub fn stage_mix_inputs(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        live: impl IntoIterator<Item = u64>,
+        sources: &HashMap<u64, &wgpu::Texture>,
+    ) {
+        let live: HashSet<u64> = live.into_iter().collect();
+        self.mix_textures.retain(|id, _| live.contains(id));
+        self.mix_aliases.retain(|id, _| live.contains(id));
+        for (id, src) in sources {
+            let size = src.size();
+            let recreate = self.mix_textures.get(id).is_none_or(|tex| {
+                tex.size().width != size.width || tex.size().height != size.height
+            });
+            if recreate {
+                let usage = wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC;
+                let texture = make_texture(device, size.width, size.height, usage);
+                let view = texture.create_view(&Default::default());
+                self.mix_textures.insert(*id, texture);
+                self.mix_aliases.insert(*id, view);
+                self.blit_groups.remove(id);
+                self.uyvy_groups.remove(id);
+                self.pack_groups.remove(&(0x4000_0000_0000_0000 | *id));
+                self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+            }
+            if let Some(dst) = self.mix_textures.get(id) {
+                copy_texture(encoder, src, dst);
+            }
+        }
+    }
+
+    pub fn mix_texture(&self, source_id: u64) -> Option<&wgpu::Texture> {
+        self.mix_textures.get(&source_id)
     }
 
     pub fn upload_sources(
@@ -2298,6 +2336,9 @@ impl Composer {
                 total += texture_bytes(packed);
             }
         }
+        for texture in self.mix_textures.values() {
+            total += texture_bytes(texture);
+        }
         for texture in self.input_packed.values() {
             total += texture_bytes(texture);
         }
@@ -2662,6 +2703,22 @@ fn color_for(id: u64) -> [f32; 4] {
         SRC_BLACK => [0.0, 0.0, 0.0, 1.0],
         _ => [1.0, 0.0, 0.0, 1.0],
     }
+}
+
+fn copy_texture(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu::Texture) {
+    let size = src.size();
+    if size != dst.size() {
+        return;
+    }
+    encoder.copy_texture_to_texture(
+        src.as_image_copy(),
+        dst.as_image_copy(),
+        wgpu::Extent3d {
+            width: size.width,
+            height: size.height,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 fn make_texture(

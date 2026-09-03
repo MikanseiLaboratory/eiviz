@@ -1,13 +1,48 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
+
+const SITE = 'https://mikanseilaboratory.github.io';
+const BASE = '/eiviz/';
+
+async function latestReleaseTag() {
+	if (process.env.PUBLIC_EIVIZ_VERSION) {
+		return process.env.PUBLIC_EIVIZ_VERSION;
+	}
+	try {
+		const headers = new Headers({
+			Accept: 'application/vnd.github+json',
+			'User-Agent': 'eiviz-docs',
+		});
+		if (process.env.GITHUB_TOKEN) {
+			headers.set('Authorization', `Bearer ${process.env.GITHUB_TOKEN}`);
+		}
+		const res = await fetch(
+			'https://api.github.com/repos/MikanseiLaboratory/eiviz/releases?per_page=1',
+			{ headers },
+		);
+		if (!res.ok) {
+			return '';
+		}
+		const releases = await res.json();
+		return typeof releases?.[0]?.tag_name === 'string' ? releases[0].tag_name : '';
+	} catch {
+		return '';
+	}
+}
+
+const version = await latestReleaseTag();
+if (version) {
+	process.env.PUBLIC_EIVIZ_VERSION = version;
+}
 
 // https://astro.build/config
 // GitHub Pages: https://mikanseilaboratory.github.io/eiviz/
 export default defineConfig({
-	site: 'https://mikanseilaboratory.github.io',
-	base: '/eiviz/',
+	site: SITE,
+	base: BASE,
 	integrations: [
 		mermaid({ autoTheme: true }),
 		starlight({
@@ -18,7 +53,17 @@ export default defineConfig({
 				alt: 'Mikansei Laboratory',
 			},
 			favicon: '/favicon.png',
+			components: {
+				Footer: './src/overrides/Footer.astro',
+			},
 			head: [
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'sitemap',
+						href: `${BASE}sitemap-index.xml`,
+					},
+				},
 				{
 					tag: 'link',
 					attrs: {
@@ -117,6 +162,15 @@ export default defineConfig({
 					],
 				},
 			],
+		}),
+		sitemap({
+			i18n: {
+				defaultLocale: 'ja',
+				locales: {
+					ja: 'ja',
+					en: 'en',
+				},
+			},
 		}),
 	],
 });

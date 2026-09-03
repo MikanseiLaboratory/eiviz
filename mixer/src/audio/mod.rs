@@ -239,15 +239,7 @@ impl AudioEngine {
         let mut graph = self.graph.lock().expect("audio");
         let mut delay = self.delay.lock().expect("audio delay");
         graph.mix(
-            uploads,
-            snapshot,
-            scenes,
-            frames,
-            &mut delay,
-            produce,
-            mix_inputs,
-            fps_num,
-            fps_den,
+            uploads, snapshot, scenes, frames, &mut delay, produce, mix_inputs, fps_num, fps_den,
         )
     }
 

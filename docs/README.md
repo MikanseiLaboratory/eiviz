@@ -4,6 +4,10 @@ Starlight starter (`npm create astro@latest -- --template starlight`).
 
 Public URL: [https://mikanseilaboratory.github.io/eiviz/](https://mikanseilaboratory.github.io/eiviz/)
 
+After each production deploy, `sitemap-index.xml` and `robots.txt` are at the site root (`/eiviz/`). An org owner submits this sitemap in [Google Search Console](https://search.google.com/search-console) for the prefix `https://mikanseilaboratory.github.io/eiviz/` (URL-prefix or HTML-file verification):
+
+- https://mikanseilaboratory.github.io/eiviz/sitemap-index.xml
+
 Japanese is the source of truth (`src/content/docs/ja/`). English lives in `src/content/docs/en/` with the same relative paths.
 
 Requires Node.js 22.12 or later.

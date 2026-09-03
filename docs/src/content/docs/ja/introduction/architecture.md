@@ -80,9 +80,72 @@ flowchart LR
   compose --> mu
 ```
 
+## テキスチャ
+
+Input、Scene、Mixing UnitのPreview/Program、Multiviewは、同じソースID空間の**GPUテキスチャ**です。合成とGUIは、その`TextureView`をサンプリングします。
+
+| 種別 | 実体 |
+| --- | --- |
+| Input | 取り込み結果。GPU経路はハンドル共有、CPU経路は1枚へ上書き |
+| Scene | レイヤーを描いた合成結果 |
+| Multiview | Sceneと同じ実体。ラベルとタリーを足す |
+| Preview | Mixing Unitのpreview |
+| Program | mixとオーバーレイ後のmixed。GUIと送出が指す |
+
+Programは切替前の`program`と、本線の`mixed`を持ちます。合成は使用中のSceneを描き、セッション上のSceneテキスチャは保持します。
+
+### GUIへの経路
+
+ホストはウィンドウ面を用意し、Mixerがそこに描きます。経路は2本です。
+
+```mermaid
+flowchart TB
+  inp["Input"]
+  sc["Scene / MV"]
+  prv["MU preview"]
+  pgm["MU mixed"]
+  delay["Frame Delay"]
+  inp --> sc
+  inp --> prv
+  sc --> prv
+  prv --> pgm
+  pgm --> delay
+  prv --> delay
+  delay --> swap["swapchain blit"]
+  pgm --> swap
+  sc --> swap
+  inp --> swap
+  sc --> thumb["縮小blit + 読み戻し"]
+  inp --> thumb
+  swap --> live["ライブ面"]
+  thumb --> tiles["一覧サムネ"]
+```
+
+ライブのPreview/Program、開いているMultiview、Scene Editor、Overlay窓は、既存のViewをHWND/NSViewのswapchainへblitします。同じソースを複数のライブ面に出すと、面の数だけblitします。
+
+Input一覧、Scene一覧、スイッチャーのソースボタンは、最大960×540へ縮小してGPUから読み戻します。
+
+### GPU上のコピー
+
+次のコピーがフレーム処理に入ります。
+
+- Frame Delay。`mixed`と`preview`をリングへコピーし、音声と揃えます。GUIのPreview/Programもこの遅延面を見ます
+- トランジション履歴。`mixed`を`prev`へコピーします
+- 送出。CPU経路はUYVYへパックし、GPU経路のOMTは非同期送出用スロットへコピーします
+
+sort/flow/bloomなどの中間バッファはVRAMにあり、該当トランジションのときに計算します。
+
 ## 1フレーム
 
-1フレームの流れは次のとおりです。
+1フレームは次の3レーンです。
+
+1. 本線の取り込み。毎マスターフレーム
+2. 本線の合成（Preview/Program/出力）。毎マスターフレーム
+3. 監視用の合成（Sceneタイル、入力プレビュー）と、そのソースの取り込み。更新間隔のとき
+
+本線のソースは毎フレームGPUへ載せます。MonitorとサムネのInputは、それぞれの更新間隔でGPUへ載せます。OMT受信の品質判定は、開いている監視面を毎フレーム見ます。
+
+そのうえで流れは次のとおりです。
 
 1. 入力スレッドが最新フレームを置く
 2. Mixing UnitごとにPreviewとProgramを描き、TバーやAUTOのmixで混ぜ、オーバーレイとマルチビューを載せる

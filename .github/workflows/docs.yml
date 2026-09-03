@@ -26,11 +26,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Latest release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=1" --jq '.[0].tag_name // empty')
+          echo "PUBLIC_EIVIZ_VERSION=$tag" >> "$GITHUB_ENV"
+
       - name: Install, build, and upload
         uses: withastro/action@v6
         with:
           path: docs
           node-version: 22
+        env:
+          PUBLIC_EIVIZ_VERSION: ${{ env.PUBLIC_EIVIZ_VERSION }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   deploy:
     name: Deploy to GitHub Pages

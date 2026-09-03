@@ -79,9 +79,72 @@ flowchart LR
   compose --> mu
 ```
 
+## Textures
+
+Inputs, scenes, a Mixing Unit’s Preview/Program, and Multiview all live in one source-id space as **GPU textures**. Compose and the GUI sample those `TextureView`s.
+
+| Kind | What it is |
+| --- | --- |
+| Input | Ingest result. GPU ingest shares the handle; CPU ingest overwrites one texture |
+| Scene | Composited layers |
+| Multiview | The same scene object, plus labels and tallies |
+| Preview | The Mixing Unit `preview` bus |
+| Program | `mixed` after mix and overlays. GUI and send point here |
+
+Program keeps a pre-mix `program` target and the on-air `mixed` target. Compose draws live scenes. Session scene textures stay allocated.
+
+### Path to the GUI
+
+The host supplies the window surface; the mixer draws into it. There are two paths.
+
+```mermaid
+flowchart TB
+  inp["Input"]
+  sc["Scene / MV"]
+  prv["MU preview"]
+  pgm["MU mixed"]
+  delay["Frame Delay"]
+  inp --> sc
+  inp --> prv
+  sc --> prv
+  prv --> pgm
+  pgm --> delay
+  prv --> delay
+  delay --> swap["swapchain blit"]
+  pgm --> swap
+  sc --> swap
+  inp --> swap
+  sc --> thumb["downscale blit + readback"]
+  inp --> thumb
+  swap --> live["Live surfaces"]
+  thumb --> tiles["List thumbnails"]
+```
+
+Live Preview/Program, an open Multiview, Scene Editor, and the Overlay window blit an existing view into an HWND / NSView swapchain. Several live surfaces of the same source each blit that view.
+
+Input lists, scene lists, and switcher source buttons read back a downscale (up to 960×540).
+
+### GPU copies
+
+These copies run in the frame:
+
+- Frame Delay. Copies `mixed` and `preview` into a ring so picture lines up with audio. GUI Preview/Program sample that delayed surface
+- Transition history. Copies `mixed` into `prev`
+- Send. The CPU path packs UYVY; GPU OMT copies into an async send slot
+
+Intermediate buffers such as sort / flow / bloom stay in VRAM. Their compute runs during those transitions.
+
 ## One frame
 
-A frame goes like this:
+A frame has three lanes:
+
+1. On-air ingest — every master frame
+2. On-air compose (Preview/Program/outputs) — every master frame
+3. Monitor compose (scene tiles, input preview) and ingest for those sources — present interval
+
+On-air sources upload every master frame. Monitor and thumbnail Inputs upload on their present interval. OMT receive quality reads every attached monitor and thumb each tick.
+
+Then the picture moves like this:
 
 1. An ingest thread deposits the latest frame
 2. Each Mixing Unit draws Preview and Program, mixes with the T-bar or AUTO, then overlays and multiview
