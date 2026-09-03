@@ -256,6 +256,71 @@ fn dx12_omt_gpu_in_and_out() {
     mixer_destroy();
 }
 
+#[test]
+fn omt_gpu_send_1080p_rgba_does_not_overflow() {
+    use openmediatransport::{GpuVideoContext, VideoTextureMeta};
+    use std::sync::Arc;
+
+    let Some((_, _, device, queue)) = vmx::gpu::request_headless_device() else {
+        eprintln!("skip: no wgpu adapter");
+        return;
+    };
+    let ctx = GpuVideoContext {
+        device: Arc::new(device.clone()),
+        queue: Arc::new(queue.clone()),
+        gpu_lock: None,
+    };
+    let width = 1920u32;
+    let height = 1080u32;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eiviz omt 1080p rgba"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for (i, b) in pixels.iter_mut().enumerate() {
+        *b = (i.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u8;
+    }
+    queue.write_texture(
+        texture.as_image_copy(),
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        texture.size(),
+    );
+
+    let mut sender = Sender::create("eiviz-1080p-gpu", FrameType::VIDEO).expect("sender");
+    sender.force_subscribe(true, false, false);
+    sender
+        .send_video_texture(
+            &ctx,
+            &texture,
+            VideoTextureMeta {
+                width,
+                height,
+                timestamp: 1,
+                frame_rate_n: 60,
+                frame_rate_d: 1,
+                ..Default::default()
+            },
+        )
+        .expect("1080p GPU OMT send");
+}
+
 fn scene_id(id: u64) -> u64 {
     SCENE_BASE | id
 }
