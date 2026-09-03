@@ -2663,13 +2663,14 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let (master, buses, uploads) = {
+        let (master, buses, mix_peaks, uploads) = {
             let shared = mixer.shared.lock().expect("shared");
             let master = shared.audio.master_peak();
             let buses = shared.audio.bus_peaks();
+            let mix_peaks = shared.audio.mix_input_peaks();
             let uploads = Arc::clone(&mixer.uploads);
             drop(shared);
-            (master, buses, uploads)
+            (master, buses, mix_peaks, uploads)
         };
         let uploads = uploads.lock().expect("uploads");
         let mut n = 0u32;
@@ -2701,10 +2702,26 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             if n >= cap {
                 break;
             }
+            if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
+                continue;
+            }
             let Some(ring) = uploads.get(id) else {
                 continue;
             };
             let (left, right) = ring.peak();
+            unsafe {
+                *out.add(n as usize) = AudioPeak {
+                    source_id: id,
+                    left,
+                    right,
+                };
+            }
+            n += 1;
+        }
+        for (id, left, right) in mix_peaks {
+            if n >= cap {
+                break;
+            }
             unsafe {
                 *out.add(n as usize) = AudioPeak {
                     source_id: id,

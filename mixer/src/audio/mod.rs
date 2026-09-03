@@ -265,6 +265,10 @@ impl AudioEngine {
             .collect()
     }
 
+    pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
+        self.graph.lock().expect("audio").mix_input_peaks()
+    }
+
     pub fn skip_bus_frames(&self, frames: usize) {
         if frames == 0 {
             return;

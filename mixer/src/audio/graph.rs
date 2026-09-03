@@ -134,6 +134,7 @@ pub struct AudioGraph {
     popped: HashMap<u64, Vec<f32>>,
     mix_fifos: HashMap<u64, VecDeque<f32>>,
     mix_last: HashMap<u64, (f32, f32)>,
+    mix_peaks: HashMap<u64, (f32, f32)>,
 }
 
 impl AudioGraph {
@@ -150,6 +151,7 @@ impl AudioGraph {
             popped: HashMap::new(),
             mix_fifos: HashMap::new(),
             mix_last: HashMap::new(),
+            mix_peaks: HashMap::new(),
         };
         // Tests must not open the machine's output. HAL Start can block forever
         // on CI runners, and AudioEngine used to join that thread from Drop.
@@ -253,6 +255,13 @@ impl AudioGraph {
         );
     }
 
+    pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
+        self.mix_peaks
+            .iter()
+            .map(|(id, peak)| (*id, peak.0, peak.1))
+            .collect()
+    }
+
     pub fn set_bus_gain(&mut self, id: u64, gain: f32, mute: bool) {
         if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == id) {
             bus.gain = gain.max(0.0);
@@ -345,14 +354,21 @@ impl AudioGraph {
                     self.scratch_mixed.clear();
                     self.scratch_mixed.extend_from_slice(&self.scratch_master);
                     crate::simd::scale_f32(&mut self.scratch_mixed, fader);
+                    self.push_mix_from_bus(bus_id, mix_inputs);
+                    self.mix_self_copies(
+                        bus_id,
+                        role,
+                        snapshot,
+                        &spec_map,
+                        mix_inputs,
+                    );
                     if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
                         bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                     }
-                delay.push(bus_id, &self.scratch_mixed);
-                self.push_mix_from_bus(bus_id, mix_inputs);
-                continue;
-            }
-            let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map, mix_inputs);
+                    delay.push(bus_id, &self.scratch_mixed);
+                    continue;
+                }
+                let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map, mix_inputs);
                 self.scratch_mixed.clear();
                 self.scratch_mixed.resize(frames * 2, 0.0);
                 for (id, gain) in gains {
@@ -365,6 +381,14 @@ impl AudioGraph {
                     crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
                 }
                 crate::simd::scale_f32(&mut self.scratch_mixed, fader);
+                self.push_mix_from_bus(bus_id, mix_inputs);
+                self.mix_self_copies(
+                    bus_id,
+                    role,
+                    snapshot,
+                    &spec_map,
+                    mix_inputs,
+                );
                 if role == ROLE_MASTER {
                     self.scratch_master.copy_from_slice(&self.scratch_mixed);
                     self.master_peak = crate::simd::peak_interleaved(&self.scratch_mixed);
@@ -373,7 +397,6 @@ impl AudioGraph {
                     bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
                 delay.push(bus_id, &self.scratch_mixed);
-                self.push_mix_from_bus(bus_id, mix_inputs);
             }
         }
         let mut master = vec![0.0f32; frames * 2];
@@ -502,11 +525,13 @@ impl AudioGraph {
     ) {
         self.mix_fifos.retain(|id, _| mix_inputs.contains_key(id));
         self.mix_last.retain(|id, _| mix_inputs.contains_key(id));
+        self.mix_peaks.retain(|id, _| mix_inputs.contains_key(id));
         for (mix_id, spec) in mix_inputs {
             let slot = self.popped.entry(*mix_id).or_default();
             slot.clear();
             if spec.audio_bus_id == 0 {
                 slot.resize(frames * 2, 0.0);
+                self.mix_peaks.insert(*mix_id, (0.0, 0.0));
                 continue;
             }
             let delay_samples = mix_delay_samples(spec.delay, fps_num, fps_den);
@@ -526,7 +551,114 @@ impl AudioGraph {
                     slot.push(right);
                 }
             }
+            self.mix_peaks
+                .insert(*mix_id, crate::simd::peak_interleaved(slot));
         }
+    }
+
+    fn mix_self_copies(
+        &mut self,
+        bus_id: u64,
+        role: u32,
+        snapshot: &[crate::abi::UnitSnap],
+        spec_map: &HashMap<u64, &[OverlayDesc]>,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
+    ) {
+        let extras = self.self_mix_gains(bus_id, role, snapshot, spec_map, mix_inputs);
+        for (id, gain) in extras {
+            if gain.abs() < 1e-6 {
+                continue;
+            }
+            let Some(samples) = self.popped.get(&id) else {
+                continue;
+            };
+            crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
+        }
+    }
+
+    fn self_mix_gains(
+        &self,
+        bus_id: u64,
+        role: u32,
+        snapshot: &[crate::abi::UnitSnap],
+        spec_map: &HashMap<u64, &[OverlayDesc]>,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
+    ) -> Vec<(u64, f32)> {
+        if !mix_inputs
+            .values()
+            .any(|spec| spec.audio_bus_id == bus_id && spec.audio_bus_id != 0)
+        {
+            return Vec::new();
+        }
+        let follow_units: Vec<(u64, UnitState, bool)> = if role == ROLE_HEADPHONE
+            && !self.headphone_copy_master
+        {
+            snapshot
+                .iter()
+                .filter(|(id, ..)| *id == self.headphone_cue_unit || self.headphone_cue_unit == 0)
+                .map(|(id, _, _, _, _, state, _, _)| (*id, *state, true))
+                .collect()
+        } else {
+            snapshot
+                .iter()
+                .filter_map(|(id, _, _, _, _, state, _, _)| {
+                    let link = self.unit_links.get(id).copied().unwrap_or(UnitLink {
+                        bus_id: MASTER_BUS,
+                        mode: LINK_FOLLOW,
+                    });
+                    if link.bus_id != bus_id {
+                        return None;
+                    }
+                    Some((*id, *state, link.mode == LINK_FOLLOW))
+                })
+                .collect()
+        };
+        let mut gains = HashMap::<u64, f32>::new();
+        for (_, state, follow) in &follow_units {
+            if !*follow {
+                continue;
+            }
+            let mix = state.mix.clamp(0.0, 1.0);
+            let prv_gain = if role == ROLE_HEADPHONE { 0.35 } else { mix };
+            let pgm_gain = if role == ROLE_HEADPHONE {
+                1.0
+            } else {
+                1.0 - mix
+            };
+            add_self_mix(
+                state.program_source,
+                pgm_gain,
+                spec_map,
+                &self.inputs,
+                mix_inputs,
+                bus_id,
+                &mut gains,
+            );
+            add_self_mix(
+                state.mix_incoming(),
+                prv_gain,
+                spec_map,
+                &self.inputs,
+                mix_inputs,
+                bus_id,
+                &mut gains,
+            );
+            for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+                if overlay.audio_follow == 0 {
+                    continue;
+                }
+                add_self_mix(
+                    overlay.source_id,
+                    overlay.opacity.max(0.0),
+                    spec_map,
+                    &self.inputs,
+                    mix_inputs,
+                    bus_id,
+                    &mut gains,
+                );
+            }
+        }
+        gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
     }
 
     fn push_mix_from_bus(&mut self, bus_id: u64, mix_inputs: &HashMap<u64, MixInputSpec>) {
@@ -622,6 +754,50 @@ fn add_source(
         return;
     }
     let level = gain * level;
+    gains
+        .entry(id)
+        .and_modify(|current| *current = (*current).max(level))
+        .or_insert(level);
+}
+
+fn add_self_mix(
+    id: u64,
+    gain: f32,
+    spec_map: &HashMap<u64, &[OverlayDesc]>,
+    inputs: &HashMap<u64, InputAudio>,
+    mix_inputs: &HashMap<u64, MixInputSpec>,
+    bus_id: u64,
+    gains: &mut HashMap<u64, f32>,
+) {
+    if gain.abs() < 1e-4 {
+        return;
+    }
+    if is_scene(id) {
+        if let Some(layers) = spec_map.get(&id) {
+            for layer in *layers {
+                if layer.audio_follow == 0 {
+                    continue;
+                }
+                add_self_mix(
+                    layer.source_id,
+                    gain * layer.opacity.max(0.0),
+                    spec_map,
+                    inputs,
+                    mix_inputs,
+                    bus_id,
+                    gains,
+                );
+            }
+        }
+        return;
+    }
+    let Some(spec) = mix_inputs.get(&id) else {
+        return;
+    };
+    if spec.audio_bus_id == 0 || spec.audio_bus_id != bus_id {
+        return;
+    }
+    let level = gain * inputs.get(&id).map(|input| input.gain.max(0.0)).unwrap_or(1.0);
     gains
         .entry(id)
         .and_modify(|current| *current = (*current).max(level))
