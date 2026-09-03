@@ -71,6 +71,7 @@ impl SampleRing {
         self.len -= take;
     }
 
+    #[cfg(test)]
     pub fn pop_front(&mut self) -> Option<f32> {
         if self.len == 0 {
             return None;
@@ -437,6 +438,7 @@ impl SourceRing {
         }
     }
 
+    #[cfg(test)]
     pub fn push_playout_cpu(&mut self, src: &[u8], stride: usize, pts: i64) {
         self.push_playout_cpu_opaque(src, stride, pts, false);
     }
@@ -562,6 +564,7 @@ impl SourceRing {
         self.fifo_primed = false;
     }
 
+    #[cfg(test)]
     fn pop_stereo(&mut self) -> (f32, f32) {
         if !self.fifo_primed {
             return (0.0, 0.0);
@@ -596,6 +599,7 @@ impl SourceRing {
         }
     }
 
+    #[cfg(test)]
     pub fn latest_rgba_or_packed(&self) -> &[u8] {
         self.slots[self.write.load(Ordering::Acquire)].as_slice()
     }
@@ -818,12 +822,6 @@ impl UploadStore {
         }
     }
 
-    pub fn set_cache_ram(&mut self, id: u64, bytes: u64) {
-        if let Some(ring) = self.sources.get_mut(&id) {
-            ring.cache_ram = bytes;
-        }
-    }
-
     pub fn memory_bytes(&self) -> (u64, u64) {
         self.sources
             .values()
@@ -886,10 +884,6 @@ impl UploadStore {
         }
     }
 
-    pub fn fifo_over_high_water(&self, id: u64) -> bool {
-        self.fifo_frames(id) >= AUDIO_FIFO_HIGH_FRAMES
-    }
-
     pub fn primed_ids(&self) -> Vec<u64> {
         self.sources
             .iter()
@@ -898,6 +892,7 @@ impl UploadStore {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
         let Some(ring) = self.sources.get_mut(&id) else {
             return vec![(0.0, 0.0); frames];
@@ -962,29 +957,6 @@ impl UploadStore {
         self.sources.get(&id).is_some_and(|ring| ring.has_frame)
     }
 
-    pub fn mix_follow(&mut self, gains: &[(u64, f32)], frames: usize) -> Vec<f32> {
-        let mut out = vec![0.0f32; frames.saturating_mul(2)];
-        if frames == 0 || gains.is_empty() {
-            return out;
-        }
-        for &(id, gain) in gains {
-            if gain.abs() < 1e-6 {
-                continue;
-            }
-            let Some(ring) = self.sources.get_mut(&id) else {
-                continue;
-            };
-            let mut samples = Vec::with_capacity(frames * 2);
-            for _ in 0..frames {
-                let (left, right) = ring.pop_stereo();
-                samples.push(left);
-                samples.push(right);
-            }
-            crate::simd::mix_stereo_gain(&mut out, &samples, gain);
-        }
-        out
-    }
-
     pub fn fifo_frames(&self, id: u64) -> usize {
         self.sources
             .get(&id)
@@ -994,10 +966,6 @@ impl UploadStore {
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
         self.sources.get(&id)
-    }
-
-    pub fn get_mut(&mut self, id: u64) -> Option<&mut SourceRing> {
-        self.sources.get_mut(&id)
     }
 
     pub fn ids(&self) -> impl Iterator<Item = u64> + '_ {

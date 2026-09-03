@@ -604,8 +604,6 @@ struct VideoLayout {
     stride: i32,
     gpu: bool,
     packed: bool,
-    fps_num: u32,
-    fps_den: u32,
 }
 
 fn startup() -> Result<(), String> {
@@ -893,10 +891,6 @@ fn read_video_layout(
             return Err("Media Foundation reported a zero-sized frame".into());
         }
         let stride = ty.GetUINT32(&MF_MT_DEFAULT_STRIDE).unwrap_or(0) as i32;
-        let (fps_num, fps_den) = ty
-            .GetUINT64(&MF_MT_FRAME_RATE)
-            .map(|rate| ((rate >> 32) as u32, rate as u32))
-            .unwrap_or((0, 1));
         Ok(VideoLayout {
             width,
             height,
@@ -904,8 +898,6 @@ fn read_video_layout(
             stride,
             gpu,
             packed,
-            fps_num,
-            fps_den,
         })
     }
 }

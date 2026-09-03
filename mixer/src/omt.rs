@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,17 @@ pub fn omt_gpu_from_device(device: &GpuDevice) -> OmtGpu {
         device: Arc::new(device.device.clone()),
         queue: Arc::new(device.queue.clone()),
         gpu_lock: Some(crate::device::gpu_queue_lock_handle()),
+    }
+}
+
+/// Send-side VMX encode must not hold the compose `Queue::submit` lock across
+/// GPU readback. Receive still uses [`omt_gpu_from_device`] so decode cannot
+/// race `Surface::configure`.
+pub fn omt_gpu_for_send(device: &GpuDevice) -> OmtGpu {
+    GpuVideoContext {
+        device: Arc::new(device.device.clone()),
+        queue: Arc::new(device.queue.clone()),
+        gpu_lock: None,
     }
 }
 
@@ -191,9 +202,21 @@ impl Drop for OmtReceiver {
     }
 }
 
+/// Enough for ~0.5s at 60fps so a slow VMX encode does not drop PCM.
+pub(crate) const HELD_AUDIO_CAP: usize = 32;
+
+pub(crate) fn push_held_audio(queue: &mut VecDeque<AudioPacket>, packet: AudioPacket) {
+    if queue.len() >= HELD_AUDIO_CAP {
+        queue.pop_front();
+    }
+    queue.push_back(packet);
+}
+
 pub struct ProgramSender {
-    pub sender: Sender,
-    pub unit_id: u64,
+    sender: Sender,
+    encoder: VmxEncoder,
+    pair_after_video: bool,
+    held_audio: VecDeque<AudioPacket>,
     name: String,
     discovery: Option<Discovery>,
 }
@@ -214,10 +237,22 @@ impl ProgramSender {
         .flatten();
         Ok(Self {
             sender,
-            unit_id: 0,
+            encoder: VmxEncoder::new(),
+            pair_after_video: false,
+            held_audio: VecDeque::new(),
             name: name.to_string(),
             discovery,
         })
+    }
+
+    pub fn set_pair_after_video(&mut self, pair: bool) {
+        self.pair_after_video = pair;
+    }
+
+    /// Non-blocking accept only. Safe around GPU encode (no peer-lock reads).
+    pub fn pump_accept(&mut self) -> Result<(), String> {
+        self.sender.poll_accept().map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn pump(&mut self) -> Result<(), String> {
@@ -225,6 +260,7 @@ impl ProgramSender {
         self.sender
             .poll_peer_metadata()
             .map_err(|e| e.to_string())?;
+        self.sender.enable_audio_output();
         Ok(())
     }
 
@@ -238,21 +274,35 @@ impl ProgramSender {
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {
-        let data = pixels.to_vec();
+        let bitstream = self.encoder.encode_uyvy(&pixels, width, height, stride)?;
+        self.send_video_vmx1(width, height, pts, bitstream.into(), fps_num, fps_den)
+    }
+
+    pub fn send_video_vmx1(
+        &mut self,
+        width: u32,
+        height: u32,
+        pts: i64,
+        bitstream: Arc<[u8]>,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> Result<(), String> {
         let frame = MediaFrame {
             frame_type: FrameType::VIDEO,
             timestamp: pts,
-            codec: Codec::Uyvy as i32,
+            codec: Codec::Vmx1 as i32,
             width: width as i32,
             height: height as i32,
-            stride: stride as i32,
+            stride: 0,
             frame_rate_n: fps_num as i32,
             frame_rate_d: fps_den as i32,
             aspect_ratio: width as f32 / height.max(1) as f32,
-            data,
+            data: bitstream.to_vec(),
             ..Default::default()
         };
-        self.sender.send_video(frame).map_err(|e| e.to_string())
+        let result = self.sender.send_video(frame).map_err(|e| e.to_string());
+        self.flush_held_audio();
+        result
     }
 
     pub fn send_video_texture(
@@ -273,9 +323,12 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
-        self.sender
+        let result = self
+            .sender
             .send_video_texture(ctx, texture, meta)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        self.flush_held_audio();
+        result
     }
 
     pub fn video_subscribed(&self) -> bool {
@@ -283,6 +336,23 @@ impl ProgramSender {
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
+        if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
+            return Ok(());
+        }
+        if self.pair_after_video {
+            push_held_audio(&mut self.held_audio, audio.clone());
+            return Ok(());
+        }
+        self.emit_audio(audio)
+    }
+
+    fn flush_held_audio(&mut self) {
+        while let Some(audio) = self.held_audio.pop_front() {
+            let _ = self.emit_audio(&audio);
+        }
+    }
+
+    fn emit_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
         let frame = MediaFrame {
             frame_type: FrameType::AUDIO,
             timestamp: audio.timestamp,
@@ -575,5 +645,136 @@ fn to_audio(frame: DecodedAudioFrame) -> AudioPacket {
         channels: frame.channels,
         samples_per_channel: samples,
         pcm_planar_f32: pcm,
+    }
+}
+
+/// Per-output VMX1 encoder. Lives on the send thread so PCM hold/flush
+/// stays on the same call as the video that pairs with it.
+struct VmxEncoder {
+    codec: Option<vmx::Codec>,
+    width: i32,
+    height: i32,
+    buf: Vec<u8>,
+}
+
+impl VmxEncoder {
+    fn new() -> Self {
+        Self {
+            codec: None,
+            width: 0,
+            height: 0,
+            buf: Vec::new(),
+        }
+    }
+
+    fn encode_uyvy(
+        &mut self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+    ) -> Result<Vec<u8>, String> {
+        let width = width.max(16);
+        let height = height.max(16);
+        let packed = width.saturating_mul(2);
+        let stride = stride.max(packed) as usize;
+        let need = stride.saturating_mul(height as usize);
+        if pixels.len() < need {
+            return Err(format!(
+                "UYVY frame too short: need {need}, have {}",
+                pixels.len()
+            ));
+        }
+        self.ensure(width as i32, height as i32)?;
+        let vmx = self.codec.as_mut().expect("codec");
+        vmx.encode_uyvy(pixels, stride).map_err(|e| e.to_string())?;
+        self.save()
+    }
+
+    fn ensure(&mut self, width: i32, height: i32) -> Result<(), String> {
+        if self.codec.is_some() && self.width == width && self.height == height {
+            return Ok(());
+        }
+        let codec = vmx::Codec::new(vmx::Config {
+            width,
+            height,
+            profile: vmx::Profile::Default,
+            color_space: vmx::ColorSpace::Undefined,
+        })
+        .map_err(|e| e.to_string())?;
+        self.codec = Some(codec);
+        self.width = width;
+        self.height = height;
+        Ok(())
+    }
+
+    fn save(&mut self) -> Result<Vec<u8>, String> {
+        let codec = self.codec.as_mut().expect("codec after encode");
+        let pixels = (self.width.max(0) as usize).saturating_mul(self.height.max(0) as usize);
+        let min = pixels.saturating_mul(2).max(1 << 20);
+        if self.buf.len() < min {
+            self.buf.resize(min, 0);
+        }
+        loop {
+            match codec.save_to(&mut self.buf) {
+                Ok(n) => return Ok(self.buf[..n].to_vec()),
+                Err(vmx::VmxError::OutputTooSmall { need, .. }) => {
+                    self.buf
+                        .resize(need.max(self.buf.len().saturating_mul(2)), 0);
+                }
+                Err(vmx::VmxError::BufferOverflow) => {
+                    let next = self
+                        .buf
+                        .len()
+                        .saturating_mul(2)
+                        .max(self.buf.len().saturating_add(1 << 20));
+                    if next <= self.buf.len() {
+                        return Err("vmx save buffer overflow".into());
+                    }
+                    self.buf.resize(next, 0);
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HELD_AUDIO_CAP, push_held_audio};
+    use crate::upload::AudioPacket;
+    use std::collections::VecDeque;
+
+    fn pkt(ts: i64) -> AudioPacket {
+        AudioPacket {
+            timestamp: ts,
+            sample_rate: 48_000,
+            channels: 2,
+            samples_per_channel: 1,
+            pcm_planar_f32: vec![0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn held_audio_keeps_multiple_packets() {
+        let mut q = VecDeque::new();
+        push_held_audio(&mut q, pkt(1));
+        push_held_audio(&mut q, pkt(2));
+        push_held_audio(&mut q, pkt(3));
+        assert_eq!(
+            q.iter().map(|p| p.timestamp).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn held_audio_caps_by_dropping_oldest() {
+        let mut q = VecDeque::new();
+        for ts in 0..=HELD_AUDIO_CAP as i64 {
+            push_held_audio(&mut q, pkt(ts));
+        }
+        assert_eq!(q.len(), HELD_AUDIO_CAP);
+        assert_eq!(q.front().unwrap().timestamp, 1);
+        assert_eq!(q.back().unwrap().timestamp, HELD_AUDIO_CAP as i64);
     }
 }

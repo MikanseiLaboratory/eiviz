@@ -101,6 +101,7 @@ internal static partial class MixerNative
     internal static float MixerGain(float gain) => gain < 0f ? 1f : gain;
 
     internal static ulong SceneGpuId(ulong sceneId) => SceneBase | sceneId;
+    internal static ulong MultiviewGpuId(ulong layoutId) => MultiviewBase | layoutId;
     internal static ulong MuProgram(ulong unitId) => MuSourceFlag | (unitId & MuIdMask);
     internal static ulong MuPreview(ulong unitId) => MuSourceFlag | MuBusPreview | (unitId & MuIdMask);
 
@@ -287,7 +288,7 @@ internal static partial class MixerNative
     internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu);
+    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_remove")]
     internal static partial int OutputRemove(ulong outputId);

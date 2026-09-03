@@ -62,12 +62,16 @@ Where pictures leave the mixer.
 
 <img src="/eiviz/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
 
-Each row is a name, a transport, an On/Off switch, and a video source.  
+Each row is a name, a transport, an On/Off switch, a video source, and audio.  
 Transport is OMT or NDI. Hardware outputs such as DeckLink are still in progress.  
-Source can be Input, Scene, MU PRV, MU PGM, or Multiview.
+Source can be Input, Scene, MU PRV, MU PGM, or Multiview.  
+Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
+When Multiview is selected as the video source, audio cannot be sent.
 
-OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to the VMX codec for send. CPU encode converts to UYVY and reads back to the CPU.  
+OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to the VMX codec for send. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
 NDI is always CPU encode.
+
+One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
 
 Windows applies when you press OK. macOS can also Apply per row.
 

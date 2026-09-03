@@ -811,9 +811,10 @@ struct OutputEntry: Identifiable, Codable {
     var unitId: UInt64 = 1
     var useGpu: Bool = true
     var enabled: Bool = true
+    var audioBusId: UInt64 = 1
 
     enum CodingKeys: String, CodingKey {
-        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled
+        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioBusId
     }
 
     init(
@@ -824,7 +825,8 @@ struct OutputEntry: Identifiable, Codable {
         sourceId: UInt64 = 0,
         unitId: UInt64 = 1,
         useGpu: Bool = true,
-        enabled: Bool = true
+        enabled: Bool = true,
+        audioBusId: UInt64 = 1
     ) {
         self.id = id
         self.name = name
@@ -834,6 +836,7 @@ struct OutputEntry: Identifiable, Codable {
         self.unitId = unitId
         self.useGpu = useGpu
         self.enabled = enabled
+        self.audioBusId = audioBusId
     }
 
     init(from decoder: Decoder) throws {
@@ -846,6 +849,7 @@ struct OutputEntry: Identifiable, Codable {
         unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
     }
 }
 
@@ -1284,7 +1288,7 @@ struct MixerSessionData: Codable {
         ]
         session.units = [unit]
         session.buses = [
-            AudioBusEntry(id: 1, name: "Master", role: .master, deviceKind: .coreAudio, mapLeft: 0, mapRight: 1, bit: 0),
+            AudioBusEntry(id: 1, name: "Master", role: .master, deviceKind: .none, mapLeft: 0, mapRight: 1, bit: 0),
             AudioBusEntry(id: 2, name: "Headphone", role: .headphone, deviceKind: .none, mapLeft: 0, mapRight: 1, bit: 1)
         ]
         session.addScene(name: "Scene 1", input: EIVIZ_SRC_BARS)

@@ -38,6 +38,7 @@ pub enum DeviceError {
     #[error("no GPU adapter is available")]
     NoAdapter,
     #[error("this platform has no supported GPU backend")]
+    #[cfg(not(any(windows, target_os = "macos")))]
     UnsupportedPlatform,
     #[error("failed to create the GPU device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),

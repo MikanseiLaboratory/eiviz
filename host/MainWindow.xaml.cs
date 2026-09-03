@@ -2076,5 +2076,6 @@ public partial class MainWindow : Window
         && left.SourceId == right.SourceId
         && left.UnitId == right.UnitId
         && left.UseGpu == right.UseGpu
-        && left.Enabled == right.Enabled;
+        && left.Enabled == right.Enabled
+        && left.AudioBusId == right.AudioBusId;
 }

@@ -845,6 +845,7 @@ public sealed class OutputEntry
     public ulong UnitId { get; set; } = 1;
     public bool UseGpu { get; set; }
     public bool Enabled { get; set; } = true;
+    public ulong AudioBusId { get; set; } = 1;
 }
 
 public enum MvLabelUnit
@@ -1003,7 +1004,8 @@ public sealed class Session
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = 1,
-            UseGpu = true
+            UseGpu = true,
+            AudioBusId = 1
         });
         return session;
     }
@@ -1061,7 +1063,7 @@ public sealed class Session
                 Id = 1,
                 Name = "Master",
                 Role = AudioBusRole.Master,
-                DeviceKind = AudioDeviceKind.Wasapi,
+                DeviceKind = AudioDeviceKind.None,
                 MapLeft = 0,
                 MapRight = 1,
                 Bit = 0
@@ -1087,6 +1089,11 @@ public sealed class Session
         {
             if (unit.AudioBusId == 0)
                 unit.AudioBusId = 1;
+        }
+        foreach (var output in Outputs)
+        {
+            if (output.SourceKind == OutputSourceKind.Multiview)
+                output.AudioBusId = 0;
         }
     }
 

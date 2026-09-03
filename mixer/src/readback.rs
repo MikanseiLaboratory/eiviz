@@ -149,10 +149,6 @@ impl ReadbackStore {
             .or_insert_with(|| UnitReadback::new(device, width, height))
     }
 
-    pub fn get(&self, unit_id: u64) -> Option<&UnitReadback> {
-        self.units.get(&unit_id)
-    }
-
     pub fn get_mut(&mut self, unit_id: u64) -> Option<&mut UnitReadback> {
         self.units.get_mut(&unit_id)
     }

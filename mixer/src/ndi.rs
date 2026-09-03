@@ -1,12 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use grafton_ndi::{
-    AudioFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat, Receiver,
-    ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, Sender, SenderOptions, Source,
-    SourceAddress, VideoFrame,
+    AudioFrame, BorrowedVideoFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat,
+    Receiver, ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, ScanType, Sender,
+    SenderOptions, Source, SourceAddress, VideoFrame,
 };
 
 use crate::abi::FMT_BGRA;
@@ -181,24 +182,59 @@ impl Drop for NdiReceiver {
 }
 
 pub struct NdiSender {
-    sender: Sender,
+    /// Kept until the next async submit (or drop) so the SDK can read it.
+    inflight: Option<Arc<[u8]>>,
+    sender: Option<Arc<Sender>>,
+    audio_tx: Option<SyncSender<AudioPacket>>,
+    audio_thread: Option<JoinHandle<()>>,
+    pack_ms: f32,
+    sdk_ms: f32,
 }
 
 impl NdiSender {
     pub fn start(name: &str) -> Result<Self, String> {
         let ndi = runtime()?;
+        // Video stays clocked so the source stays visible when no audio is
+        // sent (None / silent Master). Audio clocks on a dedicated thread
+        // would be fine, but clock_audio on the shared send thread blocked
+        // after GPU encode (issue 141). grafton-ndi requires one clock.
         let options = SenderOptions::builder(name)
-            .clock_video(false)
-            .clock_audio(true)
+            .clock_video(true)
+            .clock_audio(false)
             .build();
-        let sender = Sender::new(ndi, &options).map_err(|error| error.to_string())?;
-        Ok(Self { sender })
+        let sender = Arc::new(Sender::new(ndi, &options).map_err(|error| error.to_string())?);
+        let (audio_tx, audio_rx) = sync_channel::<AudioPacket>(8);
+        let worker = Arc::clone(&sender);
+        let audio_thread = thread::Builder::new()
+            .name("eiviz-ndi-audio".into())
+            .spawn(move || {
+                while let Ok(audio) = audio_rx.recv() {
+                    if let Ok(frame) = build_audio_frame(&audio) {
+                        worker.send_audio(&frame);
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            inflight: None,
+            sender: Some(sender),
+            audio_tx: Some(audio_tx),
+            audio_thread: Some(audio_thread),
+            pack_ms: 0.0,
+            sdk_ms: 0.0,
+        })
+    }
+
+    fn sender(&self) -> Result<&Arc<Sender>, String> {
+        self.sender
+            .as_ref()
+            .ok_or_else(|| "ndi sender stopped".into())
     }
 
     pub fn pump(&mut self) -> Result<bool, String> {
         // Always encode. connection_count can stay 0 on macOS until a receiver
         // has already seen a source, so gating on it hides the sender entirely.
-        let _ = self.sender.connection_count(Duration::ZERO);
+        let _ = self.sender()?.connection_count(Duration::ZERO);
         Ok(true)
     }
 
@@ -208,55 +244,114 @@ impl NdiSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: &[u8],
+        pixels: Arc<[u8]>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {
-        let packed = pack_uyvy(width, height, stride, pixels);
-        let mut frame = VideoFrame::builder()
-            .resolution(width.max(1) as i32, height.max(1) as i32)
-            .pixel_format(PixelFormat::UYVY)
-            .frame_rate(fps_num.max(1) as i32, fps_den.max(1) as i32)
-            .aspect_ratio(width as f32 / height.max(1) as f32)
-            .timestamp(pts)
-            .timecode(pts)
-            .build()
-            .map_err(|error| error.to_string())?;
-        frame
-            .replace_data(packed)
-            .map_err(|error| error.to_string())?;
-        self.sender.send_video(&frame);
+        let timed = crate::diag::profile_send();
+        let t0 = timed.then(std::time::Instant::now);
+        let packed = packed_uyvy(width, height, stride, pixels);
+        if let Some(t0) = t0 {
+            self.pack_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        }
+        let width_i = width.max(1) as i32;
+        let height_i = height.max(1) as i32;
+        let packed_stride = width_i.saturating_mul(2);
+        let sender = Arc::clone(self.sender()?);
+        let t1 = timed.then(std::time::Instant::now);
+        {
+            // SAFETY: packed is tightly packed UYVY at width*2. The slice lives
+            // through send_video_async, then moves into inflight until the next
+            // submit or sender drop (Inner flushes the in-flight async frame).
+            let borrowed = unsafe {
+                BorrowedVideoFrame::from_parts_unchecked(
+                    packed.as_ref(),
+                    width_i,
+                    height_i,
+                    PixelFormat::UYVY.into(),
+                    fps_num.max(1) as i32,
+                    fps_den.max(1) as i32,
+                    width as f32 / height.max(1) as f32,
+                    ScanType::Progressive,
+                    pts,
+                    LineStrideOrSize::LineStrideBytes(packed_stride),
+                    None,
+                    pts,
+                )
+            };
+            // SAFETY: NDI documents concurrent send_video_async_v2 and send_audio_v3
+            // on one instance as thread-safe. grafton takes &mut Sender only to
+            // lifetime-bind AsyncVideoToken. We forget the token (its Drop would
+            // flush and wait) and keep `packed` in inflight; the next async submit
+            // waits for the previous buffer, then we replace inflight.
+            unsafe {
+                let sender_mut = &mut *(Arc::as_ptr(&sender) as *mut Sender);
+                let token = sender_mut.send_video_async(&borrowed);
+                std::mem::forget(token);
+            }
+        }
+        if let Some(t1) = t1 {
+            self.sdk_ms = t1.elapsed().as_secs_f32() * 1000.0;
+        }
+        self.inflight = Some(packed);
         Ok(())
     }
 
+    pub fn last_send_ms(&self) -> (f32, f32) {
+        (self.pack_ms, self.sdk_ms)
+    }
+
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
-        let channels = audio.channels.max(1);
-        let samples = audio.samples_per_channel.max(1);
-        let floats = &audio.pcm_planar_f32;
-        if floats.is_empty() {
+        if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
             return Ok(());
         }
-        let expected = channels as usize * samples as usize;
-        let data = if floats.len() == expected {
-            floats.clone()
-        } else {
-            let n = floats.len().min(expected);
-            let mut trimmed = vec![0.0f32; expected];
-            trimmed[..n].copy_from_slice(&floats[..n]);
-            trimmed
+        let Some(tx) = self.audio_tx.as_ref() else {
+            return Err("ndi audio thread stopped".into());
         };
-        let frame = AudioFrame::builder()
-            .sample_rate(audio.sample_rate.max(1))
-            .channels(channels)
-            .samples(samples)
-            .timestamp(audio.timestamp)
-            .timecode(audio.timestamp)
-            .data(data)
-            .build()
-            .map_err(|error| error.to_string())?;
-        self.sender.send_audio(&frame);
-        Ok(())
+        match tx.try_send(audio.clone()) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err("ndi audio thread stopped".into()),
+        }
     }
+}
+
+impl Drop for NdiSender {
+    fn drop(&mut self) {
+        self.audio_tx.take();
+        if let Some(handle) = self.audio_thread.take() {
+            let _ = handle.join();
+        }
+        // Flush in-flight async video before releasing the buffer.
+        self.sender.take();
+        self.inflight.take();
+    }
+}
+
+fn build_audio_frame(audio: &AudioPacket) -> Result<AudioFrame, String> {
+    let channels = audio.channels.max(1);
+    let samples = audio.samples_per_channel.max(1);
+    let floats = &audio.pcm_planar_f32;
+    if floats.is_empty() {
+        return Err("empty audio".into());
+    }
+    let expected = channels as usize * samples as usize;
+    let data = if floats.len() == expected {
+        floats.clone()
+    } else {
+        let n = floats.len().min(expected);
+        let mut trimmed = vec![0.0f32; expected];
+        trimmed[..n].copy_from_slice(&floats[..n]);
+        trimmed
+    };
+    AudioFrame::builder()
+        .sample_rate(audio.sample_rate.max(1))
+        .channels(channels)
+        .samples(samples)
+        .timestamp(audio.timestamp)
+        .timecode(audio.timestamp)
+        .data(data)
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 fn open_receiver(
@@ -518,10 +613,29 @@ fn to_audio(frame: &AudioFrame) -> AudioPacket {
     }
 }
 
+fn packed_stride_bytes(width: u32) -> usize {
+    width.max(1) as usize * 2
+}
+
+fn uyvy_is_packed(width: u32, height: u32, stride: u32, pixels: &[u8]) -> bool {
+    let packed_stride = packed_stride_bytes(width);
+    let src_stride = stride.max(packed_stride as u32) as usize;
+    src_stride == packed_stride && pixels.len() >= packed_stride * height.max(1) as usize
+}
+
+/// Packed UYVY (stride = width*2) is sent as-is. Padded rows are copied once.
+fn packed_uyvy(width: u32, height: u32, stride: u32, pixels: Arc<[u8]>) -> Arc<[u8]> {
+    if uyvy_is_packed(width, height, stride, &pixels) {
+        pixels
+    } else {
+        Arc::from(pack_uyvy(width, height, stride, &pixels))
+    }
+}
+
 fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
     let width = width.max(1);
     let height = height.max(1);
-    let packed_stride = width.saturating_mul(2) as usize;
+    let packed_stride = packed_stride_bytes(width);
     let src_stride = stride.max(packed_stride as u32) as usize;
     let mut packed = vec![0u8; packed_stride * height as usize];
     crate::simd::copy_rows(
@@ -537,7 +651,35 @@ fn pack_uyvy(width: u32, height: u32, stride: u32, pixels: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::pack_uyvy;
+    use super::{pack_uyvy, packed_uyvy};
+    use std::sync::Arc;
+
+    #[test]
+    fn packed_uyvy_reuses_arc_when_already_packed() {
+        let width = 4u32;
+        let height = 2u32;
+        let stride = 8u32;
+        let src: Arc<[u8]> = vec![1u8; (stride * height) as usize].into();
+        let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
+        assert!(Arc::ptr_eq(&src, &packed));
+    }
+
+    #[test]
+    fn packed_uyvy_copies_padded_stride() {
+        let width = 4u32;
+        let height = 2u32;
+        let stride = 16u32;
+        let mut src = vec![0u8; (stride * height) as usize];
+        src[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        let src: Arc<[u8]> = src.into();
+        let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
+        assert!(!Arc::ptr_eq(&src, &packed));
+        assert_eq!(
+            packed.as_ref(),
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+    }
 
     #[test]
     fn pack_uyvy_strips_padded_stride() {
@@ -564,5 +706,29 @@ mod tests {
             grafton_ndi::SourceAddress::Ip(ip) => assert!(ip.starts_with("192.168.0.10")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn send_audio_does_not_block_on_sample_clock() {
+        use std::time::{Duration, Instant};
+
+        let name = format!("eiviz-ndi-audio-clock-{}", std::process::id());
+        let mut sender = super::NdiSender::start(&name).expect("ndi sender");
+        let samples = 48_000i32;
+        let packet = crate::upload::AudioPacket {
+            timestamp: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            samples_per_channel: samples,
+            pcm_planar_f32: vec![0.0; samples as usize * 2],
+        };
+        let start = Instant::now();
+        sender.send_audio(&packet).expect("send 1");
+        sender.send_audio(&packet).expect("send 2");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "NDI send_audio must not clock to sample rate (took {elapsed:?})"
+        );
     }
 }

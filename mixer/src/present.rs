@@ -155,21 +155,6 @@ impl Presenters {
             .any(|id| frame_i % u64::from(self.interval_for(*id)) == 0)
     }
 
-    pub fn invalidate_all(&mut self) {
-        for presenter in self.by_key.values_mut() {
-            presenter.ready = false;
-            presenter.bind = None;
-            presenter.bind_key = 0;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-        }
-        for presenter in self.monitors.values_mut() {
-            presenter.ready = false;
-            presenter.bind = None;
-            presenter.bind_key = 0;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-        }
-    }
-
     pub fn present_unit_buses(
         &mut self,
         device: &GpuDevice,
@@ -232,12 +217,6 @@ impl Presenters {
             present_monitor_group(self, device, epoch, &[id], &source_view)?;
         }
         Ok(())
-    }
-
-    pub fn has_kind(&self, unit_id: u64, kind: u32) -> bool {
-        self.by_key
-            .keys()
-            .any(|(id, k, _)| *id == unit_id && *k == kind)
     }
 
     pub fn reconfigure_pending(&mut self, device: &GpuDevice) {

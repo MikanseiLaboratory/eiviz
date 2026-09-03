@@ -3,20 +3,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
-    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, INCOMING_PROGRAM, MixerRebarInfo,
-    OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
-    TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
-    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
+    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE,
+    SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
+    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
-    mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_omt_connect,
-    mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
-    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_unit_acquire_frame,
-    mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame,
-    mixer_unit_set_state, mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
+    mixer_define_generator, mixer_define_mix_input, mixer_define_scene, mixer_destroy,
+    mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send,
+    mixer_output_add, mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload,
+    mixer_set_rebar_optimization, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut,
+    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
+    mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -180,6 +181,7 @@ fn dx12_compose_omt_and_program_out() {
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
+                0,
                 0
             ),
             OK
@@ -192,6 +194,7 @@ fn dx12_compose_omt_and_program_out() {
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
+                0,
                 0
             ),
             OK
@@ -225,6 +228,7 @@ fn omt_program_shows_fade_during_auto() {
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
+                0,
                 0
             ),
             OK
@@ -304,6 +308,114 @@ fn omt_program_shows_fade_during_auto() {
     mixer_destroy();
 }
 
+/// Multiview OMT must keep accepting peers while Program GPU encode is also live.
+/// A raw layout id (not `MULTIVIEW_BASE | id`) must still address the mosaic.
+#[test]
+fn omt_multiview_output_is_received() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let mv = MULTIVIEW_BASE | 1;
+    let color = full_layer(SRC_COLOR);
+    let pgm = format!("eiviz-mv-pgm-{}", std::process::id());
+    let name = format!("eiviz-mv-out-{}", std::process::id());
+    unsafe {
+        assert_eq!(mixer_define_scene(mv, 320, 180, 1, &color), OK);
+        assert_eq!(
+            mixer_output_add(
+                401,
+                OUT_OMT,
+                CString::new(pgm.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1,
+                1,
+                0
+            ),
+            OK
+        );
+        assert_eq!(
+            mixer_output_add(
+                402,
+                OUT_OMT,
+                CString::new(name.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_MULTIVIEW,
+                1,
+                1,
+                0,
+                0
+            ),
+            OK
+        );
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    let session = connect_omt_named(&name);
+    let sample = wait_omt_sample(&session, Duration::from_secs(4));
+    assert!(
+        sample.0 > 160.0 && sample.1 < 80.0,
+        "multiview OMT should show Color (red), got r={} b={}",
+        sample.0,
+        sample.1
+    );
+    mixer_destroy();
+}
+
+/// Master audio must leave the OMT sender. Color/Bars are silent unless a tone
+/// is set; FPA1 also drops all-zero channels.
+#[test]
+fn omt_program_sends_master_audio() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let name = format!("eiviz-omt-master-audio-{}", std::process::id());
+    unsafe {
+        assert_eq!(
+            mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+            OK
+        );
+        assert_eq!(mixer_generator_set_tone(SRC_COLOR, 1000.0, -12.0), OK);
+        let state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(
+            mixer_output_add(
+                501,
+                OUT_OMT,
+                CString::new(name.as_str()).unwrap().as_ptr(),
+                SRC_KIND_MU_PROGRAM,
+                0,
+                1,
+                0,
+                1
+            ),
+            OK
+        );
+    }
+    let video = connect_omt_named(&name);
+    let _ = wait_omt_sample(&video, Duration::from_secs(4));
+    let audio = ReceiverSession::connect(
+        video.address(),
+        omt_receiver_config_frames(FrameType::AUDIO),
+    )
+    .expect("OMT audio socket");
+    let energy = wait_omt_audio_energy(&audio, Duration::from_secs(4));
+    assert!(
+        energy > 1e-6,
+        "OMT Program with Master should send tone audio, energy={energy}"
+    );
+    mixer_destroy();
+}
+
 #[test]
 fn dx12_omt_gpu_in_and_out() {
     mixer_destroy();
@@ -324,7 +436,8 @@ fn dx12_omt_gpu_in_and_out() {
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
-                1
+                1,
+                0
             ),
             OK
         );
@@ -447,9 +560,9 @@ fn full_layer(source_id: u64) -> OverlayDesc {
     }
 }
 
-fn omt_receiver_config() -> ReceiverConfig {
+fn omt_receiver_config_frames(frame_types: FrameType) -> ReceiverConfig {
     ReceiverConfig {
-        frame_types: FrameType::VIDEO,
+        frame_types,
         connect_timeout: Duration::from_secs(2),
         auto_reconnect: false,
         ..ReceiverConfig::default()
@@ -457,7 +570,12 @@ fn omt_receiver_config() -> ReceiverConfig {
 }
 
 fn connect_omt_named(name: &str) -> ReceiverSession {
+    connect_omt_named_frames(name, FrameType::VIDEO)
+}
+
+fn connect_omt_named_frames(name: &str, frame_types: FrameType) -> ReceiverSession {
     let deadline = Instant::now() + Duration::from_secs(8);
+    let config = omt_receiver_config_frames(frame_types);
     loop {
         if let Ok(mut discovery) = Discovery::new()
             && discovery.refresh_for(Duration::from_millis(250)).is_ok()
@@ -467,9 +585,7 @@ fn connect_omt_named(name: &str) -> ReceiverSession {
                     || source.to_string().contains(name)
             })
         {
-            if let Ok(session) =
-                ReceiverSession::connect_from_address(source, omt_receiver_config())
-            {
+            if let Ok(session) = ReceiverSession::connect_from_address(source, config.clone()) {
                 return session;
             }
         }
@@ -479,7 +595,7 @@ fn connect_omt_named(name: &str) -> ReceiverSession {
             let text = String::from_utf8_lossy(&buf[..n as usize]);
             for url in text.lines() {
                 if url.contains(name)
-                    && let Ok(session) = ReceiverSession::connect(url, omt_receiver_config())
+                    && let Ok(session) = ReceiverSession::connect(url, config.clone())
                 {
                     return session;
                 }
@@ -491,6 +607,32 @@ fn connect_omt_named(name: &str) -> ReceiverSession {
         );
         thread::sleep(Duration::from_millis(40));
     }
+}
+
+fn audio_energy(frame: &openmediatransport::DecodedAudioFrame) -> f32 {
+    let mut sum = 0.0f32;
+    let mut n = 0u32;
+    for chunk in frame.pcm_planar_f32.chunks_exact(4) {
+        let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        sum += sample * sample;
+        n += 1;
+    }
+    if n == 0 { 0.0 } else { sum / n as f32 }
+}
+
+fn wait_omt_audio_energy(session: &ReceiverSession, timeout: Duration) -> f32 {
+    let deadline = Instant::now() + timeout;
+    let mut best = 0.0f32;
+    while Instant::now() < deadline {
+        while let Some(audio) = session.try_recv_audio() {
+            best = best.max(audio_energy(&audio));
+            if best > 1e-6 {
+                return best;
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    best
 }
 
 fn mean_red_blue(frame: &DecodedVideoFrame) -> (f32, f32) {
@@ -686,6 +828,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                     SRC_KIND_MU_PROGRAM,
                     0,
                     1,
+                    0,
                     0
                 ),
                 OK
@@ -703,6 +846,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 SRC_KIND_MU_PROGRAM,
                 0,
                 1,
+                0,
                 0
             ),
             ERR_IO

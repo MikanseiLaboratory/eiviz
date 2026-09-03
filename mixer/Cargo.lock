@@ -902,7 +902,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openmediatransport"
 version = "0.1.0"
-source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=ccc4871b558f1095b52bf8928660d09cdbc585e1#ccc4871b558f1095b52bf8928660d09cdbc585e1"
+source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=2e57ca89e0af4ca9f4e9642c72f26c0d0b1eef64#2e57ca89e0af4ca9f4e9642c72f26c0d0b1eef64"
 dependencies = [
  "bytes",
  "mdns-sd",

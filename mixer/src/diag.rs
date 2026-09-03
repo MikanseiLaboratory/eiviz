@@ -11,6 +11,9 @@ const SLOW_LOCK_MS: u128 = 20;
 
 static INIT: OnceLock<()> = OnceLock::new();
 static LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
+static PROFILE_SEND: OnceLock<bool> = OnceLock::new();
+static READBACK_US: AtomicU64 = AtomicU64::new(0);
+static READBACK_N: AtomicU64 = AtomicU64::new(0);
 
 pub fn init() {
     INIT.get_or_init(|| {
@@ -27,6 +30,37 @@ pub fn init() {
 pub fn info(message: &str) {
     init();
     write("INFO", message);
+}
+
+/// Set `EIVIZ_PROFILE_SEND=1` before launch to log NDI pack/SDK and GPU
+/// readback averages about once a second.
+pub fn profile_send() -> bool {
+    *PROFILE_SEND.get_or_init(|| {
+        let on = std::env::var("EIVIZ_PROFILE_SEND")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        if on {
+            info("profile send timings on (EIVIZ_PROFILE_SEND)");
+        }
+        on
+    })
+}
+
+pub fn add_readback(elapsed: Duration) {
+    if !profile_send() {
+        return;
+    }
+    READBACK_US.fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
+    READBACK_N.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn take_readback_avg_ms() -> Option<f32> {
+    let n = READBACK_N.swap(0, Ordering::Relaxed);
+    if n == 0 {
+        return None;
+    }
+    let us = READBACK_US.swap(0, Ordering::Relaxed);
+    Some(us as f32 / n as f32 / 1000.0)
 }
 
 pub fn warn(message: &str) {
@@ -182,6 +216,7 @@ static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
 
+#[allow(dead_code)]
 pub fn mark_gpu_fault(message: &str) {
     GPU_FAULT.store(true, Ordering::Release);
     error(message);

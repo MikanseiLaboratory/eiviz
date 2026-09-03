@@ -20,7 +20,7 @@ use crate::upload::{AUDIO_RATE, UploadStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
     AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS,
+    MASTER_BUS, MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 
@@ -235,7 +235,7 @@ impl AudioEngine {
         mix_inputs: &std::collections::HashMap<u64, crate::abi::MixInputSpec>,
         fps_num: u32,
         fps_den: u32,
-    ) -> Vec<f32> {
+    ) -> MixedAudio {
         let mut graph = self.graph.lock().expect("audio");
         let mut delay = self.delay.lock().expect("audio delay");
         graph.mix(

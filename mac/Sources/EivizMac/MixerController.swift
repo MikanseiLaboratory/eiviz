@@ -627,6 +627,11 @@ final class MixerController: ObservableObject {
         if entry.transport != .omt {
             entry.useGpu = false
         }
+        if entry.sourceKind == .multiview, entry.sourceId != 0, entry.sourceId < EIVIZ_MULTIVIEW_BASE {
+            entry.sourceId = EIVIZ_MULTIVIEW_BASE | entry.sourceId
+        } else if entry.sourceKind == .scene, entry.sourceId != 0, entry.sourceId < EIVIZ_SCENE_BASE {
+            entry.sourceId = EIVIZ_SCENE_BASE | entry.sourceId
+        }
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
         }
@@ -639,9 +644,10 @@ final class MixerController: ObservableObject {
         let sourceId = entry.sourceId
         let unitId = entry.unitId
         let useGpu: UInt32 = entry.useGpu ? 1 : 0
+        let audioBusId = entry.sourceKind == .multiview ? 0 : entry.audioBusId
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
-                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu)
+                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu, audioBusId)
                 if code != 0 {
                     DispatchQueue.main.async {
                         _ = self?.fail(code, "Add output")

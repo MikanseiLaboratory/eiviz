@@ -90,6 +90,8 @@ internal sealed class CommandQueue : IAsyncDisposable
 
     public void AddOutputNow(OutputEntry output)
     {
+        NormalizeOutputSource(output);
+        var audioBusId = output.SourceKind == OutputSourceKind.Multiview ? 0uL : output.AudioBusId;
         var code = MixerNative.OutputAdd(
             output.Id,
             (uint)output.Transport,
@@ -97,7 +99,8 @@ internal sealed class CommandQueue : IAsyncDisposable
             (uint)output.SourceKind,
             output.SourceId,
             output.UnitId,
-            output.UseGpu ? 1u : 0u);
+            output.UseGpu ? 1u : 0u,
+            audioBusId);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }
@@ -406,6 +409,7 @@ internal sealed class CommandQueue : IAsyncDisposable
                     "UVC start");
                 break;
             case AddOutputCommand add:
+                NormalizeOutputSource(add.Output);
                 MixerNative.ThrowIfFailed(
                     MixerNative.OutputAdd(
                         add.Output.Id,
@@ -414,7 +418,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                         (uint)add.Output.SourceKind,
                         add.Output.SourceId,
                         add.Output.UnitId,
-                        add.Output.UseGpu ? 1u : 0u),
+                        add.Output.UseGpu ? 1u : 0u,
+                        add.Output.AudioBusId),
                     "Add output");
                 break;
             case RemoveOutputCommand remove:
@@ -549,6 +554,18 @@ internal sealed class CommandQueue : IAsyncDisposable
         kind == MixerNative.TransitionCustom && string.IsNullOrWhiteSpace(wgsl)
             ? CustomWgslWindow.WgslTemplate
             : wgsl ?? "";
+
+    internal static void NormalizeOutputSource(OutputEntry output)
+    {
+        if (output.SourceKind == OutputSourceKind.Multiview
+            && output.SourceId != 0
+            && output.SourceId < MixerNative.MultiviewBase)
+            output.SourceId = MixerNative.MultiviewGpuId(output.SourceId);
+        else if (output.SourceKind == OutputSourceKind.Scene
+            && output.SourceId != 0
+            && output.SourceId < MixerNative.SceneBase)
+            output.SourceId = MixerNative.SceneGpuId(output.SourceId);
+    }
 
     private static void ReportUserError(string message, string title)
     {

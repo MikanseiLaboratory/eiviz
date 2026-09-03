@@ -10,7 +10,10 @@ ATEMの出力ルーティング、vMixのNDI/SRT出力に相当します。
 
 [設定](/eiviz/ja/introduction/settings/)の出力から追加します。  
 転送方式はOMTまたはNDIです。ソースはInput、Scene、MU Preview、MU Program、Multiviewから選択が可能です。  
+音声はMaster, Headphone, 各Audio Aux、またはNone(音声なし)から選択可能です。  
+Multiviewを映像ソースに選択した場合、音声の送出は出来ません。  
 新規セッションの既定はMixing UnitのProgramです。
 
+各出力毎に1スレッド割り当てられます。  
 Decklinkなどのハードウェア出力は現在実装中です。  
 送出の詳細は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
