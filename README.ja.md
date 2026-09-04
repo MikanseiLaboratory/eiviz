@@ -3,9 +3,9 @@
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-**開発中です。まだ安定していません。**
+**現在鋭意開発中です。安定していな部分や未実装の機能が数多く存在します。ご理解ください**
 
-クロスプラットフォームの無制限M/Eソフトウェアスイッチャーです。名前は映像(eizou)とvisualから取っています。
+PCの性能が許す限り無限にM/Eを追加可能なソフトウェア映像スイッチャーです。
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
@@ -13,13 +13,13 @@
 
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
-| Windows x64 | Direct3D 12 | 使えます |
-| macOS | Metal | 対応済み（未テスト） |
+| Windows x64 | Direct3D 12 | 対応済み |
+| macOS | Metal | 対応済み(未テスト) |
 | Linux | Vulkan | 開発中 |
 
 ## インストール
 
-[最新版](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [過去のリリース](https://github.com/MikanseiLaboratory/eiviz/releases)
+[最新版ダウンロード](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [過去のバージョン](https://github.com/MikanseiLaboratory/eiviz/releases)
 
 ### Windows x64
 
@@ -38,7 +38,7 @@ xattr -cr .
 open eiviz-mac.app
 ```
 
-NDI®の発見と送出には`.app`が必要です。macOSにブロックされたときは、システム設定→プライバシーとセキュリティ→このまま開く、です。
+NDI®の発見と送出には`.app`バージョンのインストールが必要です。macOSにブロックされたときは、システム設定→プライバシーとセキュリティ→このまま開く からセキュリティを許可してください。
 
 ### macOS Intel（`macos-x64`）
 
@@ -46,9 +46,10 @@ NDI®の発見と送出には`.app`が必要です。macOSにブロックされ�
 
 ## eivizとは
 
-映像オペレーターが映像オペレーションのために作った、次世代のプロダクション向けグラフィックオペレーションツールです。
+映像オペレーターが作った、次世代のプロダクション向けグラフィックオペレーションツール・映像スイッチャーソフトウェアです。
 
-eivizは、最新のモダンな技術アーキテクチャを採用することにより、既存の映像オペレーションツールやソフトウェアスイッチャーでは実装が難しかった機能やクロスプラットフォーム対応を実現し、高い機能性と拡張性を提供しています。また、既存のソフトウェアスイッチャーの扱いづらさや反省を基に、より扱いやすく、アマチュアからプロまで幅広く活躍できるスイッチャーとしてデザインされています。
+eivizは、最新のモダンな技術アーキテクチャを採用することにより、既存のツールやソフトウェアでは実現が難しかった機能やクロスプラットフォーム対応を実現し、高い機能性と拡張性を提供しています。  
+また、既存のソフトウェアスイッチャーの扱いづらさや反省を基に、より扱いやすく、アマチュアからプロまで幅広く活躍できるスイッチャーとしてデザインされています。
 
 eivizは特定の企業ではなく、メインメンテナとコミュニティのサポートにより開発・運営されています。
 
@@ -62,8 +63,8 @@ Vibe codingアプリケーションではなく、開発の要所・必要なタ
 
 ## ライセンス
 
-本体は[PolyForm Shield License 1.0.0](LICENSE)です。社内で使う分には、営利組織でも構いません。
+[PolyForm Shield License 1.0.0](LICENSE)です。営利利用・社内利用を含め制限無く利用が可能です。
 
-有償・無償を問わず、eivizの代わりになる映像スイッチャーを出荷してはいけません。河村柊吾/未完成成果物研究所がこのソフトを使って出している他の製品についても同じです。競合する製品を出したい場合は、別途ライセンスが必要です。
+有償・無償を問わず、eivizの代わりになる映像スイッチャーを開発・出荷してはいけません。河村柊吾/未完成成果物研究所がこのソフトを使って出している他の製品についても同じ条件が適用されます。競合する製品を出したい場合は、別途ライセンス契約が必要です。詳細はお問い合わせください。
 
 同梱の第三者ライブラリは、それぞれのMIT、Apache-2.0、Zlibのままです。[NOTICE](NOTICE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を見てください。
