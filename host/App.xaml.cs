@@ -156,7 +156,8 @@ public partial class App : Application
         if (disable != 0)
             HostLog.Write("WARN", $"disable vMix HTTP API after listen failure: {disable}");
 
-        var owner = TcpListenOwner.TryGetName(port);
+        var ownerName = MixerNative.ApiListenOwnerText();
+        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
         HostLog.Write(
             "WARN",
             owner is null

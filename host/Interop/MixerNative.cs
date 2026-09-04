@@ -362,6 +362,22 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_api_configure", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ApiConfigure(uint enabled, uint port, string user, string pass);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_api_listen_owner")]
+    internal static unsafe partial int ApiListenOwner(byte* buffer, nuint capacity);
+
+    internal static string ApiListenOwnerText()
+    {
+        var buffer = new byte[256];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = ApiListenOwner(ptr, (nuint)buffer.Length);
+                return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
+            }
+        }
+    }
+
     internal static string LastErrorText()
     {
         var buffer = new byte[1024];

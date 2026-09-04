@@ -118,7 +118,8 @@ final class MixerController: ObservableObject {
                 mixer_api_configure(0, port, user, pass)
             }
         }
-        let owner = TcpListenOwner.name(port: port)
+        let ownerText = MixerFFI.listenOwnerText()
+        let owner = ownerText.isEmpty ? nil : ownerText
         if let owner {
             HostLog.write("WARN", "vMix HTTP API listen failed on port \(port); in use by \(owner); disabled")
         } else {

@@ -39,6 +39,7 @@ struct ApiState {
     stop: Arc<AtomicBool>,
     server: Option<Arc<Server>>,
     join: Option<JoinHandle<()>>,
+    listen_owner: Option<String>,
 }
 
 fn api_slot() -> &'static Mutex<ApiState> {
@@ -50,6 +51,7 @@ fn api_slot() -> &'static Mutex<ApiState> {
             stop: Arc::new(AtomicBool::new(false)),
             server: None,
             join: None,
+            listen_owner: None,
         })
     })
 }
@@ -90,6 +92,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         crate::diag::http_info("disabled");
         return OK;
     }
+    slot.listen_owner = None;
     let reuse = slot
         .server
         .as_ref()
@@ -104,7 +107,14 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
                 slot.server = Some(Arc::new(server));
             }
             Err(error) => {
-                crate::diag::http_error(&format!("listen {addr}: {error}"));
+                let owner = crate::tcp_listen_owner::name(config.port);
+                match owner.as_deref() {
+                    Some(name) => {
+                        crate::diag::http_error(&format!("listen {addr}: {error} ({name})"))
+                    }
+                    None => crate::diag::http_error(&format!("listen {addr}: {error}")),
+                }
+                slot.listen_owner = owner;
                 slot.config.enabled = false;
                 slot.server = None;
                 return crate::abi::ERR_IO;
@@ -336,9 +346,7 @@ fn resolve_incoming(flat: &FlatMap, raw: &str, live: &UnitLive) -> Result<u64, D
     if raw == "-1" {
         return Ok(live.program_source);
     }
-    let input = flat
-        .resolve_scene(raw)
-        .map_err(DispatchError::BadRequest)?;
+    let input = flat.resolve_scene(raw).map_err(DispatchError::BadRequest)?;
     Ok(input.source_id)
 }
 
@@ -518,6 +526,25 @@ pub unsafe fn configure_c(
     pass: *const c_char,
 ) -> i32 {
     configure(enabled != 0, port, &read_cstr(user), &read_cstr(pass))
+}
+
+pub fn listen_owner() -> Option<String> {
+    api_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.listen_owner.clone())
+}
+
+pub unsafe fn listen_owner_c(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let name = listen_owner().unwrap_or_default();
+    let n = name.len().min(cap);
+    unsafe {
+        std::ptr::copy_nonoverlapping(name.as_ptr(), out, n);
+    }
+    n as i32
 }
 
 fn read_cstr(ptr: *const c_char) -> String {

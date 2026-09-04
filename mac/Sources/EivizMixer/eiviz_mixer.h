@@ -296,6 +296,7 @@ int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
 int32_t mixer_session_canonicalize(const uint8_t *json, size_t len, uint8_t *out, size_t cap);
 int32_t mixer_session_publish(const uint8_t *json, size_t len);
 int32_t mixer_api_configure(uint32_t enabled, uint32_t port, const char *user, const char *pass);
+int32_t mixer_api_listen_owner(uint8_t *out, size_t cap);
 int32_t mixer_audio_bus_upsert(uint64_t id, const char *name, uint32_t role, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right, uint32_t exclusive);
 int32_t mixer_audio_bus_remove(uint64_t id);
 int32_t mixer_audio_bus_count(void);
