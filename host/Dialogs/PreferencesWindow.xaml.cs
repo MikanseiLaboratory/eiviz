@@ -21,6 +21,7 @@ public partial class PreferencesWindow : Window
         SelectTag(ThemeBox, AppPrefs.Current.Theme.ToString());
         _suppress = false;
         AboutVersion.Text = $"Version {HostVersion.Display}";
+        BindDocsLink();
         Closed += (_, _) =>
         {
             if (!_accepted)
@@ -33,6 +34,7 @@ public partial class PreferencesWindow : Window
         if (_suppress)
             return;
         Apply(ReadLanguage(), ReadTheme());
+        BindDocsLink();
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
@@ -65,6 +67,13 @@ public partial class PreferencesWindow : Window
         AppPrefs.Current.Save();
         Loc.Apply(language);
         ThemeService.Apply(theme);
+    }
+
+    private void BindDocsLink()
+    {
+        var url = Loc.T("prefs.docsUrl");
+        DocsLink.NavigateUri = new Uri(url);
+        DocsLinkText.Text = url;
     }
 
     private void AboutLink_RequestNavigate(object sender, RequestNavigateEventArgs e)

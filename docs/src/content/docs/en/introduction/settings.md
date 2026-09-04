@@ -48,13 +48,15 @@ Shows the graphics adapter in use.
 ### Resizable BAR / Unified Memory
 
 On Windows you get Resizable BAR status, BAR window / VRAM, and whether GPU upload heaps exist.  
-Use ReBAR optimization writes frames straight into GPU VRAM on upload. Integrated GPUs, and adapters that do not expose upload heaps, cannot turn it on. Turn it off if you see flicker or a device reset. Why ReBAR is assumed is in [About eiviz](/eiviz/en/introduction/about/).
+Use ReBAR optimization writes frames straight into GPU VRAM on upload. Integrated GPUs, and adapters that do not expose upload heaps, cannot turn it on. Turn it off if you see flicker or tearing. Why ReBAR is assumed is in [About eiviz](/eiviz/en/introduction/about/).
+
+GPU upload heaps are not the same as Resizable BAR. Even on a ReBAR-capable machine — for example Windows 11 before 24H2 — GPU upload heaps may be unavailable, so this optimization cannot be used.
 
 On Apple Silicon the same idea is Unified Memory optimization. Live inputs land in `MTLStorageModeShared` textures and are sampled there. Off falls back to the ordinary Metal upload path.
 
 ### Upload NDI on the ingest thread
 
-On by default. On writes each NDI frame to the GPU so compose and send stay faster. Off uploads CPU frames on the render thread.
+On by default. On uploads each received frame to the GPU from a dedicated CPU thread. Off uses the shared render thread.
 
 ## Outputs
 
@@ -136,3 +138,10 @@ English / 日本語.
 ### Theme
 
 Dark, Light, or Follow OS.
+
+### Help
+
+Opens the official docs for the language in use.
+
+- English: https://mikanseilaboratory.github.io/eiviz/en/
+- 日本語: https://mikanseilaboratory.github.io/eiviz/ja/

@@ -40,6 +40,28 @@ Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputの�
 
 ## タグ
 
-Inputには複数のタグを付けられます。一覧上部のタブでAll、各タグ、Kind（Colours/Still/Video/OMT/NDI®/Video Capture/Mix）を切り替えます。タブ帯を右クリックしてタグの追加、名前変更、削除ができます。
+Inputには複数のタグを付けられます。タグはセッションのカタログに残り、どのInputにも付いていないタグもタブとして出ます。
+
+### 付け方
+
+Inputsの追加/編集ダイアログで、タグをチェックして付けます。同じダイアログから新しいタグを追加できます。  
+1つのInputに複数付けられます。
+
+### 一覧の絞り込み
+
+メインウィンドウのInputs一覧の上に、排他のタブがあります。
+
+- **すべて** — 全Input
+- **各タグ** — そのタグが付いたInputだけ
+- **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
+
+タブ切替は一覧の表示だけを絞ります。Mixing UnitやOutputの選択対象は変わりません。
+
+### タグの管理
+
+タブ帯を右クリックして、タグの追加、名前変更、削除ができます。
+
+- 改名すると、付いているInputも新しい名前に追従します
+- 削除すると、各Inputから外れます。表示中のタブを消した場合は「すべて」に戻ります
 
 詳細は[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご参照ください。

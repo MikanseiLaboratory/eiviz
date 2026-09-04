@@ -1,17 +1,28 @@
 # eiviz
+
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-Work in progress. Multi M/E vision mixer for Windows, plus a Metal preview host for Mac.  
-eiviz / 映像(eizou) + visual
+**Under active development / Unstable.**  
+A multi M/E vision mixer. eiviz / 映像(eizou) + visual.
+
+[Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
 
 <img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
 
+| Platform | Graphics | Status |
+| --- | --- | --- |
+| Windows x64 | Direct3D 12 | Supported |
+| macOS | Metal | Tier 2 |
+| Linux | Vulkan | Under development |
+
+## Install
+
 [Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [all releases](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-Windows x64 zip: unzip and run `Eiviz.Host.exe`.  
-macOS Apple Silicon zip (`macos-arm64`): unzip and run `./eiviz-mac`.  
-macOS Intel zip (`macos-x64`): same, for x86_64 / amd64.
+**Windows x64:** unzip and run `Eiviz.Host.exe`.  
+**macOS Apple Silicon** (`macos-arm64`): unzip and run `./eiviz-mac`.  
+**macOS Intel** (`macos-x64`): same, for x86_64 / amd64.
 
 ## What it is
 
@@ -22,6 +33,15 @@ The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C#
 Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
 Output: OMT (GPU or CPU encode), NDI® (CPU / UYVY).  
 Scenes, overlays, multiview. Audio buses: WASAPI / ASIO on Windows, Core Audio on macOS.
+
+## Stack
+
+| Layer | Tech |
+| --- | --- |
+| Mixer (core) | Rust 1.97, wgpu 30 |
+| Windows host | .NET 10, C# 14, WPF, Direct3D 12 |
+| macOS host | Swift 6, SwiftUI, Metal |
+| Linux host | Rust, GTK 4, Vulkan — under development |
 
 ## Build
 

@@ -15,6 +15,8 @@ The target is Windows 11 (x64). [Windows on ARM is not supported](https://github
 A **discrete GPU with Resizable BAR enabled** is required. Integrated-only machines are out of scope.  
 AMD calls the same feature Smart Access Memory (SAM).
 
+GPU upload heaps are not the same as Resizable BAR. Even on a ReBAR-capable machine — for example Windows 11 before 24H2 — GPU upload heaps may be unavailable, so this optimization cannot be used.
+
 | GPU | Recommended |
 | --- | --- |
 | NVIDIA | GeForce RTX 3000 series or later |
