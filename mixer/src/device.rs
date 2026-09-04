@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use thiserror::Error;
@@ -55,10 +56,7 @@ pub struct GpuDevice {
 impl GpuDevice {
     pub fn new() -> Result<Self, DeviceError> {
         let backends = Self::backends()?;
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        let instance = wgpu::Instance::new(instance_descriptor(backends));
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
@@ -114,9 +112,110 @@ impl GpuDevice {
     }
 }
 
+fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
+    wgpu::InstanceDescriptor {
+        backends,
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: dx12_shader_compiler(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    }
+}
+
+/// wgpu's default `Dx12Compiler::Auto` LoadLibrary-searches `dxcompiler.dll` on PATH.
+/// Other apps ship incompatible copies (CS Demo Manager is one); loading those can
+/// crash with STATUS_ILLEGAL_INSTRUCTION. Only use a sidecar next to the host, else FXC.
+fn dx12_shader_compiler() -> wgpu::Dx12Compiler {
+    let compiler = dx12_shader_compiler_from(&native_sidecar_dirs());
+    crate::diag::info(&format!("dx12 shader compiler: {compiler:?}"));
+    compiler
+}
+
+fn native_sidecar_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            dirs.push(dir.to_path_buf());
+        }
+    }
+    dirs
+}
+
+fn dx12_shader_compiler_from(dirs: &[PathBuf]) -> wgpu::Dx12Compiler {
+    if let Some(path) = bundled_dxc_path(dirs) {
+        return wgpu::Dx12Compiler::DynamicDxc { dxc_path: path };
+    }
+    wgpu::Dx12Compiler::Fxc
+}
+
+fn bundled_dxc_path(dirs: &[PathBuf]) -> Option<String> {
+    dirs.iter().find_map(|dir| {
+        let path = dir.join("dxcompiler.dll");
+        path.is_file()
+            .then(|| path_for_loadlibrary(&path))
+            .flatten()
+    })
+}
+
+fn path_for_loadlibrary(path: &Path) -> Option<String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
+}
+
 fn is_surface_local_error(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("surface is not configured")
         || text.contains("surface does not exist")
         || (text.contains("surface") && (text.contains("outdated") || text.contains("lost")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn dx12_compiler_uses_fxc_without_sidecar() {
+        let dir = scratch_dir("dxc-test-empty");
+        match dx12_shader_compiler_from(&[dir]) {
+            wgpu::Dx12Compiler::Fxc => {}
+            other => panic!("expected Fxc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dx12_compiler_uses_absolute_sidecar_not_path_basename() {
+        let dir = scratch_dir("dxc-test-sidecar");
+        let dll = dir.join("dxcompiler.dll");
+        fs::write(&dll, []).expect("sidecar");
+        match dx12_shader_compiler_from(&[dir]) {
+            wgpu::Dx12Compiler::DynamicDxc { dxc_path } => {
+                assert!(
+                    Path::new(&dxc_path).is_absolute(),
+                    "LoadLibrary basename would search PATH: {dxc_path}"
+                );
+                assert!(
+                    dxc_path.replace('\\', "/").ends_with("/dxcompiler.dll"),
+                    "{dxc_path}"
+                );
+            }
+            other => panic!("expected DynamicDxc, got {other:?}"),
+        }
+    }
 }
