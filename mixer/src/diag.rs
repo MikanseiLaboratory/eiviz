@@ -11,6 +11,7 @@ const SLOW_LOCK_MS: u128 = 20;
 
 static INIT: OnceLock<()> = OnceLock::new();
 static LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
+static HTTP_LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);
 static PROFILE_SEND: OnceLock<bool> = OnceLock::new();
 static READBACK_US: AtomicU64 = AtomicU64::new(0);
 static READBACK_N: AtomicU64 = AtomicU64::new(0);
@@ -71,6 +72,21 @@ pub fn warn(message: &str) {
 pub fn error(message: &str) {
     init();
     write("ERROR", message);
+}
+
+pub fn http_info(message: &str) {
+    init();
+    write_http("INFO", message);
+}
+
+pub fn http_warn(message: &str) {
+    init();
+    write_http("WARN", message);
+}
+
+pub fn http_error(message: &str) {
+    init();
+    write_http("ERROR", message);
 }
 
 pub fn log_dir() -> PathBuf {
@@ -147,13 +163,32 @@ fn timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+fn write_http(level: &str, message: &str) {
+    let line = format!("{} {level} {message}\n", timestamp());
+    eprint!("HTTP {line}");
+    let Ok(mut slot) = HTTP_LOG.lock() else {
+        return;
+    };
+    if slot.is_none() {
+        *slot = open_named_log("eiviz-mixer-http.log");
+    }
+    if let Some(file) = slot.as_mut() {
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.flush();
+    }
+}
+
 fn open_log() -> Option<std::fs::File> {
+    open_named_log("eiviz-mixer.log")
+}
+
+fn open_named_log(name: &str) -> Option<std::fs::File> {
     let dir = log_dir();
     fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("eiviz-mixer.log");
+    let path = dir.join(name);
     if let Ok(meta) = fs::metadata(&path) {
         if meta.len() >= MAX_LOG_BYTES {
-            let old = dir.join("eiviz-mixer.log.old");
+            let old = dir.join(format!("{name}.old"));
             let _ = fs::remove_file(&old);
             let _ = fs::rename(&path, old);
         }

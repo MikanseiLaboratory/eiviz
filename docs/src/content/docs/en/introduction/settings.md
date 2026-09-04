@@ -101,6 +101,16 @@ Enabled keeps the bus mixing internally with no output device.
 
 Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it off if you want a cue mix.
 
+## Web API
+
+vMix-compatible HTTP listen settings. These are stored in the session file.
+
+- Enabled: start the HTTP server when the mixer starts. Default on
+- Port: default 8088
+- Username / password: BasicAuth if either is set. Both empty means no auth
+
+Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
+
 ## Advanced
 
 ### Video output destination window limit

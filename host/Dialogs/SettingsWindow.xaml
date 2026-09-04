@@ -18,6 +18,7 @@
                 <ListBoxItem Content="{Binding [settings.outputs], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.multiview], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.audioAux], Source={x:Static i18n:Loc.Source}}"/>
+                <ListBoxItem Content="{Binding [settings.webApi], Source={x:Static i18n:Loc.Source}}"/>
                 <ListBoxItem Content="{Binding [settings.advanced], Source={x:Static i18n:Loc.Source}}"/>
             </ListBox>
         </Border>
@@ -156,6 +157,18 @@
                 </ComboBox>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
                            Text="{Binding [settings.flipBudgetHelp], Source={x:Static i18n:Loc.Source}}"/>
+            </StackPanel>
+            <StackPanel x:Name="WebApiPanel" Margin="20" Visibility="Collapsed">
+                <CheckBox x:Name="WebApiEnabledBox" Content="{Binding [settings.webApiEnabled], Source={x:Static i18n:Loc.Source}}"
+                          Margin="0,0,0,12" Foreground="{DynamicResource TextForeground}"/>
+                <TextBlock Text="{Binding [settings.webApiPort], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBox x:Name="WebApiPortBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left"/>
+                <TextBlock Text="{Binding [settings.webApiUser], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBox x:Name="WebApiUserBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left"/>
+                <TextBlock Text="{Binding [settings.webApiPassword], Source={x:Static i18n:Loc.Source}}"/>
+                <PasswordBox x:Name="WebApiPasswordBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left"/>
+                <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.webApiHelp], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
         </DockPanel>
     </Grid>

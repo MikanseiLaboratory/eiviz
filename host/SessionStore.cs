@@ -22,6 +22,11 @@ internal static class SessionStore
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
+    public static void Publish(Session session)
+    {
+        MixerNative.SessionPublishText(JsonSerializer.Serialize(Document.From(session), Json));
+    }
+
     public static Session Load(string path)
     {
         try
@@ -123,6 +128,10 @@ internal static class SessionStore
             session.Settings.MultiviewLabelSize = Settings.MultiviewLabelSize <= 0 ? 18 : Math.Clamp(Settings.MultiviewLabelSize, 1f, 200f);
             session.Settings.MultiviewLabelUnit = Settings.MultiviewLabelUnit;
             session.Settings.MultiviewLabelAnchor = Settings.MultiviewLabelAnchor;
+            session.Settings.VmixApiEnabled = Settings.VmixApiEnabledValue;
+            session.Settings.VmixApiPort = Settings.VmixApiPort == 0 ? 8088 : Settings.VmixApiPort;
+            session.Settings.VmixApiUser = Settings.VmixApiUser ?? "";
+            session.Settings.VmixApiPassword = Settings.VmixApiPassword ?? "";
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

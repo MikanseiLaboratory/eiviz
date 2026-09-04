@@ -17,7 +17,8 @@ struct SettingsView: View {
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
                 Text("Audio Auxiliary").tag(4)
-                Text(L10n.t("settings.advanced")).tag(5)
+                Text(L10n.t("settings.webApi")).tag(5)
+                Text(L10n.t("settings.advanced")).tag(6)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -28,6 +29,7 @@ struct SettingsView: View {
                     else if category == 2 { outputs }
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
+                    else if category == 5 { webApi }
                     else { advanced }
                 }
                 Spacer()
@@ -45,6 +47,9 @@ struct SettingsView: View {
                         for layout in mixer.session.multiviews {
                             mixer.pushMultiview(layout)
                         }
+                        AppPrefs.shared.save()
+                        mixer.applyVmixApi()
+                        mixer.publishSession()
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -145,6 +150,40 @@ struct SettingsView: View {
             .labelsHidden()
             .frame(width: 280, alignment: .leading)
             Text(L10n.t("settings.flipBudgetHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var webApi: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(L10n.t("settings.webApiEnabled"), isOn: Binding(
+                get: { mixer.session.settings.vmixApiEnabled },
+                set: { mixer.session.settings.vmixApiEnabled = $0 }
+            ))
+            Text(L10n.t("settings.webApiPort"))
+            TextField("", text: Binding(
+                get: { String(mixer.session.settings.vmixApiPort) },
+                set: {
+                    if let value = UInt32($0), value > 0, value <= 65_535 {
+                        mixer.session.settings.vmixApiPort = value
+                    }
+                }
+            ))
+            .frame(width: 220, alignment: .leading)
+            Text(L10n.t("settings.webApiUser"))
+            TextField("", text: Binding(
+                get: { mixer.session.settings.vmixApiUser },
+                set: { mixer.session.settings.vmixApiUser = $0 }
+            ))
+            .frame(width: 220, alignment: .leading)
+            Text(L10n.t("settings.webApiPassword"))
+            SecureField("", text: Binding(
+                get: { mixer.session.settings.vmixApiPassword },
+                set: { mixer.session.settings.vmixApiPassword = $0 }
+            ))
+            .frame(width: 220, alignment: .leading)
+            Text(L10n.t("settings.webApiHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }

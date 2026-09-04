@@ -21,6 +21,12 @@
                 <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
                 <Setter Property="CaretBrush" Value="{DynamicResource TextForeground}"/>
             </Style>
+            <Style TargetType="PasswordBox">
+                <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="CaretBrush" Value="{DynamicResource TextForeground}"/>
+            </Style>
             <Style TargetType="ComboBox">
                 <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
                 <Setter Property="Foreground" Value="{DynamicResource ComboForeground}"/>

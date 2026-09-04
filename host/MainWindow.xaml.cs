@@ -1192,6 +1192,11 @@ public partial class MainWindow : Window
         ApplyTBarFromMixer(SelectedUnit.Id, TBar, ref _tbarLatching, ref _tbarLocked);
         foreach (var window in _switchers.Values)
             window.ApplyMixerMix();
+        var program = CurrentProgramSceneId();
+        var previewGpu = CurrentPreviewSceneGpuId();
+        var previewId = _session.Scenes.FirstOrDefault(item => item.GpuId == previewGpu)?.Id ?? 0;
+        if (program != _shownProgramId || previewId != _shownPreviewId)
+            RefreshSceneTiles();
     }
 
     internal static void ApplyTBarFromMixer(ulong unitId, Slider tbar, ref bool latching, ref bool locked)
@@ -1629,6 +1634,7 @@ public partial class MainWindow : Window
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
         }
+        SessionStore.Publish(_session);
     }
 
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
@@ -1675,6 +1681,7 @@ public partial class MainWindow : Window
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
         TickVideo();
+        SessionStore.Publish(_session);
     }
 
     private void AddScene_Click(object sender, RoutedEventArgs e)
@@ -1684,6 +1691,7 @@ public partial class MainWindow : Window
         RebuildScenes();
         SelectScene(scene);
         OpenSceneEditor(scene);
+        SessionStore.Publish(_session);
     }
 
     private void RemoveScene_Click(object sender, RoutedEventArgs e)
@@ -1740,6 +1748,7 @@ public partial class MainWindow : Window
         SelectScene(fallback);
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
+        SessionStore.Publish(_session);
     }
 
     private void EditScene_Click(object sender, RoutedEventArgs e)
@@ -1981,6 +1990,10 @@ public partial class MainWindow : Window
         _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
         _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
         _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
+        _session.Settings.VmixApiEnabled = dialog.Settings.VmixApiEnabledValue;
+        _session.Settings.VmixApiPort = dialog.Settings.VmixApiPort == 0 ? 8088 : dialog.Settings.VmixApiPort;
+        _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
+        _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         RefreshSceneTiles();
@@ -2016,6 +2029,8 @@ public partial class MainWindow : Window
             RestartMediaPumps();
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
+        App.ApplyVmixApi();
+        SessionStore.Publish(_session);
     }
 
     private void RestartMediaPumps()

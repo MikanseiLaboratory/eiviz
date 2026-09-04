@@ -1207,6 +1207,10 @@ struct SessionSettings: Codable {
     var multiviewLabelUnit: MvLabelUnit = .px
     var multiviewLabelAnchor: MvLabelAnchor = .bottom
     var lastSessionPath: String?
+    var vmixApiEnabled: Bool = true
+    var vmixApiPort: UInt32 = 8088
+    var vmixApiUser: String = ""
+    var vmixApiPassword: String = ""
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
     var ndiGpuUploadEnabled: Bool { ndiGpuUpload != false }
@@ -1241,6 +1245,11 @@ struct SessionSettings: Codable {
         multiviewLabelUnit = try container.decodeIfPresent(MvLabelUnit.self, forKey: .multiviewLabelUnit) ?? .px
         multiviewLabelAnchor = try container.decodeIfPresent(MvLabelAnchor.self, forKey: .multiviewLabelAnchor) ?? .bottom
         lastSessionPath = try container.decodeIfPresent(String.self, forKey: .lastSessionPath)
+        vmixApiEnabled = try container.decodeIfPresent(Bool.self, forKey: .vmixApiEnabled) ?? true
+        vmixApiPort = try container.decodeIfPresent(UInt32.self, forKey: .vmixApiPort) ?? 8088
+        if vmixApiPort == 0 { vmixApiPort = 8088 }
+        vmixApiUser = try container.decodeIfPresent(String.self, forKey: .vmixApiUser) ?? ""
+        vmixApiPassword = try container.decodeIfPresent(String.self, forKey: .vmixApiPassword) ?? ""
     }
 }
 

@@ -102,6 +102,16 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
 
+## Web API
+
+vMix互換HTTP APIの待ち受けです。セッションファイルに保存されます。
+
+- 有効: Mixer起動時にHTTPサーバーを開く。既定はオン
+- ポート: 既定は8088
+- ユーザー名/パスワード: どちらか入っていればBasicAuth。両方空なら認証なし
+
+エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
+
 ## 詳細
 
 ### 映像出力先ウィンドウの上限

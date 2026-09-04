@@ -16,9 +16,12 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "2e57ca89e0af4ca9f4e9642c72f26c0d0b1eef64", features = ["wgpu"] }
 pollster = "0.4"
 raw-window-handle = "0.6"
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tiny_http = "0.12"
+vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
 vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "e6cccd45bf6bb0fb6b0617ccc55c74ea4a03c657" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }

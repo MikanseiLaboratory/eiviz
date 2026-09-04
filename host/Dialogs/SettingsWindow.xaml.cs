@@ -35,7 +35,11 @@ public partial class SettingsWindow : Window
             InactiveColor = RgbColor.FromOrDefault(session.Settings.InactiveColor, RgbColor.InactiveDefault),
             MultiviewLabelSize = session.Settings.MultiviewLabelSize,
             MultiviewLabelUnit = session.Settings.MultiviewLabelUnit,
-            MultiviewLabelAnchor = session.Settings.MultiviewLabelAnchor
+            MultiviewLabelAnchor = session.Settings.MultiviewLabelAnchor,
+            VmixApiEnabled = session.Settings.VmixApiEnabledValue,
+            VmixApiPort = session.Settings.VmixApiPort == 0 ? 8088 : session.Settings.VmixApiPort,
+            VmixApiUser = session.Settings.VmixApiUser ?? "",
+            VmixApiPassword = session.Settings.VmixApiPassword ?? ""
         };
         foreach (var output in session.Outputs)
         {
@@ -63,6 +67,10 @@ public partial class SettingsWindow : Window
         RebuildBuses();
         FillRebar();
         PaintBusColors();
+        WebApiEnabledBox.IsChecked = Settings.VmixApiEnabledValue;
+        WebApiPortBox.Text = Settings.VmixApiPort.ToString();
+        WebApiUserBox.Text = Settings.VmixApiUser;
+        WebApiPasswordBox.Password = Settings.VmixApiPassword;
     }
 
     public SessionSettings Settings { get; }
@@ -76,7 +84,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -84,7 +92,8 @@ public partial class SettingsWindow : Window
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
         MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+        WebApiPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -99,6 +108,10 @@ public partial class SettingsWindow : Window
         NdiGpuBox.IsChecked = true;
         Settings.ResetBusColors();
         PaintBusColors();
+        WebApiEnabledBox.IsChecked = true;
+        WebApiPortBox.Text = "8088";
+        WebApiUserBox.Text = "";
+        WebApiPasswordBox.Password = "";
     }
 
     private void PickPreviewColor_Click(object sender, RoutedEventArgs e)
@@ -599,6 +612,11 @@ public partial class SettingsWindow : Window
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
+        Settings.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
+        if (uint.TryParse(WebApiPortBox.Text.Trim(), out var apiPort) && apiPort is > 0 and <= 65535)
+            Settings.VmixApiPort = apiPort;
+        Settings.VmixApiUser = WebApiUserBox.Text ?? "";
+        Settings.VmixApiPassword = WebApiPasswordBox.Password ?? "";
         DialogResult = true;
     }
 
