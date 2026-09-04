@@ -47,13 +47,9 @@ Same steps, with the `macos-x64` pkg or zip.
 
 A next-generation production graphics tool, built by video operators for video operations.
 
-Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
+A modern architecture lets eiviz ship features — and real cross-platform support — that existing video-ops tools and software vision mixers have struggled to implement, while staying capable and extensible. It is also designed around what those mixers get wrong: easier to work with, and usable from amateur productions through professional shows.
 
-A session saved on Windows opens the same way on macOS, and the other way around.
-
-Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
-Output: OMT, NDI®.  
-Scenes, overlays, multiview. Audio on Windows and macOS.
+eiviz is not a company product. It is developed and operated by the main maintainer, with support from the community.
 
 ## License
 
