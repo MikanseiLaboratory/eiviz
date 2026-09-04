@@ -51,13 +51,11 @@ One Input can hold several tags.
 
 ### Filter the list
 
-Tabs above the Inputs list in the main window are exclusive.
+Tabs sit above the Inputs list. Pick one to show matching Inputs.
 
 - **All** — every Input
-- **Each tag** — only Inputs that have that tag
+- **Each tag** — Inputs with that tag
 - **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
-
-Changing a tab only filters the list. Mixing Unit and Output pickers still see every Input.
 
 ### Manage tags
 

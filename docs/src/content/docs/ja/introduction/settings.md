@@ -51,7 +51,7 @@ RAM上とGPUへ上げるときの画素の持ち方です。既定のUYVY 4:2:2�
 WindowsではResizable BARの可否と、BAR窓/VRAM、GPU upload heapの有無を出します。  
 「ReBAR最適化を使う」は、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやティアリングが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/eiviz/ja/introduction/about/)をご参照ください。
 
-GPU upload heapsとResizable BARは別物です。Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応のため、この最適化が利用できない場合があります。
+Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
 
 macOS（Apple Silicon）ではUnified Memory向けの最適化を導入しています。ライブ入力を`MTLStorageModeShared`の共有テクスチャ領域へ書き、そのままサンプルします。オフにすると通常のMetalアップロードに戻ります。
 

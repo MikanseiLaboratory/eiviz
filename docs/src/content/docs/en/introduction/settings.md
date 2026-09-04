@@ -50,7 +50,7 @@ Shows the graphics adapter in use.
 On Windows you get Resizable BAR status, BAR window / VRAM, and whether GPU upload heaps exist.  
 Use ReBAR optimization writes frames straight into GPU VRAM on upload. Integrated GPUs, and adapters that do not expose upload heaps, cannot turn it on. Turn it off if you see flicker or tearing. Why ReBAR is assumed is in [About eiviz](/eiviz/en/introduction/about/).
 
-GPU upload heaps are not the same as Resizable BAR. Even on a ReBAR-capable machine — for example Windows 11 before 24H2 — GPU upload heaps may be unavailable, so this optimization cannot be used.
+Even on a Resizable BAR system, GPU upload heaps may be unavailable — for example on Windows 11 before 24H2 — so this optimization cannot be used.
 
 On Apple Silicon the same idea is Unified Memory optimization. Live inputs land in `MTLStorageModeShared` textures and are sampled there. Off falls back to the ordinary Metal upload path.
 

@@ -311,7 +311,7 @@ public static class Loc
         ["settings.useRebar"] = "ReBAR 最適化を使う",
         ["settings.ndiGpu"] = "NDI を取り込みスレッドでアップロード",
         ["settings.perfHelp"] = "「NDIを取り込みスレッドでアップロード」がOnの際は、受信した各フレームを専用のCPUスレッドからGPUへアップロードします。オフの場合、共有の描画スレッドで転送します。ReBARはDX12の最適化機能を使用し、CPUからVRAMへ直接フレームを転送します。チラつきやティアリングが発生した場合オフにしてください。",
-        ["settings.rebarNote"] = "Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応のため、この最適化が利用できない場合があります。",
+        ["settings.rebarNote"] = "Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。",
         ["settings.flipBudget"] = "映像出力先ウィンドウの上限",
         ["settings.flipBudgetAuto"] = "自動",
         ["settings.flipBudgetHelp"] = "Preview/Program/Multiviewをリアルタイムに表示するのに使います。Switcher UIはPreviewとProgramを出すので2スロット使います。設定から上げられますが、不安定になる可能性があります。シーンタイルと入力プレビューのサムネは数えません。",

@@ -27,13 +27,12 @@ One Scene can hold several tags.
 
 ### Filter the list
 
-Tabs above the Scenes list in the main window are exclusive.
+Tabs sit above the Scenes list. Pick one to show matching Scenes.
 
 - **All** — every Scene
-- **Each tag** — only Scenes that have that tag
+- **Each tag** — Scenes with that tag
 
-Changing a tab only filters the list. Overlay, Multiview, and Settings pickers still see every Scene.  
-The separate Mixing Unit switcher window uses the same tag tabs.
+The Mixing Unit switcher window can filter with the same tabs.
 
 ### Manage tags
 

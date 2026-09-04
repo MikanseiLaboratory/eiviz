@@ -3,41 +3,40 @@
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-**活発に開発中/不安定。**  
-マルチM/Eの映像スイッチャーです。eivizは映像(eizou)+visualです。
+**開発中です。まだ安定していません。**
+
+ライブ映像を切り替えて送るソフトウェアスイッチャーです。名前は映像(eizou)とvisualから取っています。
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
 <img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
 
-| プラットフォーム | グラフィックス | 状態 |
+| 環境 | 描画 | 状態 |
 | --- | --- | --- |
-| Windows x64 | Direct3D 12 | 対応 |
+| Windows x64 | Direct3D 12 | 使えます |
 | macOS | Metal | Tier 2 |
 | Linux | Vulkan | 開発中 |
 
-## インストール
+## ダウンロード
 
-[Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [すべてのリリース](https://github.com/MikanseiLaboratory/eiviz/releases)
+[最新版](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [過去のリリース](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-**Windows x64:** zipを展開して`Eiviz.Host.exe`を実行します。  
-**macOS Apple Silicon**（`macos-arm64`）: zipを展開して`./eiviz-mac`を実行します。  
-**macOS Intel**（`macos-x64`）: 同じ手順です。x86_64/amd64向けです。
+Windows x64はzipを開いて`Eiviz.Host.exe`を実行します。  
+Apple SiliconのMac（`macos-arm64`）はzipを開いて`./eiviz-mac`を実行します。  
+Intel Mac（`macos-x64`）も手順は同じです。
 
 ## できること
 
-ライブ映像のミックス、スイッチ、オーバーレイ、送出です。各Mixing UnitにPreviewとProgramがあり、CUT、AUTO、Tバーで切り替えます。
+PreviewとProgramを持つMixing Unitで、CUT、AUTO、Tバーから映像を切り替えます。オーバーレイとマルチビューも使えます。
 
-Windowsで保存したセッションはmacOSでも同じ内容で開き、その逆も同様です。
+入力はカラー、バー、静止画、動画ファイル、UVC、OMT、NDI®。出力はOMTとNDI®です。音声はWindowsとmacOSで使えます。
 
-入力: カラー、バー、静止画、動画ファイル、UVC、OMT、NDI®。  
-出力: OMT、NDI®。  
-シーン、オーバーレイ、マルチビュー。音声はWindowsとmacOSに対応しています。
+Windowsで保存したセッションは、macOSでも同じ内容で開きます。
 
 ## ライセンス
 
-eiviz本体のソースは[PolyForm Shield License 1.0.0](LICENSE)です。
+本体は[PolyForm Shield License 1.0.0](LICENSE)です。社内で使う分には、営利組織でも構いません。
 
-営利組織を含む内部利用は許可されています。eivizとの競合は許可されていません。このソフトウェアの実用的な代替となる映像スイッチャー（有償・無償を問わない）や、河村柊吾/未完成成果物研究所がこれを使って提供する他製品の代替を出荷することです。それには河村柊吾/未完成成果物研究所からの別ライセンスが必要です。
+有償・無償を問わず、eivizの代わりになる映像スイッチャーを出荷してはいけません。河村柊吾/未完成成果物研究所がこのソフトを使って出している他の製品についても同じです。競合する製品を出したい場合は、別途ライセンスが必要です。
 
-第三者のクレートとライブラリは、元のMIT/Apache-2.0/Zlibのままです。[NOTICE](NOTICE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)をご参照ください。
+同梱の第三者ライブラリは、それぞれのMIT、Apache-2.0、Zlibのままです。[NOTICE](NOTICE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を見てください。

@@ -45,7 +45,7 @@ The Windows host is .NET 10 and C# 14, with a WPF UI. Video work runs on the GPU
 CPU-to-GPU frame upload uses Resizable BAR (ReBAR), as provided by NVIDIA and others, and writes frames straight into GPU VRAM.  
 Machines without ReBAR lose a lot of that gain, so they are not a recommended baseline. Windows on ARM is not supported ([GitHub issue #80](https://github.com/MikanseiLaboratory/eiviz/issues/80)).
 
-GPU upload heaps are not the same as Resizable BAR. Even on a ReBAR-capable machine — for example Windows 11 before 24H2 — GPU upload heaps may be unavailable, so this optimization cannot be used.
+Even on a Resizable BAR system, GPU upload heaps may be unavailable — for example on Windows 11 before 24H2 — so this optimization cannot be used.
 
 ### macOS: Swift 6 / SwiftUI / Metal
 
