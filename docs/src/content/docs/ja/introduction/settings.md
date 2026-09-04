@@ -110,6 +110,8 @@ vMix互換HTTP APIの待ち受けです。セッションファイルに保存�
 - ポート: 既定は8088
 - ユーザー名/パスワード: どちらか入っていればBasicAuth。両方空なら認証なし
 
+ポートを他のアプリが使っているときはHTTPサーバーを開かず、セッションはオフ扱いにして警告を出します。
+
 エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
 
 ## 詳細

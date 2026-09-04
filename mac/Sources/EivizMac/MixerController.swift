@@ -99,11 +99,41 @@ final class MixerController: ObservableObject {
     func applyVmixApi() {
         let settings = session.settings
         let port = settings.vmixApiPort == 0 ? 8088 : settings.vmixApiPort
-        _ = MixerFFI.withCString(settings.vmixApiUser) { user in
+        let enabled = settings.vmixApiEnabled
+        let code = MixerFFI.withCString(settings.vmixApiUser) { user in
             MixerFFI.withCString(settings.vmixApiPassword) { pass in
-                mixer_api_configure(settings.vmixApiEnabled ? 1 : 0, port, user, pass)
+                mixer_api_configure(enabled ? 1 : 0, port, user, pass)
             }
         }
+        if code == 0 {
+            return
+        }
+        if !enabled || code != 5 {
+            _ = fail(code, "Configure vMix HTTP API")
+            return
+        }
+        session.settings.vmixApiEnabled = false
+        _ = MixerFFI.withCString(settings.vmixApiUser) { user in
+            MixerFFI.withCString(settings.vmixApiPassword) { pass in
+                mixer_api_configure(0, port, user, pass)
+            }
+        }
+        let ownerText = MixerFFI.listenOwnerText()
+        let owner = ownerText.isEmpty ? nil : ownerText
+        if let owner {
+            HostLog.write("WARN", "vMix HTTP API listen failed on port \(port); in use by \(owner); disabled")
+        } else {
+            HostLog.write("WARN", "vMix HTTP API listen failed on port \(port); disabled")
+        }
+        Task { @MainActor in
+            self.showHttpListenFailed(port: port, owner: owner)
+        }
+    }
+
+    private func showHttpListenFailed(port: UInt32, owner: String?) {
+        let message = owner.map { L10n.format("msg.httpListenFailedOwner", "\(port)", $0) }
+            ?? L10n.format("msg.httpListenFailed", "\(port)")
+        presentError(message, title: L10n.t("settings.webApi"))
     }
 
     func publishSession() {

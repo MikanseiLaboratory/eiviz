@@ -32,6 +32,7 @@ mod rebar;
 mod save;
 mod session;
 pub mod simd;
+mod tcp_listen_owner;
 mod thumb;
 mod upload;
 mod vmix_api;
@@ -2505,6 +2506,11 @@ pub unsafe extern "C" fn mixer_api_configure(
     pass: *const c_char,
 ) -> i32 {
     unsafe { crate::vmix_api::configure_c(enabled, port, user, pass) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_api_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    unsafe { crate::vmix_api::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]

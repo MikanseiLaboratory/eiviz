@@ -7,6 +7,14 @@ enum L10n {
         return table[key] ?? en[key] ?? key
     }
 
+    static func format(_ key: String, _ args: String...) -> String {
+        var text = t(key)
+        for (index, arg) in args.enumerated() {
+            text = text.replacingOccurrences(of: "{\(index)}", with: arg)
+        }
+        return text
+    }
+
     static func error(_ action: String, _ code: Int32) -> String {
         let reason: String
         switch (action, code) {
@@ -86,6 +94,9 @@ enum L10n {
         "settings.webApiUser": "Username",
         "settings.webApiPassword": "Password",
         "settings.webApiHelp": "Listens on all interfaces. Default port is 8088. Leave username and password empty to disable BasicAuth.",
+        "msg.httpListenFailed": "The HTTP server failed to start. Check that no other application is using port {0} (vMix, Apache HTTP Server, and similar).",
+        "msg.httpListenFailedOwner": "The HTTP server failed to start. Port {0} is in use by {1}. Close that application or change the Web API port in Settings.",
+        "action.Configure vMix HTTP API": "Configure vMix HTTP API",
         "settings.flipBudget": "Video output destination window limit",
         "settings.flipBudgetAuto": "Auto",
         "settings.flipBudgetHelp": "Used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise this in Settings, but it may become unstable. Scene tiles and input previews are thumbnails and do not count.",
@@ -190,6 +201,9 @@ enum L10n {
         "settings.webApiUser": "ユーザー名",
         "settings.webApiPassword": "パスワード",
         "settings.webApiHelp": "すべてのインターフェイスで待ち受けます。既定のポートは8088です。ユーザー名とパスワードを空にするとBasicAuthは使いません。",
+        "msg.httpListenFailed": "HTTPサーバーの起動に失敗しました。ポート{0}を使うアプリケーション(vMix, Apache HTTP Serverなど)が起動していないかご確認ください。",
+        "msg.httpListenFailedOwner": "HTTPサーバーの起動に失敗しました。ポート{0}は「{1}」が使用しています。そのアプリケーションを終了するか、設定のWeb APIでポートを変更してください。",
+        "action.Configure vMix HTTP API": "vMix HTTP APIの設定",
         "settings.flipBudget": "映像出力先ウィンドウの上限",
         "settings.flipBudgetAuto": "自動",
         "settings.flipBudgetHelp": "Preview/Program/Multiviewをリアルタイムに表示するのに使います。Switcher UIはPreviewとProgramを出すので2スロット使います。設定から上げられますが、不安定になる可能性があります。シーンタイルと入力プレビューのサムネは数えません。",
