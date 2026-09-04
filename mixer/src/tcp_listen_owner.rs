@@ -7,16 +7,6 @@ pub fn name(port: u16) -> Option<String> {
     platform_name(port)
 }
 
-fn friendly_name(raw: &str) -> String {
-    match raw.to_ascii_lowercase().as_str() {
-        "vmix" | "vmix64" | "vmix64bit" => "vMix".into(),
-        "httpd" | "apache" | "apache2" => "Apache HTTP Server".into(),
-        "nginx" => "nginx".into(),
-        "w3wp" | "iisexpress" => "IIS".into(),
-        _ => raw.to_string(),
-    }
-}
-
 #[cfg(windows)]
 fn platform_name(port: u16) -> Option<String> {
     for pid in pids_on_port(port) {
@@ -49,7 +39,7 @@ fn platform_name(port: u16) -> Option<String> {
             continue;
         }
         if !command.is_empty() {
-            return Some(friendly_name(command));
+            return Some(command.to_string());
         }
     }
     None
@@ -192,7 +182,7 @@ fn process_name(pid: u32) -> Option<String> {
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())?;
-        Some(friendly_name(stem))
+        Some(stem.to_string())
     }
 }
 
@@ -224,15 +214,6 @@ unsafe extern "system" {
 
 #[cfg(test)]
 mod tests {
-    use super::friendly_name;
-
-    #[test]
-    fn maps_common_http_owners() {
-        assert_eq!(friendly_name("vMix64"), "vMix");
-        assert_eq!(friendly_name("httpd"), "Apache HTTP Server");
-        assert_eq!(friendly_name("python"), "python");
-    }
-
     #[test]
     fn lookup_is_best_effort() {
         let _ = super::name(8088);
