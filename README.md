@@ -51,6 +51,12 @@ eiviz uses a modern architecture to implement features and cross-platform suppor
 
 eiviz is not a company product. It is developed and operated by the main maintainer with community support.
 
+## AI in development
+
+This tool uses AI/LLM in development.
+
+It is not a vibe-coding application. LLMs are used as tools to assist at key points and for tasks that need them. They do not lead the development. The core maintainer is responsible for the architecture and the implementation. Only code that has passed maintainer review is used.
+
 ## License
 
 eiviz original source is licensed under the [PolyForm Shield License 1.0.0](LICENSE).
