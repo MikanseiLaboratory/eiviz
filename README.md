@@ -47,9 +47,9 @@ Same steps, with the `macos-x64` pkg or zip.
 
 A next-generation production graphics tool, built by video operators for video operations.
 
-A modern architecture lets eiviz ship features — and real cross-platform support — that existing video-ops tools and software vision mixers have struggled to implement, while staying capable and extensible. It is also designed around what those mixers get wrong: easier to work with, and usable from amateur productions through professional shows.
+eiviz uses a modern architecture to implement features and cross-platform support that existing video operation tools and software vision mixers struggle with, and to provide high capability and extensibility. It is also designed from the awkward parts of those mixers, so it is easier to use from amateur to professional work.
 
-eiviz is not a company product. It is developed and operated by the main maintainer, with support from the community.
+eiviz is not a company product. It is developed and operated by the main maintainer with community support.
 
 ## License
 
