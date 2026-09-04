@@ -4,7 +4,7 @@
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
 **Under active development / Unstable.**  
-A multi M/E vision mixer. eiviz / 映像(eizou) + visual.
+A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual.
 
 [Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
 
@@ -13,18 +13,39 @@ A multi M/E vision mixer. eiviz / 映像(eizou) + visual.
 | Platform | Graphics | Status |
 | --- | --- | --- |
 | Windows x64 | Direct3D 12 | Supported |
-| macOS | Metal | Tier 2 |
+| macOS | Metal | Supported (untested) |
 | Linux | Vulkan | Under development |
 
 ## Install
 
 [Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [all releases](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-**Windows x64:** unzip and run `Eiviz.Host.exe`.  
-**macOS Apple Silicon** (`macos-arm64`): unzip and run `./eiviz-mac`.  
-**macOS Intel** (`macos-x64`): same, for x86_64 / amd64.
+### Windows x64
+
+Run `eiviz-*-win-x64-setup.exe`.  
+Or unzip the zip and run `Eiviz.Host.exe`.
+
+### macOS Apple Silicon (`macos-arm64`)
+
+Run `eiviz-*-macos-arm64.pkg` to install into `/Applications`.
+
+Or unzip the zip, then:
+
+```bash
+cd eiviz-*-macos-arm64
+xattr -cr .
+open eiviz-mac.app
+```
+
+The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
+
+### macOS Intel (`macos-x64`)
+
+Same steps, with the `macos-x64` pkg or zip.
 
 ## What it is
+
+A next-generation production graphics tool, built by video operators for video operations.
 
 Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
 

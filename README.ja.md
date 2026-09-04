@@ -5,7 +5,7 @@
 
 **開発中です。まだ安定していません。**
 
-ライブ映像を切り替えて送るソフトウェアスイッチャーです。名前は映像(eizou)とvisualから取っています。
+クロスプラットフォームの無制限M/Eソフトウェアスイッチャーです。名前は映像(eizou)とvisualから取っています。
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
@@ -14,18 +14,39 @@
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
 | Windows x64 | Direct3D 12 | 使えます |
-| macOS | Metal | Tier 2 |
+| macOS | Metal | 対応済み（未テスト） |
 | Linux | Vulkan | 開発中 |
 
-## ダウンロード
+## インストール
 
 [最新版](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [過去のリリース](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-Windows x64はzipを開いて`Eiviz.Host.exe`を実行します。  
-Apple SiliconのMac（`macos-arm64`）はzipを開いて`./eiviz-mac`を実行します。  
-Intel Mac（`macos-x64`）も手順は同じです。
+### Windows x64
 
-## できること
+`eiviz-*-win-x64-setup.exe`を実行します。  
+zipの場合は展開して`Eiviz.Host.exe`を実行します。
+
+### macOS Apple Silicon（`macos-arm64`）
+
+`eiviz-*-macos-arm64.pkg`を実行すると、`/Applications`に入ります。
+
+zipの場合は展開してから次を実行します。
+
+```bash
+cd eiviz-*-macos-arm64
+xattr -cr .
+open eiviz-mac.app
+```
+
+NDI®の発見と送出には`.app`が必要です。macOSにブロックされたときは、システム設定→プライバシーとセキュリティ→このまま開く、です。
+
+### macOS Intel（`macos-x64`）
+
+手順は同じです。`macos-x64`のpkgかzipを使います。
+
+## eivizとは
+
+映像オペレーターが映像オペレーションのために作った、次世代のプロダクション向けグラフィックオペレーションツールです。
 
 PreviewとProgramを持つMixing Unitで、CUT、AUTO、Tバーから映像を切り替えます。オーバーレイとマルチビューも使えます。
 

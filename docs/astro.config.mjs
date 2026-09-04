@@ -47,6 +47,7 @@ export default defineConfig({
 		mermaid({ autoTheme: true }),
 		starlight({
 			title: 'eiviz',
+			description: 'A cross-platform vision mixer with unlimited M/E.',
 			logo: {
 				light: './src/assets/logo-light.png',
 				dark: './src/assets/logo-dark.png',
@@ -57,6 +58,48 @@ export default defineConfig({
 				Footer: './src/overrides/Footer.astro',
 			},
 			head: [
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image',
+						content: `${SITE}${BASE}og.png`,
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:width',
+						content: '1200',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:height',
+						content: '630',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:alt',
+						content: 'eiviz',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:type',
+						content: 'image/png',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:image',
+						content: `${SITE}${BASE}og.png`,
+					},
+				},
 				{
 					tag: 'link',
 					attrs: {

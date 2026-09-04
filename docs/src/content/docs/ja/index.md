@@ -1,6 +1,6 @@
 ---
 title: eiviz
-description: eiviz公式ドキュメント
+description: クロスプラットフォームの無制限M/Eソフトウェアスイッチャー。公式ドキュメント。
 ---
 
 **eiviz**（ˈeɪvɪz）は、[未完成成果物研究所](https://mikanseilaboratory.github.io/)および河村 柊吾/[FlowingSPDG](https://github.com/FlowingSPDG)が開発・保守するソフトウェアスイッチャーです。  

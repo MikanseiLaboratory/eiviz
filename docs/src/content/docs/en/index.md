@@ -1,6 +1,6 @@
 ---
 title: eiviz
-description: Official eiviz documentation
+description: A cross-platform vision mixer with unlimited M/E. Official documentation.
 ---
 
 **eiviz** (ˈeɪvɪz) is a software vision mixer maintained by [Mikansei Laboratory](https://mikanseilaboratory.github.io/) and Shugo Kawamura / [FlowingSPDG](https://github.com/FlowingSPDG).  
