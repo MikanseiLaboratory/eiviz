@@ -28,40 +28,11 @@
 
 ライブ映像のミックス、スイッチ、オーバーレイ、送出です。各Mixing UnitにPreviewとProgramがあり、CUT、AUTO、Tバーで切り替えます。
 
-ミキサーはRust + wgpu（WindowsはDX12、macOSはMetal）です。WindowsのUIはC# WPFです。MacホストはSwiftUIで、AppKitのNSViewに提示し、WPFと同じレイアウトです。セッションファイルはMixerコアが所有する正規のJSONなので、一方のOSで保存したファイルを他方でも同じセッションとして開けます。
+Windowsで保存したセッションはmacOSでも同じ内容で開き、その逆も同様です。
 
 入力: カラー、バー、静止画、動画ファイル、UVC、OMT、NDI®。  
-出力: OMT（GPUまたはCPUエンコード）、NDI®（CPU/UYVY）。  
-シーン、オーバーレイ、マルチビュー。音声バス: WindowsはWASAPI/ASIO、macOSはCore Audio。
-
-## 技術スタック
-
-| 層 | 技術 |
-| --- | --- |
-| Mixer（コア） | Rust 1.97、wgpu 30 |
-| Windowsホスト | .NET 10、C# 14、WPF、Direct3D 12 |
-| macOSホスト | Swift 6、SwiftUI、Metal |
-| Linuxホスト | Rust、GTK 4、Vulkan — 開発中 |
-
-## ビルド
-
-Windowsでは.NET 10、Rust 1.97、DirectX 12対応GPU、[NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/)（既定パス以外に入れた場合は`NDI_SDK_DIR`を設定）、bindgen用のLLVM/Clangが必要です。
-
-```powershell
-dotnet build eiviz.slnx -c Release
-dotnet run --project host\Eiviz.Host.csproj -c Release
-cargo test --manifest-path mixer\Cargo.toml
-```
-
-`dotnet build`が先にミキサーDLLをコンパイルします。
-
-macOSではRust 1.97、Swift 6、[NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/)（`/Library/NDI SDK for Apple`以外に入れた場合は`NDI_SDK_DIR`を設定）が必要です。
-
-```bash
-./mac/build.sh
-# Intel:
-# EIVIZ_MAC_ARCH=x86_64-apple-darwin ./mac/build.sh
-```
+出力: OMT、NDI®。  
+シーン、オーバーレイ、マルチビュー。音声はWindowsとmacOSに対応しています。
 
 ## ライセンス
 
