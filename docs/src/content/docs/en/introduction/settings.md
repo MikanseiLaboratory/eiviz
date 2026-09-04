@@ -109,6 +109,8 @@ vMix-compatible HTTP listen settings. These are stored in the session file.
 - Port: default 8088
 - Username / password: BasicAuth if either is set. Both empty means no auth
 
+If the port is already in use, eiviz starts with the HTTP server off, treats the session as HTTP-off, and shows a warning.
+
 Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
 
 ## Advanced

@@ -139,14 +139,45 @@ public partial class App : Application
 
     internal static void ApplyVmixApi()
     {
-        var settings = ((App)Current).Session.Settings;
-        MixerNative.ThrowIfFailed(
-            MixerNative.ApiConfigure(
-                settings.VmixApiEnabledValue ? 1u : 0u,
-                settings.VmixApiPort == 0 ? 8088 : settings.VmixApiPort,
-                settings.VmixApiUser ?? "",
-                settings.VmixApiPassword ?? ""),
-            "Configure vMix HTTP API");
+        var app = (App)Current;
+        var settings = app.Session.Settings;
+        var port = settings.VmixApiPort == 0 ? 8088u : settings.VmixApiPort;
+        var user = settings.VmixApiUser ?? "";
+        var password = settings.VmixApiPassword ?? "";
+        var enabled = settings.VmixApiEnabledValue;
+        var code = MixerNative.ApiConfigure(enabled ? 1u : 0u, port, user, password);
+        if (code == 0)
+            return;
+        if (!enabled || code != 5)
+            MixerNative.ThrowIfFailed(code, "Configure vMix HTTP API");
+
+        settings.VmixApiEnabled = false;
+        var disable = MixerNative.ApiConfigure(0, port, user, password);
+        if (disable != 0)
+            HostLog.Write("WARN", $"disable vMix HTTP API after listen failure: {disable}");
+
+        var owner = TcpListenOwner.TryGetName(port);
+        HostLog.Write(
+            "WARN",
+            owner is null
+                ? $"vMix HTTP API listen failed on port {port}; disabled"
+                : $"vMix HTTP API listen failed on port {port}; in use by {owner}; disabled");
+        app.Dispatcher.BeginInvoke(
+            () => ShowHttpListenFailed(port, owner),
+            DispatcherPriority.ApplicationIdle);
+    }
+
+    private static void ShowHttpListenFailed(uint port, string? owner)
+    {
+        var text = string.IsNullOrEmpty(owner)
+            ? Loc.Format("msg.httpListenFailed", port)
+            : Loc.Format("msg.httpListenFailedOwner", port, owner);
+        var title = Loc.T("settings.webApi");
+        var window = Current.MainWindow;
+        if (window is null)
+            MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        else
+            MessageBox.Show(window, text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private void AttachInputs()

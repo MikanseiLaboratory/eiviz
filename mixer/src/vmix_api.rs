@@ -105,6 +105,8 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
             }
             Err(error) => {
                 crate::diag::http_error(&format!("listen {addr}: {error}"));
+                slot.config.enabled = false;
+                slot.server = None;
                 return crate::abi::ERR_IO;
             }
         }
@@ -119,6 +121,8 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         }
         Err(error) => {
             crate::diag::http_error(&error);
+            slot.config.enabled = false;
+            slot.server = None;
             crate::abi::ERR_IO
         }
     }
@@ -563,6 +567,17 @@ mod tests {
             unknown.contains("404") || unknown.contains("unknown Function"),
             "{unknown}"
         );
+        shutdown();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn busy_port_returns_io_and_leaves_http_off() {
+        let occupant = std::net::TcpListener::bind("0.0.0.0:0").expect("occupy");
+        let port = occupant.local_addr().expect("addr").port() as u32;
+        assert_eq!(configure(true, port, "", ""), crate::abi::ERR_IO);
+        drop(occupant);
+        assert_eq!(configure(true, port, "", ""), crate::abi::OK);
         shutdown();
     }
 
