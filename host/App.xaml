@@ -35,6 +35,98 @@
                 <Setter Property="Background" Value="{DynamicResource ListBackground}"/>
                 <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
             </Style>
+            <Style TargetType="RadioButton">
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="Padding" Value="6,0,0,0"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <BulletDecorator Background="Transparent" SnapsToDevicePixels="True">
+                                <BulletDecorator.Bullet>
+                                    <Grid Width="16" Height="16">
+                                        <Ellipse x:Name="outer"
+                                                 Stroke="{TemplateBinding BorderBrush}"
+                                                 StrokeThickness="1"
+                                                 Fill="{TemplateBinding Background}"/>
+                                        <Ellipse x:Name="optionMark"
+                                                 Width="8" Height="8"
+                                                 HorizontalAlignment="Center"
+                                                 VerticalAlignment="Center"
+                                                 Fill="{DynamicResource TextForeground}"
+                                                 Visibility="Collapsed"/>
+                                    </Grid>
+                                </BulletDecorator.Bullet>
+                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  HorizontalAlignment="Left"
+                                                  RecognizesAccessKey="True"/>
+                            </BulletDecorator>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="optionMark" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="outer" Property="Stroke" Value="{DynamicResource TextForeground}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="CheckBox">
+                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="Padding" Value="6,0,0,0"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="CheckBox">
+                            <BulletDecorator Background="Transparent" SnapsToDevicePixels="True">
+                                <BulletDecorator.Bullet>
+                                    <Grid Width="16" Height="16">
+                                        <Border x:Name="checkBorder"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="2"/>
+                                        <Path x:Name="optionMark"
+                                              Data="M3,8 L6.5,11.5 L13,4"
+                                              Stroke="{DynamicResource TextForeground}"
+                                              StrokeThickness="1.8"
+                                              StrokeStartLineCap="Round"
+                                              StrokeEndLineCap="Round"
+                                              StrokeLineJoin="Round"
+                                              Visibility="Collapsed"/>
+                                    </Grid>
+                                </BulletDecorator.Bullet>
+                                <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  RecognizesAccessKey="True"/>
+                            </BulletDecorator>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="optionMark" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="checkBorder" Property="BorderBrush" Value="{DynamicResource TextForeground}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.5"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
