@@ -1,15 +1,21 @@
 # Official docs site (Starlight) → GitHub Pages.
 # Public URL: https://mikanseilaboratory.github.io/eiviz/
 #
-# "Build docs" is a required check. Do not put `paths:` on `on:` — a skipped
-# workflow stays Pending and still blocks the merge. The job always reports
-# success; the Astro build runs only when docs/ (or this file) changed.
+# Path filters skip this workflow when docs did not change.
+# Do not keep "Build docs" as a required check: a skipped workflow stays
+# Pending and blocks the merge.
 name: Docs
 
 on:
   push:
     branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
   pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 concurrency:
@@ -26,48 +32,11 @@ jobs:
     name: Build docs
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      changed: ${{ steps.docs.outputs.changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Detect docs changes
-        id: docs
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          changed=false
-          case "$EVENT_NAME" in
-            workflow_dispatch)
-              changed=true
-              ;;
-            pull_request)
-              if git diff --name-only "$PR_BASE" "$GITHUB_SHA" | grep -qE '^(docs/|\.github/workflows/docs\.yml$)'; then
-                changed=true
-              fi
-              ;;
-            push)
-              if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-                changed=true
-              elif git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qE '^(docs/|\.github/workflows/docs\.yml$)'; then
-                changed=true
-              fi
-              ;;
-            *)
-              changed=true
-              ;;
-          esac
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-          echo "docs changed: $changed"
 
       - name: Latest release tag
-        if: steps.docs.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -75,7 +44,6 @@ jobs:
           echo "PUBLIC_EIVIZ_VERSION=$tag" >> "$GITHUB_ENV"
 
       - name: Install, build, and upload
-        if: steps.docs.outputs.changed == 'true'
         uses: withastro/action@v6
         with:
           path: docs
@@ -86,7 +54,7 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.outputs.changed == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
