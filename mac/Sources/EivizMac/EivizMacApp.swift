@@ -6,6 +6,7 @@ struct EivizMacApp: App {
 
     init() {
         HostLog.install()
+        EivizTheme.applyAppAppearance()
     }
 
     var body: some Scene {
@@ -14,7 +15,11 @@ struct EivizMacApp: App {
                 .environmentObject(mixer)
                 .environment(\.mixerSurfaceEpoch, mixer.surfaceEpoch)
                 .frame(minWidth: 1280, minHeight: 720)
-                .onAppear { mixer.boot() }
+                .preferredColorScheme(EivizTheme.colorScheme)
+                .onAppear {
+                    EivizTheme.applyAppAppearance()
+                    mixer.boot()
+                }
                 .onDisappear { mixer.shutdown() }
         }
         .windowStyle(.titleBar)

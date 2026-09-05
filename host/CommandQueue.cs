@@ -100,7 +100,8 @@ internal sealed class CommandQueue : IAsyncDisposable
             output.SourceId,
             output.UnitId,
             output.UseGpu ? 1u : 0u,
-            audioBusId);
+            audioBusId,
+            output.SkipEncodeWhenNoReceivers ? 1u : 0u);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }
@@ -421,7 +422,8 @@ internal sealed class CommandQueue : IAsyncDisposable
                         add.Output.SourceId,
                         add.Output.UnitId,
                         add.Output.UseGpu ? 1u : 0u,
-                        add.Output.AudioBusId),
+                        add.Output.AudioBusId,
+                        add.Output.SkipEncodeWhenNoReceivers ? 1u : 0u),
                     "Add output");
                 break;
             case RemoveOutputCommand remove:

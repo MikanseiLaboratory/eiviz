@@ -455,7 +455,8 @@ public partial class SettingsWindow : Window
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
             UseGpu = true,
-            AudioBusId = 1
+            AudioBusId = 1,
+            SkipEncodeWhenNoReceivers = true
         });
         RebuildOutputs();
     }
@@ -480,6 +481,7 @@ public partial class SettingsWindow : Window
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
@@ -544,6 +546,18 @@ public partial class SettingsWindow : Window
             enabled.Checked += (_, _) => output.Enabled = true;
             enabled.Unchecked += (_, _) => output.Enabled = false;
 
+            var skipIdle = new CheckBox
+            {
+                Content = Loc.T("settings.skipEncodeWhenNoReceivers"),
+                IsChecked = output.SkipEncodeWhenNoReceivers,
+                IsEnabled = output.Transport == OutputTransport.Omt,
+                Foreground = System.Windows.Media.Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 6)
+            };
+            skipIdle.Checked += (_, _) => output.SkipEncodeWhenNoReceivers = true;
+            skipIdle.Unchecked += (_, _) => output.SkipEncodeWhenNoReceivers = false;
+
             var remove = new Button { Content = "−", Width = 28 };
             remove.Click += (_, _) =>
             {
@@ -566,6 +580,8 @@ public partial class SettingsWindow : Window
             Grid.SetColumnSpan(pick, 3);
             Grid.SetRow(audio, 4);
             Grid.SetColumnSpan(audio, 3);
+            Grid.SetRow(skipIdle, 5);
+            Grid.SetColumnSpan(skipIdle, 4);
             grid.Children.Add(name);
             grid.Children.Add(remove);
             grid.Children.Add(transport);
@@ -574,6 +590,7 @@ public partial class SettingsWindow : Window
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
             grid.Children.Add(audio);
+            grid.Children.Add(skipIdle);
             box.Child = grid;
             OutputRows.Children.Add(box);
         }
@@ -778,7 +795,8 @@ public partial class SettingsWindow : Window
         UnitId = output.UnitId,
         UseGpu = output.UseGpu,
         Enabled = output.Enabled,
-        AudioBusId = output.AudioBusId
+        AudioBusId = output.AudioBusId,
+        SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers
     };
 
     private static void SelectTag(ComboBox box, string tag)

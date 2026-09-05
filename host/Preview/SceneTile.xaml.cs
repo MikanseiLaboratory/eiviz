@@ -32,6 +32,8 @@ public partial class SceneTile : UserControl
         CollapsedTitle.Text = scene.Name;
         Number.Text = number.ToString();
         CollapsedNumber.Text = number.ToString();
+        if (scene.PreviewCollapsed)
+            Monitor.SetWanted(false);
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
         ApplyCollapsed();
     }

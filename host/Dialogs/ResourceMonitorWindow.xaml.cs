@@ -53,7 +53,7 @@ public partial class ResourceMonitorWindow : Window
         }
         if (totalRam == 0) totalRam = 1;
         if (totalVram == 0) totalVram = 1;
-        var gpuLoad = GpuUtilization.Percent();
+        var gpuLoad = GpuUtilization.Last();
 
         var rows = new List<Row>();
         foreach (var input in session.Inputs)

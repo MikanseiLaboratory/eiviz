@@ -8,6 +8,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let preview: Bool
     let program: Bool
     let selected: Bool
+    let previewCollapsed: Bool
     let interval: UInt32
     let loopOn: Bool
     let playing: Bool
@@ -24,6 +25,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let onOpenPreview: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onCollapse: () -> Void
 
     @State private var appeared = false
 
@@ -35,6 +37,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             && lhs.preview == rhs.preview
             && lhs.program == rhs.program
             && lhs.selected == rhs.selected
+            && lhs.previewCollapsed == rhs.previewCollapsed
             && lhs.interval == rhs.interval
             && lhs.loopOn == rhs.loopOn
             && lhs.playing == rhs.playing
@@ -42,25 +45,31 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             && lhs.hasVideo == rhs.hasVideo
     }
 
-    private var wanted: Bool { preview || program || selected || appeared }
+    private var wanted: Bool { !previewCollapsed && (preview || program || selected || appeared) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text("\(number)")
-                    .font(.system(size: 11, weight: .bold))
-                Text(name)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button("X", action: onDelete)
-                    .buttonStyle(MixerTileButtonStyle())
+        Group {
+            if previewCollapsed {
+                collapsedBody
+            } else {
+                expandedBody
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(Color(white: 0.2))
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onPreview)
+        }
+        .background(Rectangle().stroke(
+            program ? programColor : preview ? previewColor : inactiveColor,
+            lineWidth: 2
+        ))
+        .overlay(RightClickCatcher(action: onCollapse))
+        .contextMenu {
+            Button("Edit", action: onEdit)
+        }
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
+    }
+
+    private var expandedBody: some View {
+        VStack(spacing: 0) {
+            titleBar
             ThumbRepresentable(
                 sourceId: gpuId,
                 width: 176,
@@ -85,15 +94,43 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             .padding(2)
         }
         .frame(width: 176)
-        .background(Rectangle().stroke(
-            program ? programColor : preview ? previewColor : inactiveColor,
-            lineWidth: 2
-        ))
-        .contextMenu {
-            Button("Edit", action: onEdit)
+    }
+
+    private var collapsedBody: some View {
+        VStack(spacing: 4) {
+            Button("X", action: onDelete)
+                .buttonStyle(MixerTileButtonStyle())
+            Text("\(number)")
+                .font(.system(size: 11, weight: .bold))
+            Text(name)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .rotationEffect(.degrees(-90))
+                .frame(maxHeight: .infinity)
         }
-        .onAppear { appeared = true }
-        .onDisappear { appeared = false }
+        .padding(.vertical, 4)
+        .frame(width: 40, height: 140)
+        .background(EivizTheme.chrome)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onPreview)
+    }
+
+    private var titleBar: some View {
+        HStack(spacing: 6) {
+            Text("\(number)")
+                .font(.system(size: 11, weight: .bold))
+            Text(name)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("X", action: onDelete)
+                .buttonStyle(MixerTileButtonStyle())
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(EivizTheme.chrome)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onPreview)
     }
 
     private func chip(_ title: String, action: @escaping () -> Void) -> some View {

@@ -34,6 +34,7 @@ struct ContentView: View {
         }
         .background(EivizTheme.background)
         .foregroundStyle(EivizTheme.text)
+        .preferredColorScheme(EivizTheme.colorScheme)
         .id("\(prefs.language)-\(prefs.theme)-\(prefs.localeRevision)")
         .sheet(isPresented: $mixer.showSettings) { SettingsView() }
         .sheet(isPresented: $mixer.showPreferences) { PreferencesView() }
@@ -75,6 +76,7 @@ struct ContentView: View {
                 Text("▾")
             }
             Spacer()
+            Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
@@ -433,6 +435,7 @@ struct ContentView: View {
             preview: preview,
             program: program,
             selected: mixer.selectedSceneId == scene.id,
+            previewCollapsed: scene.previewCollapsed,
             interval: mixer.session.settings.resolvedPresentInterval,
             loopOn: video?.videoLoop == true,
             playing: mixer.scenePlaying(scene),
@@ -448,7 +451,8 @@ struct ContentView: View {
             onAudio: { mixer.toggleSceneAudio(scene) },
             onOpenPreview: { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) },
             onEdit: { mixer.openSceneEditor(scene) },
-            onDelete: { mixer.deleteScene(scene) }
+            onDelete: { mixer.deleteScene(scene) },
+            onCollapse: { mixer.toggleSceneCollapsed(scene.id) }
         ))
     }
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host;
@@ -7,6 +8,9 @@ namespace Eiviz.Host;
 internal sealed class ResourceMonitor : IDisposable
 {
     private readonly Process _process = Process.GetCurrentProcess();
+    private readonly object _gate = new();
+    private readonly Thread _thread;
+    private volatile bool _stop;
     private TimeSpan _lastCpu;
     private DateTime _lastSample = DateTime.UtcNow;
     private float _cpu;
@@ -15,8 +19,43 @@ internal sealed class ResourceMonitor : IDisposable
     private float _vram;
     private float _renderMs;
     private float _budgetMs = 16.67f;
+    private string _line = "";
+    private string? _warning;
 
-    public void Sample()
+    public ResourceMonitor()
+    {
+        _thread = new Thread(Loop)
+        {
+            IsBackground = true,
+            Name = "eiviz-hud"
+        };
+        _thread.Start();
+    }
+
+    private void Loop()
+    {
+        while (!_stop)
+        {
+            try
+            {
+                Sample();
+                var line = FormatLine();
+                var warning = FormatWarning();
+                lock (_gate)
+                {
+                    _line = line;
+                    _warning = warning;
+                }
+            }
+            catch
+            {
+                // keep last
+            }
+            Thread.Sleep(400);
+        }
+    }
+
+    private void Sample()
     {
         var now = DateTime.UtcNow;
         _process.Refresh();
@@ -52,10 +91,22 @@ internal sealed class ResourceMonitor : IDisposable
 
     public string Line()
     {
-        return $"CPU {_cpu:0}%   GPU {_gpu:0}%   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms";
+        lock (_gate)
+            return _line;
     }
 
     public string? Warning()
+    {
+        lock (_gate)
+            return _warning;
+    }
+
+    private string FormatLine()
+    {
+        return $"CPU {_cpu:0}%   GPU {_gpu:0}%   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms";
+    }
+
+    private string? FormatWarning()
     {
         var hits = new List<string>();
         if (_cpu >= 85) hits.Add($"CPU {_cpu:0}%");
@@ -67,7 +118,12 @@ internal sealed class ResourceMonitor : IDisposable
         return hits.Count == 0 ? null : "High load: " + string.Join("  ", hits);
     }
 
-    public void Dispose() => _process.Dispose();
+    public void Dispose()
+    {
+        _stop = true;
+        _thread.Join(800);
+        _process.Dispose();
+    }
 
     private static float SampleRam(long workingSet)
     {
