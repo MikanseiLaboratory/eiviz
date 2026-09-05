@@ -41,7 +41,7 @@ struct ContentView: View {
         .sheet(isPresented: $mixer.showAddInput, onDismiss: { mixer.editingInput = nil }) {
             AddInputView(editing: mixer.editingInput)
         }
-        .sheet(isPresented: $mixer.showMixingUnit) {
+        .sheet(isPresented: $mixer.showMixingUnit, onDismiss: { mixer.editingUnit = nil }) {
             MixingUnitView(unit: mixer.editingUnit ?? mixer.selectedUnit)
         }
         .sheet(isPresented: $mixer.showSceneEditor) { SceneEditorView() }
@@ -366,7 +366,8 @@ struct ContentView: View {
             HSplitView {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
-                    List(mixer.session.inputs, selection: $mixer.selectedInputId) { input in
+                    CatalogTabBar(input: true)
+                    List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
                         Text(input.name)
                             .tag(input.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -404,9 +405,10 @@ struct ContentView: View {
                         }
                     }
                     .buttonStyle(MixerButtonStyle())
+                    CatalogTabBar(input: false)
                     ScrollView {
                         WrapFlowLayout(spacing: 8) {
-                            ForEach(mixer.session.scenes) { scene in
+                            ForEach(mixer.session.scenes.filter { mixer.sceneFilter.matchesScene($0) }) { scene in
                                 sceneTile(scene)
                             }
                         }

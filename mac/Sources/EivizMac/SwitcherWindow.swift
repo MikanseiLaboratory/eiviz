@@ -70,6 +70,11 @@ struct SwitcherView: View {
             SwitcherScenesSheet(unitId: unitId)
                 .environmentObject(mixer)
         }
+        .onChange(of: mixer.session.sceneTags) { _, tags in
+            if let sceneTag, !tags.contains(sceneTag) {
+                self.sceneTag = nil
+            }
+        }
     }
 
     private var transitions: some View {
@@ -140,9 +145,9 @@ struct SwitcherView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    tagTab(L10n.t("tag.all"), selected: sceneTag == nil) { sceneTag = nil }
+                    tagTab(L10n.t("tag.all"), selected: sceneTag == nil, filter: .all) { sceneTag = nil }
                     ForEach(mixer.session.sceneTags, id: \.self) { tag in
-                        tagTab(tag, selected: sceneTag == tag) { sceneTag = tag }
+                        tagTab(tag, selected: sceneTag == tag, filter: .tag(tag)) { sceneTag = tag }
                     }
                 }
             }
@@ -158,7 +163,7 @@ struct SwitcherView: View {
         }
     }
 
-    private func tagTab(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func tagTab(_ title: String, selected: Bool, filter: ListFilter, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: selected ? .semibold : .regular))
@@ -168,6 +173,15 @@ struct SwitcherView: View {
                 Rectangle()
                     .fill(selected ? mixer.session.settings.previewColor.color : Color.clear)
                     .frame(height: 2)
+            }
+            .contextMenu {
+                Button(L10n.t("tag.add")) { mixer.addCatalogTag(input: false) }
+                if filter.mode == .tag, let tag = filter.tag {
+                    Button(L10n.t("tag.rename")) { mixer.renameCatalogTag(input: false, current: tag) }
+                    Button(L10n.t("tag.delete"), role: .destructive) {
+                        mixer.deleteCatalogTag(input: false, name: tag)
+                    }
+                }
             }
     }
 

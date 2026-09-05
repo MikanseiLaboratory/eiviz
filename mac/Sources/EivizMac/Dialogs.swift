@@ -625,6 +625,7 @@ struct AddInputView: View {
     @State private var mixPreview = false
     @State private var mixAudioBusId: UInt64 = 0
     @State private var mixBuffer: UInt32 = 1
+    @State private var selectedTags: [String] = []
 
     var body: some View {
         HStack(spacing: 0) {
@@ -640,6 +641,7 @@ struct AddInputView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(EivizTheme.dim)
                 }
+                TagCheckView(input: true, selected: $selectedTags)
                 form
                 Spacer()
                 HStack {
@@ -855,6 +857,7 @@ struct AddInputView: View {
         refreshOmt()
         refreshNdi()
         refreshUvc()
+        selectedTags = []
         guard let editing else { return }
         name = editing.name
         category = editing.kind.category
@@ -894,6 +897,7 @@ struct AddInputView: View {
             ? editing.mixAudioBusId
             : 0
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
+        selectedTags = editing.tags
     }
 
     private func defaultName() -> String {
@@ -1006,6 +1010,8 @@ struct AddInputView: View {
             input.guid = editing.guid
             input.id = editing.id
         }
+        TagCatalog.replace(&input.tags, selectedTags)
+        mixer.mergeInputTags(input.tags)
         mixer.upsertInput(input, replacing: editing?.id)
         return true
     }
@@ -1057,7 +1063,7 @@ struct MixingUnitView: View {
             HStack {
                 Spacer()
                 Button("OK") {
-                    mixer.saveUnit(unit)
+                    mixer.commitUnit(unit)
                     dismiss()
                 }
                 Button("Cancel") { dismiss() }

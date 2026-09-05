@@ -43,6 +43,8 @@ final class MixerController: ObservableObject {
     @Published var openMultiview: MultiviewLayout?
     @Published var expandedTransitions: Set<UUID> = []
     @Published var kindMenuGroup: [UUID: TransitionGroup] = [:]
+    @Published var inputFilter = ListFilter.all
+    @Published var sceneFilter = ListFilter.all
     @Published private(set) var surfaceEpoch: UInt64 = 0
 
     private var booted = false
@@ -246,6 +248,7 @@ final class MixerController: ObservableObject {
     }
 
     func applySession() {
+        session.mergeTagCatalogs()
         session.assignMonitors()
         for unit in session.units {
             fail(mixer_create_unit(unit.id, unit.width, unit.height), "Create Mixing Unit")
@@ -595,16 +598,46 @@ final class MixerController: ObservableObject {
     }
 
     func addUnit() {
-        let id = session.nextUnitId
-        session.nextUnitId += 1
-        var unit = MixingUnitEntry(id: id, name: "Mixing Unit \(id)")
+        var unit = MixingUnitEntry(id: session.nextUnitId, name: "Mixing Unit \(session.nextUnitId)")
+        unit.width = session.settings.defaultWidth
+        unit.height = session.settings.defaultHeight
+        unit.fpsNum = session.settings.masterFpsNum
+        unit.fpsDen = session.settings.masterFpsDen
         unit.transitions = [
             TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
             TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
         ]
-        session.units.append(unit)
-        fail(mixer_create_unit(id, unit.width, unit.height), "Create Mixing Unit")
-        selectedUnitId = id
+        editingUnit = unit
+        showMixingUnit = true
+    }
+
+    func commitUnit(_ unit: MixingUnitEntry) {
+        if session.units.contains(where: { $0.id == unit.id }) {
+            saveUnit(unit)
+            return
+        }
+        var entry = unit
+        entry.id = session.nextUnitId
+        if entry.audioBusId == 0 {
+            entry.audioBusId = 1
+        }
+        if entry.transitions.isEmpty {
+            entry.transitions = [
+                TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
+                TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
+            ]
+        }
+        guard fail(mixer_create_unit(entry.id, entry.width, entry.height), "Create Mixing Unit") else { return }
+        session.nextUnitId += 1
+        fail(mixer_unit_configure(entry.id, entry.width, entry.height, entry.fpsNum, entry.fpsDen), "Configure Mixing Unit")
+        fail(mixer_audio_set_unit_link(entry.id, entry.audioBusId, entry.audioLink.rawUInt), "Audio link")
+        let preview = session.scenes.first?.gpuId ?? UInt64(EIVIZ_SRC_BARS)
+        let program = session.scenes.count > 1 ? session.scenes[1].gpuId : preview
+        applyBusSources(unitId: entry.id, preview: preview, program: program)
+        pushState(unitId: entry.id, program: program, preview: preview, mix: 0, kind: EIVIZ_TRANSITION_FADE)
+        session.units.append(entry)
+        selectedUnitId = entry.id
+        updateStatus()
     }
 
     func deleteUnit() {
@@ -1080,6 +1113,8 @@ final class MixerController: ObservableObject {
         session = loaded
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
         mix = 0
+        inputFilter = .all
+        sceneFilter = .all
         guard fail(mixer_create(0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
@@ -1654,6 +1689,101 @@ final class MixerController: ObservableObject {
 
     func presentInputError(_ message: String, editing: Bool = false) {
         presentError(message, title: L10n.t(editing ? "msg.editInput" : "msg.addInput"))
+    }
+
+    func addCatalogTag(input: Bool) {
+        guard let name = TextPrompt.ask(title: L10n.t("tag.add"), prompt: L10n.t("tag.name"), initial: "") else { return }
+        var catalog = input ? session.inputTags : session.sceneTags
+        let result = TagCatalog.tryAdd(&catalog, name)
+        if !result.ok {
+            presentError(L10n.t("tag.duplicate"), title: L10n.t("tag.add"))
+            return
+        }
+        if input {
+            session.inputTags = catalog
+        } else {
+            session.sceneTags = catalog
+        }
+    }
+
+    func promptTagForCheck(input: Bool) -> String? {
+        guard let name = TextPrompt.ask(title: L10n.t("tag.add"), prompt: L10n.t("tag.name"), initial: "") else { return nil }
+        var catalog = input ? session.inputTags : session.sceneTags
+        let result = TagCatalog.tryAdd(&catalog, name)
+        if result.normalized.isEmpty {
+            return nil
+        }
+        if result.ok {
+            if input {
+                session.inputTags = catalog
+            } else {
+                session.sceneTags = catalog
+            }
+        }
+        return result.normalized
+    }
+
+    func renameCatalogTag(input: Bool, current: String) {
+        guard let name = TextPrompt.ask(title: L10n.t("tag.rename"), prompt: L10n.t("tag.name"), initial: current) else { return }
+        var catalog = input ? session.inputTags : session.sceneTags
+        var owners = input ? session.inputs.map(\.tags) : session.scenes.map(\.tags)
+        if !TagCatalog.rename(&catalog, owners: &owners, current: current, next: name) {
+            presentError(L10n.t("tag.duplicate"), title: L10n.t("tag.rename"))
+            return
+        }
+        if input {
+            session.inputTags = catalog
+            for i in session.inputs.indices {
+                session.inputs[i].tags = owners[i]
+            }
+            if inputFilter.mode == .tag && inputFilter.tag == current {
+                inputFilter = .tag(name)
+            }
+        } else {
+            session.sceneTags = catalog
+            for i in session.scenes.indices {
+                session.scenes[i].tags = owners[i]
+            }
+            if sceneFilter.mode == .tag && sceneFilter.tag == current {
+                sceneFilter = .tag(name)
+            }
+        }
+    }
+
+    func deleteCatalogTag(input: Bool, name: String) {
+        guard TextPrompt.confirm(title: L10n.t("tag.delete"), message: L10n.format("tag.deleteConfirm", name)) else { return }
+        var catalog = input ? session.inputTags : session.sceneTags
+        var owners = input ? session.inputs.map(\.tags) : session.scenes.map(\.tags)
+        TagCatalog.remove(&catalog, owners: &owners, name: name)
+        if input {
+            session.inputTags = catalog
+            for i in session.inputs.indices {
+                session.inputs[i].tags = owners[i]
+            }
+            if inputFilter.mode == .tag && inputFilter.tag == name {
+                inputFilter = .all
+            }
+        } else {
+            session.sceneTags = catalog
+            for i in session.scenes.indices {
+                session.scenes[i].tags = owners[i]
+            }
+            if sceneFilter.mode == .tag && sceneFilter.tag == name {
+                sceneFilter = .all
+            }
+        }
+    }
+
+    func mergeInputTags(_ tags: [String]) {
+        var catalog = session.inputTags
+        TagCatalog.mergeInto(&catalog, tags)
+        session.inputTags = catalog
+    }
+
+    func mergeSceneTags(_ tags: [String]) {
+        var catalog = session.sceneTags
+        TagCatalog.mergeInto(&catalog, tags)
+        session.sceneTags = catalog
     }
 
     @discardableResult

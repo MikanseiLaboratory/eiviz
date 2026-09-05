@@ -23,6 +23,19 @@ enum InputKind: String, Codable, CaseIterable {
         case .mix: return "Mix"
         }
     }
+
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix]
+
+    func sameCategory(as other: InputKind) -> Bool {
+        self == other || (isColour && other.isColour)
+    }
+
+    var isColour: Bool {
+        switch self {
+        case .color, .bars, .black: return true
+        default: return false
+        }
+    }
 }
 
 enum MixSource: String, Codable {
@@ -1361,6 +1374,19 @@ struct MixerSessionData: Codable {
             buses[i].deviceKind = .coreAudio
         }
     }
+
+    mutating func mergeTagCatalogs() {
+        inputTags = TagCatalog.normalizeList(inputTags)
+        sceneTags = TagCatalog.normalizeList(sceneTags)
+        for i in inputs.indices {
+            TagCatalog.replace(&inputs[i].tags, inputs[i].tags)
+            TagCatalog.mergeInto(&inputTags, inputs[i].tags)
+        }
+        for i in scenes.indices {
+            TagCatalog.replace(&scenes[i].tags, scenes[i].tags)
+            TagCatalog.mergeInto(&sceneTags, scenes[i].tags)
+        }
+    }
 }
 
 enum SessionFile {
@@ -1373,6 +1399,7 @@ enum SessionFile {
     static func decode(_ data: Data) throws -> MixerSessionData {
         var session = try JSONDecoder().decode(MixerSessionData.self, from: data)
         session.assignMonitors()
+        session.mergeTagCatalogs()
         return session
     }
 }

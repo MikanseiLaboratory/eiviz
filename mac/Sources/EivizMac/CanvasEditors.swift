@@ -10,6 +10,7 @@ struct SceneEditorView: View {
     @State private var copyFromId: UInt64 = 0
     @State private var lastGpuPush = Date.distantPast
     @State private var editorMonitor: UInt64 = 0
+    @State private var selectedTags: [String] = []
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -128,6 +129,7 @@ struct SceneEditorView: View {
                 }
                 Text("Name").padding(.top, 8)
                 mixerTextField($name, placeholder: "Name")
+                TagCheckView(input: false, selected: $selectedTags)
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
                 }
@@ -136,9 +138,13 @@ struct SceneEditorView: View {
                     Spacer()
                     Button("OK") {
                         if let i = sceneIndex {
-                            mixer.session.scenes[i].name = name.trimmingCharacters(in: .whitespaces).isEmpty
-                                ? mixer.session.scenes[i].name : name.trimmingCharacters(in: .whitespaces)
-                            mixer.pushScene(mixer.session.scenes[i])
+                            var scene = mixer.session.scenes[i]
+                            let trimmed = name.trimmingCharacters(in: .whitespaces)
+                            scene.name = trimmed.isEmpty ? scene.name : trimmed
+                            TagCatalog.replace(&scene.tags, selectedTags)
+                            mixer.session.scenes[i] = scene
+                            mixer.mergeSceneTags(scene.tags)
+                            mixer.pushScene(scene)
                         }
                         dismiss()
                     }
@@ -164,6 +170,7 @@ struct SceneEditorView: View {
             }
             original = current?.layers ?? []
             name = current?.name ?? ""
+            selectedTags = current?.tags ?? []
             selectedLayer = current?.layers.first?.id
             mutate { scene in
                 scene.layers.sort { $0.z > $1.z }
