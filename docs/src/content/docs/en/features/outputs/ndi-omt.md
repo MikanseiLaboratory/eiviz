@@ -14,6 +14,8 @@ NDI is always a CPU path.
 
 One thread is assigned per output.
 
+Each OMT output can skip VMX encode when no receiver is subscribed. The default is on. Turn off “Skip encode when there are no OMT receivers” in Settings → Outputs to keep encoding. NDI ignores this option.
+
 ## Audio
 
 Audio can be Master, Headphone, any Audio Aux, or None (no audio).  

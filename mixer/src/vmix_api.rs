@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-use crate::abi::{ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, TRANSITION_FADE, UnitState};
+use crate::abi::{
+    ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PROGRAM, TRANSITION_FADE, UnitState,
+};
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
 
@@ -268,7 +270,7 @@ enum DispatchError {
 
 fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(), DispatchError> {
     match name {
-        "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" => {}
+        "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot" => {}
         _ => return Err(DispatchError::Unknown(format!("unknown Function {name}"))),
     }
     let doc = {
@@ -328,7 +330,25 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
             let incoming = resolve_incoming(&flat, input_raw, &live)?;
             cut(unit_id, false, incoming)
         }
+        "Snapshot" => snapshot(
+            unit_id,
+            params.get("Value").map(String::as_str).unwrap_or(""),
+        ),
         _ => unreachable!("function allow-list"),
+    }
+}
+
+fn snapshot(unit_id: u64, value: &str) -> Result<(), DispatchError> {
+    let path = if value.is_empty() {
+        crate::snapshot::default_path()
+    } else {
+        value.to_string()
+    };
+    let code = crate::take_snapshot(unit_id, OUTPUT_PROGRAM, &path);
+    if code == OK {
+        Ok(())
+    } else {
+        Err(DispatchError::Failed(format!("snapshot failed ({code})")))
     }
 }
 

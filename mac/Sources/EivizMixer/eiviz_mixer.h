@@ -269,7 +269,8 @@ int32_t mixer_ndi_connect(uint64_t id, const char *address, uint32_t frame_buffe
 int32_t mixer_set_live_save(uint64_t id, uint32_t mode, uint32_t flags);
 int32_t mixer_omt_set_quality(uint64_t id, uint32_t quality);
 int32_t mixer_omt_start_send(uint64_t unit_id, const char *name);
-int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id);
+int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode);
+int32_t mixer_snapshot(uint64_t unit_id, uint32_t kind, const char *path);
 int32_t mixer_output_remove(uint64_t output_id);
 int32_t mixer_omt_discover(uint8_t *out, size_t cap);
 int32_t mixer_ndi_discover(uint8_t *out, size_t cap);

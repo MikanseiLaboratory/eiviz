@@ -1153,11 +1153,9 @@ public partial class MainWindow : Window
             if (MixerNative.CopyStats(&stats) == 0)
                 FlipBudget.ObserveLost(stats.SurfaceLost);
         }
-        _resources.Sample();
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
-        RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
@@ -1354,6 +1352,27 @@ public partial class MainWindow : Window
         var unit = SelectedUnit;
         foreach (var layout in _session.Multiviews)
             Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+    }
+
+    private void Snapshot_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = Loc.T("filter.png"),
+            FileName = "eiviz.png"
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+        try
+        {
+            MixerNative.ThrowIfFailed(
+                MixerNative.Snapshot(SelectedUnit.Id, MixerNative.OutputProgram, dialog.FileName),
+                "Screenshot");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("chrome.screenshot"));
+        }
     }
 
     private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
@@ -2105,5 +2124,6 @@ public partial class MainWindow : Window
         && left.UnitId == right.UnitId
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled
-        && left.AudioBusId == right.AudioBusId;
+        && left.AudioBusId == right.AudioBusId
+        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
 }

@@ -14,8 +14,10 @@ Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `
 | `Fade` | `Input`, `Mix`, `Duration` | Same target as Cut, then Fade. `Duration` is milliseconds. If omitted, the Mixing Unit Fade preset is used, else 1000 |
 | `PreviewInput` | `Input` (required), `Mix` | Sets Preview to the input |
 | `ActiveInput` | `Input` (required), `Mix` | Sets Program to the input. Preview does not change |
+| `Snapshot` | `Value`, `Mix` | Saves Program of the Mixing Unit as a PNG. `Value` is the destination path. If omitted, a timestamped file is written under Pictures, or the temp directory |
 
 Examples:
 
 - `http://127.0.0.1:8088/api?Function=Fade&Duration=500`
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
+- `http://127.0.0.1:8088/api?Function=Snapshot&Value=C:/Temp/eiviz.png`

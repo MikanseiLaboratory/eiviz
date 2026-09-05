@@ -306,7 +306,7 @@ private struct SwitcherSceneThumb: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(Color(white: 0.2))
+                .background(EivizTheme.chrome)
                 .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
                 .overlay(RightClickCatcher(action: onCollapse))
@@ -404,34 +404,3 @@ private struct SwitcherScenesSheet: View {
     }
 }
 
-private struct RightClickCatcher: NSViewRepresentable {
-    let action: () -> Void
-
-    func makeNSView(context: Context) -> RightClickNSView {
-        let view = RightClickNSView()
-        view.action = action
-        return view
-    }
-
-    func updateNSView(_ nsView: RightClickNSView, context: Context) {
-        nsView.action = action
-    }
-}
-
-private final class RightClickNSView: NSView {
-    var action: (() -> Void)?
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let event = NSApp.currentEvent else { return nil }
-        switch event.type {
-        case .rightMouseDown, .rightMouseUp:
-            return self
-        default:
-            return nil
-        }
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        action?()
-    }
-}

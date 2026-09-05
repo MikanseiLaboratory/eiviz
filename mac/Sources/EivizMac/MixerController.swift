@@ -5,6 +5,7 @@ import Darwin
 import EivizMixer
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class MixerController: ObservableObject {
@@ -198,7 +199,8 @@ final class MixerController: ObservableObject {
             frame: contentRect
         )
         window.isReleasedWhenClosed = false
-        window.backgroundColor = NSColor(calibratedWhite: 17 / 255, alpha: 1)
+        window.appearance = NSApp.appearance
+        window.backgroundColor = EivizTheme.nsStatusBar
         window.minSize = NSSize(width: 320, height: 180)
         window.tabbingMode = .disallowed
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
@@ -697,9 +699,10 @@ final class MixerController: ObservableObject {
         let unitId = entry.unitId
         let useGpu: UInt32 = entry.useGpu ? 1 : 0
         let audioBusId = entry.sourceKind == .multiview ? 0 : entry.audioBusId
+        let skipIdle: UInt32 = entry.transport == .omt && entry.skipEncodeWhenNoReceivers ? 1 : 0
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
-                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu, audioBusId)
+                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu, audioBusId, skipIdle)
                 if code != 0 {
                     DispatchQueue.main.async {
                         _ = self?.fail(code, "Add output")
@@ -739,6 +742,8 @@ final class MixerController: ObservableObject {
         window.identifier = NSUserInterfaceItemIdentifier("multiview-\(layout.id)")
         window.contentViewController = host
         window.isReleasedWhenClosed = false
+        window.appearance = NSApp.appearance
+        window.backgroundColor = EivizTheme.nsBackground
         window.level = layout.alwaysOnTop ? .floating : .normal
         window.center()
         multiviewCloser.onClose = { [weak self] closedId in
@@ -775,7 +780,8 @@ final class MixerController: ObservableObject {
         window.identifier = NSUserInterfaceItemIdentifier("switcher-\(unit.id)")
         window.contentViewController = host
         window.isReleasedWhenClosed = false
-        window.backgroundColor = NSColor(calibratedWhite: 26 / 255, alpha: 1)
+        window.appearance = NSApp.appearance
+        window.backgroundColor = EivizTheme.nsBackground
         window.tabbingMode = .disallowed
         window.level = unit.alwaysOnTop ? .floating : .normal
         window.center()
@@ -974,6 +980,17 @@ final class MixerController: ObservableObject {
             }
             self.overlayOn[id] = false
             self.pushOverlays(unitId: unit.id)
+        }
+    }
+
+    func snapshotProgram() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "eiviz.png"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let unitId = selectedUnitId
+        MixerFFI.withCString(url.path) { path in
+            _ = fail(mixer_snapshot(unitId, EIVIZ_OUTPUT_PROGRAM, path), "Screenshot")
         }
     }
 
