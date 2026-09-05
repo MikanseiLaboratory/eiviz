@@ -45,6 +45,8 @@ Windowsホストは.NET 10とC# 14、UIはWPFです。映像処理はGPU側で�
 CPUからGPUへのフレーム転送には、NVIDIAなどが提供するResizable BAR（ReBAR）を使い、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。  
 ReBAR非対応環境では性能が大きく落ちるため、基本的には非推奨です。Windows on ARMには未対応です（[GitHub issue #80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。
 
+Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
+
 ### macOS: Swift 6 / SwiftUI / Metal
 
 macOSホストはSwift 6/SwiftUIで、Mixerの`dylib`をC ABI経由で呼び出します。描画はMetalです。  

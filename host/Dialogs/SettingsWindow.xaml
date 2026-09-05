@@ -92,6 +92,8 @@
                           Foreground="{DynamicResource TextForeground}"/>
                 <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
                            Text="{Binding [settings.perfHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
+                           Text="{Binding [settings.rebarNote], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
             <DockPanel x:Name="OutputPanel" Margin="20" Visibility="Collapsed">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">

@@ -1,47 +1,61 @@
 # eiviz
+
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-Work in progress. Multi M/E vision mixer for Windows, plus a Metal preview host for Mac.  
-eiviz / 映像(eizou) + visual
+**Under active development / Unstable.**  
+A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual.
+
+[Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
 
 <img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
 
+| Platform | Graphics | Status |
+| --- | --- | --- |
+| Windows x64 | Direct3D 12 | Supported |
+| macOS | Metal | Supported (untested) |
+| Linux | Vulkan | Under development |
+
+## Install
+
 [Download](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [all releases](https://github.com/MikanseiLaboratory/eiviz/releases)
 
-Windows x64 zip: unzip and run `Eiviz.Host.exe`.  
-macOS Apple Silicon zip (`macos-arm64`): unzip and run `./eiviz-mac`.  
-macOS Intel zip (`macos-x64`): same, for x86_64 / amd64.
+### Windows x64
+
+Run `eiviz-*-win-x64-setup.exe`.  
+Or unzip the zip and run `Eiviz.Host.exe`.
+
+### macOS Apple Silicon (`macos-arm64`)
+
+Run `eiviz-*-macos-arm64.pkg` to install into `/Applications`.
+
+Or unzip the zip, then:
+
+```bash
+cd eiviz-*-macos-arm64
+xattr -cr .
+open eiviz-mac.app
+```
+
+The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
+
+### macOS Intel (`macos-x64`)
+
+Same steps, with the `macos-x64` pkg or zip.
 
 ## What it is
 
-Mix, switch, overlay, and send live video. Each Mixing Unit has Preview and Program, plus CUT, AUTO, and a T-bar.
+A next-generation production graphics tool, built by video operators for video operations.
 
-The mixer is Rust + wgpu (DX12 on Windows, Metal on macOS). The Windows UI is C# WPF. The Mac host is SwiftUI with AppKit NSView present, matching the WPF layout. Session files are canonical JSON owned by the mixer core, so a file saved on one OS loads as the same session on the other.
+eiviz uses a modern architecture to implement features and cross-platform support that existing video operation tools and software vision mixers struggle with, and to provide high capability and extensibility. It is also designed from the awkward parts of those mixers, so it is easier to use from amateur to professional work.
 
-Inputs: colour, bars, still, video file, UVC, OMT, NDI®.  
-Output: OMT (GPU or CPU encode), NDI® (CPU / UYVY).  
-Scenes, overlays, multiview. Audio buses: WASAPI / ASIO on Windows, Core Audio on macOS.
+eiviz is not a company product. It is developed and operated by the main maintainer with community support.
 
-## Build
+## AI in development
 
-Windows, .NET 10, Rust 1.97, a DirectX 12 GPU, the [NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/) (set `NDI_SDK_DIR` if it is not installed to the default path), and LLVM/Clang for bindgen.
+This tool uses AI/LLM in development.
 
-```powershell
-dotnet build eiviz.slnx -c Release
-dotnet run --project host\Eiviz.Host.csproj -c Release
-cargo test --manifest-path mixer\Cargo.toml
-```
-
-`dotnet build` compiles the mixer DLL first.
-
-macOS, Rust 1.97, Swift 6, and the [NDI SDK 6](https://ndi.video/for-developers/ndi-sdk/) (set `NDI_SDK_DIR` if it is not in `/Library/NDI SDK for Apple`):
-
-```bash
-./mac/build.sh
-# Intel:
-# EIVIZ_MAC_ARCH=x86_64-apple-darwin ./mac/build.sh
-```
+It is not a vibe-coding application. LLMs are used as tools to assist at key points and for tasks that need them. They do not lead the development. The core maintainer is responsible for the architecture and the implementation. Only code that has passed maintainer review is used.
 
 ## License
 

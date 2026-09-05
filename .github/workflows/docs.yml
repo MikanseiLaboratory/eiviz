@@ -1,11 +1,21 @@
 # Official docs site (Starlight) → GitHub Pages.
 # Public URL: https://mikanseilaboratory.github.io/eiviz/
+#
+# Path filters skip this workflow when docs did not change.
+# Do not keep "Build docs" as a required check: a skipped workflow stays
+# Pending and blocks the merge.
 name: Docs
 
 on:
   push:
     branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
   pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 concurrency:

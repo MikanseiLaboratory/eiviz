@@ -15,6 +15,8 @@ Windows 11（x64）を対象にします。[Windows on ARMは未対応](https://
 **外付けGPUでResizable BARが有効であること**が必須です。内蔵GPUだけのマシンは対象外です。  
 AMDでは同じ機能がSmart Access Memory（SAM）と呼ばれることがあります。
 
+Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
+
 | GPU | 推奨要件 |
 | --- | --- |
 | NVIDIA | GeForce RTX 3000世代以降 |

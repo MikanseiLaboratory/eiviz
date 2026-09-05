@@ -26,6 +26,14 @@
                     <ComboBoxItem Content="{Binding [prefs.themeLight], Source={x:Static i18n:Loc.Source}}" Tag="Light"/>
                     <ComboBoxItem Content="{Binding [prefs.themeSystem], Source={x:Static i18n:Loc.Source}}" Tag="System"/>
                 </ComboBox>
+                <TextBlock Text="{Binding [prefs.help], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold"/>
+                <TextBlock Margin="0,8,0,16">
+                    <Hyperlink x:Name="DocsLink"
+                               RequestNavigate="AboutLink_RequestNavigate"
+                               Foreground="{DynamicResource TextForeground}">
+                        <Run x:Name="DocsLinkText"/>
+                    </Hyperlink>
+                </TextBlock>
                 <TextBlock Text="{Binding [about.name], Source={x:Static i18n:Loc.Source}}" FontSize="18" FontWeight="Bold"/>
                 <TextBlock x:Name="AboutVersion" Margin="0,8,0,0"/>
                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap"

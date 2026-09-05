@@ -49,13 +49,15 @@ RAM上とGPUへ上げるときの画素の持ち方です。既定のUYVY 4:2:2�
 ### Resizable Bar / Unified Memory
 
 WindowsではResizable BARの可否と、BAR窓/VRAM、GPU upload heapの有無を出します。  
-「ReBAR最適化を使う」は、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやデバイスリセットが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/eiviz/ja/introduction/about/)をご参照ください。
+「ReBAR最適化を使う」は、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやティアリングが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/eiviz/ja/introduction/about/)をご参照ください。
+
+Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
 
 macOS（Apple Silicon）ではUnified Memory向けの最適化を導入しています。ライブ入力を`MTLStorageModeShared`の共有テクスチャ領域へ書き、そのままサンプルします。オフにすると通常のMetalアップロードに戻ります。
 
 ### NDIを取り込みスレッドでアップロード
 
-既定はオンです。オンだと、NDIから受信した各フレームをGPUへ書き、映像合成・転送処理を高速化します。オフだと、レンダースレッドでCPUフレームをアップロードします。
+既定はオンです。オンのときは、受信した各フレームを専用のCPUスレッドからGPUへアップロードします。オフのときは、共有の描画スレッドで転送します。
 
 ## 出力
 
@@ -137,3 +139,10 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 ### テーマ
 
 ダーク、ライト、OS設定を選択可能です。
+
+### ヘルプ
+
+使っている言語の公式ドキュメントを開きます。
+
+- 日本語: https://mikanseilaboratory.github.io/eiviz/ja/
+- English: https://mikanseilaboratory.github.io/eiviz/en/

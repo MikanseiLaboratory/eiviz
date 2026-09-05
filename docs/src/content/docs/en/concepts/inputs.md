@@ -42,6 +42,26 @@ Input preview is a GPU readback thumbnail and does not use the video output dest
 
 ## Tags
 
-An Input can have more than one tag. Tabs above the list switch All, each tag, and Kind (Colours, Still, Video, OMT, NDI®, Video Capture, Mix). Right-click the tab strip to add, rename, or delete a tag.
+An Input can have more than one tag. Tags stay in the session catalog, and unused tags still appear as tabs.
+
+### Assign
+
+In Add / Edit Input, check the tags to assign. You can add a new tag from the same dialog.  
+One Input can hold several tags.
+
+### Filter the list
+
+Tabs sit above the Inputs list. Pick one to show matching Inputs.
+
+- **All** — every Input
+- **Each tag** — Inputs with that tag
+- **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
+
+### Manage tags
+
+Right-click the tab strip to add, rename, or delete a tag.
+
+- Rename follows through on every Input that had the old name
+- Delete removes the tag from those Inputs. If you were on that tab, the list returns to All
 
 Detail is in [Scenes](/eiviz/en/concepts/scenes/), [Mixing Unit](/eiviz/en/concepts/mixing-unit/), and [Outputs](/eiviz/en/concepts/outputs/).

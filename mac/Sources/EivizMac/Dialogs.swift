@@ -523,6 +523,8 @@ struct PreferencesView: View {
                 Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
             }
             .frame(width: 220)
+            Text(L10n.t("prefs.help")).fontWeight(.bold)
+            Link(L10n.t("prefs.docsUrl"), destination: URL(string: L10n.t("prefs.docsUrl"))!)
             Text("eiviz").font(.title)
             Text("Version \(HostVersion.display)")
             Text(L10n.t("about.blurb")).fixedSize(horizontal: false, vertical: true)
