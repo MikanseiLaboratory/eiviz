@@ -278,12 +278,12 @@ fn omt_program_shows_fade_during_auto() {
     let max_blue = during.iter().map(|(_, blue)| *blue).fold(0.0f32, f32::max);
     let min_red = during.iter().map(|(red, _)| *red).fold(f32::MAX, f32::min);
     assert!(
-        max_blue > baseline.1 + 40.0,
+        max_blue > baseline.1 + OMT_FADE_DELTA,
         "fade must raise blue on Program out (baseline b={} max b={max_blue})",
         baseline.1
     );
     assert!(
-        min_red < baseline.0 - 40.0,
+        min_red < baseline.0 - OMT_FADE_DELTA,
         "fade must lower red on Program out (baseline r={} min r={min_red})",
         baseline.0
     );
@@ -660,6 +660,10 @@ fn looks_blue(sample: (f32, f32)) -> bool {
     sample.1 > 150.0 && sample.1 > sample.0 + 40.0
 }
 
+/// Mid-fade OMT is a mix, then UYVY. Look for a move off the baseline, not a
+/// full primary swing.
+const OMT_FADE_DELTA: f32 = 5.0;
+
 fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -695,7 +699,7 @@ fn wait_omt_fade(
         if let Some(frame) = session.recv_video_timeout(Duration::from_millis(20)) {
             let sample = mean_red_blue(&frame);
             samples.push(sample);
-            if sample.1 > baseline.1 + 40.0 && sample.0 < baseline.0 - 40.0 {
+            if sample.1 > baseline.1 + OMT_FADE_DELTA && sample.0 < baseline.0 - OMT_FADE_DELTA {
                 break;
             }
         }
