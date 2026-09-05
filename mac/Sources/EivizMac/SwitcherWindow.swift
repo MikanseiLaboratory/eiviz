@@ -219,7 +219,8 @@ struct SwitcherView: View {
             onPreview: { mixer.previewScene(scene, unitId: unitId) },
             onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
             onHide: { mixer.hideSceneOnSwitcher(unitId, scene.id) },
-            onEdit: { mixer.openSceneEditor(scene) }
+            onEdit: { mixer.openSceneEditor(scene) },
+            onSnapshot: { mixer.snapshotScene(scene) }
         )
     }
 
@@ -293,6 +294,7 @@ private struct SwitcherSceneThumb: View {
     let onCollapse: () -> Void
     let onHide: () -> Void
     let onEdit: () -> Void
+    let onSnapshot: () -> Void
 
     @State private var appeared = false
 
@@ -309,7 +311,6 @@ private struct SwitcherSceneThumb: View {
                 .background(EivizTheme.chrome)
                 .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
-                .overlay(RightClickCatcher(action: onCollapse))
             if !scene.previewCollapsed {
                 ThumbRepresentable(
                     sourceId: scene.gpuId,
@@ -329,6 +330,8 @@ private struct SwitcherSceneThumb: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onPreview)
         .contextMenu {
+            Button(L10n.t("action.Snapshot"), action: onSnapshot)
+            Button(L10n.t(scene.previewCollapsed ? "scene.expand" : "scene.collapse"), action: onCollapse)
             Button(L10n.t("switcher.hideHere"), action: onHide)
         }
         .onAppear { appeared = true }

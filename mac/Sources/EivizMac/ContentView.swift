@@ -452,7 +452,8 @@ struct ContentView: View {
             onOpenPreview: { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) },
             onEdit: { mixer.openSceneEditor(scene) },
             onDelete: { mixer.deleteScene(scene) },
-            onCollapse: { mixer.toggleSceneCollapsed(scene.id) }
+            onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
+            onSnapshot: { mixer.snapshotScene(scene) }
         ))
     }
 

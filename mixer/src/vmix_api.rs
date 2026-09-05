@@ -330,21 +330,26 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
             let incoming = resolve_incoming(&flat, input_raw, &live)?;
             cut(unit_id, false, incoming)
         }
-        "Snapshot" => snapshot(
-            unit_id,
-            params.get("Value").map(String::as_str).unwrap_or(""),
-        ),
+        "Snapshot" => {
+            let value = params.get("Value").map(String::as_str).unwrap_or("");
+            if input_raw.is_empty() {
+                snapshot(unit_id, OUTPUT_PROGRAM, value)
+            } else {
+                let source = resolve_incoming(&flat, input_raw, &live)?;
+                snapshot(source, 0, value)
+            }
+        }
         _ => unreachable!("function allow-list"),
     }
 }
 
-fn snapshot(unit_id: u64, value: &str) -> Result<(), DispatchError> {
+fn snapshot(source_id: u64, kind: u32, value: &str) -> Result<(), DispatchError> {
     let path = if value.is_empty() {
         crate::snapshot::default_path()
     } else {
         value.to_string()
     };
-    let code = crate::take_snapshot(unit_id, OUTPUT_PROGRAM, &path);
+    let code = crate::take_snapshot(source_id, kind, &path);
     if code == OK {
         Ok(())
     } else {

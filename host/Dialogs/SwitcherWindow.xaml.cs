@@ -309,6 +309,13 @@ public partial class SwitcherWindow : Window
     private ContextMenu ThumbMenu(SceneEntry scene)
     {
         var menu = new ContextMenu();
+        var snap = new MenuItem { Header = Loc.T("action.Snapshot") };
+        snap.Click += (_, _) =>
+        {
+            if (Application.Current.MainWindow is MainWindow main)
+                main.SnapshotScene(scene);
+        };
+        menu.Items.Add(snap);
         var hide = new MenuItem { Header = Loc.T("switcher.hideHere") };
         hide.Click += (_, _) =>
         {

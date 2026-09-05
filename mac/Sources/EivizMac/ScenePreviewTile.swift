@@ -26,6 +26,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onCollapse: () -> Void
+    let onSnapshot: () -> Void
 
     @State private var appeared = false
 
@@ -59,9 +60,10 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             program ? programColor : preview ? previewColor : inactiveColor,
             lineWidth: 2
         ))
-        .overlay(RightClickCatcher(action: onCollapse))
         .contextMenu {
-            Button("Edit", action: onEdit)
+            Button(L10n.t("action.Snapshot"), action: onSnapshot)
+            Button(L10n.t(previewCollapsed ? "scene.expand" : "scene.collapse"), action: onCollapse)
+            Button(L10n.t("chrome.edit"), action: onEdit)
         }
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
@@ -89,7 +91,13 @@ struct ScenePreviewTile: View, @MainActor Equatable {
                 chip("Aud", action: onAudio)
                     .opacity(muted ? 0.45 : 1)
                 chip("Prev", action: onOpenPreview)
-                chip("Set", action: onEdit)
+                Menu {
+                    Button(L10n.t("chrome.edit"), action: onEdit)
+                    Button(L10n.t("action.Snapshot"), action: onSnapshot)
+                } label: {
+                    Text("Set")
+                }
+                .buttonStyle(MixerTileButtonStyle())
             }
             .padding(2)
         }

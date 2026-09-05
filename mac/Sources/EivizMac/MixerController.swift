@@ -984,14 +984,34 @@ final class MixerController: ObservableObject {
     }
 
     func snapshotProgram() {
+        saveSnapshot(
+            sourceId: selectedUnitId,
+            kind: EIVIZ_OUTPUT_PROGRAM,
+            name: selectedUnit.name
+        )
+    }
+
+    func snapshotScene(_ scene: SceneEntry) {
+        saveSnapshot(sourceId: scene.gpuId, kind: 0, name: scene.name)
+    }
+
+    private func saveSnapshot(sourceId: UInt64, kind: UInt32, name: String) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "eiviz.png"
+        panel.nameFieldStringValue = snapshotFileName(name)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let unitId = selectedUnitId
         MixerFFI.withCString(url.path) { path in
-            _ = fail(mixer_snapshot(unitId, EIVIZ_OUTPUT_PROGRAM, path), "Screenshot")
+            _ = fail(mixer_snapshot(sourceId, kind, path), "Screenshot")
         }
+    }
+
+    private func snapshotFileName(_ name: String) -> String {
+        let cleaned = name.replacingOccurrences(
+            of: "[/\\\\?%*|\"<>:]",
+            with: "_",
+            options: .regularExpression
+        )
+        return (cleaned.isEmpty ? "eiviz" : cleaned) + ".png"
     }
 
     func saveSession() {

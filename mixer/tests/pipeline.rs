@@ -1345,5 +1345,22 @@ fn snapshot_writes_png() {
     let bytes = std::fs::read(&path).expect("png");
     assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let _ = std::fs::remove_file(&path);
+    let bars = full_layer(SRC_BARS);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let scene_path = std::env::temp_dir().join("eiviz-scene-snapshot-test.png");
+    let _ = std::fs::remove_file(&scene_path);
+    let scene_cpath = CString::new(scene_path.to_string_lossy().as_bytes()).unwrap();
+    let mut scene_code = unsafe { mixer_snapshot(scene_id(1), 0, scene_cpath.as_ptr()) };
+    if scene_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        scene_code = unsafe { mixer_snapshot(scene_id(1), 0, scene_cpath.as_ptr()) };
+    }
+    assert_eq!(scene_code, OK);
+    let scene_bytes = std::fs::read(&scene_path).expect("scene png");
+    assert!(scene_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let _ = std::fs::remove_file(&scene_path);
     mixer_destroy();
 }

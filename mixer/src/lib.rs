@@ -3284,6 +3284,7 @@ fn render_loop(
     let mut mem_at = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
+    let mut pending_snapshots: Vec<(u64, u32, String, mpsc::Sender<i32>)> = Vec::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -3364,26 +3365,11 @@ fn render_loop(
                     kind,
                     path,
                     reply,
-                } => {
-                    let texture = frame_delay
-                        .rgba(unit_id, kind)
-                        .or_else(|| composer.rgba_texture(unit_id, kind));
-                    let code = match texture {
-                        Some(tex) => match crate::snapshot::save_texture(&device, tex, &path) {
-                            Ok(()) => OK,
-                            Err(error) => {
-                                set_error(&telemetry, error);
-                                ERR_IO
-                            }
-                        },
-                        None => {
-                            set_error(&telemetry, "snapshot source not ready");
-                            ERR_IO
-                        }
-                    };
-                    let _ = reply.send(code);
-                }
+                } => pending_snapshots.push((unit_id, kind, path, reply)),
                 GpuCmd::Shutdown => {
+                    for (_, _, _, reply) in pending_snapshots.drain(..) {
+                        let _ = reply.send(ERR_DEVICE);
+                    }
                     drop(presenters);
                     let _ = device.device.poll(wgpu::PollType::Wait {
                         submission_index: None,
@@ -3553,6 +3539,11 @@ fn render_loop(
                 .collect();
             let mut compose_sources = due_monitors;
             compose_sources.extend_from_slice(&due_thumbs);
+            for (id, ..) in &pending_snapshots {
+                if crate::abi::is_scene(*id) {
+                    compose_sources.push(*id);
+                }
+            }
             let (mut used_scenes, used_uploads) = collect_frame_live_ids(
                 &scene_specs,
                 &snapshot,
@@ -3848,6 +3839,13 @@ fn render_loop(
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
+            flush_snapshots(
+                &device,
+                &composer,
+                &frame_delay,
+                &telemetry,
+                &mut pending_snapshots,
+            );
             thumbs.advance(&device);
             emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap, pts);
             emit_gpu_encode(&gpu_copies, pts);
@@ -3984,6 +3982,48 @@ fn render_loop(
             }
         }
         next += frame_dt;
+    }
+}
+
+fn snapshot_texture<'a>(
+    composer: &'a Composer,
+    frame_delay: &'a FrameDelay,
+    source_id: u64,
+    kind: u32,
+) -> Option<&'a wgpu::Texture> {
+    if crate::abi::is_scene(source_id) {
+        composer
+            .scene_texture(source_id)
+            .or_else(|| frame_delay.scene_rgba_at(source_id, 0))
+    } else {
+        composer
+            .rgba_texture(source_id, kind)
+            .or_else(|| frame_delay.rgba(source_id, kind))
+    }
+}
+
+fn flush_snapshots(
+    device: &GpuDevice,
+    composer: &Composer,
+    frame_delay: &FrameDelay,
+    telemetry: &Mutex<Telemetry>,
+    pending: &mut Vec<(u64, u32, String, mpsc::Sender<i32>)>,
+) {
+    for (source_id, kind, path, reply) in pending.drain(..) {
+        let code = match snapshot_texture(composer, frame_delay, source_id, kind) {
+            Some(tex) => match crate::snapshot::save_texture(device, tex, &path) {
+                Ok(()) => OK,
+                Err(error) => {
+                    set_error(telemetry, error);
+                    ERR_IO
+                }
+            },
+            None => {
+                set_error(telemetry, "snapshot source not ready");
+                ERR_IO
+            }
+        };
+        let _ = reply.send(code);
     }
 }
 
