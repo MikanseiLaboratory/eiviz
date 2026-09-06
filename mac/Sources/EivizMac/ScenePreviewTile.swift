@@ -61,7 +61,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             program ? programColor : preview ? previewColor : inactiveColor,
             lineWidth: 2
         ))
-        .background(RightClickCatcher(action: onCollapse))
+        .background(TileRightClickCatcher(action: onCollapse))
         .onTapGesture(count: 2, perform: onEdit)
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
@@ -176,21 +176,21 @@ final class TileSetNSButton: NSButton {
     }
 }
 
-struct RightClickCatcher: NSViewRepresentable {
+fileprivate struct TileRightClickCatcher: NSViewRepresentable {
     let action: () -> Void
 
-    func makeNSView(context: Context) -> RightClickNSView {
-        let view = RightClickNSView()
+    func makeNSView(context: Context) -> TileRightClickNSView {
+        let view = TileRightClickNSView()
         view.action = action
         return view
     }
 
-    func updateNSView(_ nsView: RightClickNSView, context: Context) {
+    func updateNSView(_ nsView: TileRightClickNSView, context: Context) {
         nsView.action = action
     }
 }
 
-final class RightClickNSView: NSView {
+fileprivate final class TileRightClickNSView: NSView {
     var action: (() -> Void)?
     private var monitor: Any?
 
