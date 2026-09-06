@@ -33,7 +33,8 @@
                     <Button x:Name="PlayButton" Style="{StaticResource TileBtn}" Content="▶" Click="Play_Click"/>
                     <Button x:Name="AudioButton" Style="{StaticResource TileBtn}" Content="Aud" Click="Audio_Click"/>
                     <Button Style="{StaticResource TileBtn}" Content="Prev" Click="Preview_Click"/>
-                    <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"/>
+                    <Button Style="{StaticResource TileBtn}" Content="Set" Click="Settings_Click"
+                            PreviewMouseRightButtonDown="Settings_RightClick"/>
                 </StackPanel>
                 <preview:ThumbView x:Name="Monitor" Height="90"/>
             </DockPanel>

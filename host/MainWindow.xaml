@@ -153,11 +153,14 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="8"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Height="32" Click="AddInput_Click"/>
                             <Button Grid.Column="2" Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Height="32" Click="EditInput_Click"/>
                             <Button Grid.Column="4" Content="{Binding [chrome.previewInput], Source={x:Static i18n:Loc.Source}}" Height="32" Click="PreviewInput_Click"/>
-                            <Button Grid.Column="6" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Height="32" Click="RemoveInput_Click"/>
+                            <Button Grid.Column="6" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Height="32" Click="SnapshotInput_Click"/>
+                            <Button Grid.Column="8" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Height="32" Click="RemoveInput_Click"/>
                         </Grid>
                         <ListBox x:Name="InputList" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                                  SelectionChanged="InputList_SelectionChanged"

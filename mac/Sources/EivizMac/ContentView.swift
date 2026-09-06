@@ -389,6 +389,12 @@ struct ContentView: View {
                             mixer.showAddInput = true
                         }
                         Button("Preview") { mixer.previewSelectedInput() }
+                        Button(L10n.t("chrome.screenshot")) {
+                            guard let id = mixer.selectedInputId,
+                                  let input = mixer.session.inputs.first(where: { $0.id == id })
+                            else { return }
+                            mixer.snapshotInput(input)
+                        }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
                     .buttonStyle(MixerButtonStyle())

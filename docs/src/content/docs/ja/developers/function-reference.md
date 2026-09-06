@@ -5,7 +5,9 @@ description: eivizの関数リファレンス
 
 ## vMix互換API
 
-vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。Input単体はMixing Unitに載せられないので拒否します。存在しない番号も拒否します。`0`は現在のPreview、`-1`は現在のProgramです。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`始まりはMixing Unitの並びです。
+vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。Cut/Fadeなど本線操作ではInput単体はMixing Unitに載せられないので拒否します。存在しない番号も拒否します。`0`は現在のPreview、`-1`は現在のProgramです。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`始まりはMixing Unitの並びです。
+
+保存パス`Value`の拡張子が`.jpg`/`.jpeg`ならJPEG、それ以外（省略時を含む）はPNGです。省略時はPictures（無ければ一時ディレクトリ）へ日時付きファイルを書きます。
 
 | Function | 引数 | 動作 |
 | --- | --- | --- |
@@ -14,11 +16,14 @@ vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Inp
 | `Fade` | `Input`, `Mix`, `Duration` | Cutと同じ対象選択のあとFadeする。`Duration`はミリ秒。省略時は当該Mixing UnitのFadeプリセット、無ければ1000 |
 | `PreviewInput` | `Input`（必須）, `Mix` | Previewを指定Inputにする |
 | `ActiveInput` | `Input`（必須）, `Mix` | Programを指定Inputにする。Previewは変えない |
-| `Snapshot` | `Value`, `Mix`, `Input` | PNGを保存する。`Input`なしは選択中Mixing UnitのProgram。`Input`ありはそのScene（`0`は現在のPreview、`-1`は現在のProgram）。`Value`は保存先パス。省略時はPictures（無ければ一時ディレクトリ）へ日時付きファイルを書く |
+| `Snapshot` | `Value`, `Mix` | 指定Mixing UnitのProgramを保存する。`Input`は使わない |
+| `SnapshotInput` | `Input`（必須）, `Value`, `Mix` | 指定Inputを保存する。フラット番号はSceneのあと生Input。`0`/`-1`は当該Mixing UnitのPreview/Program |
+| `SnapshotScene` | `Input`（必須）, `Value` | eiviz独自。Sceneだけを`Input`として指定して保存する。生Inputは拒否する |
 
 例:
 
 - `http://127.0.0.1:8088/api?Function=Fade&Duration=500`
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
-- `http://127.0.0.1:8088/api?Function=Snapshot&Value=C:/Temp/eiviz.png`
-- `http://127.0.0.1:8088/api?Function=Snapshot&Input=3&Value=C:/Temp/scene.png`
+- `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
+- `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
+- `http://127.0.0.1:8088/api?Function=SnapshotScene&Input=2&Value=C:/Temp/scene.png`

@@ -10,7 +10,8 @@ use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::abi::{
-    ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PROGRAM, TRANSITION_FADE, UnitState,
+    ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
+    TRANSITION_FADE, UnitState,
 };
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
@@ -270,7 +271,8 @@ enum DispatchError {
 
 fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(), DispatchError> {
     match name {
-        "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot" => {}
+        "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
+        | "SnapshotInput" | "SnapshotScene" => {}
         _ => return Err(DispatchError::Unknown(format!("unknown Function {name}"))),
     }
     let doc = {
@@ -332,12 +334,31 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
         }
         "Snapshot" => {
             let value = params.get("Value").map(String::as_str).unwrap_or("");
-            if input_raw.is_empty() {
+            snapshot(unit_id, OUTPUT_PROGRAM, value)
+        }
+        "SnapshotInput" => {
+            require_input(input_raw)?;
+            let value = params.get("Value").map(String::as_str).unwrap_or("");
+            if input_raw == "0" {
+                snapshot(unit_id, OUTPUT_PREVIEW, value)
+            } else if input_raw == "-1" {
                 snapshot(unit_id, OUTPUT_PROGRAM, value)
             } else {
-                let source = resolve_incoming(&flat, input_raw, &live)?;
-                snapshot(source, 0, value)
+                let found = flat
+                    .resolve_input(input_raw)
+                    .map_err(DispatchError::BadRequest)?
+                    .ok_or_else(|| {
+                        DispatchError::BadRequest(format!("unknown Input {input_raw}"))
+                    })?;
+                let kind = if found.is_scene { 0 } else { OUTPUT_SOURCE };
+                snapshot(found.source_id, kind, value)
             }
+        }
+        "SnapshotScene" => {
+            require_input(input_raw)?;
+            let value = params.get("Value").map(String::as_str).unwrap_or("");
+            let source = resolve_incoming(&flat, input_raw, &live)?;
+            snapshot(source, 0, value)
         }
         _ => unreachable!("function allow-list"),
     }

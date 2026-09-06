@@ -44,11 +44,11 @@ pub use abi::{
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
     ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
     MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
-    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
+    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
+    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -3540,9 +3540,10 @@ fn render_loop(
             let mut compose_sources = due_monitors;
             compose_sources.extend_from_slice(&due_thumbs);
             for (id, ..) in &pending_snapshots {
-                if crate::abi::is_scene(*id) {
-                    compose_sources.push(*id);
+                if snapshot.iter().any(|(unit_id, ..)| *unit_id == *id) {
+                    continue;
                 }
+                compose_sources.push(*id);
             }
             let (mut used_scenes, used_uploads) = collect_frame_live_ids(
                 &scene_specs,
@@ -3841,7 +3842,7 @@ fn render_loop(
             device.submit(Some(encoder.finish()));
             flush_snapshots(
                 &device,
-                &composer,
+                &mut composer,
                 &frame_delay,
                 &telemetry,
                 &mut pending_snapshots,
@@ -3992,25 +3993,37 @@ fn snapshot_texture<'a>(
     kind: u32,
 ) -> Option<&'a wgpu::Texture> {
     if crate::abi::is_scene(source_id) {
-        composer
+        return composer
             .scene_texture(source_id)
-            .or_else(|| frame_delay.scene_rgba_at(source_id, 0))
-    } else {
-        composer
-            .rgba_texture(source_id, kind)
-            .or_else(|| frame_delay.rgba(source_id, kind))
+            .or_else(|| frame_delay.scene_rgba_at(source_id, 0));
     }
+    if kind == OUTPUT_SOURCE {
+        return composer.mix_texture(source_id).or_else(|| {
+            composer
+                .source_can_copy(source_id)
+                .then(|| composer.source_texture(source_id))
+                .flatten()
+        });
+    }
+    composer
+        .rgba_texture(source_id, kind)
+        .or_else(|| frame_delay.rgba(source_id, kind))
 }
 
 fn flush_snapshots(
     device: &GpuDevice,
-    composer: &Composer,
+    composer: &mut Composer,
     frame_delay: &FrameDelay,
     telemetry: &Mutex<Telemetry>,
     pending: &mut Vec<(u64, u32, String, mpsc::Sender<i32>)>,
 ) {
     for (source_id, kind, path, reply) in pending.drain(..) {
-        let code = match snapshot_texture(composer, frame_delay, source_id, kind) {
+        let blitted = (kind == OUTPUT_SOURCE
+            && snapshot_texture(composer, frame_delay, source_id, kind).is_none())
+        .then(|| composer.blit_source_rgba(device, source_id));
+        let code = match snapshot_texture(composer, frame_delay, source_id, kind)
+            .or(blitted.as_ref().and_then(|item| item.as_ref()))
+        {
             Some(tex) => match crate::snapshot::save_texture(device, tex, &path) {
                 Ok(()) => OK,
                 Err(error) => {

@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
     EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
-    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OverlayDesc, Rect,
-    SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM,
-    TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
-    TRANSITION_HEART, TRANSITION_LOREZ, TRANSITION_METAMIX, TRANSITION_MULTITASK,
-    TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
-    TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL, TRANSITION_TILE,
-    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
+    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OUTPUT_SOURCE,
+    OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
+    TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
+    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
+    TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
+    TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
     mixer_define_generator, mixer_define_mix_input, mixer_define_scene, mixer_destroy,
     mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send,
@@ -1362,5 +1362,29 @@ fn snapshot_writes_png() {
     let scene_bytes = std::fs::read(&scene_path).expect("scene png");
     assert!(scene_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let _ = std::fs::remove_file(&scene_path);
+    let jpeg_path = std::env::temp_dir().join("eiviz-snapshot-test.jpg");
+    let _ = std::fs::remove_file(&jpeg_path);
+    let jpeg_cpath = CString::new(jpeg_path.to_string_lossy().as_bytes()).unwrap();
+    let mut jpeg_code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, jpeg_cpath.as_ptr()) };
+    if jpeg_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        jpeg_code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, jpeg_cpath.as_ptr()) };
+    }
+    assert_eq!(jpeg_code, OK);
+    let jpeg_bytes = std::fs::read(&jpeg_path).expect("jpeg");
+    assert_eq!(&jpeg_bytes[..2], &[0xFF, 0xD8]);
+    let _ = std::fs::remove_file(&jpeg_path);
+    let input_path = std::env::temp_dir().join("eiviz-input-snapshot-test.png");
+    let _ = std::fs::remove_file(&input_path);
+    let input_cpath = CString::new(input_path.to_string_lossy().as_bytes()).unwrap();
+    let mut input_code = unsafe { mixer_snapshot(SRC_COLOR, OUTPUT_SOURCE, input_cpath.as_ptr()) };
+    if input_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        input_code = unsafe { mixer_snapshot(SRC_COLOR, OUTPUT_SOURCE, input_cpath.as_ptr()) };
+    }
+    assert_eq!(input_code, OK);
+    let input_bytes = std::fs::read(&input_path).expect("input png");
+    assert!(input_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let _ = std::fs::remove_file(&input_path);
     mixer_destroy();
 }

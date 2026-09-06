@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ScenePreviewTile: View, @MainActor Equatable {
@@ -60,11 +61,8 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             program ? programColor : preview ? previewColor : inactiveColor,
             lineWidth: 2
         ))
-        .contextMenu {
-            Button(L10n.t("action.Snapshot"), action: onSnapshot)
-            Button(L10n.t(previewCollapsed ? "scene.expand" : "scene.collapse"), action: onCollapse)
-            Button(L10n.t("chrome.edit"), action: onEdit)
-        }
+        .background(RightClickCatcher(action: onCollapse))
+        .onTapGesture(count: 2, perform: onEdit)
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
     }
@@ -91,13 +89,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
                 chip("Aud", action: onAudio)
                     .opacity(muted ? 0.45 : 1)
                 chip("Prev", action: onOpenPreview)
-                Menu {
-                    Button(L10n.t("chrome.edit"), action: onEdit)
-                    Button(L10n.t("action.Snapshot"), action: onSnapshot)
-                } label: {
-                    Text("Set")
-                }
-                .buttonStyle(MixerTileButtonStyle())
+                TileSetButton(title: "Set", onLeft: onEdit, onRight: onSnapshot)
             }
             .padding(2)
         }
@@ -138,11 +130,98 @@ struct ScenePreviewTile: View, @MainActor Equatable {
         .padding(.vertical, 3)
         .background(EivizTheme.chrome)
         .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onEdit)
         .onTapGesture(perform: onPreview)
     }
 
     private func chip(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(MixerTileButtonStyle())
+    }
+}
+
+struct TileSetButton: NSViewRepresentable {
+    let title: String
+    let onLeft: () -> Void
+    let onRight: () -> Void
+
+    func makeNSView(context: Context) -> TileSetNSButton {
+        let button = TileSetNSButton()
+        button.title = title
+        button.bezelStyle = .smallSquare
+        button.isBordered = true
+        button.font = .systemFont(ofSize: 10)
+        button.onLeft = onLeft
+        button.onRight = onRight
+        return button
+    }
+
+    func updateNSView(_ nsView: TileSetNSButton, context: Context) {
+        nsView.title = title
+        nsView.onLeft = onLeft
+        nsView.onRight = onRight
+    }
+}
+
+final class TileSetNSButton: NSButton {
+    var onLeft: (() -> Void)?
+    var onRight: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onLeft?()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onRight?()
+    }
+}
+
+struct RightClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> RightClickNSView {
+        let view = RightClickNSView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: RightClickNSView, context: Context) {
+        nsView.action = action
+    }
+}
+
+final class RightClickNSView: NSView {
+    var action: (() -> Void)?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard let self, let window = self.window, event.window == window else { return event }
+            let loc = self.convert(event.locationInWindow, from: nil)
+            guard self.bounds.contains(loc) else { return event }
+            if self.window?.contentView?.hitTest(event.locationInWindow) is TileSetNSButton {
+                return event
+            }
+            self.action?()
+            return nil
+        }
+    }
+
+    override func removeFromSuperview() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+        super.removeFromSuperview()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }

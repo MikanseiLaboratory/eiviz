@@ -1361,11 +1361,16 @@ public partial class MainWindow : Window
     internal void SnapshotScene(SceneEntry scene) =>
         SaveSnapshot(scene.GpuId, 0, scene.Name);
 
+    internal void SnapshotInput(InputEntry input) =>
+        SaveSnapshot(input.Id, MixerNative.OutputSource, input.Name);
+
     private void SaveSnapshot(ulong sourceId, uint kind, string name)
     {
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
-            Filter = Loc.T("filter.png"),
+            Filter = Loc.T("filter.snapshot"),
+            DefaultExt = ".png",
+            AddExtension = true,
             FileName = SnapshotFileName(name)
         };
         if (dialog.ShowDialog(this) != true)
@@ -1493,6 +1498,16 @@ public partial class MainWindow : Window
             return;
         }
         OpenInputPreview(input);
+    }
+
+    private void SnapshotInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, Loc.T("msg.selectInputPreview"));
+            return;
+        }
+        SnapshotInput(input);
     }
 
     private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.Name);

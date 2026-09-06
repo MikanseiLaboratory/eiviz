@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using Eiviz.Host.I18n;
 
 namespace Eiviz.Host.Preview;
 
@@ -13,6 +12,11 @@ public partial class SceneTile : UserControl
     {
         InitializeComponent();
         MouseLeftButtonUp += (_, _) => Select();
+        MouseDoubleClick += (_, e) =>
+        {
+            Raise(SceneEditRequested);
+            e.Handled = true;
+        };
     }
 
     public SceneEntry? Scene { get; private set; }
@@ -95,40 +99,12 @@ public partial class SceneTile : UserControl
     {
         if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null)
             return;
-        OpenSceneMenu(Chrome, includeEdit: false);
-        e.Handled = true;
-    }
-
-    private void OpenSceneMenu(FrameworkElement target, bool includeEdit)
-    {
         if (Scene is not { } scene)
             return;
-        var menu = new ContextMenu();
-        if (includeEdit)
-        {
-            var edit = new MenuItem { Header = Loc.T("chrome.edit") };
-            edit.Click += (_, _) => Raise(SceneEditRequested);
-            menu.Items.Add(edit);
-        }
-        var snap = new MenuItem { Header = Loc.T("action.Snapshot") };
-        snap.Click += (_, _) => Raise(SceneSnapshotRequested);
-        menu.Items.Add(snap);
-        if (!includeEdit)
-        {
-            var collapse = new MenuItem
-            {
-                Header = Loc.T(scene.PreviewCollapsed ? "scene.expand" : "scene.collapse")
-            };
-            collapse.Click += (_, _) =>
-            {
-                scene.PreviewCollapsed = !scene.PreviewCollapsed;
-                ApplyCollapsed();
-                SceneCollapseToggled?.Invoke(this, scene);
-            };
-            menu.Items.Add(collapse);
-        }
-        menu.PlacementTarget = target;
-        menu.IsOpen = true;
+        scene.PreviewCollapsed = !scene.PreviewCollapsed;
+        ApplyCollapsed();
+        SceneCollapseToggled?.Invoke(this, scene);
+        e.Handled = true;
     }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
@@ -167,10 +143,12 @@ public partial class SceneTile : UserControl
 
     private void Preview_Click(object sender, RoutedEventArgs e) => Raise(ScenePreviewRequested);
 
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => Raise(SceneEditRequested);
+
+    private void Settings_RightClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement target)
-            OpenSceneMenu(target, includeEdit: true);
+        Raise(SceneSnapshotRequested);
+        e.Handled = true;
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Raise(SceneCloseRequested);

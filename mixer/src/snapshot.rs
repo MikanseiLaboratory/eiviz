@@ -1,5 +1,11 @@
+use std::io::BufWriter;
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
+
+use image::ImageEncoder;
+use image::codecs::jpeg::JpegEncoder;
+use wgpu::TextureFormat;
 
 use crate::device::GpuDevice;
 
@@ -62,10 +68,45 @@ pub fn save_texture(device: &GpuDevice, texture: &wgpu::Texture, path: &str) -> 
     }
     drop(view);
     buffer.unmap();
-    image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| "snapshot encode".to_string())?
-        .save(path)
-        .map_err(|error| error.to_string())
+    if matches!(
+        texture.format(),
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb
+    ) {
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+    }
+    encode_rgba(width, height, &rgba, path)
+}
+
+fn encode_rgba(width: u32, height: u32, rgba: &[u8], path: &str) -> Result<(), String> {
+    if wants_jpeg(path) {
+        let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+        for px in rgba.chunks_exact(4) {
+            rgb.extend_from_slice(&px[..3]);
+        }
+        let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+        let encoder = JpegEncoder::new_with_quality(BufWriter::new(file), 90);
+        encoder
+            .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
+            .map_err(|error| error.to_string())
+    } else {
+        image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .ok_or_else(|| "snapshot encode".to_string())?
+            .save_with_format(path, image::ImageFormat::Png)
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub fn wants_jpeg(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("jpg") | Some("jpeg")
+    )
 }
 
 pub fn default_path() -> String {
@@ -87,4 +128,15 @@ pub fn default_path() -> String {
         .join(name)
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn jpeg_extension_is_detected() {
+        assert!(super::wants_jpeg("C:/Temp/out.jpg"));
+        assert!(super::wants_jpeg("shot.JPEG"));
+        assert!(!super::wants_jpeg("shot.png"));
+        assert!(!super::wants_jpeg("shot"));
+    }
 }

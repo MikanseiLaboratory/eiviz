@@ -1028,9 +1028,14 @@ final class MixerController: ObservableObject {
         saveSnapshot(sourceId: scene.gpuId, kind: 0, name: scene.name)
     }
 
+    func snapshotInput(_ input: InputEntry) {
+        saveSnapshot(sourceId: input.id, kind: EIVIZ_OUTPUT_SOURCE, name: input.name)
+    }
+
     private func saveSnapshot(sourceId: UInt64, kind: UInt32, name: String) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.allowsOtherFileTypes = false
         panel.nameFieldStringValue = snapshotFileName(name)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         MixerFFI.withCString(url.path) { path in
