@@ -18,7 +18,6 @@ Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `
 | `ActiveInput` | `Input` (required), `Mix` | Sets Program to the input. Preview does not change |
 | `Snapshot` | `Value`, `Mix` | Saves Program of the Mixing Unit. `Input` is not used |
 | `SnapshotInput` | `Input` (required), `Value`, `Mix` | Saves that Input. Flat numbers are Scenes first, then raw Inputs. `0` / `-1` are Preview / Program of the Mixing Unit |
-| `SnapshotScene` | `Input` (required), `Value` | eiviz-only. Saves a Scene addressed as `Input`. Raw Inputs are rejected |
 
 Examples:
 
@@ -26,4 +25,3 @@ Examples:
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
 - `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
 - `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
-- `http://127.0.0.1:8088/api?Function=SnapshotScene&Input=2&Value=C:/Temp/scene.png`

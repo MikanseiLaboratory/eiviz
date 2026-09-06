@@ -272,7 +272,7 @@ enum DispatchError {
 fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(), DispatchError> {
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
-        | "SnapshotInput" | "SnapshotScene" => {}
+        | "SnapshotInput" => {}
         _ => return Err(DispatchError::Unknown(format!("unknown Function {name}"))),
     }
     let doc = {
@@ -353,12 +353,6 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
                 let kind = if found.is_scene { 0 } else { OUTPUT_SOURCE };
                 snapshot(found.source_id, kind, value)
             }
-        }
-        "SnapshotScene" => {
-            require_input(input_raw)?;
-            let value = params.get("Value").map(String::as_str).unwrap_or("");
-            let source = resolve_incoming(&flat, input_raw, &live)?;
-            snapshot(source, 0, value)
         }
         _ => unreachable!("function allow-list"),
     }

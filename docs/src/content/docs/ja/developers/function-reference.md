@@ -18,7 +18,6 @@ vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Inp
 | `ActiveInput` | `Input`（必須）, `Mix` | Programを指定Inputにする。Previewは変えない |
 | `Snapshot` | `Value`, `Mix` | 指定Mixing UnitのProgramを保存する。`Input`は使わない |
 | `SnapshotInput` | `Input`（必須）, `Value`, `Mix` | 指定Inputを保存する。フラット番号はSceneのあと生Input。`0`/`-1`は当該Mixing UnitのPreview/Program |
-| `SnapshotScene` | `Input`（必須）, `Value` | eiviz独自。Sceneだけを`Input`として指定して保存する。生Inputは拒否する |
 
 例:
 
@@ -26,4 +25,3 @@ vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Inp
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
 - `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
 - `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
-- `http://127.0.0.1:8088/api?Function=SnapshotScene&Input=2&Value=C:/Temp/scene.png`
