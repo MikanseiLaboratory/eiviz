@@ -579,7 +579,12 @@ internal sealed class RemoteVideoPresenter
         if (sourceId is ulong id)
             host.RetargetMonitor(monitorId, id);
         else
+        {
             host.ReleaseNative();
+            host.IsMonitor = true;
+            host.MonitorId = 0;
+            host.SourceId = 0;
+        }
     }
 }
 
@@ -618,6 +623,12 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     {
         preview.ReleaseNative();
         program.ReleaseNative();
+        preview.IsMonitor = true;
+        program.IsMonitor = true;
+        preview.MonitorId = 0;
+        program.MonitorId = 0;
+        preview.SourceId = 0;
+        program.SourceId = 0;
         _ = unitId;
     }
     public void BindMultiview(SwapchainHost host, MultiviewLayout layout)

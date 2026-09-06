@@ -64,7 +64,7 @@ public partial class MainWindow : Window
         _tbarTimer.Tick += (_, _) =>
         {
             ((App)Application.Current).Backend.Poll();
-            WarnText.Text = ((App)Application.Current).Backend.StatusText;
+            RefreshRemoteStatus();
             SyncTBarsFromMixer();
         };
         _tbarTimer.Start();
@@ -123,7 +123,6 @@ public partial class MainWindow : Window
         RebuildMeters();
         ApplyAspect();
         BindPreviewProgram();
-        WarnText.Text = ((App)Application.Current).Backend.StatusText;
         _overlay?.Reload(SelectedUnit);
     }
 
@@ -139,8 +138,25 @@ public partial class MainWindow : Window
         var outputs = ((App)Application.Current).Backend.PublishedOutputs();
         var previewOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuPreview && item.UnitId == SelectedUnit.Id) == 1;
         var programOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuProgram && item.UnitId == SelectedUnit.Id) == 1;
-        if (App.IsRemote && (!previewOk || !programOk) && string.IsNullOrEmpty(WarnText.Text))
-            WarnText.Text = Loc.T("msg.videoUnavailable");
+        RefreshRemoteStatus(previewOk, programOk);
+    }
+
+    private void RefreshRemoteStatus(bool? previewOk = null, bool? programOk = null)
+    {
+        if (Application.Current is not App app)
+            return;
+        if (!app.Backend.IsRemote)
+        {
+            WarnText.Text = app.Backend.StatusText;
+            return;
+        }
+        var outputs = app.Backend.PublishedOutputs();
+        var unitId = SelectedUnit.Id;
+        var preview = previewOk ?? outputs.Count(item => item.SourceKind == OutputSourceKind.MuPreview && item.UnitId == unitId) == 1;
+        var program = programOk ?? outputs.Count(item => item.SourceKind == OutputSourceKind.MuProgram && item.UnitId == unitId) == 1;
+        WarnText.Text = !preview || !program
+            ? Loc.T("msg.videoUnavailable")
+            : app.Backend.StatusText;
     }
 
 
