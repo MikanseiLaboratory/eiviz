@@ -136,7 +136,7 @@ impl NdiReceiver {
                 }
                 let mut gpu_ring = GpuUploadRing::new();
                 #[cfg(windows)]
-                let mut rebar_ring: Option<crate::rebar::RebarIngestRing> = None;
+                let mut ingest_ring: Option<crate::rebar::FrameIngestRing> = None;
                 let mut gpu_warned = false;
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
@@ -145,7 +145,7 @@ impl NdiReceiver {
                             gpu.as_ref(),
                             &mut gpu_ring,
                             #[cfg(windows)]
-                            &mut rebar_ring,
+                            &mut ingest_ring,
                             &mut gpu_warned,
                             source_id,
                             depth,
@@ -447,7 +447,7 @@ fn ingest_video(
     uploads: &Mutex<UploadStore>,
     gpu: Option<&GpuIngest>,
     gpu_ring: &mut GpuUploadRing,
-    #[cfg(windows)] rebar_ring: &mut Option<crate::rebar::RebarIngestRing>,
+    #[cfg(windows)] ingest_ring: &mut Option<crate::rebar::FrameIngestRing>,
     gpu_warned: &mut bool,
     source_id: u64,
     depth: u32,
@@ -472,10 +472,10 @@ fn ingest_video(
     if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
         #[cfg(windows)]
         if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
-            if rebar_ring.is_none() {
-                *rebar_ring = crate::rebar::RebarIngestRing::new(&gpu.device, &gpu.queue);
+            if ingest_ring.is_none() {
+                *ingest_ring = crate::rebar::FrameIngestRing::new(&gpu.device, &gpu.queue);
             }
-            if let Some(ring) = rebar_ring.as_mut().filter(|ring| ring.is_live()) {
+            if let Some(ring) = ingest_ring.as_mut().filter(|ring| ring.is_live()) {
                 let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
                 let bgra = format == CpuFormat::Bgra;
                 let tex_format = if packed {
@@ -509,12 +509,14 @@ fn ingest_video(
                             frame,
                             uploaded,
                             ring.vram_bytes(),
-                            "rebar",
+                            "host",
                         );
                         return;
                     }
                     Err(error) => {
-                        eprintln!("eiviz ndi rebar upload: {error}; falling back to write_texture");
+                        eprintln!(
+                            "eiviz ndi host-visible upload: {error}; falling back to write_texture"
+                        );
                     }
                 }
             }

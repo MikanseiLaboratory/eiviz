@@ -39,6 +39,8 @@ mod tcp_listen_owner;
 mod thumb;
 mod upload;
 #[cfg(any(windows, target_os = "linux"))]
+mod vk_upload;
+#[cfg(any(windows, target_os = "linux"))]
 mod vk_video;
 mod vmix_api;
 mod vmix_tcp;

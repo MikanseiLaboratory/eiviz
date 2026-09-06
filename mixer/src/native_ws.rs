@@ -39,6 +39,58 @@ pub fn configure(enabled: bool, port: u32) -> i32 {
     }
     let port = port as u16;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let config = ServerConfig {
+        bind: addr,
+        auth: AuthConfig::from_env(),
+        idle_timeout: Duration::from_secs(60),
+        max_clients: 32,
+    };
+    let control = Arc::new(MixerFacade);
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    // Build the Tokio runtime on this worker. `eiviz-headless run` already
+    // sits inside a runtime, and nested `Runtime::new` panics.
+    match thread::Builder::new()
+        .name("eiviz-native-ws".into())
+        .spawn(move || ws_worker(config, control, ready_tx, stop_rx))
+    {
+        Ok(join) => match ready_rx.recv() {
+            Ok(Ok(bound)) => {
+                crate::diag::http_info(&format!("ws listen {bound}"));
+                let Ok(mut slot) = ws_slot().lock() else {
+                    let _ = stop_tx.send(true);
+                    crate::diag::join_timeout(join, Duration::from_secs(2), "native-ws");
+                    return ERR_INVALID_ARGUMENT;
+                };
+                slot.listen_owner = None;
+                slot.stop = Some(stop_tx);
+                slot.join = Some(join);
+                OK
+            }
+            Ok(Err(error)) => {
+                crate::diag::join_timeout(join, Duration::from_secs(2), "native-ws");
+                report_listen_error(addr, port, &error);
+                ERR_IO
+            }
+            Err(_) => {
+                crate::diag::join_timeout(join, Duration::from_secs(2), "native-ws");
+                crate::diag::http_error(&format!("ws listen {addr}: worker exited"));
+                ERR_IO
+            }
+        },
+        Err(error) => {
+            crate::diag::http_error(&format!("ws spawn: {error}"));
+            ERR_IO
+        }
+    }
+}
+
+fn ws_worker(
+    config: ServerConfig,
+    control: Arc<MixerFacade>,
+    ready_tx: std::sync::mpsc::SyncSender<Result<SocketAddr, String>>,
+    mut stop_rx: tokio::sync::watch::Receiver<bool>,
+) {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -47,65 +99,45 @@ pub fn configure(enabled: bool, port: u32) -> i32 {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            crate::diag::http_error(&format!("ws runtime: {error}"));
-            return ERR_IO;
+            let _ = ready_tx.send(Err(format!("ws runtime: {error}")));
+            return;
         }
     };
-    let config = ServerConfig {
-        bind: addr,
-        auth: AuthConfig::from_env(),
-        idle_timeout: Duration::from_secs(60),
-        max_clients: 32,
-    };
-    let control = Arc::new(MixerFacade);
     let started = runtime.block_on(listen(config, control));
     let (bind, task) = match started {
         Ok(pair) => pair,
         Err(error) => {
-            let owner = crate::tcp_listen_owner::name(port);
-            match owner.as_deref() {
-                Some(name) => {
-                    crate::diag::http_error(&format!("ws listen {addr}: {error} ({name})"))
-                }
-                None => crate::diag::http_error(&format!("ws listen {addr}: {error}")),
-            }
-            if let Ok(mut slot) = ws_slot().lock() {
-                slot.listen_owner = owner;
-            }
-            return ERR_IO;
-        }
-    };
-    crate::diag::http_info(&format!("ws listen {}", bind.ws_addr));
-    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
-    let Ok(mut slot) = ws_slot().lock() else {
-        task.abort();
-        return ERR_INVALID_ARGUMENT;
-    };
-    slot.listen_owner = None;
-    match thread::Builder::new()
-        .name("eiviz-native-ws".into())
-        .spawn(move || {
-            runtime.block_on(async move {
-                tokio::select! {
-                    result = task => {
-                        if let Err(error) = result {
-                            crate::diag::http_error(&format!("ws accept: {error}"));
-                        }
-                    }
-                    _ = stop_rx.changed() => {}
-                }
-            });
+            let _ = ready_tx.send(Err(error.to_string()));
             runtime.shutdown_background();
-        }) {
-        Ok(join) => {
-            slot.stop = Some(stop_tx);
-            slot.join = Some(join);
-            OK
+            return;
         }
-        Err(error) => {
-            crate::diag::http_error(&format!("ws spawn: {error}"));
-            ERR_IO
+    };
+    if ready_tx.send(Ok(bind.ws_addr)).is_err() {
+        task.abort();
+        runtime.shutdown_background();
+        return;
+    }
+    runtime.block_on(async move {
+        tokio::select! {
+            result = task => {
+                if let Err(error) = result {
+                    crate::diag::http_error(&format!("ws accept: {error}"));
+                }
+            }
+            _ = stop_rx.changed() => {}
         }
+    });
+    runtime.shutdown_background();
+}
+
+fn report_listen_error(addr: SocketAddr, port: u16, error: &str) {
+    let owner = crate::tcp_listen_owner::name(port);
+    match owner.as_deref() {
+        Some(name) => crate::diag::http_error(&format!("ws listen {addr}: {error} ({name})")),
+        None => crate::diag::http_error(&format!("ws listen {addr}: {error}")),
+    }
+    if let Ok(mut slot) = ws_slot().lock() {
+        slot.listen_owner = owner;
     }
 }
 

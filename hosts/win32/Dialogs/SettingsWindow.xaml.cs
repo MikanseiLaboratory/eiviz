@@ -182,7 +182,14 @@ public partial class SettingsWindow : Window
                 return;
             }
             AdapterName.Text = ReadZ(info.Adapter, 128);
-            if (info.Uma != 0)
+            var vulkan = MixerNative.Backend() == 2;
+            if (vulkan)
+            {
+                RebarStatus.Text = info.Available != 0
+                    ? Loc.T("rebar.hostVisible")
+                    : Loc.T("rebar.hostVisibleOff");
+            }
+            else if (info.Uma != 0)
                 RebarStatus.Text = Loc.T("rebar.na");
             else if (info.Available != 0)
                 RebarStatus.Text = Loc.T("rebar.enabled");
@@ -191,7 +198,9 @@ public partial class SettingsWindow : Window
             var bar = FormatMib(info.BarBytes);
             var vram = FormatMib(info.VramBytes);
             var heaps = info.GpuUploadHeaps != 0 ? "Yes" : "No";
-            RebarMemory.Text = $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
+            RebarMemory.Text = vulkan
+                ? $"{bar} host-visible  /  {vram} VRAM"
+                : $"{bar} BAR  /  {vram} VRAM  ·  GPU upload heaps: {heaps}";
             _rebarAvailable = info.Available != 0;
             RebarOptBox.IsEnabled = _rebarAvailable;
             RebarOptBox.IsChecked = _rebarAvailable && Settings.RebarOptimizationEnabled;

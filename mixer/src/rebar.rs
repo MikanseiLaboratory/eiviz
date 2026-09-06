@@ -1,9 +1,10 @@
-//! Resizable BAR detection and D3D12 GPU-upload-heap frame uploads.
+//! Fast CPU→VRAM uploads and the [`FrameUploader`] mouth used by compose / NDI.
 //!
 //! wgpu's `queue.write_texture` stages through system memory. When the OS exposes
-//! `D3D12_HEAP_TYPE_GPU_UPLOAD` (ReBAR on a discrete GPU, or UMA), CPU writes go
-//! straight into VRAM. The default path then copies VRAM→VRAM into the compose
-//! texture. Experimental direct-sample binds the upload-heap texture instead.
+//! `D3D12_HEAP_TYPE_GPU_UPLOAD` (ReBAR on a discrete GPU, or UMA), Metal shared
+//! textures, or Vulkan `DEVICE_LOCAL | HOST_VISIBLE`, CPU writes go straight into
+//! VRAM. The default path then copies VRAM→VRAM into the compose texture.
+//! Experimental direct-sample binds the upload-heap texture instead (Metal).
 
 use crate::device::GpuDevice;
 
@@ -52,7 +53,7 @@ fn probe_impl(device: &GpuDevice) -> RebarSnapshot {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 fn probe_impl(device: &GpuDevice) -> RebarSnapshot {
-    RebarSnapshot::unavailable(&device.adapter.get_info().name)
+    crate::vk_upload::probe(device)
 }
 
 #[cfg(target_os = "macos")]
@@ -84,7 +85,11 @@ fn macos_probe(device: &GpuDevice) -> RebarSnapshot {
 
 #[cfg(windows)]
 fn probe_impl(device: &GpuDevice) -> RebarSnapshot {
-    windows_probe(device)
+    match device.adapter.get_info().backend {
+        wgpu::Backend::Vulkan => crate::vk_upload::probe(device),
+        wgpu::Backend::Dx12 => windows_probe(device),
+        _ => RebarSnapshot::unavailable(&device.adapter.get_info().name),
+    }
 }
 
 #[cfg(windows)]
@@ -1059,4 +1064,154 @@ fn write_shared(
         texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row_bytes as _);
     }
     Ok(())
+}
+
+/// Compose / NDI mouth for DX12 ReBAR, Metal UMA, and Vulkan host-visible.
+pub enum FrameUploader {
+    #[cfg(windows)]
+    Rebar(RebarUploader),
+    #[cfg(target_os = "macos")]
+    Uma(UmaUploader),
+    #[cfg(any(windows, target_os = "linux"))]
+    Vulkan(crate::vk_upload::VulkanUploader),
+}
+
+impl FrameUploader {
+    pub fn new(device: &GpuDevice) -> Option<Self> {
+        match device.adapter.get_info().backend {
+            #[cfg(windows)]
+            wgpu::Backend::Dx12 => RebarUploader::new(device).map(Self::Rebar),
+            #[cfg(target_os = "macos")]
+            wgpu::Backend::Metal => UmaUploader::new(device).map(Self::Uma),
+            #[cfg(any(windows, target_os = "linux"))]
+            wgpu::Backend::Vulkan => {
+                crate::vk_upload::VulkanUploader::new(device).map(Self::Vulkan)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn upload(
+        &mut self,
+        device: &GpuDevice,
+        dest: &wgpu::Texture,
+        data: &[u8],
+        row_bytes: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), String> {
+        match self {
+            #[cfg(windows)]
+            Self::Rebar(uploader) => {
+                uploader.upload(device, dest, data, row_bytes, height, tex_width, format)
+            }
+            #[cfg(target_os = "macos")]
+            Self::Uma(_) => Err("uma copy uses write_texture".into()),
+            #[cfg(any(windows, target_os = "linux"))]
+            Self::Vulkan(uploader) => {
+                uploader.upload(device, dest, data, row_bytes, height, tex_width, format)
+            }
+        }
+    }
+
+    pub fn flush(&mut self, device: &GpuDevice) {
+        match self {
+            #[cfg(windows)]
+            Self::Rebar(uploader) => uploader.flush(device),
+            #[cfg(target_os = "macos")]
+            Self::Uma(_) => {}
+            #[cfg(any(windows, target_os = "linux"))]
+            Self::Vulkan(uploader) => uploader.flush(device),
+        }
+    }
+
+    pub fn retain_direct(&mut self, needed: &std::collections::HashSet<u64>, direct: bool) {
+        #[cfg(target_os = "macos")]
+        if let Self::Uma(uploader) = self {
+            if direct {
+                uploader.retain(needed);
+            } else {
+                uploader.clear();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (needed, direct);
+    }
+
+    pub fn upload_direct(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+        data: &[u8],
+        row_bytes: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Option<Result<(wgpu::Texture, wgpu::TextureView), String>> {
+        #[cfg(target_os = "macos")]
+        if let Self::Uma(uploader) = self {
+            return Some(uploader.upload_direct(
+                device, source_id, data, row_bytes, height, tex_width, format,
+            ));
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (
+            device, source_id, data, row_bytes, height, tex_width, format,
+        );
+        None
+    }
+}
+
+/// NDI ingest-thread host-visible ring. DX12 ReBAR or Vulkan; never calls the other HAL.
+#[cfg(windows)]
+pub enum FrameIngestRing {
+    Rebar(RebarIngestRing),
+    Vulkan(crate::vk_upload::VulkanIngestRing),
+}
+
+#[cfg(windows)]
+impl FrameIngestRing {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        if let Some(ring) = RebarIngestRing::new(device, queue) {
+            return Some(Self::Rebar(ring));
+        }
+        crate::vk_upload::VulkanIngestRing::new(device, queue).map(Self::Vulkan)
+    }
+
+    pub fn is_live(&self) -> bool {
+        match self {
+            Self::Rebar(ring) => ring.is_live(),
+            Self::Vulkan(ring) => ring.is_live(),
+        }
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        match self {
+            Self::Rebar(ring) => ring.vram_bytes(),
+            Self::Vulkan(ring) => ring.vram_bytes(),
+        }
+    }
+
+    pub fn upload(
+        &mut self,
+        data: &[u8],
+        stride: usize,
+        row_bytes: usize,
+        width: u32,
+        height: u32,
+        packed: bool,
+        bgra: bool,
+        format: wgpu::TextureFormat,
+        pts: i64,
+    ) -> Result<crate::upload::GpuVideoFrame, String> {
+        match self {
+            Self::Rebar(ring) => ring.upload(
+                data, stride, row_bytes, width, height, packed, bgra, format, pts,
+            ),
+            Self::Vulkan(ring) => ring.upload(
+                data, stride, row_bytes, width, height, packed, bgra, format, pts,
+            ),
+        }
+    }
 }

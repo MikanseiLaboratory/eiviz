@@ -335,7 +335,11 @@ mod tests {
     #[test]
     fn vulkan_backend_can_be_requested() {
         match GpuDevice::with_backend(BackendRequest::Vulkan) {
-            Ok(device) => assert_eq!(device.adapter.get_info().backend, wgpu::Backend::Vulkan),
+            Ok(device) => {
+                assert_eq!(device.adapter.get_info().backend, wgpu::Backend::Vulkan);
+                let _ = crate::rebar::probe(&device);
+                let _ = crate::rebar::FrameUploader::new(&device);
+            }
             Err(
                 DeviceError::NoAdapter
                 | DeviceError::UnsupportedBackend { .. }

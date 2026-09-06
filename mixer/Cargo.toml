@@ -35,6 +35,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
 [target.'cfg(windows)'.dependencies]
+ash = "0.38"
 grafton-ndi = { version = "1.0", default-features = false }
 gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }
@@ -48,6 +49,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["std", 
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
 gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "vulkan"] }
 
