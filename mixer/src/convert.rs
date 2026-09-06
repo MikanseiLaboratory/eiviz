@@ -336,6 +336,100 @@ impl Nv12Converter {
         })
     }
 
+    pub fn convert_nv12_texture(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ring: &mut VideoGpuRing,
+        nv12: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pts: i64,
+    ) -> Result<GpuVideoFrame, String> {
+        let y_view = nv12.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("eiviz nv12 y"),
+            format: Some(wgpu::TextureFormat::R8Unorm),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::Plane0,
+            ..Default::default()
+        });
+        let uv_view = nv12.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("eiviz nv12 uv"),
+            format: Some(wgpu::TextureFormat::Rg8Unorm),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::Plane1,
+            ..Default::default()
+        });
+        let (dest, dest_view) = ring.acquire_dest(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+        );
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("nv12 convert bg"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&y_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("nv12 vulkan convert"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("nv12 convert"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dest_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..6, 0..1);
+        }
+        let index = {
+            let _guard = crate::device::lock_gpu_queue();
+            queue.submit(Some(encoder.finish()))
+        };
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: None,
+        });
+        Ok(GpuVideoFrame {
+            pts,
+            width,
+            height,
+            packed: false,
+            bgra: false,
+            texture: dest,
+            view: dest_view,
+        })
+    }
+
     pub fn copy_bgra(
         &self,
         device: &wgpu::Device,

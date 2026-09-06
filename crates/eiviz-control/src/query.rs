@@ -24,7 +24,7 @@ impl Default for Capabilities {
         Self {
             protocol_version: "eiviz.control.v1".into(),
             mixer_version: env!("CARGO_PKG_VERSION").into(),
-            platforms: vec!["windows".into(), "macos".into()],
+            platforms: vec!["windows".into(), "macos".into(), "linux".into()],
             commands: vec![
                 "Preview".into(),
                 "Cut".into(),
@@ -50,4 +50,17 @@ pub struct Snapshot {
     pub resources: Vec<crate::live::ResourceStatus>,
     pub capabilities: Capabilities,
     pub lifecycle: crate::lifecycle::Lifecycle,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_platforms_include_linux() {
+        let caps = Capabilities::default();
+        assert!(caps.platforms.iter().any(|p| p == "windows"));
+        assert!(caps.platforms.iter().any(|p| p == "macos"));
+        assert!(caps.platforms.iter().any(|p| p == "linux"));
+    }
 }

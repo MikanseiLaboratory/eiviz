@@ -83,8 +83,12 @@ public partial class App : Application
     private void BootMixer()
     {
         MixerNative.ThrowIfFailed(
-            MixerNative.Create(0, Session.Settings.MasterFpsNum, Session.Settings.MasterFpsDen),
-            "DX12 mixer initialization");
+            MixerNative.CreateWithBackend(
+                Session.Settings.CreateAbi,
+                0,
+                Session.Settings.MasterFpsNum,
+                Session.Settings.MasterFpsDen),
+            "GPU mixer initialization");
         FlipBudget.Configure(Session.Settings.FlipSwapchainLimit);
         MixerNative.VideoFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra

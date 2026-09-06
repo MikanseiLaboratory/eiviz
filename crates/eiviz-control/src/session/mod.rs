@@ -84,6 +84,8 @@ pub struct SessionSettings {
     pub rebar_optimization: bool,
     #[serde(default)]
     pub rebar_direct_sample: bool,
+    #[serde(default)]
+    pub renderer: Renderer,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub ndi_gpu_upload: bool,
     #[serde(default = "preview_color", deserialize_with = "de_preview_color")]
@@ -128,6 +130,7 @@ impl Default for SessionSettings {
             default_present_interval: 3,
             flip_swapchain_limit: 0,
             internal_color_format: InternalColorFormat::Uyvy,
+            renderer: Renderer::Auto,
             rebar_optimization: true,
             rebar_direct_sample: false,
             ndi_gpu_upload: true,
@@ -253,6 +256,51 @@ pub(crate) fn clamp_size(size: f32) -> f32 {
         return 18.0;
     }
     size.clamp(1.0, 200.0)
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Renderer {
+    #[default]
+    Auto,
+    Dx12,
+    Vulkan,
+    Metal,
+}
+
+impl Renderer {
+    pub fn to_abi(self) -> u32 {
+        match self {
+            Self::Auto => 0,
+            Self::Dx12 => 1,
+            Self::Vulkan => 2,
+            Self::Metal => 3,
+        }
+    }
+
+    /// Backend passed to `mixer_create_with_backend`.
+    /// Same-OS choices are kept (Windows Direct3D 12 vs Vulkan never rewrite each other).
+    /// Other-OS values become Auto so a session authored elsewhere can still open.
+    pub fn create_abi(self) -> u32 {
+        #[cfg(windows)]
+        {
+            if matches!(self, Self::Metal) {
+                return 0;
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if matches!(self, Self::Dx12 | Self::Vulkan) {
+                return 0;
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if matches!(self, Self::Dx12 | Self::Metal) {
+                return 0;
+            }
+        }
+        self.to_abi()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -1131,6 +1179,7 @@ mod tests {
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(doc.units[0].transitions.len(), 2);
         assert!(doc.settings.rebar_optimization);
+        assert_eq!(doc.settings.renderer, Renderer::Auto);
         assert!(!doc.settings.rebar_direct_sample);
         assert!(doc.settings.ndi_gpu_upload);
         assert_eq!(doc.settings.preview_color, RgbColor { r: 0, g: 255, b: 0 });
@@ -1150,6 +1199,47 @@ mod tests {
         assert!(!doc.scenes[0].preview_collapsed);
         assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
         assert!(doc.units[0].switcher_scene_ids.is_empty());
+    }
+
+    #[test]
+    fn renderer_vulkan_roundtrip() {
+        let src = r#"{
+  "version": 2,
+  "settings": { "renderer": "Vulkan" }
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert_eq!(doc.settings.renderer, Renderer::Vulkan);
+        assert_eq!(Renderer::Vulkan.to_abi(), 2);
+        let bytes = canonicalize_bytes(src.as_bytes()).expect("canonicalize");
+        let again = parse(&bytes).unwrap();
+        assert_eq!(again.settings.renderer, Renderer::Vulkan);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(
+            text.contains("\"renderer\": \"Vulkan\"") || text.contains("\"renderer\":\"Vulkan\"")
+        );
+    }
+
+    #[test]
+    fn renderer_create_abi_keeps_same_os_choice() {
+        assert_eq!(Renderer::Auto.create_abi(), 0);
+        #[cfg(windows)]
+        {
+            assert_eq!(Renderer::Dx12.create_abi(), 1);
+            assert_eq!(Renderer::Vulkan.create_abi(), 2);
+            assert_eq!(Renderer::Metal.create_abi(), 0);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(Renderer::Metal.create_abi(), 3);
+            assert_eq!(Renderer::Dx12.create_abi(), 0);
+            assert_eq!(Renderer::Vulkan.create_abi(), 0);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(Renderer::Vulkan.create_abi(), 2);
+            assert_eq!(Renderer::Dx12.create_abi(), 0);
+            assert_eq!(Renderer::Metal.create_abi(), 0);
+        }
     }
 
     #[test]

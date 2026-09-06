@@ -11,14 +11,14 @@ use crate::abi::{ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rec
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_set_bus_gain,
     mixer_audio_set_headphone_copy_master, mixer_audio_set_input, mixer_audio_set_unit_link,
-    mixer_bind_multiview, mixer_create, mixer_create_unit, mixer_define_generator,
-    mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
-    mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_ndi_discover, mixer_omt_connect,
-    mixer_omt_discover, mixer_omt_set_quality, mixer_output_add, mixer_output_remove,
-    mixer_set_bus_colors, mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label,
-    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure,
-    mixer_unit_get_state, mixer_unit_set_state, mixer_video_seek, mixer_video_set_loop,
-    mixer_video_set_playing, mixer_video_start,
+    mixer_bind_multiview, mixer_create_unit, mixer_define_generator, mixer_define_mix_input,
+    mixer_define_scene, mixer_destroy_scene, mixer_destroy_source, mixer_destroy_unit,
+    mixer_load_still, mixer_ndi_connect, mixer_ndi_discover, mixer_omt_connect, mixer_omt_discover,
+    mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
+    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
+    mixer_unit_set_state, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -46,8 +46,18 @@ pub(crate) fn last_error_text() -> String {
 pub struct ProcessMixer;
 
 impl MixerPort for ProcessMixer {
-    fn create(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()> {
-        map_abi(mixer_create(0, fps_num, fps_den))
+    fn create(
+        &mut self,
+        fps_num: u32,
+        fps_den: u32,
+        renderer: eiviz_control::session::Renderer,
+    ) -> ControlResult<()> {
+        map_abi(crate::mixer_create_with_backend(
+            renderer.create_abi(),
+            0,
+            fps_num,
+            fps_den,
+        ))
     }
 
     fn destroy(&mut self) -> ControlResult<()> {

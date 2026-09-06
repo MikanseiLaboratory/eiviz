@@ -7,7 +7,12 @@ pub trait MixerPort: Send {
         0x4549_5649
     }
 
-    fn create(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()>;
+    fn create(
+        &mut self,
+        fps_num: u32,
+        fps_den: u32,
+        renderer: crate::session::Renderer,
+    ) -> ControlResult<()>;
     fn destroy(&mut self) -> ControlResult<()>;
     fn is_ready(&self) -> bool;
 
@@ -245,7 +250,12 @@ pub struct NullMixer {
 }
 
 impl MixerPort for NullMixer {
-    fn create(&mut self, _fps_num: u32, _fps_den: u32) -> ControlResult<()> {
+    fn create(
+        &mut self,
+        _fps_num: u32,
+        _fps_den: u32,
+        _renderer: crate::session::Renderer,
+    ) -> ControlResult<()> {
         self.ready = true;
         Ok(())
     }

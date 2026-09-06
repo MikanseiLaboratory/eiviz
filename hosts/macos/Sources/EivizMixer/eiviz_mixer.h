@@ -231,6 +231,8 @@ typedef struct EivizAudioBusInfo {
 
 uint32_t mixer_ping(void);
 int32_t mixer_create(uint64_t adapter_luid, uint32_t fps_num, uint32_t fps_den);
+int32_t mixer_create_with_backend(uint32_t backend, uint64_t adapter_luid, uint32_t fps_num, uint32_t fps_den);
+uint32_t mixer_backend(void);
 void mixer_destroy(void);
 int32_t mixer_create_unit(uint64_t unit_id, uint32_t width, uint32_t height);
 int32_t mixer_destroy_unit(uint64_t unit_id);

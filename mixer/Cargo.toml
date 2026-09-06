@@ -36,7 +36,8 @@ naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
 [target.'cfg(windows)'.dependencies]
 grafton-ndi = { version = "1.0", default-features = false }
-wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12"] }
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D11on12", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Devices_FunctionDiscovery", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -45,6 +46,10 @@ grafton-ndi = { version = "1.0", default-features = false }
 objc2 = "0.6.4"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "vulkan"] }
 
 [build-dependencies]
 cc = "1"

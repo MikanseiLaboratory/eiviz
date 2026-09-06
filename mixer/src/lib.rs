@@ -38,6 +38,8 @@ mod snapshot;
 mod tcp_listen_owner;
 mod thumb;
 mod upload;
+#[cfg(any(windows, target_os = "linux"))]
+mod vk_video;
 mod vmix_api;
 mod vmix_tcp;
 mod vmix_xml;
@@ -45,15 +47,16 @@ mod vmix_xml;
 pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 
 pub use abi::{
-    AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
-    EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
-    MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
-    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
-    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
+    DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
+    ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS,
+    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo, MixerStats,
+    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT,
+    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW,
+    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
+    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -279,6 +282,8 @@ struct Shared {
     gpu_ingest: GpuIngest,
     #[cfg(windows)]
     gpu_video: Option<GpuVideoContext>,
+    #[cfg(any(windows, target_os = "linux"))]
+    vulkan_decode: Option<crate::vk_video::VulkanDecode>,
     omt_gpu: OmtGpu,
     receivers: HashMap<u64, LiveReceiver>,
     #[cfg(any(windows, target_os = "macos"))]
@@ -530,6 +535,7 @@ struct Mixer {
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    backend: u32,
     #[cfg(target_os = "macos")]
     surface_gpu: present::SurfaceGpu,
 }
@@ -725,25 +731,47 @@ fn prepare_surface_off_slot(
     })
 }
 
-/// Creates the OS-fixed wgpu device (DX12 on Windows, Metal on macOS).
+/// Creates the OS-default wgpu device (DX12 on Windows, Metal on macOS, Vulkan on Linux).
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+pub extern "C" fn mixer_create(adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+    mixer_create_with_backend(crate::abi::BACKEND_AUTO, adapter_luid, fps_num, fps_den)
+}
+
+/// Creates a mixer with an explicit GPU backend.
+/// `0=auto`, `1=dx12`, `2=vulkan`, `3=metal`. Unsupported combinations fail; no fallback.
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_create_with_backend(
+    backend: u32,
+    _adapter_luid: u64,
+    fps_num: u32,
+    fps_den: u32,
+) -> i32 {
     crate::diag::init();
     crate::diag::reset_generation();
     reset_frame_caches();
-    crate::diag::info("mixer_create");
+    crate::diag::info(&format!("mixer_create backend={backend}"));
     let _ = crate::diag::profile_send();
     if fps_num == 0 || fps_den == 0 {
         return ERR_INVALID_ARGUMENT;
     }
+    let Some(request) = crate::device::BackendRequest::from_abi(backend) else {
+        report_session_error(format!("unknown GPU backend {backend}"));
+        return ERR_INVALID_ARGUMENT;
+    };
     let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
     if slot.is_some() {
         return ERR_ALREADY_CREATED;
     }
-    let device = match GpuDevice::new() {
+    let device = match GpuDevice::with_backend(request) {
         Ok(device) => device,
-        Err(_) => return ERR_DEVICE,
+        Err(error) => {
+            let message = format!("gpu device: {error}");
+            crate::diag::error(&message);
+            report_session_error(message);
+            return ERR_DEVICE;
+        }
     };
+    let backend = crate::device::abi_of_backend(device.adapter.get_info().backend);
     #[cfg(target_os = "macos")]
     let surface_gpu = present::SurfaceGpu {
         instance: device.instance.clone(),
@@ -751,13 +779,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         device: device.device.clone(),
     };
     #[cfg(windows)]
-    let gpu_video = match GpuVideoContext::new(&device) {
-        Ok(ctx) => Some(ctx),
-        Err(error) => {
-            eprintln!("eiviz dxgi video: {error}");
-            return ERR_DEVICE;
+    let gpu_video = if device.adapter.get_info().backend == wgpu::Backend::Dx12 {
+        match GpuVideoContext::new(&device) {
+            Ok(ctx) => Some(ctx),
+            Err(error) => {
+                eprintln!("eiviz dxgi video: {error}");
+                return ERR_DEVICE;
+            }
         }
+    } else {
+        None
     };
+    #[cfg(any(windows, target_os = "linux"))]
+    let vulkan_decode = device.vulkan.clone();
     let omt_recv_gpu = omt_gpu_from_device(&device);
     let omt_send_gpu = omt_gpu_for_send(&device);
     let rebar = crate::rebar::probe(&device);
@@ -792,6 +826,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         gpu_ingest,
         #[cfg(windows)]
         gpu_video,
+        #[cfg(any(windows, target_os = "linux"))]
+        vulkan_decode,
         omt_gpu: omt_recv_gpu,
         receivers: HashMap::new(),
         #[cfg(any(windows, target_os = "macos"))]
@@ -844,6 +880,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         thumb_pixels,
         render: Some(render),
         stop,
+        backend,
         #[cfg(target_os = "macos")]
         surface_gpu,
     });
@@ -852,6 +889,11 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         .name("eiviz-ndi-find".into())
         .spawn(ndi::warm_finder);
     OK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_backend() -> u32 {
+    with_mixer(|mixer| mixer.backend).unwrap_or(crate::abi::BACKEND_AUTO)
 }
 
 pub(crate) fn mixer_created() -> bool {
@@ -2033,28 +2075,36 @@ pub unsafe extern "C" fn mixer_video_start(
     }
     #[cfg(windows)]
     {
-        let (uploads, gpu, depth, previous_video, previous_recv) = match with_mixer(|mixer| {
-            let mut shared = mixer.shared.lock().expect("shared");
-            let previous_video = shared.videos.remove(&id);
-            let previous_recv = shared.receivers.remove(&id);
-            let uploads = shared.uploads.clone();
-            let gpu = shared.gpu_video.clone();
-            let session = shared.frame_buffer_frames.clamp(1, 8);
-            let depth = if frame_buffer_frames == 0 {
-                session
-            } else {
-                frame_buffer_frames.clamp(1, 8)
+        let (uploads, gpu, ingest, vulkan, depth, previous_video, previous_recv) =
+            match with_mixer(|mixer| {
+                let mut shared = mixer.shared.lock().expect("shared");
+                let previous_video = shared.videos.remove(&id);
+                let previous_recv = shared.receivers.remove(&id);
+                let uploads = shared.uploads.clone();
+                let gpu = shared.gpu_video.clone();
+                let ingest = shared.gpu_ingest.clone();
+                let vulkan = shared.vulkan_decode.clone();
+                let session = shared.frame_buffer_frames.clamp(1, 8);
+                let depth = if frame_buffer_frames == 0 {
+                    session
+                } else {
+                    frame_buffer_frames.clamp(1, 8)
+                };
+                (
+                    uploads,
+                    gpu,
+                    ingest,
+                    vulkan,
+                    depth,
+                    previous_video,
+                    previous_recv,
+                )
+            }) {
+                Ok(value) => value,
+                Err(code) => return code,
             };
-            (uploads, gpu, depth, previous_video, previous_recv)
-        }) {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
         drop(previous_recv);
         drop(previous_video);
-        let Some(gpu) = gpu else {
-            return ERR_DEVICE;
-        };
         return match VideoPump::start(
             id,
             path,
@@ -2066,6 +2116,8 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_den,
             uploads,
             gpu,
+            ingest,
+            vulkan,
             depth,
         ) {
             Ok(pump) => insert_video(id, pump),
@@ -5243,7 +5295,7 @@ mod tests {
 
     #[test]
     fn coalesce_latest_video_releases_stale_gpu_busy() {
-        let device = GpuDevice::new().expect("gpu");
+        let device = GpuDevice::with_backend(crate::device::BackendRequest::Auto).expect("gpu");
         let stale = Arc::new(AtomicBool::new(true));
         let latest = Arc::new(AtomicBool::new(true));
         let out = coalesce_latest_video(vec![

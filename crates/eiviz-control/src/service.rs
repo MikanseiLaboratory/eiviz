@@ -83,9 +83,14 @@ impl ControlService {
     }
 
     #[inline(never)]
-    pub fn create_runtime(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()> {
+    pub fn create_runtime(
+        &mut self,
+        fps_num: u32,
+        fps_den: u32,
+        renderer: crate::session::Renderer,
+    ) -> ControlResult<()> {
         self.lifecycle = Lifecycle::Starting;
-        match self.port.create(fps_num, fps_den) {
+        match self.port.create(fps_num, fps_den, renderer) {
             Ok(()) => {
                 self.lifecycle = Lifecycle::Ready;
                 let meta = self.meta("");
@@ -304,6 +309,7 @@ impl ControlService {
             self.create_runtime(
                 document.settings.master_fps_num,
                 document.settings.master_fps_den,
+                document.settings.renderer,
             )?;
         } else if self.lifecycle != Lifecycle::Ready {
             self.lifecycle = Lifecycle::Ready;
@@ -588,7 +594,12 @@ mod tests {
     }
 
     impl MixerPort for FakeMixer {
-        fn create(&mut self, _fps_num: u32, _fps_den: u32) -> ControlResult<()> {
+        fn create(
+            &mut self,
+            _fps_num: u32,
+            _fps_den: u32,
+            _renderer: crate::session::Renderer,
+        ) -> ControlResult<()> {
             self.ready = true;
             self.push_op("create".into());
             Ok(())

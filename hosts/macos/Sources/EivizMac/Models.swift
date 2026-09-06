@@ -1204,6 +1204,31 @@ enum MvLabelAnchor: String, Codable {
     case bottom = "Bottom"
 }
 
+enum GpuRenderer: String, Codable, CaseIterable {
+    case auto = "Auto"
+    case dx12 = "Dx12"
+    case vulkan = "Vulkan"
+    case metal = "Metal"
+
+    var abi: UInt32 {
+        switch self {
+        case .auto: return 0
+        case .dx12: return 1
+        case .vulkan: return 2
+        case .metal: return 3
+        }
+    }
+
+    /// Backend for mixer_create. Direct3D 12 and Vulkan cannot run on this Mac, so Auto is used;
+    /// the session field is kept so the file can be opened on Windows or Linux.
+    var createAbi: UInt32 {
+        switch self {
+        case .dx12, .vulkan: return 0
+        default: return abi
+        }
+    }
+}
+
 struct SessionSettings: Codable {
     var masterFpsNum: UInt32 = 60_000
     var masterFpsDen: UInt32 = 1_001
@@ -1215,6 +1240,7 @@ struct SessionSettings: Codable {
     var defaultPresentInterval: UInt32 = 3
     var flipSwapchainLimit: UInt32 = 0
     var internalColorFormat: InternalColorFormat = .uyvy
+    var renderer: GpuRenderer = .auto
     var rebarOptimization: Bool?
     var rebarDirectSample: Bool?
     var ndiGpuUpload: Bool?
@@ -1256,6 +1282,7 @@ struct SessionSettings: Codable {
         let flip = try container.decodeIfPresent(UInt32.self, forKey: .flipSwapchainLimit) ?? 0
         flipSwapchainLimit = [0, 4, 6, 8, 10, 12, 16].contains(flip) ? flip : 0
         internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
+        renderer = try container.decodeIfPresent(GpuRenderer.self, forKey: .renderer) ?? .auto
         rebarOptimization = try container.decodeIfPresent(Bool.self, forKey: .rebarOptimization)
         rebarDirectSample = try container.decodeIfPresent(Bool.self, forKey: .rebarDirectSample)
         ndiGpuUpload = try container.decodeIfPresent(Bool.self, forKey: .ndiGpuUpload)

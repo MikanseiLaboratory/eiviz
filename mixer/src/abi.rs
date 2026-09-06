@@ -5,6 +5,11 @@ pub const ERR_INVALID_ARGUMENT: i32 = 3;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
 
+pub const BACKEND_AUTO: u32 = 0;
+pub const BACKEND_DX12: u32 = 1;
+pub const BACKEND_VULKAN: u32 = 2;
+pub const BACKEND_METAL: u32 = 3;
+
 pub const SRC_COLOR: u64 = 1;
 pub const SRC_BARS: u64 = 2;
 pub const SRC_BLACK: u64 = 3;

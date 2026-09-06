@@ -112,6 +112,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_create")]
     internal static partial int Create(ulong adapterLuid, uint fpsNumerator, uint fpsDenominator);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_create_with_backend")]
+    internal static partial int CreateWithBackend(uint backend, ulong adapterLuid, uint fpsNumerator, uint fpsDenominator);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_backend")]
+    internal static partial uint Backend();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_destroy")]
     internal static partial void Destroy();
 

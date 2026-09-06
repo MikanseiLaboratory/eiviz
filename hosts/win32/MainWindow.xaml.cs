@@ -2016,6 +2016,7 @@ public partial class MainWindow : Window
         var dialog = new SettingsWindow(_session) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
+        var restartMixer = _session.Settings.Renderer != dialog.Settings.Renderer;
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
         _session.Settings.MasterFpsNum = dialog.Settings.MasterFpsNum;
@@ -2028,6 +2029,7 @@ public partial class MainWindow : Window
         _session.Settings.FlipSwapchainLimit = dialog.Settings.FlipSwapchainLimit;
         FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
         _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
+        _session.Settings.Renderer = dialog.Settings.Renderer;
         _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
         _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
         _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
@@ -2053,6 +2055,14 @@ public partial class MainWindow : Window
         _session.Buses.Clear();
         foreach (var bus in dialog.Buses)
             _session.Buses.Add(bus);
+        if (restartMixer)
+        {
+            _session.Outputs.Clear();
+            foreach (var output in dialog.Outputs)
+                _session.Outputs.Add(output);
+            ((App)Application.Current).ReloadSession(_session);
+            return;
+        }
         AudioGraphSync.Push(_session);
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),

@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
     @State private var selectedMultiviewId: UInt64?
+    @State private var originalRenderer = GpuRenderer.auto
 
     var body: some View {
         HStack(spacing: 0) {
@@ -39,6 +40,7 @@ struct SettingsView: View {
                         if !copyUmaInfo().available {
                             mixer.session.settings.rebarOptimization = false
                         }
+                        let restartMixer = mixer.session.settings.renderer != originalRenderer
                         mixer.pushAudio()
                         mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
@@ -50,6 +52,9 @@ struct SettingsView: View {
                         AppPrefs.shared.save()
                         mixer.applyVmixApi()
                         mixer.publishSession()
+                        if restartMixer {
+                            mixer.recreateMixer()
+                        }
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -61,6 +66,7 @@ struct SettingsView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
+        .onAppear { originalRenderer = mixer.session.settings.renderer }
     }
 
     private var display: some View {
@@ -117,6 +123,18 @@ struct SettingsView: View {
 
     private var performance: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("Renderer").fontWeight(.bold)
+            Picker("", selection: $mixer.session.settings.renderer) {
+                Text("Auto").tag(GpuRenderer.auto)
+                Text("Metal").tag(GpuRenderer.metal)
+                Text("Direct3D 12").tag(GpuRenderer.dx12)
+                Text("Vulkan").tag(GpuRenderer.vulkan)
+            }
+            .labelsHidden()
+            .frame(width: 220)
+            Text("Changing the renderer restarts the mixer. Metal is the only backend on this Mac. Direct3D 12 and Vulkan are kept so a session can be authored for Windows or Linux.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             let info = copyUmaInfo()
             Text("Graphics Adapter").fontWeight(.bold)
             Text(info.name)

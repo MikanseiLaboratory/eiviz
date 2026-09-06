@@ -13,6 +13,7 @@ as copyright and permission notices are preserved.
 | Crate | License | Source |
 | --- | --- | --- |
 | bytemuck | MIT OR Apache-2.0 | https://crates.io/crates/bytemuck |
+| gpu-video | MIT | https://github.com/software-mansion/smelter |
 | grafton-ndi | Apache-2.0 | https://crates.io/crates/grafton-ndi |
 | image | MIT OR Apache-2.0 | https://crates.io/crates/image |
 | openmediatransport | MIT | https://github.com/MikanseiLaboratory/openmediatransport-rs |

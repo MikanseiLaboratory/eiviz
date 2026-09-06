@@ -10,15 +10,17 @@ use windows::Win32::Media::MediaFoundation::{
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
     MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
-    MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READER_D3D_MANAGER,
-    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
-    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-    MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK,
-    MF_VERSION, MFAudioFormat_Float, MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
+    MF_MT_MAJOR_TYPE, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_USER_DATA, MF_PD_DURATION,
+    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_ANY_STREAM,
+    MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK, MF_VERSION, MFAudioFormat_Float,
+    MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
     MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFEnumDeviceSources,
-    MFMediaType_Audio, MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_NV12,
-    MFVideoFormat_RGB32, MFVideoFormat_UYVY, MFVideoFormat_YUY2,
+    MFMediaType_Audio, MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_H264,
+    MFVideoFormat_H264_ES, MFVideoFormat_NV12, MFVideoFormat_RGB32, MFVideoFormat_UYVY,
+    MFVideoFormat_YUY2,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
 use windows::Win32::System::Variant::VT_I8;
@@ -28,8 +30,8 @@ use crate::abi::{FMT_BGRA, MixerVideoInfo};
 use crate::convert::VideoGpuRing;
 use crate::dxgi::GpuVideoContext;
 use crate::upload::{
-    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_clocked,
-    ingest_audio_throttled,
+    AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuIngest, GpuVideoFrame, UploadStore,
+    ingest_audio_clocked, ingest_audio_throttled,
 };
 
 static MF_ONCE: Once = Once::new();
@@ -56,7 +58,9 @@ impl VideoPump {
         fps_num: u32,
         fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
-        gpu: GpuVideoContext,
+        gpu: Option<GpuVideoContext>,
+        ingest: GpuIngest,
+        vulkan: Option<crate::vk_video::VulkanDecode>,
         frame_buffer_frames: u32,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
@@ -81,7 +85,8 @@ impl VideoPump {
             .spawn(move || {
                 if let Err(error) = run_loop(
                     source_id, path, capture, format, width, height, fps_num, fps_den, uploads,
-                    gpu, depth, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
+                    gpu, ingest, vulkan, depth, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t,
+                    ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -160,7 +165,9 @@ fn run_loop(
     fps_num: u32,
     fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
-    gpu: GpuVideoContext,
+    gpu: Option<GpuVideoContext>,
+    ingest: GpuIngest,
+    vulkan: Option<crate::vk_video::VulkanDecode>,
     depth: u32,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
@@ -173,25 +180,58 @@ fn run_loop(
     startup()?;
     let prefer_packed = format != FMT_BGRA;
     let mut ready = Some(ready);
+    if !capture
+        && gpu.is_none()
+        && let Some(vulkan) = vulkan.as_ref()
+    {
+        match run_vulkan_h264_file(
+            source_id,
+            &path,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            &uploads,
+            &ingest,
+            vulkan,
+            depth,
+            &stop,
+            &playing,
+            &looping,
+            &seek_hns,
+            &position_hns,
+            &duration_hns,
+            &mut ready,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                eprintln!("eiviz vulkan video: {error}; using CPU decode");
+            }
+        }
+    }
+    let _ = ingest;
     loop {
         if stop.load(Ordering::Relaxed) {
             send_ready(&mut ready, Ok(()));
             return Ok(());
         }
-        let opened = match open_reader(&path, capture, Some(&gpu), prefer_packed) {
-            Ok(reader) => match configure_video(
-                &reader,
-                true,
-                prefer_packed,
-                width,
-                height,
-                fps_num,
-                fps_den,
-            ) {
-                Ok(layout) => Ok((reader, layout)),
+        let opened = match gpu.as_ref() {
+            Some(gpu) => match open_reader(&path, capture, Some(gpu), prefer_packed) {
+                Ok(reader) => match configure_video(
+                    &reader,
+                    true,
+                    prefer_packed,
+                    width,
+                    height,
+                    fps_num,
+                    fps_den,
+                ) {
+                    Ok(layout) => Ok((reader, layout)),
+                    Err(error) => Err(error),
+                },
                 Err(error) => Err(error),
             },
-            Err(error) => Err(error),
+            None => Err("Direct3D 12 video is not active".into()),
         };
         let (reader, layout) = match opened {
             Ok(pair) => pair,
@@ -347,7 +387,7 @@ fn run_loop(
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
                     let decoded = decode_video_frame(
-                        &gpu,
+                        gpu.as_ref(),
                         &mut gpu_ring,
                         &sample,
                         &layout,
@@ -490,7 +530,7 @@ fn present_due_file(
 }
 
 fn decode_video_frame(
-    gpu: &GpuVideoContext,
+    gpu: Option<&GpuVideoContext>,
     gpu_ring: &mut VideoGpuRing,
     sample: &windows::Win32::Media::MediaFoundation::IMFSample,
     layout: &VideoLayout,
@@ -498,13 +538,15 @@ fn decode_video_frame(
     gpu_warned: &mut bool,
 ) -> Option<Prefetched> {
     if layout.gpu {
-        match gpu.dxgi.import_sample(gpu, gpu_ring, sample, pts) {
-            Ok(frame) => return Some(Prefetched::Gpu(frame)),
-            Err(error) if !*gpu_warned => {
-                eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
-                *gpu_warned = true;
+        if let Some(gpu) = gpu {
+            match gpu.dxgi.import_sample(gpu, gpu_ring, sample, pts) {
+                Ok(frame) => return Some(Prefetched::Gpu(frame)),
+                Err(error) if !*gpu_warned => {
+                    eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
+                    *gpu_warned = true;
+                }
+                Err(_) => {}
             }
-            Err(_) => {}
         }
     }
     match take_cpu_frame(sample, layout, pts) {
@@ -1350,6 +1392,306 @@ fn wide(text: &str) -> Vec<u16> {
         .encode_wide()
         .chain(Some(0))
         .collect()
+}
+
+fn run_vulkan_h264_file(
+    source_id: u64,
+    path: &str,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    uploads: &Mutex<UploadStore>,
+    ingest: &GpuIngest,
+    vulkan: &crate::vk_video::VulkanDecode,
+    depth: u32,
+    stop: &AtomicBool,
+    playing: &AtomicBool,
+    looping: &AtomicBool,
+    seek_hns: &AtomicI64,
+    position_hns: &AtomicI64,
+    duration_hns: &AtomicI64,
+    ready: &mut Option<mpsc::SyncSender<Result<(), String>>>,
+) -> Result<(), String> {
+    let reader = open_reader(path, false, None, false)?;
+    let (layout_w, layout_h, prefix, nal_len) =
+        configure_h264_compressed(&reader, width, height, fps_num, fps_den)?;
+    let audio = match configure_audio(&reader) {
+        Ok(layout) => Some(layout),
+        Err(_) => {
+            let _ = unsafe {
+                reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM), false)
+            };
+            None
+        }
+    };
+    duration_hns.store(read_duration(&reader), Ordering::Relaxed);
+    send_ready(ready, Ok(()));
+    let file_prefetch = depth.max(3);
+    let mut gpu_ring = crate::convert::VideoGpuRing::new(file_prefetch);
+    let converter = crate::convert::Nv12Converter::new(&ingest.device);
+    let mut decoder = vulkan
+        .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
+        .map_err(|error| error.to_string())?;
+    let mut prefetch = std::collections::VecDeque::new();
+    let mut ring_vram = 0u64;
+    let mut clock_pts = -1i64;
+    let mut seek_base = 0i64;
+    let mut clock_start = Instant::now();
+    let mut need_frame = true;
+    let mut was_playing = false;
+    let mut sent_prefix = false;
+    let mut annexb = Vec::new();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let seek = seek_hns.swap(-1, Ordering::Relaxed);
+        if seek >= 0 {
+            let _ = unsafe { reader.Flush(stream(MF_SOURCE_READER_ANY_STREAM)) };
+            seek_to(&reader, seek);
+            prefetch.clear();
+            {
+                let mut store = uploads.lock().expect("uploads");
+                store.flush_audio(source_id);
+                store.flush_video(source_id);
+            }
+            decoder = vulkan
+                .create_wgpu_textures_decoder_h264(
+                    gpu_video::parameters::DecoderParameters::default(),
+                )
+                .map_err(|error| error.to_string())?;
+            sent_prefix = false;
+            clock_pts = -1;
+            seek_base = seek;
+            position_hns.store(seek, Ordering::Relaxed);
+            clock_start = Instant::now();
+            need_frame = true;
+        }
+        let is_playing = playing.load(Ordering::Relaxed);
+        if is_playing && !was_playing {
+            clock_pts = -1;
+            seek_base = position_hns.load(Ordering::Relaxed);
+            clock_start = Instant::now();
+        }
+        was_playing = is_playing;
+        present_due_file(
+            uploads,
+            source_id,
+            &mut prefetch,
+            ring_vram,
+            &mut clock_pts,
+            &mut clock_start,
+            seek_base,
+            position_hns,
+            need_frame,
+            is_playing,
+        );
+        if need_frame && uploads.lock().expect("uploads").has_video_frame(source_id) {
+            need_frame = false;
+        }
+        if !is_playing && !need_frame {
+            thread::sleep(Duration::from_millis(16));
+            continue;
+        }
+        if prefetch.len() >= file_prefetch as usize && !need_frame {
+            if let Some(front) = prefetch.front() {
+                wait_for_pts(
+                    front.pts(),
+                    clock_pts,
+                    clock_start,
+                    &reader,
+                    audio.as_ref(),
+                    uploads,
+                    source_id,
+                    is_playing,
+                );
+            } else {
+                thread::sleep(Duration::from_millis(2));
+            }
+            continue;
+        }
+        let sample = match read_sample(&reader, audio.as_ref()) {
+            Ok(Some(sample)) => sample,
+            Ok(None) => continue,
+            Err(end) if end => {
+                if looping.load(Ordering::Relaxed) {
+                    position_hns.store(0, Ordering::Relaxed);
+                    seek_hns.store(0, Ordering::Relaxed);
+                } else {
+                    playing.store(false, Ordering::Relaxed);
+                }
+                continue;
+            }
+            Err(_) => continue,
+        };
+        match sample {
+            Decoded::Audio { packet, .. } => {
+                if is_playing {
+                    ingest_audio_clocked(uploads, source_id, packet);
+                }
+            }
+            Decoded::Video { pts, sample } => {
+                let preview = need_frame;
+                if clock_pts < 0 {
+                    clock_pts = pts;
+                    clock_start = Instant::now();
+                }
+                position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
+                annexb.clear();
+                if !sent_prefix {
+                    annexb.extend_from_slice(&prefix);
+                    sent_prefix = true;
+                }
+                let payload = sample_bytes(&sample)?;
+                crate::vk_video::annexb_from_avcc(&payload, nal_len, &mut annexb);
+                if annexb.is_empty() {
+                    continue;
+                }
+                let frames = decoder
+                    .decode(gpu_video::EncodedInputChunk {
+                        data: &annexb,
+                        pts: Some(pts.max(0) as u64),
+                    })
+                    .map_err(|error| error.to_string())?;
+                for frame in frames {
+                    let size = frame.data.size();
+                    let w = if size.width > 0 { size.width } else { layout_w };
+                    let h = if size.height > 0 {
+                        size.height
+                    } else {
+                        layout_h
+                    };
+                    let gpu_pts = frame.metadata.pts.map(|value| value as i64).unwrap_or(pts);
+                    match converter.convert_nv12_texture(
+                        &ingest.device,
+                        &ingest.queue,
+                        &mut gpu_ring,
+                        &frame.data,
+                        w,
+                        h,
+                        gpu_pts,
+                    ) {
+                        Ok(gpu) => {
+                            ring_vram = gpu_ring.vram_bytes();
+                            prefetch.push_back(Prefetched::Gpu(gpu));
+                        }
+                        Err(error) => eprintln!("eiviz vulkan nv12: {error}"),
+                    }
+                }
+                if preview {
+                    present_due_file(
+                        uploads,
+                        source_id,
+                        &mut prefetch,
+                        ring_vram,
+                        &mut clock_pts,
+                        &mut clock_start,
+                        seek_base,
+                        position_hns,
+                        true,
+                        is_playing,
+                    );
+                    need_frame = false;
+                }
+            }
+        }
+    }
+}
+
+fn configure_h264_compressed(
+    reader: &IMFSourceReader,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> Result<(u32, u32, Vec<u8>, usize), String> {
+    unsafe {
+        let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_ANY_STREAM), false);
+        reader
+            .SetStreamSelection(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), true)
+            .map_err(|e| e.to_string())?;
+        let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_FIRST_AUDIO_STREAM), true);
+        let native = reader
+            .GetNativeMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0)
+            .map_err(|e| e.to_string())?;
+        let subtype = native.GetGUID(&MF_MT_SUBTYPE).map_err(|e| e.to_string())?;
+        if !is_h264_compressed(subtype) {
+            return Err(format!(
+                "Vulkan Video decode supports H.264, not {subtype:?}"
+            ));
+        }
+        let ty = MFCreateMediaType().map_err(|e| e.to_string())?;
+        ty.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+            .map_err(|e| e.to_string())?;
+        ty.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)
+            .map_err(|e| e.to_string())?;
+        if width > 0 && height > 0 {
+            let size = ((width as u64) << 32) | height as u64;
+            ty.SetUINT64(&MF_MT_FRAME_SIZE, size)
+                .map_err(|e| e.to_string())?;
+        }
+        if fps_num > 0 && fps_den > 0 {
+            let rate = ((fps_num as u64) << 32) | fps_den as u64;
+            ty.SetUINT64(&MF_MT_FRAME_RATE, rate)
+                .map_err(|e| e.to_string())?;
+        }
+        reader
+            .SetCurrentMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), None, &ty)
+            .map_err(|e| e.to_string())?;
+        let current = reader
+            .GetCurrentMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM))
+            .map_err(|e| e.to_string())?;
+        let frame_size = current.GetUINT64(&MF_MT_FRAME_SIZE).unwrap_or(0);
+        let out_w = (frame_size >> 32) as u32;
+        let out_h = frame_size as u32;
+        if out_w == 0 || out_h == 0 {
+            return Err("H.264 stream has no frame size".into());
+        }
+        let mut blob = media_blob(&current);
+        if blob.is_empty() {
+            blob = media_blob(&native);
+        }
+        let (prefix, nal_len) = crate::vk_video::annexb_from_avc_config(&blob);
+        Ok((out_w, out_h, prefix, nal_len))
+    }
+}
+
+fn is_h264_compressed(subtype: GUID) -> bool {
+    const AVC1: GUID = GUID::from_u128(0x3143_5641_0000_0010_8000_00aa_0038_9b71);
+    subtype == MFVideoFormat_H264 || subtype == MFVideoFormat_H264_ES || subtype == AVC1
+}
+
+fn media_blob(ty: &windows::Win32::Media::MediaFoundation::IMFMediaType) -> Vec<u8> {
+    for key in [&MF_MT_MPEG_SEQUENCE_HEADER, &MF_MT_USER_DATA] {
+        let Ok(size) = (unsafe { ty.GetBlobSize(key) }) else {
+            continue;
+        };
+        if size == 0 {
+            continue;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if unsafe { ty.GetBlob(key, &mut buf, None) }.is_ok() {
+            return buf;
+        }
+    }
+    Vec::new()
+}
+
+fn sample_bytes(sample: &IMFSample) -> Result<Vec<u8>, String> {
+    unsafe {
+        let buffer = sample
+            .ConvertToContiguousBuffer()
+            .map_err(|e| e.to_string())?;
+        let mut ptr = std::ptr::null_mut();
+        let mut len = 0u32;
+        buffer
+            .Lock(&mut ptr, None, Some(&mut len))
+            .map_err(|e| e.to_string())?;
+        let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+        let _ = buffer.Unlock();
+        Ok(bytes)
+    }
 }
 
 #[cfg(test)]
