@@ -23,7 +23,7 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 ### Windows x64
 
 Run `eiviz-*-win-x64-setup.exe`.  
-Or unzip the zip and run `Eiviz.Host.exe`.
+Or unzip the zip and run `Eiviz.Host.exe` (mixer) or `Eiviz.Remote.exe` (operator client).
 
 ### macOS Apple Silicon (`macos-arm64`)
 
@@ -35,9 +35,10 @@ Or unzip the zip, then:
 cd eiviz-*-macos-arm64
 xattr -cr .
 open eiviz-mac.app
+open eiviz-remote.app
 ```
 
-The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
+`eiviz-mac.app` is the mixer. `eiviz-remote.app` operates another eiviz. The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
 
 ### macOS Intel (`macos-x64`)
 

@@ -10,7 +10,7 @@ struct EivizMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("eiviz") {
+        WindowGroup(L10n.t(AppPrefs.isRemoteProcess ? "app.titleRemote" : "app.title")) {
             ContentView()
                 .environmentObject(mixer)
                 .environment(\.mixerSurfaceEpoch, mixer.surfaceEpoch)

@@ -1036,11 +1036,7 @@ mod tests {
                     .any(|item| item.name == "Logo")
             );
             let err = svc
-                .mutate_session(
-                    SessionMutation::DeleteInput { id: 2 },
-                    Some(1),
-                    "stale",
-                )
+                .mutate_session(SessionMutation::DeleteInput { id: 2 }, Some(1), "stale")
                 .unwrap_err();
             assert!(matches!(err, ControlError::Conflict { .. }));
         });

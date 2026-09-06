@@ -58,8 +58,22 @@ impl ControlClient {
     }
 
     pub async fn auto(&self, unit_id: u64, duration_ms: u32, swap: bool) -> ControlResult<()> {
-        self.auto_full(unit_id, 0, duration_ms, swap, true, 0, 0, 0.0, 0.0, 0.0, 1.0, 0.02, 0.0)
-            .await
+        self.auto_full(
+            unit_id,
+            0,
+            duration_ms,
+            swap,
+            true,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.02,
+            0.0,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -107,7 +121,11 @@ impl ControlClient {
         duration_ms: u32,
         to_on: bool,
     ) -> ControlResult<()> {
-        status_ok(&self.roundtrip(overlay_req(unit_id, index, duration_ms, to_on)).await?)
+        status_ok(
+            &self
+                .roundtrip(overlay_req(unit_id, index, duration_ms, to_on))
+                .await?,
+        )
     }
 
     pub async fn mutate_session(
@@ -115,7 +133,11 @@ impl ControlClient {
         mutation_json: Vec<u8>,
         expected_revision: u64,
     ) -> ControlResult<()> {
-        status_ok(&self.roundtrip(mutate_req(mutation_json, expected_revision)).await?)
+        status_ok(
+            &self
+                .roundtrip(mutate_req(mutation_json, expected_revision))
+                .await?,
+        )
     }
 
     pub async fn replace_session(
@@ -193,7 +215,10 @@ impl ControlSession {
     }
 
     pub fn view(&self) -> SessionView {
-        self.view.lock().map(|slot| slot.clone()).unwrap_or_default()
+        self.view
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
     }
 
     pub async fn subscribe(&self, after_sequence: u64) -> ControlResult<Response> {
@@ -484,16 +509,7 @@ async fn session_supervisor(
     let mut ready = Some(ready);
     let mut delay = Duration::from_millis(200);
     loop {
-        match session_once(
-            &endpoint,
-            &token,
-            &mut rx,
-            &events,
-            &view,
-            ready.take(),
-        )
-        .await
-        {
+        match session_once(&endpoint, &token, &mut rx, &events, &view, ready.take()).await {
             Ok(()) => return,
             Err(error) => {
                 if let Ok(mut slot) = view.lock() {

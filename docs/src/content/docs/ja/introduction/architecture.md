@@ -13,10 +13,9 @@ eivizの映像合成はMixerを1プロセスとして動かします。
 ホストはウィンドウ、操作、プレビュー面など、UI表示と操作を担当します。  
 映像合成、音声処理、入出力の管理、セッションデータはMixerが担当し、根幹の処理をUIから完全に分離することで高いパフォーマンスとクロスプラットフォームを両立しています。
 
-外部からの制御はMixer内の`ControlService`が担当します。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じ経路を通ってディスパッチャーへ入ります。  
+外部からの制御はMixer内の`ControlService`が担当しています。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じ経路を通ってディスパッチャーへ入ります。  
 
-Windows/macOSは**リモートGUI**としても起動できます。  
-ライブ操作とセッション編集は、信頼できるLANまたはVPN上の認証付き`ws://`で接続先の`ControlService`へ送ることで制御します。詳細は[eiviz API](/eiviz/ja/developers/api/)をご確認ください。。
+Windows/macOSは`Eiviz.Remote.exe`/`eiviz-remote.app`としても起動できます。クライアントは受信用のMixerと`eiviz_remote`を読み、操作は接続先の`ControlService`へ送ります。プロトコルは[eiviz API](/eiviz/ja/developers/api/)をご確認ください。
 
 ```mermaid
 flowchart TB
@@ -43,17 +42,17 @@ flowchart TB
 flowchart LR
   subgraph client["リモートGUIプロセス"]
     rui["ホストUI"]
-    recv["受信専用Mixer"]
+    recv["受信用Mixer"]
   end
   subgraph server["ホストまたはheadless"]
     ctrl2["ControlService"]
     gpu["Mixer GPU"]
-    ndi["有効なNDI / OMT"]
+    ndi["NDI / OMT"]
   end
   rui -->|Protobuf ws| ctrl2
   ctrl2 --> gpu
   gpu --> ndi
-  ndi -->|既存出力のみ| recv
+  ndi --> recv
   recv --> rui
 ```
 
@@ -68,13 +67,7 @@ flowchart LR
 
 Mixerはプロセスに1つです。ライブプレビュー以外、ホストへGPUポインタは渡しません。入力・シーン・Mixing Unitは整数IDで指します。
 
-リモートGUIは受信専用のMixerをもう1つ持ちます。Preview/Program/Multiviewは、接続先ですでに有効なNDIまたはOMT出力がちょうど1本のときだけ受信します。無い、または複数ある場合はUnavailableです。追加のNDI/OMT出力は作りません。Input Previewとシーンサムネイルは出しません。
-
-## リモートGUI
-
-リモートクライアントとローカルホストは、同じWindows/macOS UIを使います。PreferencesでLocalまたはRemoteを選びます。リモートでは設定UIは確認のみです。クライアント自身のPreferences（言語、接続、ホスト側の待ち受けtoken）は編集できます。
-
-セッション編集は型付きの`MutateSession`と`expected_revision`です。衝突したら再読込し、黙ってマージしません。Still/Videoの追加は、クライアントのファイルをホストのメディアディレクトリへ送り、ホスト側でInputを足します。Mixing Unitのライブ操作（`Cut`、`Preview`、`Auto`、Overlay）は`eivizctl`と同じ`ControlService`を通ります。
+リモート接続時のプロセス構成は上図です。操作手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
 
 ## 並行性
 
@@ -226,7 +219,7 @@ flowchart TB
 内部ミックスは48 kHzのグラフです。MasterとHeadphoneが固定で、AUXを追加できます。  
 入力はバスマスクとゲインを持ち、Mixing UnitはProgramに追従した音声(Audio Follow)をバスへ送れます。オーバーレイも同様にAudio Followを設定可能です。
 
-詳細は[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)をご参照ください。
+[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)をご確認ください。
 
 ## 出力
 
@@ -241,13 +234,13 @@ flowchart TB
 OMT受信は、Preview/Programに乗っているときだけフル品質、外れたら帯域を落とします。  
 TAKEやTバーで受信を作り直さないよう、外れてもしばらくフル品質を維持します。
 
-詳細は[設定](/eiviz/ja/introduction/settings/)の出力と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
+[設定](/eiviz/ja/introduction/settings/)の出力と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご確認ください。
 
 ## ホスト
 
 OSごとのホストは`hosts/win32`、`hosts/macos`、`hosts/linux`に分かれます。ライブのPreview/Program、開いているMultiview、Scene Editor、Overlay窓、スイッチャーのPreview/Programは、ネイティブ面へMixerが直接描きます。Windowsは子ウィンドウ（HWND）、macOSはNSViewにwgpuがMetalレイヤを付けます。
 
-リモートGUIでは、それらのライブ面はホストGPUのシーンではなく、すでに有効なNDI/OMT出力の受信です。シーンタイル、スイッチャーのシーンサムネ、入力プレビューはローカルではGPU読み戻しサムネで、リモートではプレースホルダです。シーンやMix Inputを足してもswapchainは増えません。Mix InputはMixing UnitのバスまたはセッションMultiviewの遅延エイリアスで、FrameDelayのリングを読み、同じサムネ経路を使います。
+リモート接続時のライブ面は、接続先のNDI/OMT出力の受信です。手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。Mix InputはMixing UnitのバスまたはセッションMultiviewの遅延エイリアスで、FrameDelayのリングを読み、同じサムネ経路を使います。
 
 WindowsのDXGI flip面（swapchain）は同時に多く作れません。[設定](/eiviz/ja/introduction/settings/)の映像出力先ウィンドウの上限が、開いているswapchainの本数を抑えます。Preview/Program/Multiviewをリアルタイムに表示するのに使います。たとえばSwitcher UIはPreviewとProgramを出すので2スロット使います。設定から上げられますが、不安定になる可能性があります。窓を閉じるとswapchainは外れ、枠が空きます。本体ウィンドウを閉じると補助窓も閉じてプロセスを終了します。
 

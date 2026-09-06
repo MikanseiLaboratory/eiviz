@@ -21,7 +21,7 @@ vMixやOBS Studioといった既存ソフトウェアの代替を目指しては
 モダンな技術で、性能・操作感・クロスプラットフォームの可搬性を両立することを目標にしています。
 
 映像合成の本体はMixer（コア）に集約し、各OSのUIから内部のC ABIで呼び出します。ホスト実装は`hosts/win32`、`hosts/macos`、`hosts/linux`です。  
-GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最適化しています。制御の正本はMixer内の`ControlService`です。外部APIはvMix互換HTTP/TCPとProtobuf WebSocketです。同じWindows/macOSホストは、認証付き`ws://`のリモートGUIとしても接続できます（信頼できるLAN/VPNのみ。このリリースではTLSなし）。クライアントのMixerは受信専用で、リモートのセッションをGPUへは載せません。
+GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最適化しています。制御はMixer内の`ControlService`が担当しています。外部APIはvMix互換HTTP/TCPとProtobuf WebSocketです。Windows/macOSからの遠隔操作は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
 
 | 層 | 技術 |
 | --- | --- |

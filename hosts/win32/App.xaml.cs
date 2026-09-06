@@ -32,7 +32,7 @@ public partial class App : Application
             if (MixerNative.Ping() != 0x4549_5649)
                 throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
             Session = Session.Default();
-            if (AppPrefs.Current.ConnectionMode == HostConnectionMode.Remote)
+            if (HostProcess.IsRemote)
                 BootRemote();
             else
             {
@@ -61,7 +61,7 @@ public partial class App : Application
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();
         Session = session;
-        if (AppPrefs.Current.ConnectionMode == HostConnectionMode.Remote)
+        if (HostProcess.IsRemote)
             BootRemote();
         else
         {
@@ -227,7 +227,7 @@ public partial class App : Application
             port,
             token,
             prefs.NativeApiRole ?? "admin",
-            prefs.MediaDirectory ?? "");
+            prefs.ResolvedMediaDirectory);
         if (code == 0)
             return;
         if (!enabled || code != 5)

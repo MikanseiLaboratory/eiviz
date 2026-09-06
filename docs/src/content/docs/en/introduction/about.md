@@ -21,7 +21,7 @@ Use it in tests, labs, and anywhere a crash is acceptable.
 The stack aims for performance, a native feel, and portability across operating systems.
 
 Compositing lives in the mixer core. Each OS UI calls it through an internal C ABI. Host code lives in `hosts/win32`, `hosts/macos`, and `hosts/linux`.  
-GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer is the control-plane source of truth. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket. The same Windows and macOS hosts can connect as a remote GUI over authenticated `ws://` (trusted LAN/VPN only; no TLS in this release). The client mixer is receive-only and never loads the remote session onto its GPU.
+GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer handles the control plane. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket. Operating another eiviz from Windows or macOS is in [Remote connection](/eiviz/en/features/remote/).
 
 | Layer | Stack |
 | --- | --- |
@@ -36,7 +36,6 @@ GPU paths drop through wgpu to the native API on that platform and apply extra o
 
 The compositing engine is the mixer (core). It is Rust + wgpu 30, for real-time GPU work on every supported OS.  
 It builds as a `cdylib` and is called from each host (`hosts/win32` and the others) over an internal C ABI.  
-The remote GUI client is a second `cdylib` (`eiviz_remote`) with the `mixer_remote_*` C ABI so the UI can keep the same calls and load a different library.  
 Session files are canonical JSON owned by the mixer, so a file saved on one OS loads as the same session on another.
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12

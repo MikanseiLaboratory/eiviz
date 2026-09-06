@@ -34,25 +34,23 @@
                 </ComboBox>
                 <TextBlock Margin="0,0,0,16" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
                            Text="{Binding [prefs.rendererHelp], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBlock Text="{Binding [prefs.connection], Source={x:Static i18n:Loc.Source}}"/>
-                <ComboBox x:Name="ConnectionBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left">
-                    <ComboBoxItem Content="{Binding [prefs.connectionLocal], Source={x:Static i18n:Loc.Source}}" Tag="Local"/>
-                    <ComboBoxItem Content="{Binding [prefs.connectionRemote], Source={x:Static i18n:Loc.Source}}" Tag="Remote"/>
-                </ComboBox>
-                <TextBlock Text="{Binding [prefs.remoteUrl], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBox x:Name="RemoteUrlBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
-                <TextBlock Text="{Binding [prefs.remoteToken], Source={x:Static i18n:Loc.Source}}"/>
-                <PasswordBox x:Name="RemoteTokenBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
-                <TextBlock Text="{Binding [prefs.apiBind], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBox x:Name="ApiBindBox" Margin="0,4,0,8" Width="220" HorizontalAlignment="Left"/>
-                <TextBlock Text="{Binding [prefs.apiPort], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBox x:Name="ApiPortBox" Margin="0,4,0,8" Width="220" HorizontalAlignment="Left"/>
-                <TextBlock Text="{Binding [prefs.apiToken], Source={x:Static i18n:Loc.Source}}"/>
-                <PasswordBox x:Name="ApiTokenBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
-                <TextBlock Text="{Binding [prefs.mediaDirectory], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBox x:Name="MediaDirBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
-                <TextBlock Margin="0,0,0,16" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"
-                           Text="{Binding [prefs.connectionHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <StackPanel x:Name="RemoteFields">
+                    <TextBlock Text="{Binding [prefs.remoteUrl], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBox x:Name="RemoteUrlBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
+                    <TextBlock Text="{Binding [prefs.remoteToken], Source={x:Static i18n:Loc.Source}}"/>
+                    <PasswordBox x:Name="RemoteTokenBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
+                </StackPanel>
+                <StackPanel x:Name="HostListenFields">
+                    <TextBlock Text="{Binding [prefs.apiBind], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBox x:Name="ApiBindBox" Margin="0,4,0,8" Width="220" HorizontalAlignment="Left"/>
+                    <TextBlock Text="{Binding [prefs.apiPort], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBox x:Name="ApiPortBox" Margin="0,4,0,8" Width="220" HorizontalAlignment="Left"/>
+                    <TextBlock Text="{Binding [prefs.apiToken], Source={x:Static i18n:Loc.Source}}"/>
+                    <PasswordBox x:Name="ApiTokenBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
+                    <TextBlock Text="{Binding [prefs.mediaDirectory], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBox x:Name="MediaDirBox" Margin="0,4,0,8" Width="320" HorizontalAlignment="Left"/>
+                </StackPanel>
+                <TextBlock x:Name="ConnectionHelpBlock" Margin="0,0,0,16" TextWrapping="Wrap" Foreground="{DynamicResource DimForeground}"/>
                 <TextBlock Text="{Binding [prefs.help], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold"/>
                 <TextBlock Margin="0,8,0,16">
                     <Hyperlink x:Name="DocsLink"

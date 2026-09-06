@@ -263,9 +263,10 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
         return status_envelope(&request_id, "PERMISSION_DENIED", "role too low");
     }
     let result = match request.payload {
-        Some(request::Payload::GetCapabilities(_)) => state.control.snapshot().map(|snap| {
-            cap_response(snap, request_id.clone())
-        }),
+        Some(request::Payload::GetCapabilities(_)) => state
+            .control
+            .snapshot()
+            .map(|snap| cap_response(snap, request_id.clone())),
         Some(request::Payload::GetSnapshot(_)) | Some(request::Payload::Subscribe(_)) => state
             .control
             .snapshot()
@@ -321,7 +322,11 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                     dip_b: auto.dip_b,
                     dip_a: if auto.dip_a <= 0.0 { 1.0 } else { auto.dip_a },
                     incoming: Incoming::Preview,
-                    softness: if auto.softness <= 0.0 { 0.02 } else { auto.softness },
+                    softness: if auto.softness <= 0.0 {
+                        0.02
+                    } else {
+                        auto.softness
+                    },
                     param: auto.param,
                 },
             )
@@ -476,7 +481,9 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                 .snapshot()
                 .map(|snap| proto_snapshot(snap, request_id.clone()))
         }
-        Some(request::Payload::Shutdown(_)) => exec_cmd(state, instance, &request_id, Command::Shutdown),
+        Some(request::Payload::Shutdown(_)) => {
+            exec_cmd(state, instance, &request_id, Command::Shutdown)
+        }
         None => Err(ControlError::invalid("empty request")),
     };
     match result {
@@ -497,12 +504,7 @@ fn begin_upload(
         .as_ref()
         .ok_or_else(|| ControlError::unavailable("media storage is not configured"))?;
     let kind = parse_kind(&begin.media_kind)?;
-    let upload_id = media.begin(
-        &begin.file_name,
-        kind,
-        begin.size_bytes,
-        &begin.sha256_hex,
-    )?;
+    let upload_id = media.begin(&begin.file_name, kind, begin.size_bytes, &begin.sha256_hex)?;
     if let Ok(mut pending) = state.pending.lock() {
         pending.insert(
             upload_id.clone(),
@@ -848,15 +850,24 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         let events_a = a.take_events();
         let events_b = b.take_events();
-        assert!(events_a.iter().any(|kind| kind == "LiveChanged" || kind == "CommandApplied"));
-        assert!(events_b.iter().any(|kind| kind == "LiveChanged" || kind == "CommandApplied"));
+        assert!(
+            events_a
+                .iter()
+                .any(|kind| kind == "LiveChanged" || kind == "CommandApplied")
+        );
+        assert!(
+            events_b
+                .iter()
+                .any(|kind| kind == "LiveChanged" || kind == "CommandApplied")
+        );
         task.abort();
     }
 
     #[tokio::test]
     async fn upload_commit_adds_still_input() {
         let dir = std::env::temp_dir().join(format!("eiviz-upload-{}", uuid::Uuid::new_v4()));
-        let store = crate::FileMediaStorage::new(crate::MediaStorageConfig::new(dir.clone())).unwrap();
+        let store =
+            crate::FileMediaStorage::new(crate::MediaStorageConfig::new(dir.clone())).unwrap();
         let control = ready_control();
         let (bind, task) = listen(
             ServerConfig {

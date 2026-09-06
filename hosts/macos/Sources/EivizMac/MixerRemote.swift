@@ -96,6 +96,45 @@ enum MixerRemote {
         encode(["kind": "deleteScene", "id": NSNumber(value: id)])
     }
 
+    static func upsertMultiview(_ layout: MultiviewLayout) -> String {
+        let tiles: [[String: Any]] = layout.tiles.map { tile in
+            [
+                "kind": tile.kind.rawValue,
+                "sourceId": NSNumber(value: tile.sourceId),
+                "labelFollow": tile.labelFollow,
+                "label": tile.label
+            ]
+        }
+        var body: [String: Any] = [
+            "id": NSNumber(value: layout.id),
+            "name": layout.name,
+            "previewUnitId": NSNumber(value: layout.previewUnitId),
+            "programUnitId": NSNumber(value: layout.programUnitId),
+            "presentInterval": layout.presentInterval,
+            "tiles": tiles,
+            "template": layout.template.rawValue,
+            "previewLabelFollow": layout.previewLabelFollow,
+            "previewLabel": layout.previewLabel,
+            "programLabelFollow": layout.programLabelFollow,
+            "programLabel": layout.programLabel,
+            "alwaysOnTop": layout.alwaysOnTop
+        ]
+        if let anchor = layout.labelAnchor {
+            body["labelAnchor"] = anchor.rawValue
+        }
+        if let size = layout.labelSize {
+            body["labelSize"] = size
+        }
+        if let unit = layout.labelUnit {
+            body["labelUnit"] = unit.rawValue
+        }
+        encode(["kind": "upsertMultiview", "layout": body])
+    }
+
+    static func deleteMultiview(_ id: UInt64) -> String {
+        encode(["kind": "deleteMultiview", "id": NSNumber(value: id)])
+    }
+
     static func setOverlaySlot(unitId: UInt64, index: UInt32, slot: OverlaySlot) -> String {
         let wire: [String: Any] = [
             "sceneGpuId": NSNumber(value: slot.sceneGpuId),

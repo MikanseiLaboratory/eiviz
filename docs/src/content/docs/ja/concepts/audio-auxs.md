@@ -17,4 +17,4 @@ FollowはPreview/ProgramとTバーのmixに追従します。Independentは映�
 Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。  
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。
 
-デバイス側の詳細は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご参照ください。
+デバイス側は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。

@@ -32,6 +32,57 @@ impl MediaStorageConfig {
     }
 }
 
+/// Default host directory for uploaded Still/Video files.
+pub fn default_media_directory() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            if !local.is_empty() {
+                return PathBuf::from(local).join("eiviz").join("media");
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("eiviz")
+                .join("media");
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            if !xdg.is_empty() {
+                return PathBuf::from(xdg).join("eiviz").join("media");
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("eiviz")
+                .join("media");
+        }
+    }
+    PathBuf::from("eiviz-media")
+}
+
+/// Resolve an explicit path, then `EIVIZ_MEDIA_DIRECTORY`, then the OS default.
+pub fn resolve_media_directory(explicit: &str) -> PathBuf {
+    let trimmed = explicit.trim();
+    if !trimmed.is_empty() {
+        return PathBuf::from(trimmed);
+    }
+    std::env::var("EIVIZ_MEDIA_DIRECTORY")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_media_directory)
+}
+
 pub trait MediaStorage: Send + Sync {
     fn begin(
         &self,
@@ -108,7 +159,11 @@ impl MediaStorage for FileMediaStorage {
             return Err(ControlError::unavailable("too many uploads"));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let staging = inner.config.root.join(".staging").join(format!("{id}{ext}"));
+        let staging = inner
+            .config
+            .root
+            .join(".staging")
+            .join(format!("{id}{ext}"));
         File::create(&staging).map_err(|error| ControlError::io(error.to_string()))?;
         inner.uploads.push(Upload {
             id: id.clone(),
@@ -341,5 +396,15 @@ mod tests {
             .collect();
         assert!(files.is_empty());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_media_directory_uses_eiviz_media() {
+        let path = super::default_media_directory();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("media")
+        );
+        assert!(path.components().any(|part| part.as_os_str() == "eiviz"));
     }
 }

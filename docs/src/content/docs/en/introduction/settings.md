@@ -105,7 +105,7 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Web API
 
-vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen.
+vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen. See [eiviz API](/eiviz/en/developers/api/) for the protocol.
 
 - HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
@@ -142,15 +142,11 @@ Dark, Light, or Follow OS.
 
 ### Connection
 
-Local mixer, or remote eiviz over WebSocket. Remote URL and token are stored separately (Windows Credential Manager / macOS Keychain). Changing connection mode restarts the mixer.
-
-Remote Settings is view-only. Language, theme, and connection stay editable on the client.
-
-Remote Preview/Program/Multiview video uses only already-enabled NDI or OMT outputs (`MuPreview` / `MuProgram` / `Multiview`). eiviz does not create extra outputs. Missing or ambiguous outputs show Unavailable.
+`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Steps and video handling are in [Remote connection](/eiviz/en/features/remote/).
 
 ### API listen (host)
 
-Bind address, listen token, and uploaded media directory. Non-loopback bind requires the token. Still/Video added from a remote client land in this directory.
+Bind address, listen token, and uploaded media directory. Non-loopback bind requires the token. When unset, the directory is `%LOCALAPPDATA%\eiviz\media` on Windows, or the equivalent OS path. Still/Video added from a remote client land in this directory.
 
 ### Help
 

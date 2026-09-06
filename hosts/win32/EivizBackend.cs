@@ -98,6 +98,42 @@ internal static class MutationJson
     public static string DeleteScene(ulong id) =>
         JsonSerializer.Serialize(new { kind = "deleteScene", id }, Json);
 
+    public static string UpsertMultiview(MultiviewLayout layout)
+    {
+        layout.EnsureTiles();
+        return JsonSerializer.Serialize(new
+        {
+            kind = "upsertMultiview",
+            layout = new
+            {
+                id = layout.Id,
+                name = layout.Name,
+                previewUnitId = layout.PreviewUnitId,
+                programUnitId = layout.ProgramUnitId,
+                presentInterval = layout.PresentInterval,
+                tiles = layout.Tiles.Select(tile => new
+                {
+                    kind = tile.Kind.ToString(),
+                    sourceId = tile.SourceId,
+                    labelFollow = tile.LabelFollow,
+                    label = tile.Label ?? ""
+                }),
+                template = layout.Template.ToString(),
+                previewLabelFollow = layout.PreviewLabelFollow,
+                previewLabel = layout.PreviewLabel ?? "",
+                programLabelFollow = layout.ProgramLabelFollow,
+                programLabel = layout.ProgramLabel ?? "",
+                labelAnchor = layout.LabelAnchor?.ToString(),
+                labelSize = layout.LabelSize,
+                labelUnit = layout.LabelUnit?.ToString(),
+                alwaysOnTop = layout.AlwaysOnTop
+            }
+        }, Json);
+    }
+
+    public static string DeleteMultiview(ulong id) =>
+        JsonSerializer.Serialize(new { kind = "deleteMultiview", id }, Json);
+
     private sealed class InputWire
     {
         public ulong Id { get; set; }
@@ -580,6 +616,7 @@ internal sealed class RemoteVideoPresenter
             host.RetargetMonitor(monitorId, id);
         else
         {
+            // Keep the HWND swapchain in monitor mode so Unavailable can paint.
             host.ReleaseNative();
             host.IsMonitor = true;
             host.MonitorId = 0;

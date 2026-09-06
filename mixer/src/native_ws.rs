@@ -71,17 +71,10 @@ pub fn configure_owned(
         return ERR_INVALID_ARGUMENT;
     }
     let addr = SocketAddr::new(ip, port);
-    let media_path = if media_directory.is_empty() {
-        std::env::var("EIVIZ_MEDIA_DIRECTORY")
-            .ok()
-            .filter(|value| !value.is_empty())
-    } else {
-        Some(media_directory.to_string())
-    };
-    let media = media_path.and_then(|path| {
-        eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(path.into())).ok()
-    })
-    .map(|store| std::sync::Arc::new(store) as std::sync::Arc<dyn eiviz_api::MediaStorage>);
+    let media_path = eiviz_api::resolve_media_directory(media_directory);
+    let media = eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(media_path))
+        .ok()
+        .map(|store| std::sync::Arc::new(store) as std::sync::Arc<dyn eiviz_api::MediaStorage>);
     let config = ServerConfig {
         bind: addr,
         auth,

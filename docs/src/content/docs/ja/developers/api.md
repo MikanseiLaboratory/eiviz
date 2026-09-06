@@ -3,7 +3,7 @@ title: eiviz API
 description: eiviz固有の制御APIとheadless運用
 ---
 
-eivizの制御面はMixer内の`ControlService`が正本です。vMix互換HTTP/TCP、ProtobufのWebSocket、`eivizctl`はいずれも同じディスパッチャへ変換されます。vMix互換の待ち受けは[互換API](/eiviz/ja/developers/compatibility/)です。このページはeiviz固有のProtobuf面です。
+eivizの制御面はMixer内の`ControlService`が担当しています。vMix互換HTTP/TCP、ProtobufのWebSocket、`eivizctl`はいずれも同じディスパッチャへ変換されます。vMix互換の待ち受けは[互換API](/eiviz/ja/developers/compatibility/)をご確認ください。このページはeiviz固有のProtobuf面です。
 
 ## 公開契約
 
@@ -30,8 +30,8 @@ eivizの制御面はMixer内の`ControlService`が正本です。vMix互換HTTP/
 | `VideoPlay`/`VideoLoop`/`VideoSeek` | operate | ビデオInput |
 | `AudioSetInput`/`AudioSetBus` | operate | 音声 |
 | `SnapshotCmd`/`Discover` | operate | スクリーンショットと発見 |
-| `ReplaceSession` | configure | 正本Documentの置換（`expected_revision`でlost updateを拒否） |
-| `MutateSession` | configure | 型付きDocument変更（`expected_revision`でlost updateを拒否。自動マージしません） |
+| `ReplaceSession` | configure | 接続先Documentの置換（`expected_revision`でlost updateを拒否） |
+| `MutateSession` | configure | 型付きDocument変更（`expected_revision`が一致しない変更は拒否。クライアントは最新を読み直す） |
 | `BeginUpload`/`WriteChunk`/`CommitUpload`/`AbortUpload` | configure | ホスト保存先へのメディアupload。commit時だけStill/Video Inputを原子的に追加 |
 | `Shutdown` | admin | graceful停止 |
 
@@ -41,9 +41,7 @@ CutでInputを指定した場合はPreviewを変えません。未指定ならPr
 
 ## リモートGUI
 
-WindowsとmacOSは環境設定からリモートクライアントとして接続できます。状態の正本はリモート側のセッションです。クライアントの設定は確認専用で、言語・テーマ・接続先などクライアント固有の環境設定だけ編集できます。Input Previewとシーンサムネは使いません。Preview/Program/Multiview映像は、すでに有効なNDIまたはOMT出力のうち`MuPreview`/`MuProgram`/`Multiview`だけを受信します。eivizは出力を追加作成しません。該当なし、または複数一致のときはUnavailableと出します。
-
-Still/Videoの追加はクライアント側でファイルを選び、ホストのメディア保存先へuploadしたあとInputへ載せます。パストラバーサル、上書き、symlink/junction先は拒否します。
+オペレーター向けの接続手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。Still/Videoは`BeginUpload`から`CommitUpload`まで、ホストのメディア保存先へ保存したあとInputを足します。パストラバーサル、上書き、symlink/junction先は拒否します。
 
 ## エラー
 
@@ -74,6 +72,6 @@ eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 
 - token rotation: headlessは`EIVIZ_API_TOKEN`を差し替え、GUIは環境設定の待ち受けtokenを変えて再起動します
 - loopback以外へbindする場合は認証必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSが必要なら手前で終端してください
-- `--media-directory`/`EIVIZ_MEDIA_DIRECTORY`がホストのupload保存先です
+- `--media-directory`/`EIVIZ_MEDIA_DIRECTORY`がホストのupload保存先です。未指定時はOSのローカルアプリデータ配下`eiviz/media`です
 - ログはstderrの構造化可能なテキストです
 - バックアップはセッションJSONを`eiviz-headless canonicalize`で正規化して保管します

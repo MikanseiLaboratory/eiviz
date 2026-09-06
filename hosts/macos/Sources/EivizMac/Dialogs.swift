@@ -32,7 +32,7 @@ struct SettingsView: View {
                     else if category == 5 { webApi }
                     else { advanced }
                 }
-                .disabled(mixer.isRemote)
+                .disabled(mixer.isRemote && category != 3)
                 Spacer()
                 HStack {
                     Spacer()
@@ -549,7 +549,6 @@ struct PreferencesView: View {
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
     @State private var originalRenderer = AppPrefs.shared.renderer
-    @State private var originalConnection = AppPrefs.shared.connectionMode
     @State private var originalRemoteUrl = AppPrefs.shared.remoteUrl
     @State private var renderer = AppPrefs.shared.renderer
     @State private var remoteToken = KeychainStore.load(account: AppPrefs.shared.remoteUrl)
@@ -580,27 +579,24 @@ struct PreferencesView: View {
             Text(L10n.t("prefs.rendererHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(L10n.t("prefs.connection"))
-            Picker("", selection: $prefs.connectionMode) {
-                Text(L10n.t("prefs.connectionLocal")).tag(HostConnectionMode.local)
-                Text(L10n.t("prefs.connectionRemote")).tag(HostConnectionMode.remote)
+            if mixer.isRemote {
+                Text(L10n.t("prefs.remoteUrl"))
+                mixerTextField($prefs.remoteUrl, placeholder: "ws://127.0.0.1:9400")
+                Text(L10n.t("prefs.remoteToken"))
+                SecureField("", text: $remoteToken)
+                    .frame(width: 320)
+            } else {
+                Text(L10n.t("prefs.apiBind"))
+                mixerTextField($prefs.nativeApiBind, placeholder: "127.0.0.1")
+                Text(L10n.t("prefs.apiPort"))
+                mixerUintField($prefs.nativeApiPort)
+                Text(L10n.t("prefs.apiToken"))
+                SecureField("", text: $listenToken)
+                    .frame(width: 320)
+                Text(L10n.t("prefs.mediaDirectory"))
+                mixerTextField($prefs.mediaDirectory, placeholder: AppPrefs.defaultMediaDirectory)
             }
-            .frame(width: 280)
-            Text(L10n.t("prefs.remoteUrl"))
-            mixerTextField($prefs.remoteUrl, placeholder: "ws://127.0.0.1:9400")
-            Text(L10n.t("prefs.remoteToken"))
-            SecureField("", text: $remoteToken)
-                .frame(width: 320)
-            Text(L10n.t("prefs.apiBind"))
-            mixerTextField($prefs.nativeApiBind, placeholder: "127.0.0.1")
-            Text(L10n.t("prefs.apiPort"))
-            mixerUintField($prefs.nativeApiPort)
-            Text(L10n.t("prefs.apiToken"))
-            SecureField("", text: $listenToken)
-                .frame(width: 320)
-            Text(L10n.t("prefs.mediaDirectory"))
-            mixerTextField($prefs.mediaDirectory, placeholder: "")
-            Text(L10n.t("prefs.connectionHelp"))
+            Text(L10n.t(mixer.isRemote ? "prefs.remoteHelp" : "prefs.hostHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             Text(L10n.t("prefs.help")).fontWeight(.bold)
@@ -619,13 +615,13 @@ struct PreferencesView: View {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
                     prefs.renderer = renderer
+                    prefs.mediaDirectory = prefs.resolvedMediaDirectory
                     KeychainStore.save(account: prefs.remoteUrl, token: remoteToken)
                     KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
-                    let connectionChanged = prefs.connectionMode != originalConnection
-                        || prefs.remoteUrl != originalRemoteUrl
-                    if renderer != originalRenderer || connectionChanged {
+                    let remoteChanged = mixer.isRemote && prefs.remoteUrl != originalRemoteUrl
+                    if renderer != originalRenderer || remoteChanged {
                         mixer.recreateMixer()
                     }
                     dismiss()
@@ -648,7 +644,6 @@ struct PreferencesView: View {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
             originalRenderer = prefs.renderer
-            originalConnection = prefs.connectionMode
             originalRemoteUrl = prefs.remoteUrl
             renderer = prefs.renderer
             remoteToken = KeychainStore.load(account: prefs.remoteUrl)

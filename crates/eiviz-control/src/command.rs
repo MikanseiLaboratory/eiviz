@@ -196,6 +196,12 @@ pub enum SessionMutation {
         video_loop: bool,
         tags: Vec<String>,
     },
+    UpsertMultiview {
+        layout: Box<crate::session::MultiviewDto>,
+    },
+    DeleteMultiview {
+        id: u64,
+    },
 }
 
 impl SessionMutation {
@@ -210,6 +216,8 @@ impl SessionMutation {
             Self::DeleteUnit { .. } => "DeleteUnit",
             Self::SetOverlaySlot { .. } => "SetOverlaySlot",
             Self::AddMediaInput { .. } => "AddMediaInput",
+            Self::UpsertMultiview { .. } => "UpsertMultiview",
+            Self::DeleteMultiview { .. } => "DeleteMultiview",
         }
     }
 }

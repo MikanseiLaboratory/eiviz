@@ -16,4 +16,4 @@ Multiviewを映像ソースに選択した場合、音声の送出は出来ま�
 
 各出力毎に1スレッド割り当てられます。  
 Decklinkなどのハードウェア出力は現在実装中です。  
-送出の詳細は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
+送出は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご確認ください。

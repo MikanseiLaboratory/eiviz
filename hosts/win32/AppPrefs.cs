@@ -35,7 +35,7 @@ internal sealed class AppPrefs
     public string NativeApiBind { get; set; } = "127.0.0.1";
     public uint NativeApiPort { get; set; } = 9400;
     public string NativeApiRole { get; set; } = "admin";
-    public string MediaDirectory { get; set; } = "";
+    public string MediaDirectory { get; set; } = DefaultMediaDirectory;
     public AppLanguage Language { get; set; } = DefaultLanguage();
     public AppThemeMode Theme { get; set; } = AppThemeMode.Dark;
     public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;
@@ -46,7 +46,17 @@ internal sealed class AppPrefs
     public static AppPrefs Current { get; private set; } = Load();
 
     public static string StorePath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "eiviz", "prefs.json");
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "eiviz",
+            HostProcess.IsRemote ? "remote-prefs.json" : "prefs.json");
+
+    public static string DefaultMediaDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "eiviz", "media");
+
+    [JsonIgnore]
+    public string ResolvedMediaDirectory =>
+        string.IsNullOrWhiteSpace(MediaDirectory) ? DefaultMediaDirectory : MediaDirectory.Trim();
 
     public static AppPrefs Load()
     {
@@ -60,6 +70,8 @@ internal sealed class AppPrefs
                     loaded.RecentSessions = Clean(loaded.RecentSessions, RecentCap);
                     loaded.RecentStills = Clean(loaded.RecentStills, InputCap);
                     loaded.RecentVideos = Clean(loaded.RecentVideos, InputCap);
+                    if (string.IsNullOrWhiteSpace(loaded.MediaDirectory))
+                        loaded.MediaDirectory = DefaultMediaDirectory;
                     return loaded;
                 }
             }

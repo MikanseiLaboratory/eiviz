@@ -38,10 +38,29 @@ final class AppPrefs: ObservableObject {
     @Published var mediaDirectory: String
     @Published var localeRevision = 0
 
+    static var defaultMediaDirectory: String {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return root.appendingPathComponent("eiviz", isDirectory: true)
+            .appendingPathComponent("media", isDirectory: true).path
+    }
+
+    var resolvedMediaDirectory: String {
+        let trimmed = mediaDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.defaultMediaDirectory : trimmed
+    }
+
     private static var storeURL: URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        return root.appendingPathComponent("eiviz", isDirectory: true).appendingPathComponent("prefs.json")
+        let name = isRemoteProcess ? "remote-prefs.json" : "prefs.json"
+        return root.appendingPathComponent("eiviz", isDirectory: true).appendingPathComponent(name)
+    }
+
+    static var isRemoteProcess: Bool {
+        let name = ProcessInfo.processInfo.processName
+        return name.caseInsensitiveCompare("eiviz-remote") == .orderedSame
+            || name.caseInsensitiveCompare("Eiviz.Remote") == .orderedSame
     }
 
     private init() {
@@ -75,7 +94,7 @@ final class AppPrefs: ObservableObject {
         dto.nativeApiBind = nativeApiBind
         dto.nativeApiPort = nativeApiPort
         dto.nativeApiRole = nativeApiRole
-        dto.mediaDirectory = mediaDirectory
+        dto.mediaDirectory = resolvedMediaDirectory
         do {
             try FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(dto).write(to: Self.storeURL, options: .atomic)
@@ -135,7 +154,7 @@ final class AppPrefs: ObservableObject {
         var nativeApiBind: String = "127.0.0.1"
         var nativeApiPort: UInt32 = 9400
         var nativeApiRole: String = "admin"
-        var mediaDirectory: String = ""
+        var mediaDirectory: String = AppPrefs.defaultMediaDirectory
 
         init() {}
 
@@ -153,7 +172,11 @@ final class AppPrefs: ObservableObject {
             nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"
             nativeApiPort = try container.decodeIfPresent(UInt32.self, forKey: .nativeApiPort) ?? 9400
             nativeApiRole = try container.decodeIfPresent(String.self, forKey: .nativeApiRole) ?? "admin"
-            mediaDirectory = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
+            mediaDirectory = {
+                let value = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? AppPrefs.defaultMediaDirectory : trimmed
+            }()
         }
     }
 }

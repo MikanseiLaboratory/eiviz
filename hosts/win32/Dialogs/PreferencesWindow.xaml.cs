@@ -11,10 +11,9 @@ public partial class PreferencesWindow : Window
     private readonly AppLanguage _originalLanguage = AppPrefs.Current.Language;
     private readonly AppThemeMode _originalTheme = AppPrefs.Current.Theme;
     private readonly GpuRenderer _originalRenderer = AppPrefs.Current.Renderer;
+    private readonly string _originalRemoteUrl = AppPrefs.Current.RemoteUrl;
     private bool _accepted;
     private bool _suppress;
-
-    private readonly HostConnectionMode _originalConnection = AppPrefs.Current.ConnectionMode;
 
     public PreferencesWindow()
     {
@@ -23,13 +22,15 @@ public partial class PreferencesWindow : Window
         SelectTag(LanguageBox, AppPrefs.Current.Language.ToString());
         SelectTag(ThemeBox, AppPrefs.Current.Theme.ToString());
         SelectTag(RendererBox, AppPrefs.Current.Renderer.ToString());
-        SelectTag(ConnectionBox, AppPrefs.Current.ConnectionMode.ToString());
+        RemoteFields.Visibility = HostProcess.IsRemote ? Visibility.Visible : Visibility.Collapsed;
+        HostListenFields.Visibility = HostProcess.IsRemote ? Visibility.Collapsed : Visibility.Visible;
         RemoteUrlBox.Text = AppPrefs.Current.RemoteUrl;
         RemoteTokenBox.Password = CredentialStore.Load(AppPrefs.Current.RemoteUrl);
         ApiBindBox.Text = AppPrefs.Current.NativeApiBind;
         ApiPortBox.Text = AppPrefs.Current.NativeApiPort.ToString();
         ApiTokenBox.Password = CredentialStore.Load("listen");
-        MediaDirBox.Text = AppPrefs.Current.MediaDirectory;
+        MediaDirBox.Text = AppPrefs.Current.ResolvedMediaDirectory;
+        ConnectionHelpBlock.Text = Loc.T(HostProcess.IsRemote ? "prefs.remoteHelp" : "prefs.hostHelp");
         _suppress = false;
         AboutVersion.Text = $"Version {HostVersion.Display}";
         BindDocsLink();
@@ -41,8 +42,8 @@ public partial class PreferencesWindow : Window
     }
 
     public bool RendererChanged => AppPrefs.Current.Renderer != _originalRenderer;
-    public bool ConnectionChanged => AppPrefs.Current.ConnectionMode != _originalConnection
-        || AppPrefs.Current.RemoteUrl != RemoteUrlBox.Text.Trim();
+    public bool ConnectionChanged =>
+        HostProcess.IsRemote && AppPrefs.Current.RemoteUrl != _originalRemoteUrl;
 
     private void PrefsChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -55,29 +56,28 @@ public partial class PreferencesWindow : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         Apply(ReadLanguage(), ReadTheme(), ReadRenderer());
-        AppPrefs.Current.ConnectionMode = ReadConnection();
-        AppPrefs.Current.RemoteUrl = string.IsNullOrWhiteSpace(RemoteUrlBox.Text)
-            ? "ws://127.0.0.1:9400"
-            : RemoteUrlBox.Text.Trim();
-        CredentialStore.Save(AppPrefs.Current.RemoteUrl, RemoteTokenBox.Password);
-        AppPrefs.Current.NativeApiBind = string.IsNullOrWhiteSpace(ApiBindBox.Text)
-            ? "127.0.0.1"
-            : ApiBindBox.Text.Trim();
-        if (uint.TryParse(ApiPortBox.Text, out var port) && port is > 0 and <= 65535)
-            AppPrefs.Current.NativeApiPort = port;
-        CredentialStore.Save("listen", ApiTokenBox.Password);
-        AppPrefs.Current.MediaDirectory = MediaDirBox.Text.Trim();
+        if (HostProcess.IsRemote)
+        {
+            AppPrefs.Current.RemoteUrl = string.IsNullOrWhiteSpace(RemoteUrlBox.Text)
+                ? "ws://127.0.0.1:9400"
+                : RemoteUrlBox.Text.Trim();
+            CredentialStore.Save(AppPrefs.Current.RemoteUrl, RemoteTokenBox.Password);
+        }
+        else
+        {
+            AppPrefs.Current.NativeApiBind = string.IsNullOrWhiteSpace(ApiBindBox.Text)
+                ? "127.0.0.1"
+                : ApiBindBox.Text.Trim();
+            if (uint.TryParse(ApiPortBox.Text, out var port) && port is > 0 and <= 65535)
+                AppPrefs.Current.NativeApiPort = port;
+            CredentialStore.Save("listen", ApiTokenBox.Password);
+            AppPrefs.Current.MediaDirectory = string.IsNullOrWhiteSpace(MediaDirBox.Text)
+                ? AppPrefs.DefaultMediaDirectory
+                : MediaDirBox.Text.Trim();
+        }
         AppPrefs.Current.Save();
         _accepted = true;
         DialogResult = true;
-    }
-
-    private HostConnectionMode ReadConnection()
-    {
-        if (ConnectionBox.SelectedItem is ComboBoxItem item && item.Tag is string tag
-            && Enum.TryParse<HostConnectionMode>(tag, out var mode))
-            return mode;
-        return AppPrefs.Current.ConnectionMode;
     }
 
     private AppLanguage ReadLanguage()

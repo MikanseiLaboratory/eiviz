@@ -120,6 +120,9 @@ jobs:
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Host.exe")) {
             throw "Published output is missing Eiviz.Host.exe"
           }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Remote.exe")) {
+            throw "Published output is missing Eiviz.Remote.exe"
+          }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_mixer.dll")) {
             throw "Published output is missing eiviz_mixer.dll"
           }
@@ -248,6 +251,7 @@ jobs:
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Apple Silicon (arm64) Metal preview host.
 
@@ -255,7 +259,9 @@ jobs:
             cd eiviz-*-macos-arm64
             xattr -cr .
             open eiviz-mac.app
+            open eiviz-remote.app
 
+          eiviz-mac.app is the mixer. eiviz-remote.app operates another eiviz.
           The .app bundle is required for NDI® discovery/send (local network + Bonjour).
           The loose ./eiviz-mac binary still works for local preview.
 
@@ -351,6 +357,7 @@ jobs:
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
           Intel (x86_64 / amd64) Metal preview host.
 
@@ -358,7 +365,9 @@ jobs:
             cd eiviz-*-macos-x64
             xattr -cr .
             open eiviz-mac.app
+            open eiviz-remote.app
 
+          eiviz-mac.app is the mixer. eiviz-remote.app operates another eiviz.
           The .app bundle is required for NDI® discovery/send (local network + Bonjour).
           The loose ./eiviz-mac binary still works for local preview.
 

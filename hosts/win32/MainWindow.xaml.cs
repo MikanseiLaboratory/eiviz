@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = Loc.T(HostProcess.IsRemote ? "app.titleRemote" : "app.title");
         BindInputList();
         RebuildInputTabs();
         RebuildSceneTabs();
@@ -1109,14 +1110,39 @@ public partial class MainWindow : Window
 
     internal void OpenNewMultiview(ulong unitId)
     {
-        if (App.IsRemote)
-            return;
         if (!FlipBudget.TryOpen(1, this))
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
+        if (App.IsRemote)
+        {
+            var draft = DraftMultiview(unit.Id);
+            if (!RemoteMutate(MutationJson.UpsertMultiview(draft), Loc.T("chrome.multiview")))
+                return;
+            var added = _session.Multiviews.FirstOrDefault(item => item.Id == draft.Id) ?? draft;
+            OpenMultiviewWindow(added);
+            return;
+        }
         var layout = _session.AddMultiview(unitId: unit.Id);
         MixerApply.PushMultiview(layout, unit.Width, unit.Height);
         OpenMultiviewWindow(layout);
+    }
+
+    private MultiviewLayout DraftMultiview(ulong unitId)
+    {
+        var layout = new MultiviewLayout
+        {
+            Id = _session.NextMultiviewId,
+            Name = $"Multiview {_session.NextMultiviewId}",
+            PreviewUnitId = unitId,
+            ProgramUnitId = unitId,
+            LabelAnchor = _session.Settings.MultiviewLabelAnchor,
+            LabelSize = _session.Settings.MultiviewLabelSize,
+            LabelUnit = _session.Settings.MultiviewLabelUnit,
+            AlwaysOnTop = true
+        };
+        layout.EnsureTiles();
+        layout.SeedDefaultBuses(unitId);
+        return layout;
     }
 
     internal void OpenMultiviewWindow(MultiviewLayout layout)
@@ -2283,12 +2309,23 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool TryRemoteMutate(string json, string title)
+    internal bool RemoteMutate(string json, string title)
     {
         if (!App.IsRemote || Application.Current is not App app)
             return false;
         if (!app.Backend.Mutate(json, app.Backend.Revision, out var error))
+        {
             MessageBox.Show(this, error, title);
+            return false;
+        }
+        return true;
+    }
+
+    private bool TryRemoteMutate(string json, string title)
+    {
+        if (!App.IsRemote)
+            return false;
+        RemoteMutate(json, title);
         return true;
     }
 

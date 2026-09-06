@@ -3,7 +3,7 @@ title: eiviz API
 description: Native control API and headless operations
 ---
 
-The control plane lives in Mixer as `ControlService`. vMix-compatible HTTP/TCP, Protobuf WebSocket, and `eivizctl` are thin adapters over the same dispatcher. vMix listen details are in [Compatibility APIs](/eiviz/en/developers/compatibility/). This page is the native Protobuf surface.
+The control plane is handled by `ControlService` inside the mixer. vMix-compatible HTTP/TCP, Protobuf WebSocket, and `eivizctl` are thin adapters over the same dispatcher. vMix listen details are in [Compatibility APIs](/eiviz/en/developers/compatibility/). This page is the native Protobuf surface.
 
 ## Contract
 
@@ -30,8 +30,8 @@ Roles are `read` / `operate` / `configure` / `admin`. The server clamps the gran
 | `VideoPlay` / `VideoLoop` / `VideoSeek` | operate | Video inputs |
 | `AudioSetInput` / `AudioSetBus` | operate | Audio |
 | `SnapshotCmd` / `Discover` | operate | Still capture and discovery |
-| `ReplaceSession` | configure | Canonical Document replace (`expected_revision` rejects lost updates) |
-| `MutateSession` | configure | Typed document mutation (`expected_revision` rejects lost updates; no silent merge) |
+| `ReplaceSession` | configure | Replace the destination Document (`expected_revision` rejects lost updates) |
+| `MutateSession` | configure | Typed document mutation (mismatched `expected_revision` is rejected; the client reloads) |
 | `BeginUpload` / `WriteChunk` / `CommitUpload` / `AbortUpload` | configure | Host-directory media upload; commit adds a Still/Video Input atomically |
 | `Shutdown` | admin | Graceful stop |
 
@@ -41,9 +41,7 @@ A lagged subscriber receives `Lag` and must take a new snapshot, then resume fro
 
 ## Remote GUI
 
-Windows and macOS can connect as a remote client from Preferences. The remote host session is the source of truth. Settings on the client is view-only except client-local Preferences (language, theme, connection). Input Preview and scene thumbnails are off. Preview/Program/Multiview video uses only already-enabled NDI or OMT outputs named as `MuPreview` / `MuProgram` / `Multiview`. eiviz does not create extra outputs. If none exists, or more than one matches, the surface shows Unavailable.
-
-Upload of Still/Video picks a file on the client, stores it in the host media directory, then adds an Input. Path traversal, overwrite, and symlink/junction targets are rejected.
+Operator steps are in [Remote connection](/eiviz/en/features/remote/). Still/Video moves through `BeginUpload` … `CommitUpload` into the host media directory, then adds an Input. Path traversal, overwrite, and symlink/junction targets are rejected.
 
 ## Errors
 
@@ -74,6 +72,6 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 
 - Rotate tokens by changing `EIVIZ_API_TOKEN` (headless) or the listen token in Preferences, then restart
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
-- `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root
+- `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr
 - Back up canonical session JSON from `eiviz-headless canonicalize`

@@ -37,6 +37,11 @@
     <Copy SourceFiles="$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and '$(NDI_SDK_DIR)' != '' and Exists('$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll')" />
     <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />
     <Error Text="NDI runtime DLL not found. Install the NDI SDK 6 and set NDI_SDK_DIR if it is not in the default location." Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll')" />
+    <Copy SourceFiles="$(PublishDir)Eiviz.Host.exe" DestinationFiles="$(PublishDir)Eiviz.Remote.exe" />
+  </Target>
+
+  <Target Name="CopyRemoteExe" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)Eiviz.Host.exe" DestinationFiles="$(OutDir)Eiviz.Remote.exe" Condition="Exists('$(OutDir)Eiviz.Host.exe')" />
   </Target>
 
   <ItemGroup>

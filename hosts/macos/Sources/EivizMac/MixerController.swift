@@ -77,7 +77,7 @@ final class MixerController: ObservableObject {
 
     func boot() {
         guard !booted else { return }
-        isRemote = AppPrefs.shared.connectionMode == .remote
+        isRemote = AppPrefs.isRemoteProcess
         guard mixer_ping() == 0x4549_5649 else {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
@@ -225,7 +225,7 @@ final class MixerController: ObservableObject {
         let enabled = prefs.nativeApiEnabled
         let token = KeychainStore.load(account: "listen")
         let role = prefs.nativeApiRole.isEmpty ? "admin" : prefs.nativeApiRole
-        let media = prefs.mediaDirectory
+        let media = prefs.resolvedMediaDirectory
         let code = MixerFFI.withCString(host) { hostPtr in
             MixerFFI.withCString(token) { tokenPtr in
                 MixerFFI.withCString(role) { rolePtr in
@@ -985,11 +985,29 @@ final class MixerController: ObservableObject {
     }
 
     func openNewMultiview() {
-        if isRemote { return }
         guard FlipBudget.tryOpen(1) else { return }
         let unitId = session.settings.defaultMultiviewUnitId == 0
             ? selectedUnitId
             : session.settings.defaultMultiviewUnitId
+        if isRemote {
+            var layout = MultiviewLayout(
+                id: session.nextMultiviewId,
+                name: "Multiview \(session.nextMultiviewId)",
+                previewUnitId: unitId,
+                programUnitId: unitId,
+                labelAnchor: session.settings.multiviewLabelAnchor,
+                labelSize: session.settings.multiviewLabelSize,
+                labelUnit: session.settings.multiviewLabelUnit
+            )
+            layout.ensureTiles()
+            layout.seedDefaultBuses(unitId)
+            if mutateRemote(MixerRemote.upsertMultiview(layout)),
+               let added = session.multiviews.first(where: { $0.id == layout.id })
+            {
+                openMultiviewWindow(added)
+            }
+            return
+        }
         let layout = session.addMultiview(unitId: unitId)
         pushMultiview(layout)
         openMultiviewWindow(layout)
@@ -1099,6 +1117,14 @@ final class MixerController: ObservableObject {
     }
 
     func deleteMultiview(_ id: UInt64) {
+        if isRemote {
+            _ = mutateRemote(MixerRemote.deleteMultiview(id))
+            if openMultiview?.id == id {
+                showMultiview = false
+                openMultiview = nil
+            }
+            return
+        }
         if let layout = session.multiviews.first(where: { $0.id == id }) {
             _ = mixer_destroy_scene(layout.gpuId)
             _ = mixer_detach_monitor(layout.monitorId)
@@ -1111,7 +1137,10 @@ final class MixerController: ObservableObject {
     }
 
     func pushMultiview(_ layout: MultiviewLayout) {
-        if isRemote { return }
+        if isRemote {
+            _ = mutateRemote(MixerRemote.upsertMultiview(layout))
+            return
+        }
         guard let index = session.multiviews.firstIndex(where: { $0.id == layout.id }) else { return }
         var item = layout
         item.ensureTiles()

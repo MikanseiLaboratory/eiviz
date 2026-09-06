@@ -2,7 +2,7 @@
 
 use crate::command::SessionMutation;
 use crate::error::{ControlError, ControlResult};
-use crate::session::{Document, InputDto, InputKind, SceneDto, UnitDto};
+use crate::session::{Document, InputDto, InputKind, MultiviewDto, SceneDto, UnitDto};
 
 pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResult<()> {
     match mutation {
@@ -37,7 +37,9 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
         SessionMutation::UpsertUnit { unit } => upsert_unit(document, *unit),
         SessionMutation::DeleteUnit { id } => {
             if document.units.len() <= 1 {
-                return Err(ControlError::invalid("refusing to delete the last mixing unit"));
+                return Err(ControlError::invalid(
+                    "refusing to delete the last mixing unit",
+                ));
             }
             if !document.units.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("unit {id}")));
@@ -60,23 +62,26 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 .ok_or_else(|| ControlError::not_found(format!("unit {unit_id}")))?;
             let index = index as usize;
             if index >= unit.overlays.len() {
-                unit.overlays.resize(index + 1, crate::session::OverlaySlot {
-                    scene_gpu_id: 0,
-                    x: 0.62,
-                    y: 0.08,
-                    width: 0.32,
-                    height: 0.32,
-                    opacity: 1.0,
-                    z: 0,
-                    enabled: true,
-                    transition_kind: 1,
-                    duration_value: 15,
-                    duration_unit: 0,
-                    audio_follow: true,
-                    source_kind: 0,
-                    locked: false,
-                    hidden: false,
-                });
+                unit.overlays.resize(
+                    index + 1,
+                    crate::session::OverlaySlot {
+                        scene_gpu_id: 0,
+                        x: 0.62,
+                        y: 0.08,
+                        width: 0.32,
+                        height: 0.32,
+                        opacity: 1.0,
+                        z: 0,
+                        enabled: true,
+                        transition_kind: 1,
+                        duration_value: 15,
+                        duration_unit: 0,
+                        audio_follow: true,
+                        source_kind: 0,
+                        locked: false,
+                        hidden: false,
+                    },
+                );
             }
             unit.overlays[index] = *slot;
             Ok(())
@@ -89,7 +94,9 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             tags,
         } => {
             if !matches!(kind, InputKind::Still | InputKind::Video) {
-                return Err(ControlError::invalid("uploaded media must be Still or Video"));
+                return Err(ControlError::invalid(
+                    "uploaded media must be Still or Video",
+                ));
             }
             if host_path.is_empty() {
                 return Err(ControlError::invalid("host path required"));
@@ -136,6 +143,14 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             document.next_input_id = id.saturating_add(1);
             Ok(())
         }
+        SessionMutation::UpsertMultiview { layout } => upsert_multiview(document, *layout),
+        SessionMutation::DeleteMultiview { id } => {
+            if !document.multiviews.iter().any(|item| item.id == id) {
+                return Err(ControlError::not_found(format!("multiview {id}")));
+            }
+            document.multiviews.retain(|item| item.id != id);
+            Ok(())
+        }
     }
 }
 
@@ -178,8 +193,30 @@ fn upsert_unit(document: &mut Document, unit: UnitDto) -> ControlResult<()> {
     Ok(())
 }
 
+fn upsert_multiview(document: &mut Document, layout: MultiviewDto) -> ControlResult<()> {
+    if layout.id == 0 {
+        return Err(ControlError::invalid("multiview id required"));
+    }
+    if let Some(existing) = document
+        .multiviews
+        .iter_mut()
+        .find(|item| item.id == layout.id)
+    {
+        *existing = layout;
+    } else {
+        document.next_multiview_id = document.next_multiview_id.max(layout.id.saturating_add(1));
+        document.multiviews.push(layout);
+    }
+    Ok(())
+}
+
 fn next_input_id(document: &Document) -> u64 {
-    let max = document.inputs.iter().map(|item| item.id).max().unwrap_or(9);
+    let max = document
+        .inputs
+        .iter()
+        .map(|item| item.id)
+        .max()
+        .unwrap_or(9);
     document.next_input_id.max(max.saturating_add(1)).max(10)
 }
 
@@ -260,6 +297,38 @@ mod tests {
         let mut doc = bars();
         let err = apply(&mut doc, SessionMutation::DeleteInput { id: 99 }).unwrap_err();
         assert!(matches!(err, ControlError::NotFound { .. }));
+    }
+
+    #[test]
+    fn upsert_multiview_appends_and_delete_removes() {
+        let mut doc = bars();
+        apply(
+            &mut doc,
+            SessionMutation::UpsertMultiview {
+                layout: Box::new(crate::session::MultiviewDto {
+                    id: 1,
+                    name: "MV 1".into(),
+                    preview_unit_id: 1,
+                    program_unit_id: 1,
+                    present_interval: 3,
+                    tiles: vec![],
+                    template: crate::session::MultiviewTemplate::PreviewProgram8,
+                    preview_label_follow: true,
+                    preview_label: String::new(),
+                    program_label_follow: true,
+                    program_label: String::new(),
+                    label_anchor: None,
+                    label_size: None,
+                    label_unit: None,
+                    always_on_top: true,
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.multiviews.len(), 1);
+        assert_eq!(doc.multiviews[0].name, "MV 1");
+        apply(&mut doc, SessionMutation::DeleteMultiview { id: 1 }).unwrap();
+        assert!(doc.multiviews.is_empty());
     }
 
     #[test]

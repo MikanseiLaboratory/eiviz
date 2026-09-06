@@ -43,6 +43,8 @@ enum L10n {
     }
 
     private static let en: [String: String] = [
+        "app.title": "eiviz",
+        "app.titleRemote": "eiviz Remote",
         "chrome.mixingUnit": "Mixing Unit",
         "chrome.add": "Add",
         "chrome.edit": "Edit",
@@ -106,7 +108,9 @@ enum L10n {
         "prefs.apiPort": "API port",
         "prefs.apiToken": "Listen token",
         "prefs.mediaDirectory": "Uploaded media directory",
-        "prefs.connectionHelp": "Remote mode talks to another eiviz over authenticated ws:// on a trusted LAN or VPN. TLS is not used in this build. Changing connection mode restarts the mixer.",
+        "prefs.connectionHelp": "eiviz-remote connects over authenticated ws:// on a trusted LAN or VPN.",
+        "prefs.hostHelp": "This process hosts the mixer. Listen token and media directory apply to the control API.",
+        "prefs.remoteHelp": "eiviz-remote connects over authenticated ws:// on a trusted LAN or VPN. Changing the URL restarts the mixer.",
         "msg.remoteConnectFailed": "Could not connect to the remote eiviz.",
         "msg.remoteDisconnected": "Disconnected from the remote eiviz.",
         "msg.remoteAuthFailed": "Remote authentication failed.",
@@ -114,8 +118,8 @@ enum L10n {
         "msg.remoteConnected": "Remote revision {0}",
         "msg.revisionConflict": "The remote session changed. The draft was not applied. Reload and try again.",
         "msg.uploadFailed": "The media upload failed.",
-        "msg.remoteNoInputPreview": "Input Preview is not available in remote mode.",
-        "msg.videoUnavailable": "Preview/Program/Multiview video is unavailable. Enable a unique NDI or OMT MuPreview/MuProgram/Multiview output on the host. eiviz will not create outputs automatically.",
+        "msg.remoteNoInputPreview": "Input Preview is for a local mixer connection.",
+        "msg.videoUnavailable": "Preview, Program, and Multiview show live video when the host has exactly one enabled NDI or OMT output for MuPreview, MuProgram, or Multiview. Other counts show Unavailable.",
         "chrome.previewInput": "Preview",
         "prefs.help": "Help",
         "prefs.docsUrl": "https://mikanseilaboratory.github.io/eiviz/en/",
@@ -196,6 +200,8 @@ enum L10n {
     ]
 
     private static let ja: [String: String] = [
+        "app.title": "eiviz",
+        "app.titleRemote": "eiviz リモート",
         "chrome.mixingUnit": "Mixing Unit",
         "chrome.add": "追加",
         "chrome.edit": "編集",
@@ -259,7 +265,9 @@ enum L10n {
         "prefs.apiPort": "APIポート",
         "prefs.apiToken": "待ち受けトークン",
         "prefs.mediaDirectory": "アップロード保存先",
-        "prefs.connectionHelp": "リモートモードは、信頼できるLANまたはVPN上の認証付きws://で別のeivizと通信します。このビルドではTLSを使いません。接続モードの変更はMixerを再起動します。",
+        "prefs.connectionHelp": "eiviz-remoteは、信頼できるLANまたはVPN上の認証付きws://で接続します。",
+        "prefs.hostHelp": "このプロセスがMixerを動かします。待ち受けtokenとメディア保存先は制御APIに使います。",
+        "prefs.remoteHelp": "eiviz-remoteは、信頼できるLANまたはVPN上の認証付きws://で接続します。URLの変更はMixerを再起動します。",
         "msg.remoteConnectFailed": "リモートeivizに接続できませんでした。",
         "msg.remoteDisconnected": "リモートeivizから切断されました。",
         "msg.remoteAuthFailed": "リモート認証に失敗しました。",
@@ -267,8 +275,8 @@ enum L10n {
         "msg.remoteConnected": "リモートrevision {0}",
         "msg.revisionConflict": "リモートのセッションが変わりました。下書きは適用していません。最新を読み直してやり直してください。",
         "msg.uploadFailed": "メディアのアップロードに失敗しました。",
-        "msg.remoteNoInputPreview": "リモートモードではInput Previewは使えません。",
-        "msg.videoUnavailable": "Preview/Program/Multiview映像を受信できません。ホストで一意のNDIまたはOMTのMuPreview/MuProgram/Multiview出力を有効にしてください。eivizは出力を自動作成しません。",
+        "msg.remoteNoInputPreview": "Input Previewはローカル接続向けです。",
+        "msg.videoUnavailable": "Preview/Program/Multiviewは、ホストで有効なNDIまたはOMT出力がMuPreview/MuProgram/Multiviewそれぞれ1本のときに表示します。本数が合わない面はUnavailableです。",
         "chrome.previewInput": "プレビュー",
         "prefs.help": "ヘルプ",
         "prefs.docsUrl": "https://mikanseilaboratory.github.io/eiviz/ja/",

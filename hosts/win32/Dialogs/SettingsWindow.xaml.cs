@@ -8,13 +8,12 @@ namespace Eiviz.Host.Dialogs;
 
 public partial class SettingsWindow : Window
 {
-    private readonly Session _session;
+    private Session _session => ((App)Application.Current).Session;
     private ulong _nextOutputId;
 
     public SettingsWindow(Session session)
     {
         InitializeComponent();
-        _session = session;
         _nextOutputId = session.NextOutputId;
         Settings = new SessionSettings
         {
@@ -82,7 +81,6 @@ public partial class SettingsWindow : Window
             DisplayPanel.IsEnabled = false;
             PerformancePanel.IsEnabled = false;
             OutputPanel.IsEnabled = false;
-            MultiviewPanel.IsEnabled = false;
             AudioBusPanel.IsEnabled = false;
             AdvancedPanel.IsEnabled = false;
             WebApiPanel.IsEnabled = false;
@@ -455,6 +453,12 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() != true)
             return;
         var unit = MvUnitBox.SelectedItem as MixingUnitEntry ?? _session.Units[0];
+        if (App.IsRemote)
+        {
+            if (Owner is MainWindow main)
+                main.RemoteMutate(MutationJson.UpsertMultiview(layout), Loc.T("chrome.multiview"));
+            return;
+        }
         MixerApply.PushMultiview(layout, unit.Width, unit.Height);
     }
 
@@ -464,6 +468,13 @@ public partial class SettingsWindow : Window
             return;
         if (Owner is MainWindow main)
             main.CloseMultiview(layout.Id);
+        if (App.IsRemote)
+        {
+            if (Owner is MainWindow remote)
+                remote.RemoteMutate(MutationJson.DeleteMultiview(layout.Id), Loc.T("chrome.delete"));
+            RebuildLayouts();
+            return;
+        }
         MixerNative.DestroyScene(layout.GpuId);
         _session.Multiviews.Remove(layout);
         RebuildLayouts();

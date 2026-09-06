@@ -48,7 +48,11 @@ enum Cmd {
         session: PathBuf,
         #[arg(long, default_value = "127.0.0.1:9400")]
         bind: String,
-        #[arg(long, env = "EIVIZ_MEDIA_DIRECTORY")]
+        #[arg(
+            long,
+            env = "EIVIZ_MEDIA_DIRECTORY",
+            help = "Uploaded media directory (default: OS local app data/eiviz/media)"
+        )]
         media_directory: Option<PathBuf>,
     },
 }
@@ -114,7 +118,11 @@ fn run_daemon(session: PathBuf, bind: String, media_directory: Option<PathBuf>) 
 }
 
 #[cfg(feature = "runtime")]
-fn run_daemon_runtime(session: PathBuf, bind: String, media_directory: Option<PathBuf>) -> Result<(), u8> {
+fn run_daemon_runtime(
+    session: PathBuf,
+    bind: String,
+    media_directory: Option<PathBuf>,
+) -> Result<(), u8> {
     let document = load_valid(&session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
@@ -156,23 +164,20 @@ fn run_daemon_runtime(session: PathBuf, bind: String, media_directory: Option<Pa
                 code
             })?;
         }
-        let media = media_directory
-            .or_else(|| {
-                std::env::var("EIVIZ_MEDIA_DIRECTORY")
-                    .ok()
-                    .filter(|value| !value.is_empty())
-                    .map(PathBuf::from)
-            })
-            .and_then(|path| {
-                eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(path)).ok()
-            })
-            .map(|store| Arc::new(store) as Arc<dyn eiviz_api::MediaStorage>);
+        let media_path = media_directory.unwrap_or_else(|| eiviz_api::resolve_media_directory(""));
+        let media =
+            eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(media_path))
+                .map_err(|error| {
+                    eprintln!("eiviz-headless error=media {error}");
+                    EXIT_OTHER
+                })
+                .map(|store| Arc::new(store) as Arc<dyn eiviz_api::MediaStorage>)?;
         let config = ServerConfig {
             bind: ws_addr,
             auth,
             idle_timeout: std::time::Duration::from_secs(60),
             max_clients: 32,
-            media,
+            media: Some(media),
         };
         let control: Arc<dyn eiviz_control::ControlFacade> = Arc::new(eiviz_mixer::MixerFacade);
         let (bound, task) = listen(config, control).await.map_err(|error| {
