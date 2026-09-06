@@ -65,7 +65,7 @@ internal sealed class AppPrefs
     }
 
     [JsonIgnore]
-    public uint CreateAbi => Renderer.CreateAbi;
+    public uint CreateAbi => Renderer.CreateAbi();
 
     public void Save()
     {
