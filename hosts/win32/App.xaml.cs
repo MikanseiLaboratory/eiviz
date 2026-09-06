@@ -84,7 +84,7 @@ public partial class App : Application
     {
         MixerNative.ThrowIfFailed(
             MixerNative.CreateWithBackend(
-                Session.Settings.CreateAbi,
+                AppPrefs.Current.CreateAbi,
                 0,
                 Session.Settings.MasterFpsNum,
                 Session.Settings.MasterFpsDen),

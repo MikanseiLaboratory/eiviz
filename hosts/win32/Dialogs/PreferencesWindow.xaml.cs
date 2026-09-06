@@ -10,6 +10,7 @@ public partial class PreferencesWindow : Window
 {
     private readonly AppLanguage _originalLanguage = AppPrefs.Current.Language;
     private readonly AppThemeMode _originalTheme = AppPrefs.Current.Theme;
+    private readonly GpuRenderer _originalRenderer = AppPrefs.Current.Renderer;
     private bool _accepted;
     private bool _suppress;
 
@@ -19,27 +20,30 @@ public partial class PreferencesWindow : Window
         _suppress = true;
         SelectTag(LanguageBox, AppPrefs.Current.Language.ToString());
         SelectTag(ThemeBox, AppPrefs.Current.Theme.ToString());
+        SelectTag(RendererBox, AppPrefs.Current.Renderer.ToString());
         _suppress = false;
         AboutVersion.Text = $"Version {HostVersion.Display}";
         BindDocsLink();
         Closed += (_, _) =>
         {
             if (!_accepted)
-                Apply(_originalLanguage, _originalTheme);
+                Apply(_originalLanguage, _originalTheme, _originalRenderer);
         };
     }
+
+    public bool RendererChanged => AppPrefs.Current.Renderer != _originalRenderer;
 
     private void PrefsChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppress)
             return;
-        Apply(ReadLanguage(), ReadTheme());
+        Apply(ReadLanguage(), ReadTheme(), AppPrefs.Current.Renderer);
         BindDocsLink();
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        Apply(ReadLanguage(), ReadTheme());
+        Apply(ReadLanguage(), ReadTheme(), ReadRenderer());
         _accepted = true;
         DialogResult = true;
     }
@@ -60,10 +64,19 @@ public partial class PreferencesWindow : Window
         return AppPrefs.Current.Theme;
     }
 
-    private static void Apply(AppLanguage language, AppThemeMode theme)
+    private GpuRenderer ReadRenderer()
+    {
+        if (RendererBox.SelectedItem is ComboBoxItem item && item.Tag is string tag
+            && Enum.TryParse<GpuRenderer>(tag, out var renderer))
+            return renderer;
+        return AppPrefs.Current.Renderer;
+    }
+
+    private static void Apply(AppLanguage language, AppThemeMode theme, GpuRenderer renderer)
     {
         AppPrefs.Current.Language = language;
         AppPrefs.Current.Theme = theme;
+        AppPrefs.Current.Renderer = renderer;
         AppPrefs.Current.Save();
         Loc.Apply(language);
         ThemeService.Apply(theme);

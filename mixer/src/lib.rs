@@ -737,8 +737,7 @@ pub extern "C" fn mixer_create(adapter_luid: u64, fps_num: u32, fps_den: u32) ->
     mixer_create_with_backend(crate::abi::BACKEND_AUTO, adapter_luid, fps_num, fps_den)
 }
 
-/// Creates a mixer with an explicit GPU backend.
-/// `0=auto`, `1=dx12`, `2=vulkan`, `3=metal`. Unsupported combinations fail; no fallback.
+/// Creates a mixer with an explicit GPU backend (`0=auto`, `1=dx12`, `2=vulkan`, `3=metal`).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create_with_backend(
     backend: u32,

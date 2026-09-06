@@ -123,7 +123,6 @@ internal static class SessionStore
                 ? Settings.FlipSwapchainLimit
                 : 0;
             session.Settings.InternalColorFormat = Settings.InternalColorFormat;
-            session.Settings.Renderer = Settings.Renderer;
             session.Settings.RebarOptimization = Settings.RebarOptimization != false;
             session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
             session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);

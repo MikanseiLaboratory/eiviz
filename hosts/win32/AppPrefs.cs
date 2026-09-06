@@ -31,6 +31,7 @@ internal sealed class AppPrefs
 
     public AppLanguage Language { get; set; } = DefaultLanguage();
     public AppThemeMode Theme { get; set; } = AppThemeMode.Dark;
+    public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;
     public List<string> RecentSessions { get; set; } = [];
     public List<string> RecentStills { get; set; } = [];
     public List<string> RecentVideos { get; set; } = [];
@@ -62,6 +63,9 @@ internal sealed class AppPrefs
         }
         return new AppPrefs();
     }
+
+    [JsonIgnore]
+    public uint CreateAbi => Renderer.CreateAbi;
 
     public void Save()
     {

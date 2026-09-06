@@ -25,9 +25,7 @@ pub fn create_vulkan_gpu_device(
         match adapter.request_device_with_video_support(&VideoDeviceDescriptor::default()) {
             Ok(pair) => pair,
             Err(error) => {
-                crate::diag::info(&format!(
-                    "Vulkan Video device request failed: {error}; continuing without hardware decode"
-                ));
+                crate::diag::info(&format!("Vulkan Video device request: {error}"));
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?
             }
         }
@@ -37,7 +35,7 @@ pub fn create_vulkan_gpu_device(
     let vulkan = match device.video() {
         Ok(video) => Some(Arc::new(video)),
         Err(error) => {
-            crate::diag::info(&format!("device.video() unavailable: {error}"));
+            crate::diag::info(&format!("device.video(): {error}"));
             None
         }
     };

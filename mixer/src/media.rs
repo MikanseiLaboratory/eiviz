@@ -205,7 +205,7 @@ fn run_loop(
         ) {
             Ok(()) => return Ok(()),
             Err(error) => {
-                eprintln!("eiviz vulkan video: {error}; using CPU decode");
+                eprintln!("eiviz vulkan video: {error}");
             }
         }
     }

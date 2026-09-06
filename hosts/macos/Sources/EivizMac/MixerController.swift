@@ -73,7 +73,7 @@ final class MixerController: ObservableObject {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
         }
-        guard fail(mixer_create_with_backend(session.settings.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
@@ -1174,7 +1174,7 @@ final class MixerController: ObservableObject {
         mix = 0
         inputFilter = .all
         sceneFilter = .all
-        guard fail(mixer_create_with_backend(session.settings.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")

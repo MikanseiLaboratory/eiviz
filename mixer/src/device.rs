@@ -128,7 +128,7 @@ impl GpuDevice {
     }
 }
 
-/// Requested wgpu backend. `Auto` is the OS default and never falls back to GL.
+/// Requested wgpu backend. Auto selects the OS default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendRequest {
     Auto,

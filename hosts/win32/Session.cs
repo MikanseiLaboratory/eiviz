@@ -861,6 +861,17 @@ public enum GpuRenderer
     Metal
 }
 
+internal static class GpuRendererAbi
+{
+    public static uint CreateAbi(this GpuRenderer renderer) => renderer switch
+    {
+        GpuRenderer.Dx12 => 1,
+        GpuRenderer.Vulkan => 2,
+        GpuRenderer.Metal => 0,
+        _ => 0
+    };
+}
+
 public enum AudioBusRole
 {
     Master = 0,
@@ -910,7 +921,6 @@ public sealed class SessionSettings
     public uint DefaultPresentInterval { get; set; } = 3;
     public uint FlipSwapchainLimit { get; set; }
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
-    public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;
     public bool? RebarOptimization { get; set; } = true;
     public bool? RebarDirectSample { get; set; } = false;
     public bool? NdiGpuUpload { get; set; } = true;
@@ -933,17 +943,6 @@ public sealed class SessionSettings
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;
-    public uint RendererAbi => Renderer switch
-    {
-        GpuRenderer.Dx12 => 1,
-        GpuRenderer.Vulkan => 2,
-        GpuRenderer.Metal => 3,
-        _ => 0
-    };
-
-    /// Backend for mixer_create. Metal cannot run on Windows, so Auto is used;
-    /// Direct3D 12 vs Vulkan is never rewritten.
-    public uint CreateAbi => Renderer == GpuRenderer.Metal ? 0u : RendererAbi;
     [System.Text.Json.Serialization.JsonIgnore]
     public string? LastSessionPath { get; set; }
 

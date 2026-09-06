@@ -20,6 +20,7 @@ final class AppPrefs: ObservableObject {
 
     @Published var language: AppLanguage
     @Published var theme: AppThemeMode
+    @Published var renderer: GpuRenderer
     @Published var recentSessions: [String]
     @Published var recentStills: [String]
     @Published var recentVideos: [String]
@@ -35,6 +36,7 @@ final class AppPrefs: ObservableObject {
         let loaded = Self.load()
         language = loaded.language
         theme = loaded.theme
+        renderer = loaded.renderer
         recentSessions = loaded.recentSessions
         recentStills = loaded.recentStills
         recentVideos = loaded.recentVideos
@@ -44,6 +46,7 @@ final class AppPrefs: ObservableObject {
         var dto = Dto()
         dto.language = language
         dto.theme = theme
+        dto.renderer = renderer
         dto.recentSessions = recentSessions
         dto.recentStills = recentStills
         dto.recentVideos = recentVideos
@@ -96,8 +99,21 @@ final class AppPrefs: ObservableObject {
     private struct Dto: Codable {
         var language: AppLanguage = .systemDefault
         var theme: AppThemeMode = .dark
+        var renderer: GpuRenderer = .auto
         var recentSessions: [String] = []
         var recentStills: [String] = []
         var recentVideos: [String] = []
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .systemDefault
+            theme = try container.decodeIfPresent(AppThemeMode.self, forKey: .theme) ?? .dark
+            renderer = try container.decodeIfPresent(GpuRenderer.self, forKey: .renderer) ?? .auto
+            recentSessions = try container.decodeIfPresent([String].self, forKey: .recentSessions) ?? []
+            recentStills = try container.decodeIfPresent([String].self, forKey: .recentStills) ?? []
+            recentVideos = try container.decodeIfPresent([String].self, forKey: .recentVideos) ?? []
+        }
     }
 }

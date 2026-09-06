@@ -277,9 +277,7 @@ impl Renderer {
         }
     }
 
-    /// Backend passed to `mixer_create_with_backend`.
-    /// Same-OS choices are kept (Windows Direct3D 12 vs Vulkan never rewrite each other).
-    /// Other-OS values become Auto so a session authored elsewhere can still open.
+    /// ABI for `mixer_create_with_backend` on this OS.
     pub fn create_abi(self) -> u32 {
         #[cfg(windows)]
         {

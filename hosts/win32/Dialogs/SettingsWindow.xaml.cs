@@ -28,7 +28,6 @@ public partial class SettingsWindow : Window
             DefaultPresentInterval = session.Settings.DefaultPresentInterval,
             FlipSwapchainLimit = session.Settings.FlipSwapchainLimit,
             InternalColorFormat = session.Settings.InternalColorFormat,
-            Renderer = session.Settings.Renderer,
             RebarOptimization = session.Settings.RebarOptimizationEnabled,
             NdiGpuUpload = session.Settings.NdiGpuUploadEnabled,
             PreviewColor = RgbColor.FromOrDefault(session.Settings.PreviewColor, RgbColor.PreviewDefault),
@@ -54,7 +53,6 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
         SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
-        SelectTag(RendererBox, Settings.Renderer.ToString());
         SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 3 : Settings.DefaultPresentInterval).ToString());
         SelectTag(FlipBudgetBox, Settings.FlipSwapchainLimit.ToString());
         MvUnitBox.ItemsSource = session.Units;
@@ -110,7 +108,6 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, "1920x1080");
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
-        SelectTag(RendererBox, GpuRenderer.Auto.ToString());
         SelectTag(MvPresentBox, "3");
         SelectTag(FlipBudgetBox, "0");
         RebarOptBox.IsChecked = _rebarAvailable;
@@ -631,9 +628,6 @@ public partial class SettingsWindow : Window
             Settings.FrameBufferFrames = Math.Clamp(frames, 1u, 8u);
         if (ColorFormatBox.SelectedItem is ComboBoxItem color && color.Tag is string colorTag)
             Settings.InternalColorFormat = colorTag == "bgra" ? InternalColorFormat.Bgra : InternalColorFormat.Uyvy;
-        if (RendererBox.SelectedItem is ComboBoxItem renderer && renderer.Tag is string rendererTag
-            && Enum.TryParse(rendererTag, out GpuRenderer parsedRenderer))
-            Settings.Renderer = parsedRenderer;
         if (MvPresentBox.SelectedItem is ComboBoxItem present && present.Tag is string presentTag
             && uint.TryParse(presentTag, out var interval))
             Settings.DefaultPresentInterval = MultiviewLayout.ClampPresentInterval(interval);

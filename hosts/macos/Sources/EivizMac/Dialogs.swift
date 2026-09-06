@@ -8,7 +8,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
     @State private var selectedMultiviewId: UInt64?
-    @State private var originalRenderer = GpuRenderer.auto
 
     var body: some View {
         HStack(spacing: 0) {
@@ -40,7 +39,6 @@ struct SettingsView: View {
                         if !copyUmaInfo().available {
                             mixer.session.settings.rebarOptimization = false
                         }
-                        let restartMixer = mixer.session.settings.renderer != originalRenderer
                         mixer.pushAudio()
                         mixer.applyBusColors()
                         _ = mixer_set_rebar_optimization(mixer.session.settings.rebarOptimizationEnabled ? 1 : 0)
@@ -52,9 +50,6 @@ struct SettingsView: View {
                         AppPrefs.shared.save()
                         mixer.applyVmixApi()
                         mixer.publishSession()
-                        if restartMixer {
-                            mixer.recreateMixer()
-                        }
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -66,7 +61,6 @@ struct SettingsView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
-        .onAppear { originalRenderer = mixer.session.settings.renderer }
     }
 
     private var display: some View {
@@ -123,18 +117,6 @@ struct SettingsView: View {
 
     private var performance: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Renderer").fontWeight(.bold)
-            Picker("", selection: $mixer.session.settings.renderer) {
-                Text("Auto").tag(GpuRenderer.auto)
-                Text("Metal").tag(GpuRenderer.metal)
-                Text("Direct3D 12").tag(GpuRenderer.dx12)
-                Text("Vulkan").tag(GpuRenderer.vulkan)
-            }
-            .labelsHidden()
-            .frame(width: 220)
-            Text("Changing the renderer restarts the mixer. Metal is the only backend on this Mac. Direct3D 12 and Vulkan are kept so a session can be authored for Windows or Linux.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
             let info = copyUmaInfo()
             Text("Graphics Adapter").fontWeight(.bold)
             Text(info.name)
@@ -555,9 +537,12 @@ struct SettingsView: View {
 
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var mixer: MixerController
     @ObservedObject private var prefs = AppPrefs.shared
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
+    @State private var originalRenderer = AppPrefs.shared.renderer
+    @State private var renderer = AppPrefs.shared.renderer
     @State private var reverting = false
 
     var body: some View {
@@ -575,6 +560,15 @@ struct PreferencesView: View {
                 Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
             }
             .frame(width: 220)
+            Text(L10n.t("prefs.renderer"))
+            Picker("", selection: $renderer) {
+                Text(L10n.t("prefs.rendererAuto")).tag(GpuRenderer.auto)
+                Text("Metal").tag(GpuRenderer.metal)
+            }
+            .frame(width: 220)
+            Text(L10n.t("prefs.rendererHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Text(L10n.t("prefs.help")).fontWeight(.bold)
             Link(L10n.t("prefs.docsUrl"), destination: URL(string: L10n.t("prefs.docsUrl"))!)
             Text("eiviz").font(.title)
@@ -590,8 +584,12 @@ struct PreferencesView: View {
             HStack {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
+                    prefs.renderer = renderer
                     prefs.save()
                     prefs.localeRevision += 1
+                    if renderer != originalRenderer {
+                        mixer.recreateMixer()
+                    }
                     dismiss()
                 }
                 Button(L10n.t("dialog.cancel")) {
@@ -611,6 +609,8 @@ struct PreferencesView: View {
         .onAppear {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
+            originalRenderer = prefs.renderer
+            renderer = prefs.renderer
         }
         .onChange(of: prefs.language) { _, _ in
             if !reverting {
