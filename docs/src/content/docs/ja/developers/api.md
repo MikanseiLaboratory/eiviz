@@ -3,7 +3,7 @@ title: eiviz API
 description: eiviz固有の制御APIとheadless運用
 ---
 
-eivizの制御面はMixer内の`ControlService`が正本です。Windows/macOSのC ABI、vMix互換HTTP、ProtobufのWebSocket/TCP、`eivizctl`はいずれも同じディスパッチャへ変換されます。
+eivizの制御面はMixer内の`ControlService`が正本です。vMix互換HTTP、ProtobufのWebSocket/TCP、`eivizctl`はいずれも同じディスパッチャへ変換されます。
 
 ## 公開契約
 
@@ -12,7 +12,7 @@ eivizの制御面はMixer内の`ControlService`が正本です。Windows/macOS�
 - TCP（既定無効）: `EIVZ` + version + 4-byte big-endian length + Protobuf Envelope
 - 公開済みfield numberは変更・再利用しません。削除時は`reserved`へ入れます
 
-映像/音声フレーム、GPU texture、HWND/NSView、`attach_native`、`push_frame`、frame acquire/releaseはネットワーク公開対象外です。これらは固定幅C ABIに残します。
+映像/音声フレーム、GPU texture、HWND/NSViewなどの描画・データ面はネットワーク公開対象外です。
 
 ## 認証と権限
 

@@ -3,7 +3,7 @@ title: eiviz API
 description: Native control API and headless operations
 ---
 
-The control plane lives in Mixer as `ControlService`. The Windows/macOS C ABI, vMix-compatible HTTP, Protobuf WebSocket/TCP, and `eivizctl` are thin adapters over the same dispatcher.
+The control plane lives in Mixer as `ControlService`. vMix-compatible HTTP, Protobuf WebSocket/TCP, and `eivizctl` are thin adapters over the same dispatcher.
 
 ## Contract
 
@@ -12,7 +12,7 @@ The control plane lives in Mixer as `ControlService`. The Windows/macOS C ABI, v
 - TCP (off by default): `EIVZ` + version + 4-byte big-endian length + Protobuf Envelope
 - Published field numbers are never reused. Removals go into `reserved`
 
-Video/audio frames, GPU textures, HWND/NSView, `attach_native`, `push_frame`, and frame acquire/release stay on the fixed-width C ABI. They are not network APIs.
+Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane surfaces are not network APIs.
 
 ## Auth and roles
 

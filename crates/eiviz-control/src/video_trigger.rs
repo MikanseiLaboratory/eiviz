@@ -84,7 +84,9 @@ pub fn tick(
         }
         if paused {
             actions.push((input.id, VideoAction::Pause));
-        } else if restarted || should_play(input.video_play_when, rose_program, rose_preview, now) {
+        } else if restarted
+            || should_play(input.video_play_when, rose_program, rose_preview, now, prev)
+        {
             actions.push((input.id, VideoAction::Play));
         }
         previous.insert(input.id, now);
@@ -97,11 +99,14 @@ fn should_play(
     rose_program: bool,
     rose_preview: bool,
     now: VideoRoles,
+    prev: VideoRoles,
 ) -> bool {
     match when {
         VideoPlayWhen::OnActive => rose_program,
         VideoPlayWhen::OnPreview => rose_preview,
-        VideoPlayWhen::Always => now.on_program || now.on_preview,
+        VideoPlayWhen::Always => {
+            (now.on_program || now.on_preview) && !(prev.on_program || prev.on_preview)
+        }
         VideoPlayWhen::Never => false,
     }
 }
@@ -158,6 +163,57 @@ mod tests {
         let src = br#"{
           "version": 2,
           "inputs": [{ "id": 2, "name": "Clip", "kind": "Video", "pathOrAddress": "clip.mp4", "videoPlayWhen": "OnActive" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut live = LiveState::default();
+        live.units.insert(
+            1,
+            UnitLiveState {
+                program_source: crate::ids::scene_gpu_id(1),
+                preview_source: 0,
+                ..UnitLiveState::default()
+            },
+        );
+        let mut prev = HashMap::new();
+        let actions = tick(&doc, &live, &mut prev);
+        assert!(actions.contains(&(2, VideoAction::Play)));
+        let again = tick(&doc, &live, &mut prev);
+        assert!(!again.contains(&(2, VideoAction::Play)));
+    }
+
+    #[test]
+    fn never_restart_does_not_seek_when_program_rises() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Clip", "kind": "Video", "pathOrAddress": "clip.mp4", "videoPlayWhen": "Never", "videoRestartWhen": "Never" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut live = LiveState::default();
+        live.units.insert(
+            1,
+            UnitLiveState {
+                program_source: crate::ids::scene_gpu_id(1),
+                preview_source: 0,
+                ..UnitLiveState::default()
+            },
+        );
+        let mut prev = HashMap::new();
+        let actions = tick(&doc, &live, &mut prev);
+        assert!(!actions.contains(&(2, VideoAction::SeekZero)));
+        assert!(!actions.contains(&(2, VideoAction::Play)));
+        let again = tick(&doc, &live, &mut prev);
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn always_play_is_edge_triggered() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Clip", "kind": "Video", "pathOrAddress": "clip.mp4", "videoPlayWhen": "Always" }],
           "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
           "units": [{ "id": 1, "name": "MU 1" }]
         }"#;

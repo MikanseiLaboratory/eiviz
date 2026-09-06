@@ -1,7 +1,8 @@
+use crate::live::LiveState;
 use crate::session::{
     AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind, MixSource,
     MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
-    OutputTransport, SceneDto,
+    OutputTransport, SceneDto, VideoPlayWhen,
 };
 use crate::{geometry::MultiviewPane, ids, port::*};
 
@@ -88,20 +89,28 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         .unwrap_or_default();
     let next_units: Vec<u64> = next.units.iter().map(|item| item.id).collect();
     for unit in &next.units {
-        if !prev_units.contains(&unit.id) {
+        let prev_unit = previous.and_then(|doc| doc.units.iter().find(|item| item.id == unit.id));
+        if prev_unit.is_none() {
             ops.push(ReconcileOp::CreateUnit {
                 id: unit.id,
                 width: unit.width,
                 height: unit.height,
             });
         }
-        ops.push(ReconcileOp::ConfigureUnit {
-            id: unit.id,
-            width: unit.width,
-            height: unit.height,
-            fps_num: unit.fps_num,
-            fps_den: unit.fps_den,
-        });
+        if prev_unit.is_none_or(|prev| {
+            prev.width != unit.width
+                || prev.height != unit.height
+                || prev.fps_num != unit.fps_num
+                || prev.fps_den != unit.fps_den
+        }) {
+            ops.push(ReconcileOp::ConfigureUnit {
+                id: unit.id,
+                width: unit.width,
+                height: unit.height,
+                fps_num: unit.fps_num,
+                fps_den: unit.fps_den,
+            });
+        }
     }
     for bus in &next.buses {
         ops.push(ReconcileOp::UpsertBus(BusApply {
@@ -151,7 +160,15 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
     let height = next.settings.default_height;
     let prev_scenes = previous.map(|doc| doc.scenes.as_slice()).unwrap_or(&[]);
     for scene in &next.scenes {
-        ops.push(ReconcileOp::DefineScene(scene_apply(scene, width, height)));
+        let apply = scene_apply(scene, width, height);
+        if prev_scenes
+            .iter()
+            .find(|item| item.id == scene.id)
+            .is_some_and(|prev| scene_apply(prev, width, height) == apply)
+        {
+            continue;
+        }
+        ops.push(ReconcileOp::DefineScene(apply));
     }
     for prev in prev_scenes {
         if !next.scenes.iter().any(|item| item.id == prev.id) {
@@ -163,7 +180,14 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
 
     let prev_mv = previous.map(|doc| doc.multiviews.as_slice()).unwrap_or(&[]);
     for layout in &next.multiviews {
-        ops.push(multiview_op(layout, next, width, height));
+        let op = multiview_op(layout, next, width, height);
+        if prev_mv.iter().any(|prev| {
+            prev.id == layout.id
+                && multiview_op(prev, previous.unwrap_or(next), width, height) == op
+        }) {
+            continue;
+        }
+        ops.push(op);
     }
     for prev in prev_mv {
         if !next.multiviews.iter().any(|item| item.id == prev.id) {
@@ -184,11 +208,16 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         .map(|scene| ids::scene_gpu_id(scene.id))
         .unwrap_or(preview);
     for unit in &next.units {
-        ops.push(ReconcileOp::SetLiveState {
-            unit_id: unit.id,
-            program,
-            preview,
-        });
+        // Live PGM/PVW/mix/overlays are not session fields. Seed buses only
+        // when the Mixing Unit itself is new so settings and CRUD cannot
+        // clobber the operator's current buses.
+        if !prev_units.contains(&unit.id) {
+            ops.push(ReconcileOp::SetLiveState {
+                unit_id: unit.id,
+                program,
+                preview,
+            });
+        }
         ops.push(ReconcileOp::AudioUnitLink {
             unit_id: unit.id,
             bus_id: if unit.audio_bus_id == 0 {
@@ -242,12 +271,19 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         }
     }
 
-    ops.push(ReconcileOp::ConfigureVmixApi {
-        enabled: next.settings.vmix_api_enabled,
-        port: next.settings.vmix_api_port,
-        user: next.settings.vmix_api_user.clone(),
-        pass: next.settings.vmix_api_password.clone(),
-    });
+    if previous.is_none_or(|prev| {
+        prev.settings.vmix_api_enabled != next.settings.vmix_api_enabled
+            || prev.settings.vmix_api_port != next.settings.vmix_api_port
+            || prev.settings.vmix_api_user != next.settings.vmix_api_user
+            || prev.settings.vmix_api_password != next.settings.vmix_api_password
+    }) {
+        ops.push(ReconcileOp::ConfigureVmixApi {
+            enabled: next.settings.vmix_api_enabled,
+            port: next.settings.vmix_api_port,
+            user: next.settings.vmix_api_user.clone(),
+            pass: next.settings.vmix_api_password.clone(),
+        });
+    }
 
     for id in prev_units {
         if !next_units.contains(&id) {
@@ -255,6 +291,68 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         }
     }
     ops
+}
+
+/// Retarget PGM/PVW only when the live source disappeared from the next
+/// document. Does not invent a new bus layout for settings-only replaces.
+pub fn repair_live(next: &Document, live: &LiveState) -> Vec<ReconcileOp> {
+    let preview = next
+        .scenes
+        .first()
+        .map(|scene| ids::scene_gpu_id(scene.id))
+        .unwrap_or(0);
+    let program = next
+        .scenes
+        .get(1)
+        .map(|scene| ids::scene_gpu_id(scene.id))
+        .unwrap_or(preview);
+    let mut ops = Vec::new();
+    for unit in &next.units {
+        let Some(state) = live.units.get(&unit.id) else {
+            continue;
+        };
+        let next_program = if source_still_live(next, state.program_source) {
+            state.program_source
+        } else {
+            program
+        };
+        let next_preview = if source_still_live(next, state.preview_source) {
+            state.preview_source
+        } else {
+            preview
+        };
+        if next_program != state.program_source || next_preview != state.preview_source {
+            ops.push(ReconcileOp::SetLiveState {
+                unit_id: unit.id,
+                program: next_program,
+                preview: next_preview,
+            });
+        }
+    }
+    ops
+}
+
+fn source_still_live(doc: &Document, source: u64) -> bool {
+    if source == 0 {
+        return true;
+    }
+    if source & ids::MU_SOURCE_FLAG == ids::MU_SOURCE_FLAG {
+        let unit_id = source & ids::MU_ID_MASK;
+        return doc.units.iter().any(|unit| unit.id == unit_id);
+    }
+    if source & ids::MULTIVIEW_BASE == ids::MULTIVIEW_BASE {
+        return doc
+            .multiviews
+            .iter()
+            .any(|layout| ids::multiview_gpu_id(layout.id) == source);
+    }
+    if source & ids::SCENE_BASE == ids::SCENE_BASE {
+        return doc
+            .scenes
+            .iter()
+            .any(|scene| ids::scene_gpu_id(scene.id) == source);
+    }
+    doc.inputs.iter().any(|input| input.id == source)
 }
 
 #[inline(never)]
@@ -527,7 +625,10 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             path: input.path_or_address.clone().unwrap_or_default(),
             capture: input.kind == InputKind::Uvc,
             loop_playback: input.video_loop,
-            playing: true,
+            playing: matches!(
+                input.video_play_when,
+                VideoPlayWhen::Never | VideoPlayWhen::Always
+            ),
             width: input.capture_width,
             height: input.capture_height,
             fps_num: input.capture_fps_num,
@@ -773,6 +874,8 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.mix_source == b.mix_source
         && a.capture_width == b.capture_width
         && a.capture_height == b.capture_height
+        && a.capture_fps_num == b.capture_fps_num
+        && a.capture_fps_den == b.capture_fps_den
 }
 
 fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
@@ -839,5 +942,83 @@ mod tests {
             !ops.iter()
                 .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
         );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DefineScene(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::ConfigureUnit { .. }))
+        );
+    }
+
+    #[test]
+    fn settings_only_replace_keeps_live_and_media() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 10, "name": "Clip", "kind": "Video", "pathOrAddress": "clip.mp4" }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut next = doc.clone();
+        next.settings.vmix_api_port = 9099;
+        let ops = plan(Some(&doc), &next);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. }))
+        );
+    }
+
+    #[test]
+    fn repair_live_retargets_deleted_program_scene() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut live = crate::live::LiveState::default();
+        live.units.insert(
+            1,
+            crate::live::UnitLiveState {
+                program_source: ids::scene_gpu_id(2),
+                preview_source: ids::scene_gpu_id(1),
+                ..crate::live::UnitLiveState::default()
+            },
+        );
+        let ops = repair_live(&doc, &live);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            ReconcileOp::SetLiveState {
+                unit_id: 1,
+                program,
+                preview
+            } if *program == ids::scene_gpu_id(1) && *preview == ids::scene_gpu_id(1)
+        )));
     }
 }

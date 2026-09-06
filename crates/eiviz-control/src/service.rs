@@ -11,7 +11,7 @@ use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort};
 use crate::query::{Capabilities, Query, Snapshot};
 use crate::session::Document;
-use crate::session::reconcile::plan;
+use crate::session::reconcile::{plan, repair_live};
 use crate::session::store::CanonicalSessionStore;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
 
@@ -324,6 +324,12 @@ impl ControlService {
                         let _ = self.port.apply_reconcile(&prev, op, &mut ignored);
                     }
                 }
+                return Err(error);
+            }
+        }
+        let live = self.port.live_state().unwrap_or_default();
+        for op in &repair_live(&committed, &live) {
+            if let Err(error) = self.port.apply_reconcile(&committed, op, &mut statuses) {
                 return Err(error);
             }
         }
@@ -750,19 +756,14 @@ mod tests {
             unit_id: u64,
             program: u64,
             preview: u64,
-            mix: f32,
+            _mix: f32,
         ) -> ControlResult<()> {
             if let Ok(mut units) = self.units.lock() {
-                units.insert(
-                    unit_id,
-                    UnitLiveState {
-                        program_source: program,
-                        preview_source: preview,
-                        mix,
-                        ..UnitLiveState::default()
-                    },
-                );
+                let entry = units.entry(unit_id).or_default();
+                entry.program_source = program;
+                entry.preview_source = preview;
             }
+            self.push_op(format!("set_live {unit_id}"));
             Ok(())
         }
         fn unit_live(&self, unit_id: u64) -> ControlResult<UnitLiveState> {
@@ -904,6 +905,104 @@ mod tests {
             let unit = probe.units()[&1].clone();
             assert_eq!(unit.preview_source, preview_before);
             assert_eq!(unit.program_source, crate::ids::scene_gpu_id(2));
+        });
+    }
+
+    fn video_doc() -> Document {
+        parse(
+            br#"{
+          "version": 2,
+          "inputs": [{
+            "id": 10,
+            "name": "Clip",
+            "kind": "Video",
+            "pathOrAddress": "clip.mp4",
+            "videoPlayWhen": "Never",
+            "videoRestartWhen": "Never"
+          }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn replace_after_cut_keeps_program() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(bars_doc(), None, "boot").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "t".into(),
+                    request_id: String::new(),
+                },
+                Command::Cut {
+                    unit_id: 1,
+                    swap: true,
+                    incoming: Incoming::Preview,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                probe.units()[&1].program_source,
+                crate::ids::scene_gpu_id(1)
+            );
+            let after_cut = probe.ops().len();
+            svc.replace_session(bars_doc(), Some(1), "settings")
+                .unwrap();
+            assert_eq!(
+                probe.units()[&1].program_source,
+                crate::ids::scene_gpu_id(1)
+            );
+            assert_eq!(
+                probe.units()[&1].preview_source,
+                crate::ids::scene_gpu_id(2)
+            );
+            assert!(
+                !probe.ops()[after_cut..]
+                    .iter()
+                    .any(|op| op.starts_with("set_live"))
+            );
+        });
+    }
+
+    #[test]
+    fn replace_does_not_seek_never_restart_video() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(video_doc(), None, "boot").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "t".into(),
+                    request_id: String::new(),
+                },
+                Command::Cut {
+                    unit_id: 1,
+                    swap: true,
+                    incoming: Incoming::Preview,
+                },
+            )
+            .unwrap();
+            let after_cut = probe.ops().len();
+            svc.replace_session(video_doc(), Some(1), "settings")
+                .unwrap();
+            assert!(
+                !probe.ops()[after_cut..]
+                    .iter()
+                    .any(|op| op.starts_with("seek") || op.starts_with("video "))
+            );
+            assert_eq!(
+                probe.units()[&1].program_source,
+                crate::ids::scene_gpu_id(1)
+            );
         });
     }
 }
