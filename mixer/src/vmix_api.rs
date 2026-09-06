@@ -293,10 +293,11 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
     match name {
         "Cut" => {
             let incoming = resolve_incoming(&flat, input_raw, &live)?;
-            if !input_raw.is_empty() && input_raw != "0" && input_raw != "-1" {
-                set_preview(unit_id, incoming)?;
+            if takes_from_preview(input_raw) {
+                cut(unit_id, true, INCOMING_PREVIEW)
+            } else {
+                cut(unit_id, false, incoming)
             }
-            cut(unit_id, true, INCOMING_PREVIEW)
         }
         "CutDirect" => {
             require_input(input_raw)?;
@@ -305,9 +306,7 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
         }
         "Fade" => {
             let incoming = resolve_incoming(&flat, input_raw, &live)?;
-            if !input_raw.is_empty() && input_raw != "0" && input_raw != "-1" {
-                set_preview(unit_id, incoming)?;
-            }
+            let from_preview = takes_from_preview(input_raw);
             let unit = doc.units.iter().find(|item| item.id == unit_id);
             let duration = params
                 .get("Duration")
@@ -320,7 +319,16 @@ fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(),
                         unit.map(|item| item.fps_den).unwrap_or(1_001),
                     )
                 });
-            fade(unit_id, duration)
+            fade(
+                unit_id,
+                duration,
+                from_preview,
+                if from_preview {
+                    INCOMING_PREVIEW
+                } else {
+                    incoming
+                },
+            )
         }
         "PreviewInput" => {
             require_input(input_raw)?;
@@ -379,6 +387,10 @@ fn require_input(raw: &str) -> Result<(), DispatchError> {
     Ok(())
 }
 
+fn takes_from_preview(raw: &str) -> bool {
+    raw.is_empty() || raw == "0"
+}
+
 fn resolve_incoming(flat: &FlatMap, raw: &str, live: &UnitLive) -> Result<u64, DispatchError> {
     if raw.is_empty() || raw == "0" {
         return Ok(live.preview_source);
@@ -399,12 +411,12 @@ fn cut(unit_id: u64, swap: bool, incoming: u64) -> Result<(), DispatchError> {
     }
 }
 
-fn fade(unit_id: u64, duration_ms: u32) -> Result<(), DispatchError> {
+fn fade(unit_id: u64, duration_ms: u32, swap: bool, incoming: u64) -> Result<(), DispatchError> {
     let code = crate::mixer_unit_auto(
         unit_id,
         TRANSITION_FADE,
         duration_ms.max(1),
-        1,
+        u32::from(swap),
         1,
         0,
         0,
@@ -412,7 +424,7 @@ fn fade(unit_id: u64, duration_ms: u32) -> Result<(), DispatchError> {
         0.0,
         0.0,
         1.0,
-        INCOMING_PREVIEW,
+        incoming,
         0.02,
         0.0,
     );
@@ -617,6 +629,97 @@ mod tests {
             Err(DispatchError::Unknown(_)) | Err(DispatchError::BadRequest(_)) => {}
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn cut_with_input_leaves_preview() {
+        crate::mixer_destroy();
+        assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
+        assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
+        publish_cut_session();
+        let preview = crate::SCENE_BASE | 2;
+        let program = crate::SCENE_BASE | 1;
+        let incoming = crate::SCENE_BASE | 3;
+        set_unit_buses(program, preview);
+        let mut params = HashMap::new();
+        params.insert("Input".into(), "3".into());
+        dispatch_function("Cut", &params).expect("cut");
+        let out = unit_state();
+        assert_eq!(out.program_source, incoming);
+        assert_eq!(out.preview_source, preview);
+        crate::mixer_destroy();
+    }
+
+    #[test]
+    fn cut_without_input_takes_preview() {
+        crate::mixer_destroy();
+        assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
+        assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
+        publish_cut_session();
+        let preview = crate::SCENE_BASE | 2;
+        let program = crate::SCENE_BASE | 1;
+        set_unit_buses(program, preview);
+        dispatch_function("Cut", &HashMap::new()).expect("cut");
+        let out = unit_state();
+        assert_eq!(out.program_source, preview);
+        assert_eq!(out.preview_source, program);
+        crate::mixer_destroy();
+    }
+
+    #[test]
+    fn fade_with_input_leaves_preview() {
+        crate::mixer_destroy();
+        assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
+        assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
+        publish_cut_session();
+        let preview = crate::SCENE_BASE | 2;
+        let program = crate::SCENE_BASE | 1;
+        let incoming = crate::SCENE_BASE | 3;
+        set_unit_buses(program, preview);
+        let mut params = HashMap::new();
+        params.insert("Input".into(), "3".into());
+        params.insert("Duration".into(), "1".into());
+        dispatch_function("Fade", &params).expect("fade");
+        thread::sleep(Duration::from_millis(200));
+        let out = unit_state();
+        assert_eq!(out.program_source, incoming);
+        assert_eq!(out.preview_source, preview);
+        assert_eq!(out.mix, 0.0);
+        crate::mixer_destroy();
+    }
+
+    fn publish_cut_session() {
+        let json = br#"{
+  "version": 2,
+  "inputs": [{ "id": 10, "name": "Bars", "kind": "Bars" }],
+  "scenes": [
+    { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] },
+    { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] },
+    { "id": 3, "name": "Scene 3", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }
+  ],
+  "units": [{ "id": 1, "name": "MU1" }]
+}"#;
+        assert_eq!(publish_bytes(json), crate::OK);
+    }
+
+    fn set_unit_buses(program: u64, preview: u64) {
+        let state = UnitState {
+            program_source: program,
+            preview_source: preview,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(crate::mixer_unit_set_state(1, &state), crate::OK);
+        }
+    }
+
+    fn unit_state() -> UnitState {
+        let mut out = UnitState::default();
+        unsafe {
+            assert_eq!(crate::mixer_unit_get_state(1, &mut out), crate::OK);
+        }
+        out
     }
 
     #[test]

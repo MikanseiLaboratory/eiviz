@@ -11,9 +11,9 @@ Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `
 
 | Function | Parameters | Action |
 | --- | --- | --- |
-| `Cut` | `Input`, `Mix` | Cuts Preview to Program. If `Input` is set, that input is placed on Preview first |
+| `Cut` | `Input`, `Mix` | Cuts Preview to Program. If `Input` is set, that Scene goes onto Program and Preview is left as-is |
 | `CutDirect` | `Input` (required), `Mix` | Puts the input on Program. Preview does not change |
-| `Fade` | `Input`, `Mix`, `Duration` | Same target as Cut, then Fade. `Duration` is milliseconds. If omitted, the Mixing Unit Fade preset is used, else 1000 |
+| `Fade` | `Input`, `Mix`, `Duration` | Same target as Cut, then Fade. If `Input` is set, Preview is left as-is. `Duration` is milliseconds. If omitted, the Mixing Unit Fade preset is used, else 1000 |
 | `PreviewInput` | `Input` (required), `Mix` | Sets Preview to the input |
 | `ActiveInput` | `Input` (required), `Mix` | Sets Program to the input. Preview does not change |
 | `Snapshot` | `Value`, `Mix` | Saves Program of the Mixing Unit. `Input` is not used |
@@ -22,6 +22,7 @@ Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`). `
 Examples:
 
 - `http://127.0.0.1:8088/api?Function=Fade&Duration=500`
+- `http://127.0.0.1:8088/api?Function=Cut&Input=3`
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
 - `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
 - `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
