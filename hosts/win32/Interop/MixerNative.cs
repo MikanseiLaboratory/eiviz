@@ -600,7 +600,11 @@ internal static partial class MixerNative
     {
         if (code == 0)
             return;
-        throw new InvalidOperationException(Loc.Error(action, code));
+        var message = Loc.Error(action, code);
+        var detail = LastErrorText();
+        if (!string.IsNullOrEmpty(detail))
+            message = $"{message} ({detail})";
+        throw new InvalidOperationException(message);
     }
 }
 

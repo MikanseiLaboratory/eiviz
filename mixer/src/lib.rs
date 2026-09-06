@@ -3538,15 +3538,21 @@ fn render_loop(
                     prepared,
                     reply,
                 } => {
-                    let code = match presenters
-                        .attach(&device, unit_id, kind, surface, width, height, prepared)
-                    {
-                        Ok(()) => {
+                    let code = match panic::catch_unwind(AssertUnwindSafe(|| {
+                        presenters.attach(&device, unit_id, kind, surface, width, height, prepared)
+                    })) {
+                        Ok(Ok(())) => {
                             shared.lock().expect("shared").compose_dirty = true;
                             OK
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
+                            crate::diag::error(&format!("attach surface: {error}"));
                             set_error(&telemetry, error);
+                            ERR_DEVICE
+                        }
+                        Err(_) => {
+                            crate::diag::error("attach surface panicked");
+                            set_error(&telemetry, "attach surface panicked");
                             ERR_DEVICE
                         }
                     };
@@ -3574,12 +3580,20 @@ fn render_loop(
                     prepared,
                     reply,
                 } => {
-                    let code = match presenters.attach_monitor(
-                        &device, monitor_id, source_id, surface, width, height, prepared,
-                    ) {
-                        Ok(()) => OK,
-                        Err(error) => {
+                    let code = match panic::catch_unwind(AssertUnwindSafe(|| {
+                        presenters.attach_monitor(
+                            &device, monitor_id, source_id, surface, width, height, prepared,
+                        )
+                    })) {
+                        Ok(Ok(())) => OK,
+                        Ok(Err(error)) => {
+                            crate::diag::error(&format!("attach monitor: {error}"));
                             set_error(&telemetry, error);
+                            ERR_DEVICE
+                        }
+                        Err(_) => {
+                            crate::diag::error("attach monitor panicked");
+                            set_error(&telemetry, "attach monitor panicked");
                             ERR_DEVICE
                         }
                     };
