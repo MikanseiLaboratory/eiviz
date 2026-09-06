@@ -1,0 +1,4 @@
+module EivizRemote {
+    header "eiviz_remote.h"
+    export *
+}

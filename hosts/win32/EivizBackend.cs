@@ -347,7 +347,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public static RemoteEivizBackend Open(string url, string token)
     {
-        var handle = MixerNative.RemoteOpen(url, token ?? "");
+        var handle = MixerRemote.Open(url, token ?? "");
         if (handle <= 0)
             throw new InvalidOperationException(I18n.Loc.T("msg.remoteConnectFailed"));
         var backend = new RemoteEivizBackend(handle);
@@ -359,7 +359,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     private void Pull(bool force)
     {
-        var statusJson = MixerNative.RemoteStatusText(_handle);
+        var statusJson = MixerRemote.StatusText(_handle);
         var connected = false;
         var lag = false;
         var error = "";
@@ -391,7 +391,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         _epoch = epoch;
         if (!docChanged || Application.Current is not App app)
             return;
-        var json = MixerNative.RemoteSnapshotText(_handle);
+        var json = MixerRemote.SnapshotText(_handle);
         if (string.IsNullOrEmpty(json))
             return;
         var next = SessionStore.FromJson(json);
@@ -403,14 +403,14 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     }
 
     public bool Cut(ulong unitId, bool swap) =>
-        MixerNative.RemoteCut(_handle, unitId, swap ? 1u : 0u) == 0;
+        MixerRemote.Cut(_handle, unitId, swap ? 1u : 0u) == 0;
 
     public bool Preview(ulong unitId, ulong sceneGpuId) =>
-        MixerNative.RemotePreview(_handle, unitId, sceneGpuId) == 0;
+        MixerRemote.Preview(_handle, unitId, sceneGpuId) == 0;
 
     public bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset)
     {
-        var code = MixerNative.RemoteAuto(
+        var code = MixerRemote.Auto(
             _handle, unitId, preset.Kind, preset.DurationMsFor(unit),
             preset.Swap ? 1u : 0u, preset.KeepPreview ? 1u : 0u,
             preset.Easing, preset.Direction, preset.DipR, preset.DipG, preset.DipB,
@@ -421,24 +421,24 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset)
     {
         _ = preset;
-        return MixerNative.RemoteSetMix(_handle, unitId, mix) == 0;
+        return MixerRemote.SetMix(_handle, unitId, mix) == 0;
     }
 
     public bool OverlayAuto(ulong unitId, uint index, uint durationMs, bool toOn) =>
-        MixerNative.RemoteOverlayAuto(_handle, unitId, index, durationMs, toOn ? 1u : 0u) == 0;
+        MixerRemote.OverlayAuto(_handle, unitId, index, durationMs, toOn ? 1u : 0u) == 0;
 
     public bool VideoPlay(ulong inputId, bool playing) =>
-        MixerNative.RemoteVideoPlay(_handle, inputId, playing ? 1u : 0u) == 0;
+        MixerRemote.VideoPlay(_handle, inputId, playing ? 1u : 0u) == 0;
 
     public bool VideoLoop(ulong inputId, bool looping) =>
-        MixerNative.RemoteVideoLoop(_handle, inputId, looping ? 1u : 0u) == 0;
+        MixerRemote.VideoLoop(_handle, inputId, looping ? 1u : 0u) == 0;
 
     public bool VideoSeek(ulong inputId, long positionHns) =>
-        MixerNative.RemoteVideoSeek(_handle, inputId, positionHns) == 0;
+        MixerRemote.VideoSeek(_handle, inputId, positionHns) == 0;
 
     public bool Mutate(string json, ulong expectedRevision, out string error)
     {
-        var code = MixerNative.RemoteMutateCode(_handle, json, expectedRevision);
+        var code = MixerRemote.MutateCode(_handle, json, expectedRevision);
         if (code == 0)
         {
             error = "";
@@ -452,7 +452,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public bool UploadMedia(string path, string kind, string name, bool videoLoop, ulong expectedRevision, out string error)
     {
-        var code = MixerNative.RemoteUpload(_handle, path, kind, name, videoLoop ? 1u : 0u, expectedRevision);
+        var code = MixerRemote.Upload(_handle, path, kind, name, videoLoop ? 1u : 0u, expectedRevision);
         if (code == 0)
         {
             error = "";
@@ -468,7 +468,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         mix = 0;
         try
         {
-            var json = MixerNative.RemoteLiveText(_handle);
+            var json = MixerRemote.LiveText(_handle);
             if (string.IsNullOrEmpty(json))
                 return false;
             using var doc = JsonDocument.Parse(json);
@@ -497,7 +497,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public void SyncPublishedVideo() => _presenter.Sync(PublishedOutputs());
 
-    public void Dispose() => MixerNative.RemoteClose(_handle);
+    public void Dispose() => MixerRemote.Close(_handle);
 }
 
 internal static class HostPresentation

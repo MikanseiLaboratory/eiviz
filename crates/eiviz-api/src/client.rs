@@ -581,7 +581,7 @@ async fn session_once(
                 let msg = msg.map_err(|error| error.to_string())?;
                 match msg {
                     Message::Binary(bytes) => {
-                        let env = decode_envelope(&bytes).map_err(|error| error)?;
+                        let env = decode_envelope(&bytes)?;
                         match env.kind {
                             Some(envelope::Kind::Response(response)) => {
                                 apply_response(view, &response);

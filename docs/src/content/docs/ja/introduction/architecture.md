@@ -11,11 +11,12 @@ eivizの映像合成はMixerを1プロセスとして動かします。
 映像と音声の状態機械はMixer（Rust + wgpu）にあり、OSごとのUIホストが内部のC ABIでそれを操作します。ホスト実装は`hosts/win32`（WPF）、`hosts/macos`（SwiftUI）、`hosts/linux`（開発中）です。
 
 ホストはウィンドウ、操作、プレビュー面など、UI表示と操作を担当します。  
-映像合成、音声処理、入出力の管理、セッションデータはMixerが担当し、根幹の処理をアーキテクチャ上UIから完全に分離することで高いパフォーマンスとクロスプラットフォームを両立しています。
+映像合成、音声処理、入出力の管理、セッションデータはMixerが担当し、根幹の処理をUIから完全に分離することで高いパフォーマンスとクロスプラットフォームを両立しています。
 
-外部からの制御はMixer内の`ControlService`が正本です。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じディスパッチャへ入ります。C ABIはホストとMixerの内部FFIであり、公開APIではありません。APIのlisten（bind、token、メディア保存先）はホストが所有し、セッションJSONには入れません。
+外部からの制御はMixer内の`ControlService`が担当します。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じ経路を通ってディスパッチャーへ入ります。  
 
-Windows/macOSは**リモートGUI**としても起動できます。これは別プロセスです。UIはNDI/OMT受信とHWND/NSView表示のためにローカルMixerを載せますが、リモートのセッションJSONをクライアントGPUへ`SessionReplace`しません。ライブ操作とセッション編集は、信頼できるLANまたはVPN上の認証付き`ws://`で接続先の`ControlService`へ送ります。このリリースではTLSを提供しません。詳細は[eiviz API](/eiviz/ja/developers/api/)です。
+Windows/macOSは**リモートGUI**としても起動できます。  
+ライブ操作とセッション編集は、信頼できるLANまたはVPN上の認証付き`ws://`で接続先の`ControlService`へ送ることで制御します。詳細は[eiviz API](/eiviz/ja/developers/api/)をご確認ください。。
 
 ```mermaid
 flowchart TB

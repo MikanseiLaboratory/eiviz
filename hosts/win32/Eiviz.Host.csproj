@@ -15,11 +15,14 @@
     <InformationalVersion>0.2.0</InformationalVersion>
     <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
     <MixerLibrary>$(RepoRoot)target\release\eiviz_mixer.dll</MixerLibrary>
+    <RemoteLibrary>$(RepoRoot)target\release\eiviz_remote.dll</RemoteLibrary>
   </PropertyGroup>
 
   <Target Name="BuildMixer" BeforeTargets="Build">
-    <Exec Command="cargo build -p eiviz_mixer --locked --release" WorkingDirectory="$(RepoRoot)" />
+    <Exec Command="cargo build -p eiviz_mixer -p eiviz_remote --locked --release" WorkingDirectory="$(RepoRoot)" />
     <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="$(RemoteLibrary)" DestinationFolder="$(OutDir)" />
+    <Error Text="eiviz_remote.dll was not copied to the output directory." Condition="!Exists('$(OutDir)eiviz_remote.dll')" />
     <Copy SourceFiles="$(RepoRoot)target\release\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="Exists('$(RepoRoot)target\release\Processing.NDI.Lib.x64.dll')" />
     <Copy SourceFiles="$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="!Exists('$(OutDir)Processing.NDI.Lib.x64.dll') and '$(NDI_SDK_DIR)' != '' and Exists('$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll')" />
     <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(OutDir)" Condition="!Exists('$(OutDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />
@@ -28,6 +31,8 @@
 
   <Target Name="PublishMixer" AfterTargets="Publish">
     <Copy SourceFiles="$(MixerLibrary)" DestinationFolder="$(PublishDir)" />
+    <Copy SourceFiles="$(RemoteLibrary)" DestinationFolder="$(PublishDir)" />
+    <Error Text="eiviz_remote.dll was not copied to the publish directory." Condition="!Exists('$(PublishDir)eiviz_remote.dll')" />
     <Copy SourceFiles="$(RepoRoot)target\release\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="Exists('$(RepoRoot)target\release\Processing.NDI.Lib.x64.dll')" />
     <Copy SourceFiles="$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and '$(NDI_SDK_DIR)' != '' and Exists('$(NDI_SDK_DIR)\Bin\x64\Processing.NDI.Lib.x64.dll')" />
     <Copy SourceFiles="C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll" DestinationFolder="$(PublishDir)" Condition="!Exists('$(PublishDir)Processing.NDI.Lib.x64.dll') and Exists('C:\Program Files\NDI\NDI 6 SDK\Bin\x64\Processing.NDI.Lib.x64.dll')" />

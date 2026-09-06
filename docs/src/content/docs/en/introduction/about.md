@@ -36,6 +36,7 @@ GPU paths drop through wgpu to the native API on that platform and apply extra o
 
 The compositing engine is the mixer (core). It is Rust + wgpu 30, for real-time GPU work on every supported OS.  
 It builds as a `cdylib` and is called from each host (`hosts/win32` and the others) over an internal C ABI.  
+The remote GUI client is a second `cdylib` (`eiviz_remote`) with the `mixer_remote_*` C ABI so the UI can keep the same calls and load a different library.  
 Session files are canonical JSON owned by the mixer, so a file saved on one OS loads as the same session on another.
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12

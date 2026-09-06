@@ -4,8 +4,11 @@
 # on another machine.
 set -euo pipefail
 BIN="${1:?binary}"
-DYLIB="${2:?dylib}"
-DIR="$(cd "$(dirname "$DYLIB")" && pwd)"
+shift
+if [ "$#" -lt 1 ]; then
+  echo "usage: relocate-dylib.sh BIN DYLIB [DYLIB...]" >&2
+  exit 1
+fi
 
 rewrite_id() {
   local file="$1"
@@ -27,34 +30,53 @@ $(otool -L "$file" | awk -v pat="$pattern" '$1 ~ pat { print $1 }')
 EOF
 }
 
-rewrite_id "$DYLIB" "@rpath/libeiviz_mixer.dylib"
-rewrite_dep "$BIN" "libeiviz_mixer\\.dylib" "@rpath/libeiviz_mixer.dylib"
+DIR=""
+for DYLIB in "$@"; do
+  DIR="$(cd "$(dirname "$DYLIB")" && pwd)"
+  name="$(basename "$DYLIB")"
+  rewrite_id "$DYLIB" "@rpath/$name"
+  pattern="$(printf '%s' "$name" | sed 's/\./\\./g')"
+  rewrite_dep "$BIN" "$pattern" "@rpath/$name"
+  install_name_tool -add_rpath "@executable_path" "$DYLIB" 2>/dev/null || true
+  install_name_tool -add_rpath "@loader_path" "$DYLIB" 2>/dev/null || true
+done
+
 install_name_tool -add_rpath "@executable_path" "$BIN" 2>/dev/null || true
 install_name_tool -add_rpath "@loader_path" "$BIN" 2>/dev/null || true
-install_name_tool -add_rpath "@executable_path" "$DYLIB" 2>/dev/null || true
-install_name_tool -add_rpath "@loader_path" "$DYLIB" 2>/dev/null || true
 
-if [ -f "$DIR/libndi.dylib" ]; then
+if [ -n "$DIR" ] && [ -f "$DIR/libndi.dylib" ]; then
   rewrite_id "$DIR/libndi.dylib" "@rpath/libndi.dylib"
-  rewrite_dep "$DYLIB" "libndi" "@rpath/libndi.dylib"
+  for DYLIB in "$@"; do
+    rewrite_dep "$DYLIB" "libndi" "@rpath/libndi.dylib"
+  done
 fi
-if [ -f "$DIR/libndi.6.dylib" ]; then
+if [ -n "$DIR" ] && [ -f "$DIR/libndi.6.dylib" ]; then
   rewrite_id "$DIR/libndi.6.dylib" "@rpath/libndi.6.dylib"
 fi
 
-refs="$(otool -L "$BIN" | awk '/libeiviz_mixer\.dylib/ { print $1 }')"
-if [ -z "$refs" ]; then
-  echo "eiviz-mac does not link libeiviz_mixer.dylib" >&2
-  otool -L "$BIN" >&2
-  exit 1
-fi
-while IFS= read -r old; do
-  [ -z "$old" ] && continue
-  if [ "$old" != "@rpath/libeiviz_mixer.dylib" ]; then
-    echo "eiviz-mac still references libeiviz_mixer.dylib by a non-@rpath path:" >&2
+require_rpath() {
+  local name="$1"
+  local pattern
+  pattern="$(printf '%s' "$name" | sed 's/\./\\./g')"
+  refs="$(otool -L "$BIN" | awk -v pat="$pattern" '$1 ~ pat { print $1 }')"
+  if [ -z "$refs" ]; then
+    echo "eiviz-mac does not link $name" >&2
     otool -L "$BIN" >&2
     exit 1
   fi
-done <<EOF
+  while IFS= read -r old; do
+    [ -z "$old" ] && continue
+    if [ "$old" != "@rpath/$name" ]; then
+      echo "eiviz-mac still references $name by a non-@rpath path:" >&2
+      otool -L "$BIN" >&2
+      exit 1
+    fi
+  done <<EOF
 $refs
 EOF
+}
+
+require_rpath "libeiviz_mixer.dylib"
+if otool -L "$BIN" | grep -q 'libeiviz_remote\.dylib'; then
+  require_rpath "libeiviz_remote.dylib"
+fi

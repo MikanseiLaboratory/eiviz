@@ -15,7 +15,7 @@ Compose, audio, I/O, and session data live in the mixer. Keeping that work off t
 
 External control is owned by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API. API listen (bind, token, media directory) is host-owned; it is not stored in session JSON.
 
-Windows and macOS can also run as a **remote GUI**. That is a second process: the UI still loads a local mixer for NDI/OMT receive and HWND/NSView present, but it never `SessionReplace`s the remote document onto the client GPU. Live ops and session edits go to the host `ControlService` over authenticated `ws://` on a trusted LAN or VPN. TLS is not provided in this release. Details are in [eiviz API](/eiviz/en/developers/api/).
+Windows and macOS can also run as a **remote GUI**. That is a second process: the UI still loads a local mixer for NDI/OMT receive and HWND/NSView present, but it never `SessionReplace`s the remote document onto the client GPU. The Protobuf client lives in a second `cdylib` (`eiviz_remote` / `MixerRemote`) with the same `mixer_remote_*` C ABI. The host always loads the GPU mixer; remote mode also loads `eiviz_remote`. Live ops and session edits go to the host `ControlService` over authenticated `ws://` on a trusted LAN or VPN. TLS is not provided in this release. Details are in [eiviz API](/eiviz/en/developers/api/).
 
 ```mermaid
 flowchart TB

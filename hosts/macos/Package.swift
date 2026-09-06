@@ -12,12 +12,13 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "EivizMac",
-            dependencies: ["EivizMixer"],
+            dependencies: ["EivizMixer", "EivizRemote"],
             path: "Sources/EivizMac",
             linkerSettings: [
                 .unsafeFlags([
                     "-L\(mixerLib)",
                     "-leiviz_mixer",
+                    "-leiviz_remote",
                     "-Xlinker", "-rpath", "-Xlinker", "@executable_path",
                     "-Xlinker", "-rpath", "-Xlinker", mixerLib,
                     "-Xlinker", "-sectcreate",
@@ -30,6 +31,10 @@ let package = Package(
         .systemLibrary(
             name: "EivizMixer",
             path: "Sources/EivizMixer"
+        ),
+        .systemLibrary(
+            name: "EivizRemote",
+            path: "Sources/EivizRemote"
         ),
     ]
 )

@@ -28,19 +28,25 @@ if [ -z "${LIBCLANG_PATH:-}" ]; then
 fi
 cd "$ROOT"
 if [ -n "$ARCH" ]; then
-  cargo build -p eiviz_mixer --release --locked --target "$ARCH"
+  cargo build -p eiviz_mixer -p eiviz_remote --release --locked --target "$ARCH"
 else
-  cargo build -p eiviz_mixer --release --locked
+  cargo build -p eiviz_mixer -p eiviz_remote --release --locked
 fi
 DYLIB="$EIVIZ_MIXER_LIBDIR/libeiviz_mixer.dylib"
+REMOTE="$EIVIZ_MIXER_LIBDIR/libeiviz_remote.dylib"
 install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"
+install_name_tool -id "@rpath/libeiviz_remote.dylib" "$REMOTE"
 if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" ]; then
   install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib"
+fi
+if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib" ]; then
+  install_name_tool -id "@rpath/libeiviz_remote.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib"
 fi
 cd "$ROOT/hosts/macos"
 swift build "${SWIFT_ARGS[@]}"
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"
+cp -f "$REMOTE" "$BIN/"
 if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" ]; then
   cp -f "$EIVIZ_MIXER_LIBDIR/libndi.dylib" "$BIN/"
 fi
@@ -48,8 +54,8 @@ if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" ]; then
   cp -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" "$BIN/"
 fi
 chmod +x "$ROOT/hosts/macos/relocate-dylib.sh" "$ROOT/hosts/macos/package-app.sh"
-"$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
+"$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/package-app.sh" "$BIN"
 echo "eiviz-mac -> $BIN/eiviz-mac"
-file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
+file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 otool -L "$BIN/eiviz-mac"

@@ -9,6 +9,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$DIR/eiviz-mac" "$APP/Contents/MacOS/"
 cp "$DIR/libeiviz_mixer.dylib" "$APP/Contents/MacOS/"
+cp "$DIR/libeiviz_remote.dylib" "$APP/Contents/MacOS/"
 if [ -f "$DIR/libndi.dylib" ]; then
   cp "$DIR/libndi.dylib" "$APP/Contents/MacOS/"
 fi
@@ -21,5 +22,5 @@ if [ -n "${EIVIZ_VERSION:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$APP/Contents/Info.plist"
 fi
 chmod +x "$ROOT/hosts/macos/relocate-dylib.sh"
-"$ROOT/hosts/macos/relocate-dylib.sh" "$APP/Contents/MacOS/eiviz-mac" "$APP/Contents/MacOS/libeiviz_mixer.dylib"
+"$ROOT/hosts/macos/relocate-dylib.sh" "$APP/Contents/MacOS/eiviz-mac" "$APP/Contents/MacOS/libeiviz_mixer.dylib" "$APP/Contents/MacOS/libeiviz_remote.dylib"
 echo "eiviz-mac.app -> $APP"

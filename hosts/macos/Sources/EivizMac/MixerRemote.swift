@@ -1,4 +1,4 @@
-import EivizMixer
+import EivizRemote
 import Foundation
 import Security
 

@@ -123,6 +123,9 @@ jobs:
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_mixer.dll")) {
             throw "Published output is missing eiviz_mixer.dll"
           }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_remote.dll")) {
+            throw "Published output is missing eiviz_remote.dll"
+          }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Processing.NDI.Lib.x64.dll")) {
             throw "Published output is missing Processing.NDI.Lib.x64.dll"
           }
@@ -222,6 +225,7 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
           cp target/release/eiviz-headless "$STAGING/"
           cp target/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
@@ -232,9 +236,10 @@ jobs:
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
-          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi
@@ -323,6 +328,7 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
@@ -333,9 +339,10 @@ jobs:
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
-          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi

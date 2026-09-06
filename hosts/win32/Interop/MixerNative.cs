@@ -402,54 +402,6 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_snapshot")]
     internal static unsafe partial int CopySnapshot(byte* buffer, nuint capacity);
 
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_open", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int RemoteOpen(string url, string token);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_close")]
-    internal static partial int RemoteClose(int handle);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_copy_snapshot")]
-    internal static unsafe partial int RemoteCopySnapshot(int handle, byte* buffer, nuint capacity);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_copy_live")]
-    internal static unsafe partial int RemoteCopyLive(int handle, byte* buffer, nuint capacity);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_copy_status")]
-    internal static unsafe partial int RemoteCopyStatus(int handle, byte* buffer, nuint capacity);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_cut")]
-    internal static partial int RemoteCut(int handle, ulong unitId, uint swap);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_preview")]
-    internal static partial int RemotePreview(int handle, ulong unitId, ulong sceneId);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_auto")]
-    internal static partial int RemoteAuto(int handle, ulong unitId, uint kind, uint durationMs, uint swap, uint keepPreview, uint easing, uint direction, float dipR, float dipG, float dipB, float dipA, float softness, float param);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_set_mix")]
-    internal static partial int RemoteSetMix(int handle, ulong unitId, float value);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_overlay_auto")]
-    internal static partial int RemoteOverlayAuto(int handle, ulong unitId, uint index, uint durationMs, uint toOn);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_mutate")]
-    internal static unsafe partial int RemoteMutate(int handle, byte* json, nuint length, ulong expectedRevision);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replace")]
-    internal static unsafe partial int RemoteReplace(int handle, byte* json, nuint length, ulong expectedRevision);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_video_play")]
-    internal static partial int RemoteVideoPlay(int handle, ulong inputId, uint playing);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_video_loop")]
-    internal static partial int RemoteVideoLoop(int handle, ulong inputId, uint looping);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_video_seek")]
-    internal static partial int RemoteVideoSeek(int handle, ulong inputId, long positionHns);
-
-    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_upload", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int RemoteUpload(int handle, string path, string kind, string name, uint videoLoop, ulong expectedRevision);
-
     internal static string ApiListenOwnerText()
     {
         var buffer = new byte[256];
@@ -597,37 +549,6 @@ internal static partial class MixerNative
 
     internal static unsafe string SnapshotText() =>
         CopyUtf8(CopySnapshot);
-
-    internal static unsafe string RemoteSnapshotText(int handle) =>
-        CopyUtf8((ptr, cap) => RemoteCopySnapshot(handle, ptr, cap));
-
-    internal static unsafe string RemoteLiveText(int handle) =>
-        CopyUtf8((ptr, cap) => RemoteCopyLive(handle, ptr, cap), 1 << 16);
-
-    internal static unsafe string RemoteStatusText(int handle) =>
-        CopyUtf8((ptr, cap) => RemoteCopyStatus(handle, ptr, cap), 4096);
-
-    internal static void RemoteMutateText(int handle, string json, ulong expectedRevision)
-    {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        unsafe
-        {
-            fixed (byte* ptr = bytes)
-            {
-                ThrowIfFailed(RemoteMutate(handle, ptr, (nuint)bytes.Length, expectedRevision), "Mutate session");
-            }
-        }
-    }
-
-    internal static int RemoteMutateCode(int handle, string json, ulong expectedRevision)
-    {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        unsafe
-        {
-            fixed (byte* ptr = bytes)
-                return RemoteMutate(handle, ptr, (nuint)bytes.Length, expectedRevision);
-        }
-    }
 
     internal static string DiscoverText()
     {

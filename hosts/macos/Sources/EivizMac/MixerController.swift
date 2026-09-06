@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import Darwin
 import EivizMixer
+import EivizRemote
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers

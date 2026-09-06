@@ -525,6 +525,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eiviz_remote"
+version = "0.1.0"
+dependencies = [
+ "eiviz-api",
+ "eiviz-control",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

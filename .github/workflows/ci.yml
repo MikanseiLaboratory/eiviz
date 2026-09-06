@@ -120,13 +120,13 @@ jobs:
           workspaces: .
 
       - name: Format control API
-        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz-headless -- --check
+        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -- --check
 
       - name: Clippy control API
-        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz-headless --locked --no-default-features -- -D warnings
+        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features -- -D warnings
 
       - name: Test control and API
-        run: cargo test -p eiviz-control -p eiviz-api -p eiviz-headless --locked --no-default-features
+        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features
 
       - name: Build eivizctl and headless without GPU
         run: cargo build -p eiviz-headless --locked --bins --no-default-features

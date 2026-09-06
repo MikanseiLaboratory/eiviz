@@ -23,7 +23,6 @@ pub use media_macos::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod main_thread;
 mod native_ws;
-mod remote_client;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;

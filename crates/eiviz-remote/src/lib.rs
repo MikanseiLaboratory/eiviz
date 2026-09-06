@@ -1,11 +1,20 @@
-//! Persistent Protobuf client hosted inside the mixer cdylib so hosts do not
-//! reimplement the wire protocol.
+//! Persistent Protobuf client as its own cdylib so hosts can load GPU mixer
+//! and remote control independently.
+//!
+//! # Safety
+//! Pointer arguments follow the mixer C ABI: UTF-8 C strings may be null (treated
+//! as empty), output buffers must be writable for `cap` bytes, and JSON blobs must
+//! cover `len` bytes.
+
+#![allow(clippy::missing_safety_doc)]
+
+mod abi;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -106,7 +115,7 @@ pub fn close(handle: i32) -> i32 {
     };
     let _ = slot.stop.send(true);
     if let Some(join) = slot.join.take() {
-        crate::diag::join_timeout(join, Duration::from_secs(2), "remote-client");
+        join_timeout(join, Duration::from_secs(2));
     }
     OK
 }
@@ -175,18 +184,19 @@ pub fn cut(handle: i32, unit_id: u64, swap: u32) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move { map_result(session.cut(unit_id, swap != 0).await) })
-        .unwrap_or(ERR_NOT_CREATED)
+    run(handle, async move {
+        map_result(session.cut(unit_id, swap != 0).await)
+    })
+    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn preview(handle: i32, unit_id: u64, scene_id: u64) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.preview(unit_id, scene_id).await) },
-    )
+    run(handle, async move {
+        map_result(session.preview(unit_id, scene_id).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -238,8 +248,10 @@ pub fn set_mix(handle: i32, unit_id: u64, value: f32) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move { map_result(session.set_mix(unit_id, value).await) })
-        .unwrap_or(ERR_NOT_CREATED)
+    run(handle, async move {
+        map_result(session.set_mix(unit_id, value).await)
+    })
+    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn overlay_auto(handle: i32, unit_id: u64, index: u32, duration_ms: u32, to_on: u32) -> i32 {
@@ -264,10 +276,9 @@ pub unsafe fn mutate(handle: i32, json: *const u8, len: usize, expected_revision
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.mutate_session(bytes, expected_revision).await) },
-    )
+    run(handle, async move {
+        map_result(session.mutate_session(bytes, expected_revision).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -279,10 +290,9 @@ pub unsafe fn replace(handle: i32, json: *const u8, len: usize, expected_revisio
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.replace_session(bytes, expected_revision).await) },
-    )
+    run(handle, async move {
+        map_result(session.replace_session(bytes, expected_revision).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -290,10 +300,9 @@ pub fn video_play(handle: i32, input_id: u64, playing: u32) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.video_play(input_id, playing != 0).await) },
-    )
+    run(handle, async move {
+        map_result(session.video_play(input_id, playing != 0).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -301,10 +310,9 @@ pub fn video_loop(handle: i32, input_id: u64, looping: u32) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.video_loop(input_id, looping != 0).await) },
-    )
+    run(handle, async move {
+        map_result(session.video_loop(input_id, looping != 0).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -312,10 +320,9 @@ pub fn video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
     let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
         return ERR_NOT_CREATED;
     };
-    run(
-        handle,
-        async move { map_result(session.video_seek(input_id, position_hns).await) },
-    )
+    run(handle, async move {
+        map_result(session.video_seek(input_id, position_hns).await)
+    })
     .unwrap_or(ERR_NOT_CREATED)
 }
 
@@ -339,7 +346,13 @@ pub unsafe fn upload(
     run(handle, async move {
         map_result(
             session
-                .upload_file(Path::new(&path), &kind, &name, video_loop != 0, expected_revision)
+                .upload_file(
+                    Path::new(&path),
+                    &kind,
+                    &name,
+                    video_loop != 0,
+                    expected_revision,
+                )
                 .await,
         )
     })
@@ -367,11 +380,7 @@ pub extern "C" fn mixer_remote_close(handle: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_remote_copy_snapshot(
-    handle: i32,
-    out: *mut u8,
-    cap: usize,
-) -> i32 {
+pub unsafe extern "C" fn mixer_remote_copy_snapshot(handle: i32, out: *mut u8, cap: usize) -> i32 {
     unsafe { copy_snapshot(handle, out, cap) }
 }
 
@@ -491,4 +500,19 @@ pub unsafe extern "C" fn mixer_remote_upload(
     expected_revision: u64,
 ) -> i32 {
     unsafe { upload(handle, path, kind, name, video_loop, expected_revision) }
+}
+
+fn join_timeout(handle: JoinHandle<()>, timeout: Duration) {
+    let (tx, rx) = mpsc::channel();
+    if thread::Builder::new()
+        .name("eiviz-remote-join".into())
+        .spawn(move || {
+            let _ = handle.join();
+            let _ = tx.send(());
+        })
+        .is_err()
+    {
+        return;
+    }
+    let _ = rx.recv_timeout(timeout);
 }

@@ -35,7 +35,6 @@ GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最�
 ### Mixer
 
 映像合成の中核をMixer（コア）と呼びます。Rust + wgpu 30で、クロスプラットフォームのGPUリアルタイム処理を行います。  
-`cdylib`としてビルドし、各ホスト（`hosts/win32`など）から内部のC ABIで呼び出します。  
 セッションファイルはMixerが所有するJSONで、OSをまたいでも同じセッションとして開けます。
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12
