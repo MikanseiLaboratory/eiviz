@@ -11,8 +11,10 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::abi::{
     ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
-    TRANSITION_FADE, UnitState,
+    TRANSITION_FADE,
 };
+#[cfg(test)]
+use crate::abi::UnitState;
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
 
@@ -403,50 +405,58 @@ fn resolve_incoming(flat: &FlatMap, raw: &str, live: &UnitLive) -> Result<u64, D
 }
 
 fn cut(unit_id: u64, swap: bool, incoming: u64) -> Result<(), DispatchError> {
-    let code = crate::mixer_unit_cut(unit_id, u32::from(swap), incoming);
-    if code == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("cut failed ({code})")))
-    }
+    execute_live(eiviz_control::Command::Cut {
+        unit_id,
+        swap,
+        incoming: if swap {
+            eiviz_control::Incoming::Preview
+        } else {
+            eiviz_control::Incoming::from_u64(incoming)
+        },
+    })
 }
 
 fn fade(unit_id: u64, duration_ms: u32, swap: bool, incoming: u64) -> Result<(), DispatchError> {
-    let code = crate::mixer_unit_auto(
+    execute_live(eiviz_control::Command::Auto {
         unit_id,
-        TRANSITION_FADE,
-        duration_ms.max(1),
-        u32::from(swap),
-        1,
-        0,
-        0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        incoming,
-        0.02,
-        0.0,
-    );
-    if code == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("fade failed ({code})")))
-    }
+        kind: TRANSITION_FADE,
+        duration_ms: duration_ms.max(1),
+        swap,
+        keep_preview: true,
+        easing: 0,
+        direction: 0,
+        dip_r: 0.0,
+        dip_g: 0.0,
+        dip_b: 0.0,
+        dip_a: 1.0,
+        incoming: if swap {
+            eiviz_control::Incoming::Preview
+        } else {
+            eiviz_control::Incoming::from_u64(incoming)
+        },
+        softness: 0.02,
+        param: 0.0,
+    })
 }
 
 fn set_preview(unit_id: u64, source_id: u64) -> Result<(), DispatchError> {
-    let mut state = UnitState::default();
-    let get = unsafe { crate::mixer_unit_get_state(unit_id, &mut state) };
-    if get != OK {
-        return Err(DispatchError::Failed(format!("get state failed ({get})")));
-    }
-    state.preview_source = source_id;
-    let set = unsafe { crate::mixer_unit_set_state(unit_id, &state) };
-    if set == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("set preview failed ({set})")))
+    let scene_id = source_id & !crate::SCENE_BASE;
+    execute_live(eiviz_control::Command::Preview { unit_id, scene_id })
+}
+
+fn execute_live(command: eiviz_control::Command) -> Result<(), DispatchError> {
+    match crate::runtime::control().lock() {
+        Ok(mut svc) => svc
+            .execute(
+                eiviz_control::RequestKey {
+                    client_instance_id: "vmix".into(),
+                    request_id: String::new(),
+                },
+                command,
+            )
+            .map(|_| ())
+            .map_err(|error| DispatchError::Failed(error.to_string())),
+        Err(_) => Err(DispatchError::Failed("control lock".into())),
     }
 }
 

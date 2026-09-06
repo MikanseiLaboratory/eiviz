@@ -12,7 +12,7 @@ public partial class SceneEditorWindow : Window
 {
     private readonly SceneEntry _scene;
     private readonly Session _session;
-    private readonly CommandQueue _commands;
+    private readonly MixerCommands _commands;
     private readonly uint _width;
     private readonly uint _height;
     private readonly List<SceneLayer> _original;

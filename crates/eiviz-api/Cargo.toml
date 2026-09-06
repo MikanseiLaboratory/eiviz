@@ -1,0 +1,25 @@
+[package]
+name = "eiviz-api"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Protobuf control API, WebSocket/TCP transports, and vMix compatibility adapter"
+
+[dependencies]
+eiviz-control.workspace = true
+base64.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+uuid.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"

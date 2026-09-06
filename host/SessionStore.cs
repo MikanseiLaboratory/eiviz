@@ -24,8 +24,10 @@ internal static class SessionStore
 
     public static void Publish(Session session)
     {
-        MixerNative.SessionPublishText(JsonSerializer.Serialize(Document.From(session), Json));
+        MixerNative.SessionReplaceText(JsonSerializer.Serialize(Document.From(session), Json));
     }
+
+    public static void ReplaceRuntime(Session session) => Publish(session);
 
     public static Session Load(string path)
     {

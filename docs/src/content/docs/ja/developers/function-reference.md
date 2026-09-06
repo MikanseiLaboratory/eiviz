@@ -28,3 +28,21 @@ Inputの値は`0`で現在のPreview、`-1`で現在のProgramを指定可能で
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
 - `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
 - `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
+
+## C ABIパリティ
+
+`mixer_*`は固定幅C ABIです。制御は`ControlService`へ収束し、presentation/data-planeはネットワーク公開しません。
+
+| 分類 | 関数 | ネットワーク | 備考 |
+| --- | --- | --- | --- |
+| lifecycle | `mixer_create`/`mixer_destroy`/`mixer_ping` | いいえ | readinessはComposer初期化後。destroyは世代staticをreset |
+| command（ライブ） | `mixer_unit_cut`/`mixer_unit_auto`/`mixer_unit_overlay_auto`/`mixer_unit_set_state`/`mixer_unit_set_custom_wgsl` | Cut/AutoはAPI可 | C ABIもControlService経由 |
+| command（セッション） | `mixer_session_replace`/`mixer_create_unit`/`mixer_define_scene`/`mixer_define_generator`/`mixer_load_still`/`mixer_video_start`/`mixer_omt_connect`/`mixer_ndi_connect`/`mixer_output_add`/`mixer_audio_bus_upsert`など | ReplaceSessionとCRUDはAPI可 | ホストはreplaceを正本にする |
+| query | `mixer_unit_get_state`/`mixer_session_load`/`mixer_session_canonicalize`/`mixer_poll_events`/`mixer_copy_stats` | GetSnapshot/Subscribe | pollは有界 |
+| presentation | `mixer_unit_attach_native`/`mixer_attach_monitor_native`/`mixer_resize_*`/`mixer_detach_*` | いいえ | HWND/NSView |
+| data-plane | `mixer_register_source`/`mixer_push_frame`/`mixer_push_audio`/`mixer_unit_acquire_frame`/`mixer_unit_release_frame` | いいえ | 固定幅のまま |
+| diagnostics | `mixer_last_error`/`mixer_take_fatal`/`mixer_copy_rebar_info` | いいえ | fatal後は同一process再起動でreset |
+| 互換 | `mixer_session_publish`/`mixer_api_configure` | vMix HTTP | publishはdeprecated wrapper |
+
+`mixer_session_replace(json, len, expected_revision)`が正本適用です。`expected_revision=0`は無条件、それ以外はrevision競合で`CONFLICT`です。
+

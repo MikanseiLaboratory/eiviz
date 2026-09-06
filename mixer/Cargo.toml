@@ -1,15 +1,21 @@
 [package]
 name = "eiviz_mixer"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
-authors = ["Shugo Kawamura", "Mikansei Laboratory"]
-license = "PolyForm-Shield-1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+    crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+control-api = ["dep:eiviz-api"]
 
 [dependencies]
+eiviz-control.workspace = true
+eiviz-api = { workspace = true, optional = true }
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -17,9 +23,9 @@ openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatra
 pollster = "0.4"
 raw-window-handle = "0.6"
 base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
 vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "e6cccd45bf6bb0fb6b0617ccc55c74ea4a03c657" }

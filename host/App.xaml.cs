@@ -10,7 +10,7 @@ namespace Eiviz.Host;
 
 public partial class App : Application
 {
-    internal CommandQueue Commands { get; private set; } = null!;
+    internal MixerCommands Commands { get; private set; } = null!;
     internal Session Session { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -42,9 +42,6 @@ public partial class App : Application
 
     private void ReplaceSession(Session session)
     {
-        var previous = Commands;
-        Commands = null!;
-        previous.DisposeAsync().AsTask().ConfigureAwait(false).GetAwaiter().GetResult();
         foreach (var unit in Session.Units.ToArray())
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();
@@ -89,50 +86,12 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.Create(0, Session.Settings.MasterFpsNum, Session.Settings.MasterFpsDen),
             "DX12 mixer initialization");
-        Commands = new CommandQueue();
-        foreach (var unit in Session.Units)
-        {
-            unit.EnsureDefaultTransitions();
-            MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
-            MixerNative.ThrowIfFailed(
-                MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
-                "Configure Mixing Unit");
-        }
+        Commands = new MixerCommands();
         FlipBudget.Configure(Session.Settings.FlipSwapchainLimit);
-        MixerNative.ThrowIfFailed(
-            MixerNative.SetFrameBuffer(Math.Clamp(Session.Settings.FrameBufferFrames, 1u, 8u)),
-            "Set frame buffer");
-        BusTheme.PushMultiviewLabels(Session);
-        MixerNative.ThrowIfFailed(
-            MixerNative.SetRebarOptimization(Session.Settings.RebarOptimizationEnabled ? 1u : 0u),
-            "Set ReBAR optimization");
-        MixerNative.ThrowIfFailed(
-            MixerNative.SetNdiGpuUpload(Session.Settings.NdiGpuUploadEnabled ? 1u : 0u),
-            "Set NDI GPU upload");
         MixerNative.VideoFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra
             : MixerNative.FormatUyvy;
-        var primary = Session.Units[0];
-        foreach (var scene in Session.Scenes)
-            Commands.DefineSceneNow(scene, primary.Width, primary.Height);
-        foreach (var layout in Session.Multiviews)
-            Commands.PushMultiviewNow(layout, primary.Width, primary.Height);
-        foreach (var unit in Session.Units)
-        {
-            var preview = Session.Scenes[0].GpuId;
-            var program = Session.Scenes.Count > 1 ? Session.Scenes[1].GpuId : preview;
-            Commands.PushUnitStateNow(unit.Id, CommandQueue.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
-        }
-        AttachInputs();
-        AudioGraphSync.Push(Session);
-        foreach (var output in Session.Outputs)
-        {
-            if (!output.Enabled)
-                continue;
-            if (output.Transport is not (OutputTransport.Omt or OutputTransport.Ndi))
-                continue;
-            Commands.TryEnqueue(new AddOutputCommand(output));
-        }
+        SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
     }
@@ -263,10 +222,8 @@ public partial class App : Application
         HostLog.WriteCrash(e.Exception);
     }
 
-    protected override async void OnExit(ExitEventArgs e)
+    protected override void OnExit(ExitEventArgs e)
     {
-        if (Commands is not null)
-            await Commands.DisposeAsync();
         foreach (var unit in Session.Units.ToArray())
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();

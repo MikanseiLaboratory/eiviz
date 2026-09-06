@@ -1,6 +1,5 @@
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Threading.Channels;
 using System.Windows;
 using Eiviz.Host.Dialogs;
 using Eiviz.Host.I18n;
@@ -44,30 +43,13 @@ internal sealed record DefineGeneratorCommand(ulong SourceId, uint Kind, float R
 internal sealed record DefineMixInputCommand(ulong SourceId, ulong TargetId, uint SourceKind, uint Delay, ulong AudioBusId) : MixerCommand;
 internal sealed record DropSourceCommand(ulong SourceId) : MixerCommand;
 
-internal sealed class CommandQueue : IAsyncDisposable
+internal sealed class MixerCommands
 {
-    private readonly Channel<MixerCommand> _commands = Channel.CreateUnbounded<MixerCommand>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
-    private readonly CancellationTokenSource _shutdown = new();
-    private readonly Task _consumer;
-    public CommandQueue()
+    public MixerCommands()
     {
-        _consumer = Task.Factory.StartNew(
-            () => ConsumeAsync(_shutdown.Token).GetAwaiter().GetResult(),
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
-            TaskScheduler.Default);
     }
 
-    public bool TryEnqueue(MixerCommand command)
-    {
-        if (IsDeferredIo(command))
-            return _commands.Writer.TryWrite(command);
-        return ApplyHandled(command);
-    }
-
-    private static bool IsDeferredIo(MixerCommand command) =>
-        command is ConnectOmtCommand or ConnectNdiCommand or LoadStillCommand or StartVideoCommand or StartUvcCommand;
+    public bool TryEnqueue(MixerCommand command) => ApplyHandled(command);
 
     public void DefineSceneNow(SceneEntry scene, uint width, uint height)
     {
@@ -265,27 +247,6 @@ internal sealed class CommandQueue : IAsyncDisposable
         {
             foreach (var pin in pins)
                 Marshal.FreeCoTaskMem(pin);
-        }
-    }
-
-    private async Task ConsumeAsync(CancellationToken token)
-    {
-        var inflight = new List<Task>();
-        try
-        {
-            await foreach (var command in _commands.Reader.ReadAllAsync(token))
-            {
-                var captured = command;
-                inflight.Add(Task.Run(() => ApplyHandled(captured)));
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        if (inflight.Count > 0)
-        {
-            try { await Task.WhenAll(inflight).ConfigureAwait(false); }
-            catch (Exception ex) { HostLog.WriteException(ex); }
         }
     }
 
@@ -583,14 +544,5 @@ internal sealed class CommandQueue : IAsyncDisposable
             else
                 MessageBox.Show(message, title);
         });
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _commands.Writer.TryComplete();
-        _shutdown.Cancel();
-        try { await _consumer.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
-        _shutdown.Dispose();
     }
 }

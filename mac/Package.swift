@@ -1,7 +1,7 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-let mixerLib = Context.environment["EIVIZ_MIXER_LIBDIR"] ?? "../mixer/target/release"
+let mixerLib = Context.environment["EIVIZ_MIXER_LIBDIR"] ?? "../target/release"
 
 let package = Package(
     name: "EivizMac",

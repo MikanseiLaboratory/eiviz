@@ -140,10 +140,14 @@ final class MixerController: ObservableObject {
     }
 
     func publishSession() {
+        replaceRuntime()
+    }
+
+    func replaceRuntime() {
         session.selectedUnitId = selectedUnitId
         guard let json = try? SessionFile.encode(session) else { return }
         json.withUnsafeBytes { ptr in
-            _ = mixer_session_publish(ptr.bindMemory(to: UInt8.self).baseAddress, json.count)
+            _ = mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
         }
     }
 
@@ -250,31 +254,10 @@ final class MixerController: ObservableObject {
     func applySession() {
         session.mergeTagCatalogs()
         session.assignMonitors()
-        for unit in session.units {
-            fail(mixer_create_unit(unit.id, unit.width, unit.height), "Create Mixing Unit")
-            fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-        }
-        pushAudio()
-        for scene in session.scenes {
-            pushScene(scene)
-        }
-        let preview = session.scenes.first?.gpuId ?? EIVIZ_SRC_BARS
-        let program = session.scenes.count > 1 ? session.scenes[1].gpuId : preview
-        for unit in session.units {
-            applyBusSources(unitId: unit.id, preview: preview, program: program)
-            pushState(unitId: unit.id, program: program, preview: preview, mix: 0, kind: EIVIZ_TRANSITION_FADE)
-        }
-        attachInputs()
-        for layout in session.multiviews {
-            pushMultiview(layout)
-        }
-        for output in session.outputs where output.enabled && output.transport != .deckLink {
-            addOutput(output)
-        }
+        replaceRuntime()
         selectedSceneId = session.scenes.first?.id
         selectedUnitId = session.selectedUnitId == 0 ? (session.units.first?.id ?? 1) : session.selectedUnitId
         applyVmixApi()
-        publishSession()
     }
 
     func pushAudio() {
@@ -1531,46 +1514,8 @@ final class MixerController: ObservableObject {
     }
 
     private func tickVideoTransport() {
-        var roles: [UInt64: (program: Bool, preview: Bool)] = [:]
-        var unitsRead = 0
-        for unit in session.units {
-            var state = MixerFFI.emptyState()
-            guard mixer_unit_get_state(unit.id, &state) == EIVIZ_OK else { continue }
-            unitsRead += 1
-            markVideoRole(&roles, state.program_source, program: true, preview: false)
-            markVideoRole(&roles, state.preview_source, program: false, preview: true)
-            if state.mix > 0.001 {
-                let incoming = state.incoming_source != 0 ? state.incoming_source : state.preview_source
-                markVideoRole(&roles, incoming, program: true, preview: false)
-            }
-            for slot in unit.overlays where slot.enabled && slot.sceneGpuId != 0 {
-                markVideoRole(&roles, slot.sceneGpuId, program: true, preview: false)
-            }
-        }
-        if !session.units.isEmpty && unitsRead == 0 {
-            return
-        }
-        for id in inputPreviewWindows.keys {
-            markVideoRole(&roles, id, program: false, preview: true)
-        }
-        for input in session.inputs where input.kind == .video {
-            let now = roles[input.id] ?? (false, false)
-            let prev = videoRoles[input.id] ?? (false, false)
-            let roseProgram = now.program && !prev.program
-            let fellProgram = !now.program && prev.program
-            let rosePreview = now.preview && !prev.preview
-            let paused = matchesTrigger(input.videoPauseWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
-            let restarted = matchesTrigger(input.videoRestartWhen, roseProgram: roseProgram, fellProgram: fellProgram, rosePreview: rosePreview)
-            if restarted {
-                _ = mixer_video_seek(input.id, 0)
-            }
-            if paused {
-                _ = mixer_video_set_playing(input.id, 0)
-            } else if restarted || shouldPlay(input.videoPlayWhen, roseProgram: roseProgram, rosePreview: rosePreview, now: now) {
-                _ = mixer_video_set_playing(input.id, 1)
-            }
-            videoRoles[input.id] = now
-        }
+        // Core ControlService owns OnActive/OnPreview/Always. GUI input-preview
+        // windows are monitor subscriptions, not Mixing Unit Preview.
     }
 
     private func markVideoRole(

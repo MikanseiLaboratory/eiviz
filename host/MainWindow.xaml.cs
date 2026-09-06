@@ -85,7 +85,7 @@ public partial class MainWindow : Window
 
     private Session _session => ((App)Application.Current).Session;
 
-    private CommandQueue Commands => ((App)Application.Current).Commands;
+    private MixerCommands Commands => ((App)Application.Current).Commands;
 
     private MixingUnitEntry SelectedUnit =>
         UnitBox.SelectedItem as MixingUnitEntry ?? _session.Units[0];
@@ -1901,7 +1901,7 @@ public partial class MainWindow : Window
         MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
         var preview = _session.Scenes.Count > 0 ? _session.Scenes[0].GpuId : MixerNative.Bars;
         var program = _session.Scenes.Count > 1 ? _session.Scenes[1].GpuId : preview;
-        Commands.PushUnitStateNow(unit.Id, CommandQueue.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
+        Commands.PushUnitStateNow(unit.Id, MixerCommands.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
         _session.Units.Add(unit);
         UnitBox.Items.Refresh();
         UnitBox.SelectedItem = unit;

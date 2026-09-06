@@ -44,7 +44,7 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
@@ -52,9 +52,14 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        working-directory: mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
+
+      - name: Validate sample session
+        run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eiviz.json
 
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
@@ -78,14 +83,53 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Test mixer
-        working-directory: mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
+
+      - name: Validate sample session
+        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
 
       - name: Build Mac host
         run: |
           chmod +x mac/build.sh
           mac/build.sh
+
+  control-api:
+    name: Control and API (Ubuntu, no GPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Format control API
+        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz-headless -- --check
+
+      - name: Clippy control API
+        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz-headless --locked --no-default-features -- -D warnings
+
+      - name: Test control and API
+        run: cargo test -p eiviz-control -p eiviz-api -p eiviz-headless --locked --no-default-features
+
+      - name: Build eivizctl and headless without GPU
+        run: cargo build -p eiviz-headless --locked --bins --no-default-features
+
+      - name: Validate sample session
+        run: ./target/debug/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json

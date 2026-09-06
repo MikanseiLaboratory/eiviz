@@ -363,6 +363,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_publish")]
     internal static unsafe partial int SessionPublish(byte* json, nuint length);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_replace")]
+    internal static unsafe partial int SessionReplace(byte* json, nuint length, ulong expectedRevision);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_poll_events")]
+    internal static unsafe partial int PollEvents(ulong after, byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_api_configure", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ApiConfigure(uint enabled, uint port, string user, string pass);
 
@@ -443,6 +449,18 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionPublish(ptr, (nuint)bytes.Length), "Publish session");
+            }
+        }
+    }
+
+    internal static void SessionReplaceText(string json, ulong expectedRevision = 0)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionReplace(ptr, (nuint)bytes.Length, expectedRevision), "Replace session");
             }
         }
     }

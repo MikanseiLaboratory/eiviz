@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARCH="${EIVIZ_MAC_ARCH:-}"
 SWIFT_ARGS=(-c release)
 if [ -n "$ARCH" ]; then
-  export EIVIZ_MIXER_LIBDIR="$ROOT/mixer/target/${ARCH}/release"
+  export EIVIZ_MIXER_LIBDIR="$ROOT/target/${ARCH}/release"
   case "$ARCH" in
     x86_64-apple-darwin) SWIFT_ARGS+=(--arch x86_64) ;;
     aarch64-apple-darwin) SWIFT_ARGS+=(--arch arm64) ;;
@@ -14,7 +14,7 @@ if [ -n "$ARCH" ]; then
       ;;
   esac
 else
-  export EIVIZ_MIXER_LIBDIR="$ROOT/mixer/target/release"
+  export EIVIZ_MIXER_LIBDIR="$ROOT/target/release"
 fi
 # Empty LIBCLANG_PATH makes bindgen skip its default search and fail.
 if [ -z "${LIBCLANG_PATH:-}" ]; then
@@ -26,11 +26,11 @@ if [ -z "${LIBCLANG_PATH:-}" ]; then
     fi
   fi
 fi
-cd "$ROOT/mixer"
+cd "$ROOT"
 if [ -n "$ARCH" ]; then
-  cargo build --release --locked --target "$ARCH"
+  cargo build -p eiviz_mixer --release --locked --target "$ARCH"
 else
-  cargo build --release --locked
+  cargo build -p eiviz_mixer --release --locked
 fi
 DYLIB="$EIVIZ_MIXER_LIBDIR/libeiviz_mixer.dylib"
 install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"

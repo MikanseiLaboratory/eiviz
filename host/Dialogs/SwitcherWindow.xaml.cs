@@ -69,7 +69,7 @@ public partial class SwitcherWindow : Window
 
     private Session Session => ((App)Application.Current).Session;
 
-    private CommandQueue Commands => ((App)Application.Current).Commands;
+    private MixerCommands Commands => ((App)Application.Current).Commands;
 
     internal void ApplyMixerMix() =>
         MainWindow.ApplyTBarFromMixer(_unit.Id, TBar, ref _tbarLatching, ref _tbarLocked);

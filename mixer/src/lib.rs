@@ -38,6 +38,9 @@ mod thumb;
 mod upload;
 mod vmix_api;
 mod vmix_xml;
+mod runtime;
+
+pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 
 pub use abi::{
     AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
@@ -61,7 +64,52 @@ pub use abi::{
     TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
     TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
-pub use audio::{AudioBusInfo, AudioDeviceInfo};
+pub use runtime::ProcessMixer;
+pub use eiviz_control::{ControlFacade, ControlService, RequestKey};
+
+pub fn runtime_port() -> ProcessMixer {
+    ProcessMixer
+}
+
+pub fn control_service() -> &'static std::sync::Mutex<ControlService> {
+    runtime::control()
+}
+
+pub struct MixerFacade;
+
+impl ControlFacade for MixerFacade {
+    fn execute(
+        &self,
+        key: RequestKey,
+        command: eiviz_control::Command,
+    ) -> eiviz_control::ControlResult<eiviz_control::CommandOutcome> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .execute(key, command)
+    }
+
+    fn snapshot(&self) -> eiviz_control::ControlResult<eiviz_control::Snapshot> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .snapshot()
+    }
+
+    fn events_after(&self, after: u64) -> Vec<eiviz_control::Event> {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.events_after(after))
+            .unwrap_or_default()
+    }
+
+    fn lifecycle(&self) -> eiviz_control::Lifecycle {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.lifecycle())
+            .unwrap_or(eiviz_control::Lifecycle::Failed)
+    }
+}
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, c_char};
@@ -679,6 +727,8 @@ fn prepare_surface_off_slot(
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
     crate::diag::init();
+    crate::diag::reset_generation();
+    reset_frame_caches();
     crate::diag::info("mixer_create");
     let _ = crate::diag::profile_send();
     if fps_num == 0 || fps_den == 0 {
@@ -802,8 +852,51 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
     OK
 }
 
+pub(crate) fn mixer_created() -> bool {
+    mixer_slot()
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+}
+
+pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
+    use eiviz_control::live::{LiveState, UnitLiveState};
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let mut units = HashMap::new();
+        for (id, unit) in &shared.units {
+            units.insert(
+                *id,
+                UnitLiveState {
+                    program_source: unit.state.program_source,
+                    preview_source: unit.state.preview_source,
+                    mix: unit.state.mix,
+                    transitioning: unit.auto.is_some() || unit.state.mix > 0.001,
+                    incoming_source: unit.state.incoming_source,
+                    overlay_sources: unit
+                        .state
+                        .overlays
+                        .iter()
+                        .take(unit.state.overlay_count as usize)
+                        .map(|overlay| overlay.source_id)
+                        .collect(),
+                },
+            );
+        }
+        LiveState { units }
+    })
+    .unwrap_or_default()
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
+    if let Ok(mut svc) = crate::runtime::control().try_lock() {
+        svc.abandon();
+    }
+    mixer_destroy_inner();
+}
+
+pub(crate) fn mixer_destroy_inner() {
     crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
     let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
@@ -831,6 +924,8 @@ pub extern "C" fn mixer_destroy() {
         shutdown_output_worker(worker);
     }
     crate::diag::info("mixer_destroy end");
+    crate::diag::reset_generation();
+    reset_frame_caches();
 }
 
 #[unsafe(no_mangle)]
@@ -1301,8 +1396,8 @@ fn take_cut_to(unit: &mut LiveUnit, swap: bool, incoming: u64) {
     unit.frozen_preview = None;
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
+/// GPU CUT. ControlService calls this; the C ABI entry goes through ControlService.
+pub(crate) fn unit_cut_inner(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -1325,7 +1420,12 @@ pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_auto(
+pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
+    crate::runtime::c_cut(unit_id, swap, incoming_source)
+}
+
+/// GPU AUTO. ControlService calls this; the C ABI entry goes through ControlService.
+pub(crate) fn unit_auto_inner(
     unit_id: u64,
     kind: u32,
     duration_ms: u32,
@@ -1388,6 +1488,41 @@ pub extern "C" fn mixer_unit_auto(
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_unit_auto(
+    unit_id: u64,
+    kind: u32,
+    duration_ms: u32,
+    swap: u32,
+    keep_preview: u32,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    incoming_source: u64,
+    softness: f32,
+    param: f32,
+) -> i32 {
+    crate::runtime::c_auto(
+        unit_id,
+        kind,
+        duration_ms,
+        swap,
+        keep_preview,
+        easing,
+        direction,
+        dip_r,
+        dip_g,
+        dip_b,
+        dip_a,
+        incoming_source,
+        softness,
+        param,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -2548,6 +2683,28 @@ pub unsafe extern "C" fn mixer_session_publish(json: *const u8, len: usize) -> i
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_replace(
+    json: *const u8,
+    len: usize,
+    expected_revision: u64,
+) -> i32 {
+    if json.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    crate::runtime::replace_session_bytes(bytes, expected_revision)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, cap) };
+    crate::runtime::poll_event(after, buf)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_configure(
     enabled: u32,
     port: u32,
@@ -3242,6 +3399,15 @@ fn last_frames() -> &'static Mutex<HashMap<u64, Acquired>> {
 
 fn acquired() -> &'static Mutex<HashMap<u64, Acquired>> {
     ACQUIRED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn reset_frame_caches() {
+    if let Ok(mut slot) = last_frames().lock() {
+        slot.clear();
+    }
+    if let Ok(mut slot) = acquired().lock() {
+        slot.clear();
+    }
 }
 
 fn render_loop(

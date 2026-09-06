@@ -95,7 +95,7 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
@@ -103,8 +103,10 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        working-directory: mixer
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Publish host (win-x64)
         run: |
@@ -124,6 +126,11 @@ jobs:
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Processing.NDI.Lib.x64.dll")) {
             throw "Published output is missing Processing.NDI.Lib.x64.dll"
           }
+          Copy-Item "${{ github.workspace }}\target\release\eiviz-headless.exe" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\target\release\eivizctl.exe" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\headless\eiviz-headless.example.env" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\LICENSE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
+          Copy-Item "${{ github.workspace }}\NOTICE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -194,11 +201,13 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Test mixer
-        working-directory: mixer
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Build Mac host
         run: |
@@ -213,6 +222,9 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp target/release/eiviz-headless "$STAGING/"
+          cp target/release/eivizctl "$STAGING/"
+          cp headless/eiviz-headless.example.env "$STAGING/"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
@@ -288,8 +300,11 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
           key: macos-x64
+
+      - name: Build headless (x86_64)
+        run: cargo build -p eiviz-headless --locked --release --bins --target x86_64-apple-darwin
 
       - name: Build Mac host (x86_64)
         env:
@@ -308,6 +323,9 @@ jobs:
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
+          cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
+          cp headless/eiviz-headless.example.env "$STAGING/"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi

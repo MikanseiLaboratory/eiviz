@@ -10,27 +10,9 @@ internal sealed class VideoTransport
 
     public void Tick(Session session, IEnumerable<ulong> previewWindows)
     {
-        if (!TryCollect(session, previewWindows, out var roles))
-            return;
-        foreach (var input in session.Inputs)
-        {
-            if (input.Kind != InputKind.Video)
-                continue;
-            roles.TryGetValue(input.Id, out var now);
-            _previous.TryGetValue(input.Id, out var prev);
-            var roseProgram = now.OnProgram && !prev.OnProgram;
-            var fellProgram = !now.OnProgram && prev.OnProgram;
-            var rosePreview = now.OnPreview && !prev.OnPreview;
-            var paused = Matches(input.VideoPauseWhen, roseProgram, fellProgram, rosePreview);
-            var restarted = Matches(input.VideoRestartWhen, roseProgram, fellProgram, rosePreview);
-            if (restarted)
-                MixerNative.VideoSeek(input.Id, 0);
-            if (paused)
-                MixerNative.VideoSetPlaying(input.Id, 0);
-            else if (restarted || ShouldPlay(input.VideoPlayWhen, roseProgram, rosePreview, now))
-                MixerNative.VideoSetPlaying(input.Id, 1);
-            _previous[input.Id] = now;
-        }
+        _ = (session, previewWindows);
+        // Core ControlService owns OnActive/OnPreview/Always. GUI input-preview
+        // windows are monitor subscriptions, not Mixing Unit Preview.
     }
 
     public void Forget(ulong id) => _previous.Remove(id);

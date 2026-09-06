@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+  "scenes": [
+    { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+    { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+  ],
+  "units": [{ "id": 1, "name": "MU 1" }]
+}
