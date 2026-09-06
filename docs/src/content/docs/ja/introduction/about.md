@@ -20,8 +20,8 @@ vMixやOBS Studioといった既存ソフトウェアの代替を目指しては
 
 モダンな技術で、性能・操作感・クロスプラットフォームの可搬性を両立することを目標にしています。
 
-映像合成の本体はMixer（コア）に集約し、各OSのUIからC ABIで呼び出します。  
-GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最適化しています。
+映像合成の本体はMixer（コア）に集約し、各OSのUIから内部のC ABIで呼び出します。ホスト実装は`hosts/win32`、`hosts/macos`、`hosts/linux`です。  
+GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最適化しています。制御の正本はMixer内の`ControlService`です。外部APIはvMix互換HTTP/TCPとProtobuf WebSocketです。
 
 | 層 | 技術 |
 | --- | --- |
@@ -35,12 +35,12 @@ GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最�
 ### Mixer
 
 映像合成の中核をMixer（コア）と呼びます。Rust + wgpu 30で、クロスプラットフォームのGPUリアルタイム処理を行います。  
-`cdylib`としてビルドし、C ABI経由で各ホストから呼び出します。  
+`cdylib`としてビルドし、各ホスト（`hosts/win32`など）から内部のC ABIで呼び出します。  
 セッションファイルはMixerが所有するJSONで、OSをまたいでも同じセッションとして開けます。
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12
 
-Windowsホストは.NET 10とC# 14、UIはWPFです。映像処理はGPU側で行い、wgpuの抽象の下からDirect3D 12を使って最適化しています。
+Windowsホストは`hosts/win32`にあり、.NET 10とC# 14、UIはWPFです。映像処理はGPU側で行い、wgpuの抽象の下からDirect3D 12を使って最適化しています。
 
 CPUからGPUへのフレーム転送には、NVIDIAなどが提供するResizable BAR（ReBAR）を使い、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。  
 ReBAR非対応環境では性能が大きく落ちるため、基本的には非推奨です。Windows on ARMには未対応です（[GitHub issue #80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。
@@ -49,7 +49,7 @@ Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境で�
 
 ### macOS: Swift 6 / SwiftUI / Metal
 
-macOSホストはSwift 6/SwiftUIで、Mixerの`dylib`をC ABI経由で呼び出します。描画はMetalです。  
+macOSホストはSwift 6/SwiftUIで、`hosts/macos`からMixerの`dylib`を内部のC ABI経由で呼び出します。描画はMetalです。  
 Apple SiliconのUnified Memoryと組み合わせると、WindowsのReBARに近い転送特性が得られます。
 
 :::note
@@ -64,7 +64,7 @@ MacのディスクリートGPUサポートは、現時点では予定してい�
 開発中の機能です。優先度はWindows/macOSより低く、本番利用は想定していません。
 :::
 
-LinuxではRustとGTK 4（gtk4-rs）、描画はVulkanを想定しています。  
+Linuxでは`hosts/linux`をRustとGTK 4（gtk4-rs）、描画はVulkanで進める想定です。  
 Vulkanのhost-visibleメモリで、WindowsのReBARに近いアップロード経路を取る方針です。  
 利用者と、Linuxを主戦場にする映像オペレーターがチーム内に少ないため、サポート優先度は他プラットフォームより低くしています。
 

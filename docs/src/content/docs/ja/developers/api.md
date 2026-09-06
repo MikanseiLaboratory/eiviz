@@ -3,13 +3,12 @@ title: eiviz API
 description: eiviz固有の制御APIとheadless運用
 ---
 
-eivizの制御面はMixer内の`ControlService`が正本です。vMix互換HTTP、ProtobufのWebSocket/TCP、`eivizctl`はいずれも同じディスパッチャへ変換されます。
+eivizの制御面はMixer内の`ControlService`が正本です。vMix互換HTTP/TCP、ProtobufのWebSocket、`eivizctl`はいずれも同じディスパッチャへ変換されます。vMix互換の待ち受けは[互換API](/eiviz/ja/developers/compatibility/)です。このページはeiviz固有のProtobuf面です。
 
 ## 公開契約
 
 - プロトコル: `eiviz.control.v1`（`crates/eiviz-api/proto/eiviz/control/v1/control.proto`）
 - WebSocket: `ws://127.0.0.1:9400`、subprotocol `eiviz.protobuf.v1`、binary frame 1枚がEnvelope 1個
-- TCP（既定無効）: `EIVZ` + version + 4-byte big-endian length + Protobuf Envelope
 - 公開済みfield numberは変更・再利用しません。削除時は`reserved`へ入れます
 
 映像/音声フレーム、GPU texture、HWND/NSViewなどの描画・データ面はネットワーク公開対象外です。

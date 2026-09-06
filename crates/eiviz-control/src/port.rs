@@ -95,7 +95,8 @@ pub trait MixerPort: Send {
     fn snapshot(&mut self, unit_id: u64, kind: u32, path: &str) -> ControlResult<()>;
     fn configure_vmix_api(
         &mut self,
-        enabled: bool,
+        http_enabled: bool,
+        tcp_enabled: bool,
         port: u32,
         user: &str,
         pass: &str,
@@ -438,7 +439,8 @@ impl MixerPort for NullMixer {
     }
     fn configure_vmix_api(
         &mut self,
-        _enabled: bool,
+        _http_enabled: bool,
+        _tcp_enabled: bool,
         _port: u32,
         _user: &str,
         _pass: &str,

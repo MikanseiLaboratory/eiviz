@@ -48,8 +48,6 @@ enum Cmd {
         session: PathBuf,
         #[arg(long, default_value = "127.0.0.1:9400")]
         bind: String,
-        #[arg(long)]
-        tcp_bind: Option<String>,
     },
 }
 
@@ -63,11 +61,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
-        Cmd::Run {
-            session,
-            bind,
-            tcp_bind,
-        } => match run_daemon(session, bind, tcp_bind) {
+        Cmd::Run { session, bind } => match run_daemon(session, bind) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -100,45 +94,30 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
     Ok(())
 }
 
-fn run_daemon(session: PathBuf, bind: String, tcp_bind: Option<String>) -> Result<(), u8> {
+fn run_daemon(session: PathBuf, bind: String) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
-        let _ = (session, bind, tcp_bind);
+        let _ = (session, bind);
         eprintln!("eiviz-headless error=runtime binary built without mixer runtime");
         Err(EXIT_OTHER)
     }
     #[cfg(feature = "runtime")]
     {
-        run_daemon_runtime(session, bind, tcp_bind)
+        run_daemon_runtime(session, bind)
     }
 }
 
 #[cfg(feature = "runtime")]
-fn run_daemon_runtime(session: PathBuf, bind: String, tcp_bind: Option<String>) -> Result<(), u8> {
+fn run_daemon_runtime(session: PathBuf, bind: String) -> Result<(), u8> {
     let document = load_valid(&session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
         EXIT_BIND
     })?;
-    let tcp_addr = tcp_bind
-        .as_ref()
-        .map(|value| {
-            value.parse::<SocketAddr>().map_err(|error| {
-                eprintln!("eiviz-headless error=bind {error}");
-                EXIT_BIND
-            })
-        })
-        .transpose()?;
     let auth = AuthConfig::from_env();
     if !ws_addr.ip().is_loopback() && !auth.require_auth {
         eprintln!("eiviz-headless error=bind remote bind requires authentication");
         return Err(EXIT_BIND);
-    }
-    if let Some(addr) = tcp_addr {
-        if !addr.ip().is_loopback() && !auth.require_auth {
-            eprintln!("eiviz-headless error=bind remote TCP bind requires authentication");
-            return Err(EXIT_BIND);
-        }
     }
 
     let rt = tokio::runtime::Runtime::new().map_err(|error| {
@@ -173,7 +152,6 @@ fn run_daemon_runtime(session: PathBuf, bind: String, tcp_bind: Option<String>) 
         }
         let config = ServerConfig {
             bind: ws_addr,
-            tcp_bind: tcp_addr,
             auth,
             idle_timeout: std::time::Duration::from_secs(60),
             max_clients: 32,
@@ -184,9 +162,6 @@ fn run_daemon_runtime(session: PathBuf, bind: String, tcp_bind: Option<String>) 
             EXIT_BIND
         })?;
         eprintln!("eiviz-headless ready ws={}", bound.ws_addr);
-        if let Some(addr) = bound.tcp_addr {
-            eprintln!("eiviz-headless ready tcp={addr}");
-        }
         shutdown_signal().await;
         {
             if let Ok(mut svc) = eiviz_mixer::control_service().lock() {

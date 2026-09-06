@@ -375,6 +375,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_api_listen_owner")]
     internal static unsafe partial int ApiListenOwner(byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_tcp_configure")]
+    internal static partial int TcpConfigure(uint enabled);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_tcp_listen_owner")]
+    internal static unsafe partial int TcpListenOwner(byte* buffer, nuint capacity);
+
     internal static string ApiListenOwnerText()
     {
         var buffer = new byte[256];
@@ -383,6 +389,19 @@ internal static partial class MixerNative
             fixed (byte* ptr = buffer)
             {
                 var n = ApiListenOwner(ptr, (nuint)buffer.Length);
+                return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
+            }
+        }
+    }
+
+    internal static string TcpListenOwnerText()
+    {
+        var buffer = new byte[256];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = TcpListenOwner(ptr, (nuint)buffer.Length);
                 return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
             }
         }

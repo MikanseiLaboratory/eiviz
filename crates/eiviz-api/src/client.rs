@@ -2,14 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::codec::{
-    WS_SUBPROTOCOL, decode_envelope, decode_tcp_header, encode_envelope, encode_tcp_frame,
-};
+use crate::codec::{WS_SUBPROTOCOL, decode_envelope, encode_envelope};
 use crate::proto::{
     ClientHello, Cut, Envelope, GetSnapshot, Request, Response, Role, envelope, request,
 };
@@ -19,7 +15,6 @@ use eiviz_control::error::{ControlError, ControlResult};
 pub struct ControlClient {
     pub endpoint: String,
     pub token: String,
-    pub tcp: bool,
 }
 
 impl ControlClient {
@@ -27,7 +22,6 @@ impl ControlClient {
         Self {
             endpoint: endpoint.into(),
             token: token.into(),
-            tcp: false,
         }
     }
 
@@ -146,11 +140,7 @@ impl ControlClient {
     }
 
     async fn roundtrip(&self, request: Request) -> ControlResult<Response> {
-        if self.tcp {
-            self.roundtrip_tcp(request).await
-        } else {
-            self.roundtrip_ws(request).await
-        }
+        self.roundtrip_ws(request).await
     }
 
     async fn roundtrip_ws(&self, request: Request) -> ControlResult<Response> {
@@ -195,60 +185,6 @@ impl ControlClient {
         }
         Err(ControlError::unavailable("connection closed"))
     }
-
-    async fn roundtrip_tcp(&self, request: Request) -> ControlResult<Response> {
-        let mut stream = TcpStream::connect(&self.endpoint)
-            .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        stream
-            .set_nodelay(true)
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let hello = Envelope {
-            kind: Some(envelope::Kind::Hello(ClientHello {
-                protocol: "eiviz.tcp.v1".into(),
-                client_name: "eivizctl".into(),
-                client_instance_id: uuid::Uuid::new_v4().to_string(),
-                token: String::new(),
-                role: Role::Admin as i32,
-            })),
-        };
-        stream
-            .write_all(&encode_tcp_frame(&hello))
-            .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let challenge = read_tcp_envelope(&mut stream).await?;
-        let mut token = self.token.clone();
-        if let Some(envelope::Kind::Event(event)) = challenge.kind {
-            if !event.request_id.is_empty() {
-                token = format!("{}:{}", event.request_id, self.token);
-            }
-        }
-        let authed = Envelope {
-            kind: Some(envelope::Kind::Hello(ClientHello {
-                protocol: "eiviz.tcp.v1".into(),
-                client_name: "eivizctl".into(),
-                client_instance_id: uuid::Uuid::new_v4().to_string(),
-                token,
-                role: Role::Admin as i32,
-            })),
-        };
-        stream
-            .write_all(&encode_tcp_frame(&authed))
-            .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let req = Envelope {
-            kind: Some(envelope::Kind::Request(request)),
-        };
-        stream
-            .write_all(&encode_tcp_frame(&req))
-            .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let env = read_tcp_envelope(&mut stream).await?;
-        match env.kind {
-            Some(envelope::Kind::Response(response)) => Ok(response),
-            _ => Err(ControlError::unavailable("unexpected tcp response")),
-        }
-    }
 }
 
 fn status_ok(response: &Response) -> ControlResult<()> {
@@ -260,21 +196,6 @@ fn status_ok(response: &Response) -> ControlResult<()> {
     } else {
         Err(ControlError::invalid(status.message.clone()))
     }
-}
-
-async fn read_tcp_envelope(stream: &mut TcpStream) -> ControlResult<Envelope> {
-    let mut header = [0u8; 9];
-    stream
-        .read_exact(&mut header)
-        .await
-        .map_err(|error| ControlError::io(error.to_string()))?;
-    let len = decode_tcp_header(&header).map_err(ControlError::invalid)?;
-    let mut payload = vec![0u8; len];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(|error| ControlError::io(error.to_string()))?;
-    decode_envelope(&payload).map_err(ControlError::invalid)
 }
 
 pub async fn wait_ready(endpoint: &str, token: &str, timeout: Duration) -> ControlResult<()> {

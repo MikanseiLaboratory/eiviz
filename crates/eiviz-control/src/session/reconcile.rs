@@ -73,7 +73,8 @@ pub enum ReconcileOp {
         enabled: bool,
     },
     ConfigureVmixApi {
-        enabled: bool,
+        http_enabled: bool,
+        tcp_enabled: bool,
         port: u32,
         user: String,
         pass: String,
@@ -273,12 +274,14 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
 
     if previous.is_none_or(|prev| {
         prev.settings.vmix_api_enabled != next.settings.vmix_api_enabled
+            || prev.settings.vmix_tcp_enabled != next.settings.vmix_tcp_enabled
             || prev.settings.vmix_api_port != next.settings.vmix_api_port
             || prev.settings.vmix_api_user != next.settings.vmix_api_user
             || prev.settings.vmix_api_password != next.settings.vmix_api_password
     }) {
         ops.push(ReconcileOp::ConfigureVmixApi {
-            enabled: next.settings.vmix_api_enabled,
+            http_enabled: next.settings.vmix_api_enabled,
+            tcp_enabled: next.settings.vmix_tcp_enabled,
             port: next.settings.vmix_api_port,
             user: next.settings.vmix_api_user.clone(),
             pass: next.settings.vmix_api_password.clone(),
@@ -503,11 +506,12 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             port.audio_set_headphone_copy_master(*enabled)
         }
         ReconcileOp::ConfigureVmixApi {
-            enabled,
+            http_enabled,
+            tcp_enabled,
             port: api_port,
             user,
             pass,
-        } => port.configure_vmix_api(*enabled, *api_port, user, pass),
+        } => port.configure_vmix_api(*http_enabled, *tcp_enabled, *api_port, user, pass),
         _ => Ok(()),
     }
 }

@@ -103,6 +103,12 @@ public partial class App : Application
         var port = settings.VmixApiPort == 0 ? 8088u : settings.VmixApiPort;
         var user = settings.VmixApiUser ?? "";
         var password = settings.VmixApiPassword ?? "";
+        ApplyHttpApi(app, settings, port, user, password);
+        ApplyTcpApi(app, settings);
+    }
+
+    private static void ApplyHttpApi(App app, SessionSettings settings, uint port, string user, string password)
+    {
         var enabled = settings.VmixApiEnabledValue;
         var code = MixerNative.ApiConfigure(enabled ? 1u : 0u, port, user, password);
         if (code == 0)
@@ -127,11 +133,50 @@ public partial class App : Application
             DispatcherPriority.ApplicationIdle);
     }
 
+    private static void ApplyTcpApi(App app, SessionSettings settings)
+    {
+        var enabled = settings.VmixTcpEnabledValue;
+        var code = MixerNative.TcpConfigure(enabled ? 1u : 0u);
+        if (code == 0)
+            return;
+        if (!enabled || code != 5)
+            MixerNative.ThrowIfFailed(code, "Configure vMix TCP API");
+
+        settings.VmixTcpEnabled = false;
+        var disable = MixerNative.TcpConfigure(0);
+        if (disable != 0)
+            HostLog.Write("WARN", $"disable vMix TCP API after listen failure: {disable}");
+
+        var ownerName = MixerNative.TcpListenOwnerText();
+        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
+        HostLog.Write(
+            "WARN",
+            owner is null
+                ? "vMix TCP API listen failed on port 8099; disabled"
+                : $"vMix TCP API listen failed on port 8099; in use by {owner}; disabled");
+        app.Dispatcher.BeginInvoke(
+            () => ShowTcpListenFailed(owner),
+            DispatcherPriority.ApplicationIdle);
+    }
+
     private static void ShowHttpListenFailed(uint port, string? owner)
     {
         var text = string.IsNullOrEmpty(owner)
             ? Loc.Format("msg.httpListenFailed", port)
             : Loc.Format("msg.httpListenFailedOwner", port, owner);
+        ShowApiWarning(text);
+    }
+
+    private static void ShowTcpListenFailed(string? owner)
+    {
+        var text = string.IsNullOrEmpty(owner)
+            ? Loc.T("msg.tcpListenFailed")
+            : Loc.Format("msg.tcpListenFailedOwner", owner);
+        ShowApiWarning(text);
+    }
+
+    private static void ShowApiWarning(string text)
+    {
         var title = Loc.T("settings.webApi");
         var window = Current.MainWindow;
         if (window is null)

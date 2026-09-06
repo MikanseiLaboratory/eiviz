@@ -9,12 +9,12 @@ use std::time::Duration;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+#[cfg(test)]
+use crate::abi::UnitState;
 use crate::abi::{
     ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
     TRANSITION_FADE,
 };
-#[cfg(test)]
-use crate::abi::UnitState;
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
 
@@ -94,7 +94,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
     slot.config = config.clone();
     if !enabled {
         slot.server = None;
-        crate::diag::http_info("disabled");
+        crate::diag::http_info("http disabled");
         return OK;
     }
     slot.listen_owner = None;
@@ -108,16 +108,16 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         let addr = format!("0.0.0.0:{}", config.port);
         match Server::http(&addr) {
             Ok(server) => {
-                crate::diag::http_info(&format!("listen {addr}"));
+                crate::diag::http_info(&format!("http listen {addr}"));
                 slot.server = Some(Arc::new(server));
             }
             Err(error) => {
                 let owner = crate::tcp_listen_owner::name(config.port);
                 match owner.as_deref() {
                     Some(name) => {
-                        crate::diag::http_error(&format!("listen {addr}: {error} ({name})"))
+                        crate::diag::http_error(&format!("http listen {addr}: {error} ({name})"))
                     }
-                    None => crate::diag::http_error(&format!("listen {addr}: {error}")),
+                    None => crate::diag::http_error(&format!("http listen {addr}: {error}")),
                 }
                 slot.listen_owner = owner;
                 slot.config.enabled = false;
@@ -126,7 +126,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
             }
         }
     } else {
-        crate::diag::http_info(&format!("restart 0.0.0.0:{}", config.port));
+        crate::diag::http_info(&format!("http restart 0.0.0.0:{}", config.port));
     }
     let server = slot.server.clone().expect("http listener");
     match spawn_worker(server, Arc::clone(&slot.stop), config) {
@@ -145,11 +145,13 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
 
 pub fn suspend() {
     stop_worker();
+    crate::vmix_tcp::configure(false);
 }
 
 #[cfg(test)]
 pub fn shutdown() {
     stop_worker();
+    crate::vmix_tcp::configure(false);
     if let Ok(mut slot) = api_slot().lock() {
         slot.server = None;
     }
@@ -188,7 +190,7 @@ fn spawn_worker(
                     }
                 }
             }
-            crate::diag::http_info("stopped");
+            crate::diag::http_info("http stopped");
         })
         .map_err(|error| error.to_string())
 }
@@ -265,13 +267,16 @@ fn handle_request(request: Request, config: &ApiConfig) {
 }
 
 #[derive(Debug)]
-enum DispatchError {
+pub(crate) enum DispatchError {
     Unknown(String),
     BadRequest(String),
     Failed(String),
 }
 
-fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(), DispatchError> {
+pub(crate) fn dispatch_function(
+    name: &str,
+    params: &HashMap<String, String>,
+) -> Result<(), DispatchError> {
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
         | "SnapshotInput" => {}
@@ -460,7 +465,11 @@ fn execute_live(command: eiviz_control::Command) -> Result<(), DispatchError> {
     }
 }
 
-fn current_xml() -> Result<String, String> {
+pub(crate) fn published_document() -> Option<Document> {
+    api_slot().lock().ok()?.document.clone()
+}
+
+pub(crate) fn current_xml() -> Result<String, String> {
     let doc = {
         let slot = api_slot().lock().map_err(|_| "api lock".to_string())?;
         slot.document.clone().unwrap_or_else(empty_document)
@@ -522,7 +531,7 @@ fn split_url(url: &str) -> (&str, &str) {
     }
 }
 
-fn parse_query(query: &str) -> HashMap<String, String> {
+pub(crate) fn parse_query(query: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for pair in query.split('&') {
         if pair.is_empty() {

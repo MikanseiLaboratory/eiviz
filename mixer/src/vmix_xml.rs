@@ -10,7 +10,7 @@ use vmix_core::{
 use crate::abi::{DURATION_FRAMES, DURATION_MS, SCENE_BASE, TRANSITION_FADE};
 use crate::session::{Document, InputKind, TransitionPreset, UnitDto};
 
-const VERSION: &str = "0.2.0";
+pub(crate) const VERSION: &str = "0.2.0";
 const EDITION: &str = "eiviz";
 
 #[derive(Debug, Clone)]

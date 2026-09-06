@@ -135,6 +135,7 @@ internal static class SessionStore
             session.Settings.VmixApiPort = Settings.VmixApiPort == 0 ? 8088 : Settings.VmixApiPort;
             session.Settings.VmixApiUser = Settings.VmixApiUser ?? "";
             session.Settings.VmixApiPassword = Settings.VmixApiPassword ?? "";
+            session.Settings.VmixTcpEnabled = Settings.VmixTcpEnabledValue;
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

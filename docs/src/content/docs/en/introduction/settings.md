@@ -105,13 +105,13 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Web API
 
-vMix-compatible HTTP listen settings. These are stored in the session file.
+vMix-compatible HTTP and vMix-compatible TCP listen settings. Each can be turned on or off independently. These are stored in the session file.
 
-- Enabled: start the HTTP server when the mixer starts. Default on
-- Port: default 8088
-- Username / password: BasicAuth if either is set. Both empty means no auth
+- HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
+- TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
+- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth
 
-If the port is already in use, eiviz starts with the HTTP server off, treats the session as HTTP-off, and shows a warning.
+If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
 Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
 

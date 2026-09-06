@@ -39,7 +39,8 @@ public partial class SettingsWindow : Window
             VmixApiEnabled = session.Settings.VmixApiEnabledValue,
             VmixApiPort = session.Settings.VmixApiPort == 0 ? 8088 : session.Settings.VmixApiPort,
             VmixApiUser = session.Settings.VmixApiUser ?? "",
-            VmixApiPassword = session.Settings.VmixApiPassword ?? ""
+            VmixApiPassword = session.Settings.VmixApiPassword ?? "",
+            VmixTcpEnabled = session.Settings.VmixTcpEnabledValue
         };
         foreach (var output in session.Outputs)
         {
@@ -68,6 +69,7 @@ public partial class SettingsWindow : Window
         FillRebar();
         PaintBusColors();
         WebApiEnabledBox.IsChecked = Settings.VmixApiEnabledValue;
+        WebApiTcpEnabledBox.IsChecked = Settings.VmixTcpEnabledValue;
         WebApiPortBox.Text = Settings.VmixApiPort.ToString();
         WebApiUserBox.Text = Settings.VmixApiUser;
         WebApiPasswordBox.Password = Settings.VmixApiPassword;
@@ -109,6 +111,7 @@ public partial class SettingsWindow : Window
         Settings.ResetBusColors();
         PaintBusColors();
         WebApiEnabledBox.IsChecked = true;
+        WebApiTcpEnabledBox.IsChecked = true;
         WebApiPortBox.Text = "8088";
         WebApiUserBox.Text = "";
         WebApiPasswordBox.Password = "";
@@ -630,6 +633,7 @@ public partial class SettingsWindow : Window
         HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
         _session.NextBusId = _nextBusId;
         Settings.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
+        Settings.VmixTcpEnabled = WebApiTcpEnabledBox.IsChecked == true;
         if (uint.TryParse(WebApiPortBox.Text.Trim(), out var apiPort) && apiPort is > 0 and <= 65535)
             Settings.VmixApiPort = apiPort;
         Settings.VmixApiUser = WebApiUserBox.Text ?? "";

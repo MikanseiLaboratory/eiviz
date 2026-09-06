@@ -161,6 +161,10 @@ struct SettingsView: View {
                 get: { mixer.session.settings.vmixApiEnabled },
                 set: { mixer.session.settings.vmixApiEnabled = $0 }
             ))
+            Toggle(L10n.t("settings.webApiTcpEnabled"), isOn: Binding(
+                get: { mixer.session.settings.vmixTcpEnabled },
+                set: { mixer.session.settings.vmixTcpEnabled = $0 }
+            ))
             Text(L10n.t("settings.webApiPort"))
             TextField("", text: Binding(
                 get: { String(mixer.session.settings.vmixApiPort) },

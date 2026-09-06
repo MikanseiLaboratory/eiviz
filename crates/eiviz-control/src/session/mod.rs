@@ -107,6 +107,8 @@ pub struct SessionSettings {
     pub vmix_api_user: String,
     #[serde(default)]
     pub vmix_api_password: String,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub vmix_tcp_enabled: bool,
 }
 
 impl Default for SessionSettings {
@@ -136,6 +138,7 @@ impl Default for SessionSettings {
             vmix_api_port: api_port(),
             vmix_api_user: String::new(),
             vmix_api_password: String::new(),
+            vmix_tcp_enabled: true,
         }
     }
 }

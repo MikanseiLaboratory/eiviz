@@ -799,6 +799,7 @@ mod tests {
         fn configure_vmix_api(
             &mut self,
             _e: bool,
+            _tcp: bool,
             _p: u32,
             _u: &str,
             _pw: &str,

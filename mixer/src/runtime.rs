@@ -7,7 +7,7 @@ use eiviz_control::port::*;
 use eiviz_control::service::{ControlService, RequestKey};
 use eiviz_control::{Command, Incoming};
 
-use crate::abi::{OverlayDesc, Rect, UnitState, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK};
+use crate::abi::{ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect, UnitState};
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_set_bus_gain,
     mixer_audio_set_headphone_copy_master, mixer_audio_set_input, mixer_audio_set_unit_link,
@@ -455,18 +455,20 @@ impl MixerPort for ProcessMixer {
     fn configure_vmix_api(
         &mut self,
         enabled: bool,
+        tcp_enabled: bool,
         port: u32,
         user: &str,
         pass: &str,
     ) -> ControlResult<()> {
         let user = CString::new(user).unwrap_or_else(|_| CString::new("").unwrap());
         let pass = CString::new(pass).unwrap_or_else(|_| CString::new("").unwrap());
-        let code =
+        let http =
             unsafe { mixer_api_configure(u32::from(enabled), port, user.as_ptr(), pass.as_ptr()) };
-        if code == crate::abi::ERR_IO {
+        let tcp = crate::vmix_tcp::configure(tcp_enabled);
+        if http == crate::abi::ERR_IO || tcp == crate::abi::ERR_IO {
             return Ok(());
         }
-        map_abi(code)
+        map_abi(http).and_then(|_| map_abi(tcp))
     }
 
     fn discover_omt(&self) -> ControlResult<String> {

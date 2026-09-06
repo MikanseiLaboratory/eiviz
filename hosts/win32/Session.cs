@@ -929,7 +929,9 @@ public sealed class SessionSettings
     public uint VmixApiPort { get; set; } = 8088;
     public string VmixApiUser { get; set; } = "";
     public string VmixApiPassword { get; set; } = "";
+    public bool? VmixTcpEnabled { get; set; }
     public bool VmixApiEnabledValue => VmixApiEnabled != false;
+    public bool VmixTcpEnabledValue => VmixTcpEnabled != false;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;

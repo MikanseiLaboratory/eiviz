@@ -3,13 +3,12 @@ title: eiviz API
 description: Native control API and headless operations
 ---
 
-The control plane lives in Mixer as `ControlService`. vMix-compatible HTTP, Protobuf WebSocket/TCP, and `eivizctl` are thin adapters over the same dispatcher.
+The control plane lives in Mixer as `ControlService`. vMix-compatible HTTP/TCP, Protobuf WebSocket, and `eivizctl` are thin adapters over the same dispatcher. vMix listen details are in [Compatibility APIs](/eiviz/en/developers/compatibility/). This page is the native Protobuf surface.
 
 ## Contract
 
 - Protocol: `eiviz.control.v1` (`crates/eiviz-api/proto/eiviz/control/v1/control.proto`)
 - WebSocket: `ws://127.0.0.1:9400`, subprotocol `eiviz.protobuf.v1`, one binary frame per Envelope
-- TCP (off by default): `EIVZ` + version + 4-byte big-endian length + Protobuf Envelope
 - Published field numbers are never reused. Removals go into `reserved`
 
 Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane surfaces are not network APIs.

@@ -29,6 +29,7 @@ mod pool;
 mod present;
 mod readback;
 mod rebar;
+mod runtime;
 mod save;
 mod session;
 pub mod simd;
@@ -37,8 +38,8 @@ mod tcp_listen_owner;
 mod thumb;
 mod upload;
 mod vmix_api;
+mod vmix_tcp;
 mod vmix_xml;
-mod runtime;
 
 pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 
@@ -64,8 +65,8 @@ pub use abi::{
     TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
     TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
-pub use runtime::ProcessMixer;
 pub use eiviz_control::{ControlFacade, ControlService, RequestKey};
+pub use runtime::ProcessMixer;
 
 pub fn runtime_port() -> ProcessMixer {
     ProcessMixer
@@ -2717,6 +2718,16 @@ pub unsafe extern "C" fn mixer_api_configure(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_listen_owner(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::vmix_api::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_tcp_configure(enabled: u32) -> i32 {
+    crate::vmix_tcp::configure(enabled != 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_tcp_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    unsafe { crate::vmix_tcp::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]

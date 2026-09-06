@@ -100,6 +100,11 @@ final class MixerController: ObservableObject {
     }
 
     func applyVmixApi() {
+        applyHttpApi()
+        applyTcpApi()
+    }
+
+    private func applyHttpApi() {
         let settings = session.settings
         let port = settings.vmixApiPort == 0 ? 8088 : settings.vmixApiPort
         let enabled = settings.vmixApiEnabled
@@ -133,9 +138,39 @@ final class MixerController: ObservableObject {
         }
     }
 
+    private func applyTcpApi() {
+        let enabled = session.settings.vmixTcpEnabled
+        let code = mixer_tcp_configure(enabled ? 1 : 0)
+        if code == 0 {
+            return
+        }
+        if !enabled || code != 5 {
+            _ = fail(code, "Configure vMix TCP API")
+            return
+        }
+        session.settings.vmixTcpEnabled = false
+        _ = mixer_tcp_configure(0)
+        let ownerText = MixerFFI.tcpListenOwnerText()
+        let owner = ownerText.isEmpty ? nil : ownerText
+        if let owner {
+            HostLog.write("WARN", "vMix TCP API listen failed on port 8099; in use by \(owner); disabled")
+        } else {
+            HostLog.write("WARN", "vMix TCP API listen failed on port 8099; disabled")
+        }
+        Task { @MainActor in
+            self.showTcpListenFailed(owner: owner)
+        }
+    }
+
     private func showHttpListenFailed(port: UInt32, owner: String?) {
         let message = owner.map { L10n.format("msg.httpListenFailedOwner", "\(port)", $0) }
             ?? L10n.format("msg.httpListenFailed", "\(port)")
+        presentError(message, title: L10n.t("settings.webApi"))
+    }
+
+    private func showTcpListenFailed(owner: String?) {
+        let message = owner.map { L10n.format("msg.tcpListenFailedOwner", $0) }
+            ?? L10n.t("msg.tcpListenFailed")
         presentError(message, title: L10n.t("settings.webApi"))
     }
 

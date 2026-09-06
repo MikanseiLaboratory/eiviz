@@ -20,8 +20,8 @@ Use it in tests, labs, and anywhere a crash is acceptable.
 
 The stack aims for performance, a native feel, and portability across operating systems.
 
-Compositing lives in the mixer core. Each OS UI calls it through a C ABI.  
-GPU paths drop through wgpu to the native API on that platform and apply extra optimization there.
+Compositing lives in the mixer core. Each OS UI calls it through an internal C ABI. Host code lives in `hosts/win32`, `hosts/macos`, and `hosts/linux`.  
+GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer is the control-plane source of truth. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket.
 
 | Layer | Stack |
 | --- | --- |
@@ -35,12 +35,12 @@ GPU paths drop through wgpu to the native API on that platform and apply extra o
 ### Mixer
 
 The compositing engine is the mixer (core). It is Rust + wgpu 30, for real-time GPU work on every supported OS.  
-It builds as a `cdylib` and is called over a C ABI.  
+It builds as a `cdylib` and is called from each host (`hosts/win32` and the others) over an internal C ABI.  
 Session files are canonical JSON owned by the mixer, so a file saved on one OS loads as the same session on another.
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12
 
-The Windows host is .NET 10 and C# 14, with a WPF UI. Video work runs on the GPU. The host reaches through wgpu’s abstraction to Direct3D 12 for extra optimization.
+The Windows host lives in `hosts/win32`. It is .NET 10 and C# 14, with a WPF UI. Video work runs on the GPU. The host reaches through wgpu’s abstraction to Direct3D 12 for extra optimization.
 
 CPU-to-GPU frame upload uses Resizable BAR (ReBAR), as provided by NVIDIA and others, and writes frames straight into GPU VRAM.  
 Machines without ReBAR lose a lot of that gain, so they are not a recommended baseline. Windows on ARM is not supported ([GitHub issue #80](https://github.com/MikanseiLaboratory/eiviz/issues/80)).
@@ -49,7 +49,7 @@ Even on a Resizable BAR system, GPU upload heaps may be unavailable — for exam
 
 ### macOS: Swift 6 / SwiftUI / Metal
 
-The macOS host is Swift 6 / SwiftUI and calls the mixer `dylib` through the C ABI. Drawing uses Metal.  
+The macOS host lives in `hosts/macos`. It is Swift 6 / SwiftUI and calls the mixer `dylib` through the internal C ABI. Drawing uses Metal.  
 On Apple Silicon, unified memory gives transfer characteristics close to ReBAR on Windows.
 
 :::note
@@ -64,7 +64,7 @@ Discrete GPUs on Mac are not planned.
 This path is still in development. It is a lower priority than Windows and macOS, and it is not intended for production.
 :::
 
-The Linux host is planned as Rust and GTK 4 (gtk4-rs), with Vulkan for drawing.  
+The Linux host is planned under `hosts/linux` as Rust and GTK 4 (gtk4-rs), with Vulkan for drawing.  
 The upload path is meant to use Vulkan host-visible memory, in the same spirit as ReBAR on Windows.  
 There are few Linux users so far, and nobody on the team operates video on Linux as their main platform, so support ranks below the other two.
 

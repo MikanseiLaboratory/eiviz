@@ -1229,6 +1229,7 @@ struct SessionSettings: Codable {
     var vmixApiPort: UInt32 = 8088
     var vmixApiUser: String = ""
     var vmixApiPassword: String = ""
+    var vmixTcpEnabled: Bool = true
 
     var rebarOptimizationEnabled: Bool { rebarOptimization != false }
     var ndiGpuUploadEnabled: Bool { ndiGpuUpload != false }
@@ -1268,6 +1269,7 @@ struct SessionSettings: Codable {
         if vmixApiPort == 0 { vmixApiPort = 8088 }
         vmixApiUser = try container.decodeIfPresent(String.self, forKey: .vmixApiUser) ?? ""
         vmixApiPassword = try container.decodeIfPresent(String.self, forKey: .vmixApiPassword) ?? ""
+        vmixTcpEnabled = try container.decodeIfPresent(Bool.self, forKey: .vmixTcpEnabled) ?? true
     }
 }
 

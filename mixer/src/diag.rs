@@ -164,8 +164,8 @@ fn timestamp() -> u64 {
 }
 
 fn write_http(level: &str, message: &str) {
+    write(level, message);
     let line = format!("{} {level} {message}\n", timestamp());
-    eprint!("HTTP {line}");
     let Ok(mut slot) = HTTP_LOG.lock() else {
         return;
     };

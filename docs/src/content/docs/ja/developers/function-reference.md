@@ -5,7 +5,7 @@ description: eivizの関数リファレンス
 
 ## vMix互換API
 
-vMix互換HTTP API（`GET /api?Function=...`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。  
+vMix互換HTTP API（`GET /api?Function=...`）と、同じShortcutを載せるTCP API（ポート`8099`、`FUNCTION Cut Input=3`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。  
 Cut/Fadeなど`Input`とMixing Unitが関連する一部のAPI操作では`Input`クエリにSceneのみ指定可能となり、Inputが指定された場合はエラーを返します。  
 Inputの値は`0`で現在のPreview、`-1`で現在のProgramを指定可能です。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`以降はMixing Unitの番号と紐づきます。
 
@@ -28,4 +28,6 @@ Inputの値は`0`で現在のPreview、`-1`で現在のProgramを指定可能で
 - `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
 - `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
 - `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
+- TCP: `FUNCTION Fade Duration=500`
+- TCP: `FUNCTION Cut Input=3`
 

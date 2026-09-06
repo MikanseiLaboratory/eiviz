@@ -2044,6 +2044,7 @@ public partial class MainWindow : Window
         _session.Settings.VmixApiPort = dialog.Settings.VmixApiPort == 0 ? 8088 : dialog.Settings.VmixApiPort;
         _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
         _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
+        _session.Settings.VmixTcpEnabled = dialog.Settings.VmixTcpEnabledValue;
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         RefreshSceneTiles();

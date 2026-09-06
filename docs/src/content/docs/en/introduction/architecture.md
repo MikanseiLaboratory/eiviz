@@ -8,10 +8,12 @@ eiviz system architecture. The shape is largely the same across platforms.
 ## Shape
 
 eiviz runs as one process.  
-The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over a C ABI. Windows is WPF; macOS is SwiftUI. There is no Linux host yet.
+The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over an internal C ABI. Host code lives in `hosts/win32` (WPF), `hosts/macos` (SwiftUI), and `hosts/linux` (in development).
 
 The host owns windows, interaction, and preview surfaces.  
 Compose, audio, I/O, and session data live in the mixer. Keeping that work off the UI is how the stack stays fast and portable.
+
+External control is owned by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API.
 
 ```mermaid
 flowchart TB
@@ -212,7 +214,7 @@ Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI /
 
 ## Hosts
 
-Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
+Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
 
 Scene tiles, switcher scene thumbs, and input previews are GPU readback thumbnails. Adding scenes or Mix Inputs does not add swapchains. A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 

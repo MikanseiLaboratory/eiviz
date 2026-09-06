@@ -2,10 +2,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::auth::{AuthConfig, Role};
+use crate::codec::{MAX_MESSAGE_BYTES, WS_SUBPROTOCOL, decode_envelope, encode_envelope};
+use crate::proto::{
+    Envelope, Event as ProtoEvent, Response as ProtoResponse, Snapshot as ProtoSnapshot, Status,
+    envelope, request,
+};
 use eiviz_control::error::ControlError;
 use eiviz_control::{Command, ControlFacade, Incoming, RequestKey};
 use futures_util::{SinkExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::accept_hdr_async_with_config;
@@ -14,22 +19,10 @@ use tokio_tungstenite::tungstenite::{
     handshake::server::{Request, Response},
     protocol::WebSocketConfig,
 };
-use uuid::Uuid;
-
-use crate::auth::{AuthConfig, Role};
-use crate::codec::{
-    MAX_MESSAGE_BYTES, WS_SUBPROTOCOL, decode_envelope, decode_tcp_header, encode_envelope,
-    encode_tcp_frame,
-};
-use crate::proto::{
-    ClientHello, Envelope, Event as ProtoEvent, Response as ProtoResponse,
-    Snapshot as ProtoSnapshot, Status, envelope, request,
-};
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
-    pub tcp_bind: Option<SocketAddr>,
     pub auth: AuthConfig,
     pub idle_timeout: Duration,
     pub max_clients: usize,
@@ -39,7 +32,6 @@ impl ServerConfig {
     pub fn loopback(port: u16, auth: AuthConfig) -> Self {
         Self {
             bind: SocketAddr::from(([127, 0, 0, 1], port)),
-            tcp_bind: None,
             auth,
             idle_timeout: Duration::from_secs(60),
             max_clients: 32,
@@ -50,7 +42,6 @@ impl ServerConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct ServerBind {
     pub ws_addr: SocketAddr,
-    pub tcp_addr: Option<SocketAddr>,
 }
 
 pub async fn spawn(config: ServerConfig, control: Arc<dyn ControlFacade>) -> std::io::Result<()> {
@@ -65,14 +56,6 @@ pub async fn listen(
 ) -> std::io::Result<(ServerBind, tokio::task::JoinHandle<std::io::Result<()>>)> {
     let ws = TcpListener::bind(config.bind).await?;
     let ws_addr = ws.local_addr()?;
-    let tcp = match config.tcp_bind {
-        Some(addr) => Some(TcpListener::bind(addr).await?),
-        None => None,
-    };
-    let tcp_addr = match &tcp {
-        Some(listener) => Some(listener.local_addr()?),
-        None => None,
-    };
     let idle_timeout = config.idle_timeout;
     let (events, _) = broadcast::channel::<ProtoEvent>(256);
     let state = Arc::new(State {
@@ -83,41 +66,19 @@ pub async fn listen(
         max_clients: config.max_clients,
         idle_timeout,
     });
-    let task = tokio::spawn(async move { accept_loop(ws, tcp, state).await });
-    Ok((ServerBind { ws_addr, tcp_addr }, task))
+    let task = tokio::spawn(async move { accept_loop(ws, state).await });
+    Ok((ServerBind { ws_addr }, task))
 }
 
-async fn accept_loop(
-    ws: TcpListener,
-    tcp: Option<TcpListener>,
-    state: Arc<State>,
-) -> std::io::Result<()> {
+async fn accept_loop(ws: TcpListener, state: Arc<State>) -> std::io::Result<()> {
     loop {
-        tokio::select! {
-            ok = ws.accept() => {
-                let (stream, _) = ok?;
-                let state = Arc::clone(&state);
-                tokio::spawn(async move {
-                    if let Err(error) = handle_ws(state, stream).await {
-                        eprintln!("eiviz api ws: {error}");
-                    }
-                });
+        let (stream, _) = ws.accept().await?;
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(error) = handle_ws(state, stream).await {
+                eprintln!("eiviz api ws: {error}");
             }
-            ok = async {
-                match &tcp {
-                    Some(listener) => listener.accept().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                let (stream, _) = ok?;
-                let state = Arc::clone(&state);
-                tokio::spawn(async move {
-                    if let Err(error) = handle_tcp(state, stream).await {
-                        eprintln!("eiviz api tcp: {error}");
-                    }
-                });
-            }
-        }
+        });
     }
 }
 
@@ -237,77 +198,6 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
             }
         }
     }
-}
-
-async fn handle_tcp(state: Arc<State>, mut stream: TcpStream) -> Result<(), String> {
-    stream.set_nodelay(true).map_err(|e| e.to_string())?;
-    let nonce = Uuid::new_v4().to_string();
-    let challenge = Envelope {
-        kind: Some(envelope::Kind::Event(ProtoEvent {
-            sequence: 0,
-            session_revision: 0,
-            unix_ms: 0,
-            request_id: nonce.clone(),
-            kind: "challenge".into(),
-            status: None,
-            snapshot: None,
-        })),
-    };
-    stream
-        .write_all(&encode_tcp_frame(&challenge))
-        .await
-        .map_err(|e| e.to_string())?;
-    let hello = read_tcp(&mut stream).await?;
-    let Some(envelope::Kind::Hello(ClientHello {
-        token,
-        client_instance_id,
-        role,
-        ..
-    })) = hello.kind
-    else {
-        return Err("hello required".into());
-    };
-    let expected = format!("{nonce}:{}", state.auth.token);
-    if state.auth.require_auth
-        && !(crate::auth::AuthConfig {
-            token: expected,
-            require_auth: true,
-        })
-        .check(&token)
-        && !state.auth.check(&token)
-    {
-        return Err("unauthorized".into());
-    }
-    let role =
-        Role::from_proto(crate::proto::Role::try_from(role).unwrap_or(crate::proto::Role::Read));
-    loop {
-        let env = read_tcp(&mut stream).await?;
-        let Some(envelope::Kind::Request(request)) = env.kind else {
-            continue;
-        };
-        let response = dispatch(&state, &client_instance_id, role, request);
-        stream
-            .write_all(&encode_tcp_frame(&response))
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut last_seq = 0u64;
-        flush_events(&state, &mut last_seq);
-    }
-}
-
-async fn read_tcp(stream: &mut TcpStream) -> Result<Envelope, String> {
-    let mut header = [0u8; 9];
-    stream
-        .read_exact(&mut header)
-        .await
-        .map_err(|e| e.to_string())?;
-    let len = decode_tcp_header(&header)?;
-    let mut payload = vec![0u8; len];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(|e| e.to_string())?;
-    decode_envelope(&payload)
 }
 
 fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Request) -> Envelope {
@@ -684,7 +574,6 @@ mod tests {
         let control = ready_control();
         let config = ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
-            tcp_bind: None,
             auth: AuthConfig {
                 token: "secret".into(),
                 require_auth: true,
@@ -706,7 +595,6 @@ mod tests {
         let control = ready_control();
         let config = ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
-            tcp_bind: None,
             auth: AuthConfig {
                 token: String::new(),
                 require_auth: false,
