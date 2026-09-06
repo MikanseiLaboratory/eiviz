@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Assemble eiviz-mac.app so NDI/Bonjour and local-network TCC see a real bundle.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DIR="${1:?directory containing eiviz-mac}"
 DIR="$(cd "$DIR" && pwd)"
 APP="$DIR/eiviz-mac.app"
@@ -15,11 +15,11 @@ fi
 if [ -f "$DIR/libndi.6.dylib" ]; then
   cp "$DIR/libndi.6.dylib" "$APP/Contents/MacOS/"
 fi
-cp "$ROOT/mac/Sources/EivizMac/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/hosts/macos/Sources/EivizMac/Info.plist" "$APP/Contents/Info.plist"
 if [ -n "${EIVIZ_VERSION:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EIVIZ_VERSION" "$APP/Contents/Info.plist"
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$APP/Contents/Info.plist"
 fi
-chmod +x "$ROOT/mac/relocate-dylib.sh"
-"$ROOT/mac/relocate-dylib.sh" "$APP/Contents/MacOS/eiviz-mac" "$APP/Contents/MacOS/libeiviz_mixer.dylib"
+chmod +x "$ROOT/hosts/macos/relocate-dylib.sh"
+"$ROOT/hosts/macos/relocate-dylib.sh" "$APP/Contents/MacOS/eiviz-mac" "$APP/Contents/MacOS/libeiviz_mixer.dylib"
 echo "eiviz-mac.app -> $APP"

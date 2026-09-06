@@ -110,7 +110,7 @@ jobs:
 
       - name: Publish host (win-x64)
         run: |
-          dotnet publish host\Eiviz.Host.csproj `
+          dotnet publish hosts\win32\Eiviz.Host.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
@@ -211,14 +211,14 @@ jobs:
 
       - name: Build Mac host
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
 
       - name: Package zip
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-arm64"
-          BIN="$(cd mac && swift build -c release --show-bin-path)"
+          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
@@ -231,9 +231,9 @@ jobs:
           if [ -f "$BIN/libndi.6.dylib" ]; then
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh mac/package-app.sh
-          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
+          chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
@@ -310,16 +310,16 @@ jobs:
         env:
           EIVIZ_MAC_ARCH: x86_64-apple-darwin
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
-          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
+          BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
 
       - name: Package zip
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-x64"
-          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
@@ -332,9 +332,9 @@ jobs:
           if [ -f "$BIN/libndi.6.dylib" ]; then
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh mac/package-app.sh
-          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
+          chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"

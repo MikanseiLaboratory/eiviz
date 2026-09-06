@@ -97,8 +97,8 @@ jobs:
 
       - name: Build Mac host
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
 
   control-api:
     name: Control and API (Ubuntu, no GPU)

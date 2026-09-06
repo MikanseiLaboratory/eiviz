@@ -19,8 +19,8 @@ https://github.com/MikanseiLaboratory/eiviz
   - 特にGPUテキスチャをUIに表示する機能は、1920x1080の高画質なデータを毎秒60枚スムーズに転送されることが求められるため、可能な限りボトルネックを排除しプラットフォーム毎の最適化を使用する必要があります。
   - しかし、クロスプラットフォームの保守性を優先するため、traitなどの抽象化は正しく使い、Rustのゼロコスト抽象化は出来る限り活用する必要があります。
 - UI部分/ホスト部
-  - GUI/操作面は「ホスト」や「UI」と呼ばれており、これはOSごとに実装が別れています。
-  - WindowsではC# 14 + WPF, macOSではSwift6 + SwiftUI、Linuxは現在開発中でRust、gtk4-rsとVulkanを予定しています。
+  - GUI/操作面は「ホスト」や「UI」と呼ばれており、OSごとに`hosts/`へ分かれています。
+  - Windowsは`hosts/win32`（C# 14 + WPF）、macOSは`hosts/macos`（Swift 6 + SwiftUI）、Linuxは`hosts/linux`（開発中。Rust、gtk4-rsとVulkanを予定）。
   - また、現在未実装ですがheadless機能があり、UIを完全にオフした状態で走らせることも可能です。
   - 映像合成に関する処理や、操作・表示 に関係しない処理をここにおいてはいけません。headlessモードや分離に影響が出てパフォーマンスが悪化する恐れがある為です。
     - Windows

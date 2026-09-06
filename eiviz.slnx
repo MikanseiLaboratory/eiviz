@@ -1,5 +1,5 @@
 <Solution>
-  <Folder Name="/host/">
-    <Project Path="host/Eiviz.Host.csproj" />
+  <Folder Name="/hosts/win32/">
+    <Project Path="hosts/win32/Eiviz.Host.csproj" />
   </Folder>
 </Solution>

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="${EIVIZ_MAC_ARCH:-}"
 SWIFT_ARGS=(-c release)
 if [ -n "$ARCH" ]; then
@@ -37,7 +37,7 @@ install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"
 if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" ]; then
   install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib"
 fi
-cd "$ROOT/mac"
+cd "$ROOT/hosts/macos"
 swift build "${SWIFT_ARGS[@]}"
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"
@@ -47,9 +47,9 @@ fi
 if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" ]; then
   cp -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" "$BIN/"
 fi
-chmod +x "$ROOT/mac/relocate-dylib.sh" "$ROOT/mac/package-app.sh"
-"$ROOT/mac/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
-"$ROOT/mac/package-app.sh" "$BIN"
+chmod +x "$ROOT/hosts/macos/relocate-dylib.sh" "$ROOT/hosts/macos/package-app.sh"
+"$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
+"$ROOT/hosts/macos/package-app.sh" "$BIN"
 echo "eiviz-mac -> $BIN/eiviz-mac"
 file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib"
 otool -L "$BIN/eiviz-mac"

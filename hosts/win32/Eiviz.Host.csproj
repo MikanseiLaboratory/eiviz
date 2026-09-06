@@ -13,7 +13,7 @@
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
     <Version>0.2.0</Version>
     <InformationalVersion>0.2.0</InformationalVersion>
-    <RepoRoot>$(MSBuildThisFileDirectory)..\</RepoRoot>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
     <MixerLibrary>$(RepoRoot)target\release\eiviz_mixer.dll</MixerLibrary>
   </PropertyGroup>
 
@@ -35,8 +35,8 @@
   </Target>
 
   <ItemGroup>
-    <Content Include="..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\NOTICE" Link="NOTICE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\NOTICE" Link="NOTICE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
