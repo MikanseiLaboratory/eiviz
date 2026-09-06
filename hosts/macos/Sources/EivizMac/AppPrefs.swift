@@ -15,6 +15,11 @@ enum AppThemeMode: String, Codable {
     case system
 }
 
+enum HostConnectionMode: String, Codable {
+    case local
+    case remote
+}
+
 final class AppPrefs: ObservableObject {
     nonisolated(unsafe) static let shared = AppPrefs()
 
@@ -24,6 +29,13 @@ final class AppPrefs: ObservableObject {
     @Published var recentSessions: [String]
     @Published var recentStills: [String]
     @Published var recentVideos: [String]
+    @Published var connectionMode: HostConnectionMode
+    @Published var remoteUrl: String
+    @Published var nativeApiEnabled: Bool
+    @Published var nativeApiBind: String
+    @Published var nativeApiPort: UInt32
+    @Published var nativeApiRole: String
+    @Published var mediaDirectory: String
     @Published var localeRevision = 0
 
     private static var storeURL: URL {
@@ -40,6 +52,13 @@ final class AppPrefs: ObservableObject {
         recentSessions = loaded.recentSessions
         recentStills = loaded.recentStills
         recentVideos = loaded.recentVideos
+        connectionMode = loaded.connectionMode
+        remoteUrl = loaded.remoteUrl
+        nativeApiEnabled = loaded.nativeApiEnabled
+        nativeApiBind = loaded.nativeApiBind
+        nativeApiPort = loaded.nativeApiPort
+        nativeApiRole = loaded.nativeApiRole
+        mediaDirectory = loaded.mediaDirectory
     }
 
     func save() {
@@ -50,6 +69,13 @@ final class AppPrefs: ObservableObject {
         dto.recentSessions = recentSessions
         dto.recentStills = recentStills
         dto.recentVideos = recentVideos
+        dto.connectionMode = connectionMode
+        dto.remoteUrl = remoteUrl
+        dto.nativeApiEnabled = nativeApiEnabled
+        dto.nativeApiBind = nativeApiBind
+        dto.nativeApiPort = nativeApiPort
+        dto.nativeApiRole = nativeApiRole
+        dto.mediaDirectory = mediaDirectory
         do {
             try FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(dto).write(to: Self.storeURL, options: .atomic)
@@ -103,6 +129,13 @@ final class AppPrefs: ObservableObject {
         var recentSessions: [String] = []
         var recentStills: [String] = []
         var recentVideos: [String] = []
+        var connectionMode: HostConnectionMode = .local
+        var remoteUrl: String = "ws://127.0.0.1:9400"
+        var nativeApiEnabled: Bool = true
+        var nativeApiBind: String = "127.0.0.1"
+        var nativeApiPort: UInt32 = 9400
+        var nativeApiRole: String = "admin"
+        var mediaDirectory: String = ""
 
         init() {}
 
@@ -114,6 +147,13 @@ final class AppPrefs: ObservableObject {
             recentSessions = try container.decodeIfPresent([String].self, forKey: .recentSessions) ?? []
             recentStills = try container.decodeIfPresent([String].self, forKey: .recentStills) ?? []
             recentVideos = try container.decodeIfPresent([String].self, forKey: .recentVideos) ?? []
+            connectionMode = try container.decodeIfPresent(HostConnectionMode.self, forKey: .connectionMode) ?? .local
+            remoteUrl = try container.decodeIfPresent(String.self, forKey: .remoteUrl) ?? "ws://127.0.0.1:9400"
+            nativeApiEnabled = try container.decodeIfPresent(Bool.self, forKey: .nativeApiEnabled) ?? true
+            nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"
+            nativeApiPort = try container.decodeIfPresent(UInt32.self, forKey: .nativeApiPort) ?? 9400
+            nativeApiRole = try container.decodeIfPresent(String.self, forKey: .nativeApiRole) ?? "admin"
+            mediaDirectory = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
         }
     }
 }

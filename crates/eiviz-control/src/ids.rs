@@ -1,5 +1,6 @@
 use crate::error::{ControlError, ControlResult};
 use crate::session::{Document, InputDto, SceneDto};
+use serde::{Deserialize, Serialize};
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
@@ -23,7 +24,8 @@ pub fn mu_preview(unit_id: u64) -> u64 {
     MU_SOURCE_FLAG | MU_BUS_PREVIEW | (unit_id & MU_ID_MASK)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ResourceKind {
     Input,
     Scene,

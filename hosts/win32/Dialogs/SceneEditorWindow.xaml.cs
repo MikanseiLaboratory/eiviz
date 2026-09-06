@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Eiviz.Host;
+using Eiviz.Host.I18n;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -54,9 +55,12 @@ public partial class SceneEditorWindow : Window
             PushGpu();
             AttachDrags();
             ListReorder.Attach(LayerList, MoveLayer);
-            Dispatcher.BeginInvoke(
-                () => PreviewHost.RetargetMonitor(monitorId, scene.GpuId),
-                DispatcherPriority.Loaded);
+            if (!App.IsRemote)
+            {
+                Dispatcher.BeginInvoke(
+                    () => PreviewHost.RetargetMonitor(monitorId, scene.GpuId),
+                    DispatcherPriority.Loaded);
+            }
         };
     }
 
@@ -833,7 +837,16 @@ public partial class SceneEditorWindow : Window
         _scene.Name = string.IsNullOrWhiteSpace(NameBox.Text) ? _scene.Name : NameBox.Text.Trim();
         if (_tags is { } tags)
             TagCatalog.Replace(_scene.Tags, tags.Selected);
-        PushGpu();
+        if (Application.Current is App { Backend.IsRemote: true } app)
+        {
+            if (!app.Backend.Mutate(MutationJson.UpsertScene(_scene), app.Backend.Revision, out var error))
+            {
+                MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
+                return;
+            }
+        }
+        else
+            PushGpu();
         DialogResult = true;
     }
 

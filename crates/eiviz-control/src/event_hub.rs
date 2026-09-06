@@ -60,6 +60,7 @@ impl EventHub {
             | Event::TransitionCompleted { meta, .. }
             | Event::Lag { meta, .. }
             | Event::Failed { meta, .. }
+            | Event::Discovered { meta, .. }
             | Event::Shutdown { meta } => {
                 meta.sequence = sequence;
             }

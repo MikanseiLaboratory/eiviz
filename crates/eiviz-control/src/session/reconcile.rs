@@ -292,16 +292,6 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         });
     }
 
-    if previous.is_none_or(|prev| {
-        prev.settings.native_api_enabled != next.settings.native_api_enabled
-            || prev.settings.native_api_port != next.settings.native_api_port
-    }) {
-        ops.push(ReconcileOp::ConfigureNativeApi {
-            enabled: next.settings.native_api_enabled,
-            port: next.settings.native_api_port,
-        });
-    }
-
     for id in prev_units {
         if !next_units.contains(&id) {
             ops.push(ReconcileOp::DestroyUnit { id });

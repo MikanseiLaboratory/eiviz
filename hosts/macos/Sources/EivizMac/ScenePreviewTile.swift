@@ -18,6 +18,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let previewColor: Color
     let programColor: Color
     let inactiveColor: Color
+    let showThumb: Bool
     let onPreview: () -> Void
     let onCut: () -> Void
     let onLoop: () -> Void
@@ -45,6 +46,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             && lhs.playing == rhs.playing
             && lhs.muted == rhs.muted
             && lhs.hasVideo == rhs.hasVideo
+            && lhs.showThumb == rhs.showThumb
     }
 
     private var wanted: Bool { !previewCollapsed && (preview || program || selected || appeared) }
@@ -70,15 +72,21 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             titleBar
-            ThumbRepresentable(
-                sourceId: gpuId,
-                width: 176,
-                height: 90,
-                interval: interval,
-                wanted: wanted,
-                onClick: onPreview
-            )
-            .frame(width: 176, height: 90)
+            if showThumb {
+                ThumbRepresentable(
+                    sourceId: gpuId,
+                    width: 176,
+                    height: 90,
+                    interval: interval,
+                    wanted: wanted,
+                    onClick: onPreview
+                )
+                .frame(width: 176, height: 90)
+            } else {
+                Color.black.frame(width: 176, height: 90)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onPreview)
+            }
             HStack(spacing: 1) {
                 chip("CUT", action: onCut)
                 chip("Loop", action: onLoop)

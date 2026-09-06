@@ -77,6 +77,16 @@ public partial class SettingsWindow : Window
         WebApiWsPortBox.Text = Settings.NativeApiPort.ToString();
         WebApiUserBox.Text = Settings.VmixApiUser;
         WebApiPasswordBox.Password = Settings.VmixApiPassword;
+        if (App.IsRemote)
+        {
+            DisplayPanel.IsEnabled = false;
+            PerformancePanel.IsEnabled = false;
+            OutputPanel.IsEnabled = false;
+            MultiviewPanel.IsEnabled = false;
+            AudioBusPanel.IsEnabled = false;
+            AdvancedPanel.IsEnabled = false;
+            WebApiPanel.IsEnabled = false;
+        }
     }
 
     public SessionSettings Settings { get; }

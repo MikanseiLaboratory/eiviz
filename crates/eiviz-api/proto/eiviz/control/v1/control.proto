@@ -49,6 +49,12 @@ message Request {
     SnapshotCmd snapshot_cmd = 29;
     ReplaceSession replace_session = 30;
     Discover discover = 31;
+    OverlayAuto overlay_auto = 32;
+    MutateSession mutate_session = 33;
+    BeginMediaUpload begin_media_upload = 34;
+    UploadMediaChunk upload_media_chunk = 35;
+    CommitMediaUpload commit_media_upload = 36;
+    AbortMediaUpload abort_media_upload = 37;
     Shutdown shutdown = 40;
   }
 }
@@ -61,6 +67,7 @@ message Response {
   oneof payload {
     Capabilities capabilities = 10;
     Snapshot snapshot = 11;
+    UploadAccepted upload_accepted = 12;
   }
 }
 
@@ -72,6 +79,11 @@ message Event {
   string kind = 5;
   Status status = 6;
   Snapshot snapshot = 7;
+  bytes live_json = 8;
+  bytes document_json = 9;
+  string epoch = 10;
+  string discover_kind = 11;
+  string discover_payload = 12;
 }
 
 message Status {
@@ -112,6 +124,14 @@ message Auto {
   uint32 duration_ms = 4;
   bool swap = 5;
   bool keep_preview = 6;
+  uint32 easing = 7;
+  uint32 direction = 8;
+  float dip_r = 9;
+  float dip_g = 10;
+  float dip_b = 11;
+  float dip_a = 12;
+  float softness = 13;
+  float param = 14;
 }
 
 message SetMix {
@@ -179,4 +199,49 @@ message Snapshot {
   uint64 sequence = 2;
   bytes document_json = 3;
   string lifecycle = 4;
+  bytes live_json = 5;
+  bytes resources_json = 6;
+  string epoch = 7;
+  Capabilities capabilities = 8;
+}
+
+message OverlayAuto {
+  ResourceRef unit = 1;
+  uint32 index = 2;
+  uint32 duration_ms = 3;
+  bool to_on = 4;
+}
+
+message MutateSession {
+  uint64 expected_revision = 1;
+  bytes mutation_json = 2;
+}
+
+message BeginMediaUpload {
+  string file_name = 1;
+  string media_kind = 2;
+  uint64 size_bytes = 3;
+  string sha256_hex = 4;
+  string input_name = 5;
+  bool video_loop = 6;
+}
+
+message UploadMediaChunk {
+  string upload_id = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message CommitMediaUpload {
+  string upload_id = 1;
+  uint64 expected_revision = 2;
+}
+
+message AbortMediaUpload {
+  string upload_id = 1;
+}
+
+message UploadAccepted {
+  string upload_id = 1;
+  uint32 chunk_size = 2;
 }

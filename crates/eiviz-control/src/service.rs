@@ -1,16 +1,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use crate::command::{Command, Incoming};
+use crate::command::{Command, Incoming, SessionMutation};
 use crate::error::{ControlError, ControlResult};
 use crate::event::{EnvelopeMeta, Event};
 use crate::event_hub::EventHub;
 use crate::ids::Resolver;
 use crate::lifecycle::Lifecycle;
 use crate::live::ResourceStatus;
-use crate::port::{AutoApply, MixerPort};
+use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Capabilities, Query, Snapshot};
 use crate::session::Document;
+use crate::session::mutate;
 use crate::session::reconcile::{plan, repair_live};
 use crate::session::store::CanonicalSessionStore;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
@@ -45,6 +46,7 @@ pub struct ControlService {
     video_roles: HashMap<u64, VideoRoles>,
     dedupe: HashMap<RequestKey, CachedOutcome>,
     dedupe_order: VecDeque<RequestKey>,
+    epoch: String,
 }
 
 impl ControlService {
@@ -59,6 +61,7 @@ impl ControlService {
             video_roles: HashMap::new(),
             dedupe: HashMap::new(),
             dedupe_order: VecDeque::new(),
+            epoch: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -68,6 +71,10 @@ impl ControlService {
 
     pub fn revision(&self) -> u64 {
         self.store.revision()
+    }
+
+    pub fn epoch(&self) -> &str {
+        &self.epoch
     }
 
     pub fn document(&self) -> Option<&Document> {
@@ -150,6 +157,7 @@ impl ControlService {
             resources: self.resources.clone(),
             capabilities: Capabilities::default(),
             lifecycle: self.lifecycle,
+            epoch: self.epoch.clone(),
         })
     }
 
@@ -171,6 +179,10 @@ impl ControlService {
                 document,
                 expected_revision,
             } => self.replace_session(*document, expected_revision, &key.request_id),
+            Command::MutateSession {
+                mutation,
+                expected_revision,
+            } => self.mutate_session(*mutation, expected_revision, &key.request_id),
             other => self.execute_live(&key.request_id, other),
         };
         self.remember(&key, result.clone());
@@ -277,14 +289,33 @@ impl ControlService {
                 self.after_live("Snapshot", request_id, None, false)
             }
             Command::Discover { kind } => {
-                let _ = match kind {
+                let payload = match kind {
                     crate::command::DiscoverKind::Omt => self.port.discover_omt()?,
                     crate::command::DiscoverKind::Ndi => self.port.discover_ndi()?,
                     crate::command::DiscoverKind::Audio => String::new(),
                 };
+                let kind_name = match kind {
+                    crate::command::DiscoverKind::Omt => "omt",
+                    crate::command::DiscoverKind::Ndi => "ndi",
+                    crate::command::DiscoverKind::Audio => "audio",
+                };
+                let meta = self.meta(request_id);
+                self.hub.publish(Event::Discovered {
+                    meta: meta.clone(),
+                    kind: kind_name.into(),
+                    payload,
+                });
                 self.after_live("Discover", request_id, None, false)
             }
-            Command::OverlayAuto { .. } => self.after_live("OverlayAuto", request_id, None, false),
+            Command::OverlayAuto {
+                unit_id,
+                index,
+                duration_ms,
+                to_on,
+            } => {
+                self.apply_overlay_auto(unit_id, index, duration_ms, to_on)?;
+                self.after_live("OverlayAuto", request_id, Some(unit_id), true)
+            }
             Command::Shutdown => {
                 self.destroy_runtime()?;
                 Ok(CommandOutcome {
@@ -292,7 +323,7 @@ impl ControlService {
                     sequence: self.hub.next_sequence(),
                 })
             }
-            Command::ReplaceSession { .. } => {
+            Command::ReplaceSession { .. } | Command::MutateSession { .. } => {
                 Err(ControlError::internal("replace routed incorrectly"))
             }
         }
@@ -346,6 +377,7 @@ impl ControlService {
             meta: meta.clone(),
             command: "ReplaceSession".into(),
         });
+        self.resources = statuses.clone();
         for status in statuses {
             let meta = self.meta(request_id);
             self.hub.publish(Event::Resource { meta, status });
@@ -355,6 +387,61 @@ impl ControlService {
             revision,
             sequence: self.hub.next_sequence(),
         })
+    }
+
+    pub fn mutate_session(
+        &mut self,
+        mutation: SessionMutation,
+        expected_revision: Option<u64>,
+        request_id: &str,
+    ) -> ControlResult<CommandOutcome> {
+        let mut document = self
+            .store
+            .document_cloned()
+            .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        mutate::apply(&mut document, mutation)?;
+        self.replace_session(document, expected_revision, request_id)
+    }
+
+    fn apply_overlay_auto(
+        &mut self,
+        unit_id: u64,
+        index: u32,
+        duration_ms: u32,
+        to_on: bool,
+    ) -> ControlResult<()> {
+        let doc = self
+            .store
+            .document()
+            .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        let unit = doc
+            .units
+            .iter()
+            .find(|item| item.id == unit_id)
+            .ok_or_else(|| ControlError::not_found(format!("unit {unit_id}")))?;
+        let slot = unit
+            .overlays
+            .get(index as usize)
+            .ok_or_else(|| ControlError::not_found(format!("overlay {index}")))?;
+        self.port.overlay_auto(OverlayAutoApply {
+            unit_id,
+            to_on,
+            duration_ms,
+            source_id: slot.scene_gpu_id,
+            x: slot.x,
+            y: slot.y,
+            width: slot.width,
+            height: slot.height,
+            opacity: slot.opacity,
+            z: slot.z,
+            audio_follow: slot.audio_follow,
+            hidden: slot.hidden,
+        })
+    }
+
+    /// Publish live state after a C ABI mutation that already touched the GPU.
+    pub fn note_external_live(&mut self, name: &str, request_id: &str) {
+        let _ = self.after_live(name, request_id, None, false);
     }
 
     pub fn vmix_cut(
@@ -532,6 +619,9 @@ pub trait ControlFacade: Send + Sync {
     fn snapshot(&self) -> ControlResult<Snapshot>;
     fn events_after(&self, after: u64) -> Vec<Event>;
     fn lifecycle(&self) -> Lifecycle;
+    fn epoch(&self) -> String {
+        String::new()
+    }
 }
 
 impl ControlFacade for std::sync::Mutex<ControlService> {
@@ -557,6 +647,12 @@ impl ControlFacade for std::sync::Mutex<ControlService> {
         self.lock()
             .map(|svc| svc.lifecycle())
             .unwrap_or(Lifecycle::Failed)
+    }
+
+    fn epoch(&self) -> String {
+        self.lock()
+            .map(|svc| svc.epoch().to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -732,6 +828,10 @@ mod tests {
         fn bind_multiview(&mut self, _s: u64, _p: u64, _g: u64) -> ControlResult<()> {
             Ok(())
         }
+        fn overlay_auto(&mut self, spec: OverlayAutoApply) -> ControlResult<()> {
+            self.push_op(format!("overlay {} {}", spec.unit_id, spec.to_on));
+            Ok(())
+        }
         fn unit_cut(&mut self, unit_id: u64, swap: bool, incoming: u64) -> ControlResult<()> {
             if let Ok(mut units) = self.units.lock() {
                 let unit = units.entry(unit_id).or_default();
@@ -902,6 +1002,93 @@ mod tests {
                     .filter(|op| op.starts_with("cut"))
                     .count(),
                 1
+            );
+        });
+    }
+
+    #[test]
+    fn mutate_session_adds_input_and_rejects_stale_revision() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            svc.replace_session(bars_doc(), None, "boot").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "t".into(),
+                    request_id: "add".into(),
+                },
+                Command::MutateSession {
+                    mutation: Box::new(SessionMutation::AddMediaInput {
+                        name: "Logo".into(),
+                        media_kind: crate::session::InputKind::Still,
+                        host_path: "/tmp/logo.png".into(),
+                        video_loop: true,
+                        tags: vec![],
+                    }),
+                    expected_revision: Some(1),
+                },
+            )
+            .unwrap();
+            assert!(
+                svc.document()
+                    .unwrap()
+                    .inputs
+                    .iter()
+                    .any(|item| item.name == "Logo")
+            );
+            let err = svc
+                .mutate_session(
+                    SessionMutation::DeleteInput { id: 2 },
+                    Some(1),
+                    "stale",
+                )
+                .unwrap_err();
+            assert!(matches!(err, ControlError::Conflict { .. }));
+        });
+    }
+
+    #[test]
+    fn overlay_auto_reaches_mixer_port() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            let mut doc = bars_doc();
+            doc.units[0].overlays.push(crate::session::OverlaySlot {
+                scene_gpu_id: crate::ids::scene_gpu_id(1),
+                x: 0.6,
+                y: 0.1,
+                width: 0.3,
+                height: 0.3,
+                opacity: 1.0,
+                z: 0,
+                enabled: true,
+                transition_kind: 1,
+                duration_value: 15,
+                duration_unit: 0,
+                audio_follow: true,
+                source_kind: 0,
+                locked: false,
+                hidden: false,
+            });
+            svc.replace_session(doc, None, "boot").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "t".into(),
+                    request_id: "ov".into(),
+                },
+                Command::OverlayAuto {
+                    unit_id: 1,
+                    index: 0,
+                    duration_ms: 200,
+                    to_on: true,
+                },
+            )
+            .unwrap();
+            assert!(
+                probe
+                    .ops()
+                    .iter()
+                    .any(|op| op.starts_with("overlay 1 true"))
             );
         });
     }

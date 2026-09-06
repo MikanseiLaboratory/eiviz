@@ -1,11 +1,12 @@
-//! Protobuf WebSocket control API (`eiviz.protobuf.v1`). Loopback, default port 9400.
+//! Protobuf WebSocket control API (`eiviz.protobuf.v1`). Bind address, token,
+//! max role, and media directory are host-owned. `ws://` is for a trusted LAN/VPN.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use eiviz_api::auth::AuthConfig;
+use eiviz_api::auth::{AuthConfig, Role};
 use eiviz_api::server::{ServerConfig, listen};
 
 use crate::MixerFacade;
@@ -29,6 +30,21 @@ fn ws_slot() -> &'static Mutex<WsState> {
 }
 
 pub fn configure(enabled: bool, port: u32) -> i32 {
+    configure_bind(enabled, "127.0.0.1", port)
+}
+
+pub fn configure_bind(enabled: bool, host: &str, port: u32) -> i32 {
+    configure_owned(enabled, host, port, "", "", "")
+}
+
+pub fn configure_owned(
+    enabled: bool,
+    host: &str,
+    port: u32,
+    token: &str,
+    max_role: &str,
+    media_directory: &str,
+) -> i32 {
     stop_worker();
     if !enabled {
         crate::diag::http_info("ws disabled");
@@ -38,12 +54,40 @@ pub fn configure(enabled: bool, port: u32) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     let port = port as u16;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let ip: std::net::IpAddr = match host.parse() {
+        Ok(ip) => ip,
+        Err(_) => return ERR_INVALID_ARGUMENT,
+    };
+    let mut auth = AuthConfig::from_env();
+    if !token.is_empty() {
+        auth.token = token.to_string();
+        auth.require_auth = true;
+    }
+    if !max_role.is_empty() {
+        auth.max_role = Role::from_name(max_role);
+    }
+    if !ip.is_loopback() && !auth.require_auth {
+        crate::diag::http_error("ws remote bind requires authentication");
+        return ERR_INVALID_ARGUMENT;
+    }
+    let addr = SocketAddr::new(ip, port);
+    let media_path = if media_directory.is_empty() {
+        std::env::var("EIVIZ_MEDIA_DIRECTORY")
+            .ok()
+            .filter(|value| !value.is_empty())
+    } else {
+        Some(media_directory.to_string())
+    };
+    let media = media_path.and_then(|path| {
+        eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(path.into())).ok()
+    })
+    .map(|store| std::sync::Arc::new(store) as std::sync::Arc<dyn eiviz_api::MediaStorage>);
     let config = ServerConfig {
         bind: addr,
-        auth: AuthConfig::from_env(),
+        auth,
         idle_timeout: Duration::from_secs(60),
         max_clients: 32,
+        media,
     };
     let control = Arc::new(MixerFacade);
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);

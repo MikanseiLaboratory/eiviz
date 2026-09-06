@@ -17,7 +17,7 @@ use crate::{
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
     mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
     mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
-    mixer_unit_set_state, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
     mixer_video_start,
 };
 
@@ -403,14 +403,38 @@ impl MixerPort for ProcessMixer {
         let mut state = UnitState::default();
         map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
         state.preview_source = scene_gpu_id;
-        map_abi(unsafe { mixer_unit_set_state(unit_id, &state) })
+        map_abi(crate::unit_set_state_inner(unit_id, &state))
     }
 
     fn unit_set_mix(&mut self, unit_id: u64, mix: f32) -> ControlResult<()> {
         let mut state = UnitState::default();
         map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
         state.mix = mix;
-        map_abi(unsafe { mixer_unit_set_state(unit_id, &state) })
+        map_abi(crate::unit_set_state_inner(unit_id, &state))
+    }
+
+    fn overlay_auto(&mut self, spec: OverlayAutoApply) -> ControlResult<()> {
+        let desc = OverlayDesc {
+            source_id: spec.source_id,
+            rect: Rect {
+                x: spec.x,
+                y: spec.y,
+                width: spec.width,
+                height: spec.height,
+            },
+            crop: Rect::default(),
+            opacity: spec.opacity,
+            z: spec.z,
+            audio_follow: u32::from(spec.audio_follow),
+            hidden: u32::from(spec.hidden),
+            label: std::ptr::null(),
+        };
+        map_abi(crate::overlay_auto_inner(
+            spec.unit_id,
+            u32::from(spec.to_on),
+            spec.duration_ms,
+            desc,
+        ))
     }
 
     fn unit_set_state(
@@ -424,7 +448,7 @@ impl MixerPort for ProcessMixer {
         map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
         state.program_source = program;
         state.preview_source = preview;
-        map_abi(unsafe { mixer_unit_set_state(unit_id, &state) })
+        map_abi(crate::unit_set_state_inner(unit_id, &state))
     }
 
     fn unit_live(&self, unit_id: u64) -> ControlResult<UnitLiveState> {
@@ -481,12 +505,8 @@ impl MixerPort for ProcessMixer {
         map_abi(http).and_then(|_| map_abi(tcp))
     }
 
-    fn configure_native_api(&mut self, enabled: bool, port: u32) -> ControlResult<()> {
-        let code = crate::native_ws::configure(enabled, port);
-        if code == crate::abi::ERR_IO {
-            return Ok(());
-        }
-        map_abi(code)
+    fn configure_native_api(&mut self, _enabled: bool, _port: u32) -> ControlResult<()> {
+        Ok(())
     }
 
     fn discover_omt(&self) -> ControlResult<String> {
@@ -571,14 +591,41 @@ pub(crate) fn poll_event(after: u64, out: &mut [u8]) -> i32 {
 fn events_json(events: &[eiviz_control::Event]) -> serde_json::Value {
     serde_json::json!({
         "events": events.iter().map(|event| {
-            serde_json::json!({
+            let mut value = serde_json::json!({
                 "sequence": event.meta().sequence,
                 "revision": event.meta().session_revision,
                 "kind": event.kind_name(),
                 "requestId": event.meta().request_id,
-            })
+            });
+            if let eiviz_control::Event::SessionChanged { document, .. } = event {
+                if let Ok(json) = eiviz_control::session::to_vec(document) {
+                    value["documentJson"] = serde_json::Value::String(String::from_utf8_lossy(&json).into_owned());
+                }
+            }
+            if let eiviz_control::Event::LiveChanged { live, .. } = event {
+                if let Ok(json) = serde_json::to_vec(live) {
+                    value["liveJson"] = serde_json::Value::String(String::from_utf8_lossy(&json).into_owned());
+                }
+            }
+            value
         }).collect::<Vec<_>>()
     })
+}
+
+pub(crate) fn copy_snapshot_bytes(out: &mut [u8]) -> i32 {
+    let Ok(svc) = control().lock() else {
+        return -ERR_INVALID_ARGUMENT;
+    };
+    let Ok(snap) = svc.snapshot() else {
+        return -ERR_INVALID_ARGUMENT;
+    };
+    let json = eiviz_control::session::to_vec(&snap.document).unwrap_or_default();
+    let n = json.len().min(out.len());
+    if json.len() > out.len() {
+        return -1;
+    }
+    out[..n].copy_from_slice(&json[..n]);
+    n as i32
 }
 
 pub(crate) fn c_auto(
@@ -624,6 +671,12 @@ pub(crate) fn c_auto(
             Err(error) => -error.to_abi(),
         },
         Err(_) => -ERR_INVALID_ARGUMENT,
+    }
+}
+
+pub(crate) fn note_live(name: &str) {
+    if let Ok(mut svc) = control().try_lock() {
+        svc.note_external_live(name, "c-abi");
     }
 }
 

@@ -6,10 +6,12 @@
 pub mod auth;
 pub mod client;
 pub mod codec;
+pub mod media;
 pub mod proto;
 pub mod server;
 pub mod vmix;
 
 pub use auth::{AuthConfig, Role};
-pub use client::ControlClient;
+pub use client::{ControlClient, ControlSession};
+pub use media::{FileMediaStorage, MediaStorage, MediaStorageConfig};
 pub use server::{ServerBind, ServerConfig, listen, spawn};

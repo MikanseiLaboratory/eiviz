@@ -21,7 +21,7 @@ Use it in tests, labs, and anywhere a crash is acceptable.
 The stack aims for performance, a native feel, and portability across operating systems.
 
 Compositing lives in the mixer core. Each OS UI calls it through an internal C ABI. Host code lives in `hosts/win32`, `hosts/macos`, and `hosts/linux`.  
-GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer is the control-plane source of truth. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket.
+GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer is the control-plane source of truth. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket. The same Windows and macOS hosts can connect as a remote GUI over authenticated `ws://` (trusted LAN/VPN only; no TLS in this release). The client mixer is receive-only and never loads the remote session onto its GPU.
 
 | Layer | Stack |
 | --- | --- |

@@ -37,7 +37,8 @@ public partial class MultiviewWindow : Window
         Loaded += (_, _) =>
         {
             SnapWindowToAspect();
-            MultiviewHost.RetargetMonitor(layout.MonitorId, layout.GpuId);
+            if (Application.Current is App app)
+                app.Backend.BindMultiview(MultiviewHost, layout);
             _layout.PushPresentInterval(_session.Settings);
         };
         Closed += (_, _) => MultiviewHost.ReleaseNative();

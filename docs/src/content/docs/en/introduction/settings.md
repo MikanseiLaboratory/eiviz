@@ -105,12 +105,12 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Web API
 
-vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. Each can be turned on or off independently. These are stored in the session file.
+vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen.
 
 - HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
-- WebSocket: Protobuf control API on loopback. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`
-- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens use `EIVIZ_API_TOKEN`
+- WebSocket: Protobuf control API. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`. Default bind is loopback. Non-loopback bind requires a token. This release is authenticated `ws://` on a trusted LAN or VPN; TLS is not included
+- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens are the listen token in Preferences, or `EIVIZ_API_TOKEN` for headless
 
 If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is the same: that surface turns off and warns. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
@@ -139,6 +139,18 @@ English / 日本語.
 ### Theme
 
 Dark, Light, or Follow OS.
+
+### Connection
+
+Local mixer, or remote eiviz over WebSocket. Remote URL and token are stored separately (Windows Credential Manager / macOS Keychain). Changing connection mode restarts the mixer.
+
+Remote Settings is view-only. Language, theme, and connection stay editable on the client.
+
+Remote Preview/Program/Multiview video uses only already-enabled NDI or OMT outputs (`MuPreview` / `MuProgram` / `Multiview`). eiviz does not create extra outputs. Missing or ambiguous outputs show Unavailable.
+
+### API listen (host)
+
+Bind address, listen token, and uploaded media directory. Non-loopback bind requires the token. Still/Video added from a remote client land in this directory.
 
 ### Help
 

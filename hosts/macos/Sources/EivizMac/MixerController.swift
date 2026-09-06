@@ -46,6 +46,9 @@ final class MixerController: ObservableObject {
     @Published var inputFilter = ListFilter.all
     @Published var sceneFilter = ListFilter.all
     @Published private(set) var surfaceEpoch: UInt64 = 0
+    @Published private(set) var isRemote = false
+    @Published private(set) var remoteRevision: UInt64 = 0
+    @Published var videoUnavailable = false
 
     private var booted = false
     private var fatalHandled = false
@@ -62,6 +65,10 @@ final class MixerController: ObservableObject {
     private var multiviewWindows: [UInt64: NSWindow] = [:]
     private let multiviewCloser = SwitcherCloser()
     private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
+    private var remoteHandle: Int32 = 0
+    private var remoteReceiveIds: [UInt64: UInt64] = [:]
+    private var remoteEpoch = ""
+    private var remotePulledRevision: UInt64 = 0
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -69,8 +76,13 @@ final class MixerController: ObservableObject {
 
     func boot() {
         guard !booted else { return }
+        isRemote = AppPrefs.shared.connectionMode == .remote
         guard mixer_ping() == 0x4549_5649 else {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
+            return
+        }
+        if isRemote {
+            bootRemote()
             return
         }
         guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
@@ -84,18 +96,56 @@ final class MixerController: ObservableObject {
         applyBusColors()
         applySession()
         bumpSurfaceEpoch()
+        startTimers()
+        booted = true
+        applyVmixApi()
+        publishSession()
+        updateStatus()
+    }
+
+    private func startTimers() {
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
         mixTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                ThumbPump.poll()
-                self?.syncAllUnitBuses()
+                if self?.isRemote == true {
+                    self?.pollRemote()
+                } else {
+                    ThumbPump.poll()
+                    self?.syncAllUnitBuses()
+                }
             }
         }
+    }
+
+    private func bootRemote() {
+        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, 60, 1), "Metal mixer initialization") else {
+            return
+        }
+        _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
+        FlipBudget.configure(0)
+        GpuPresentStore.load()
+        let url = AppPrefs.shared.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = url.isEmpty ? "ws://127.0.0.1:9400" : url
+        let token = KeychainStore.load(account: endpoint)
+        let handle = MixerFFI.withCString(endpoint) { urlPtr in
+            MixerFFI.withCString(token) { tokenPtr in
+                mixer_remote_open(urlPtr, tokenPtr)
+            }
+        }
+        if handle <= 0 {
+            presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("prefs.connection"))
+            startTimers()
+            booted = true
+            updateStatus()
+            return
+        }
+        remoteHandle = handle
+        startTimers()
         booted = true
-        applyVmixApi()
-        publishSession()
+        pollRemote(force: true)
+        bumpSurfaceEpoch()
         updateStatus()
     }
 
@@ -164,9 +214,26 @@ final class MixerController: ObservableObject {
     }
 
     private func applyNativeApi() {
-        let port = session.settings.nativeApiPort == 0 ? 9400 : session.settings.nativeApiPort
-        let enabled = session.settings.nativeApiEnabled
-        let code = mixer_ws_configure(enabled ? 1 : 0, port)
+        if isRemote {
+            return
+        }
+        let prefs = AppPrefs.shared
+        let port = prefs.nativeApiPort == 0 ? 9400 : prefs.nativeApiPort
+        let bind = prefs.nativeApiBind.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = bind.isEmpty ? "127.0.0.1" : bind
+        let enabled = prefs.nativeApiEnabled
+        let token = KeychainStore.load(account: "listen")
+        let role = prefs.nativeApiRole.isEmpty ? "admin" : prefs.nativeApiRole
+        let media = prefs.mediaDirectory
+        let code = MixerFFI.withCString(host) { hostPtr in
+            MixerFFI.withCString(token) { tokenPtr in
+                MixerFFI.withCString(role) { rolePtr in
+                    MixerFFI.withCString(media) { mediaPtr in
+                        mixer_ws_configure_owned(enabled ? 1 : 0, hostPtr, port, tokenPtr, rolePtr, mediaPtr)
+                    }
+                }
+            }
+        }
         if code == 0 {
             return
         }
@@ -174,8 +241,11 @@ final class MixerController: ObservableObject {
             _ = fail(code, "Configure Protobuf WebSocket API")
             return
         }
-        session.settings.nativeApiEnabled = false
-        _ = mixer_ws_configure(0, port)
+        prefs.nativeApiEnabled = false
+        prefs.save()
+        _ = MixerFFI.withCString(host) { hostPtr in
+            mixer_ws_configure_owned(0, hostPtr, port, "", "", "")
+        }
         let ownerText = MixerFFI.wsListenOwnerText()
         let owner = ownerText.isEmpty ? nil : ownerText
         if let owner {
@@ -207,10 +277,12 @@ final class MixerController: ObservableObject {
     }
 
     func publishSession() {
+        if isRemote { return }
         replaceRuntime()
     }
 
     func replaceRuntime() {
+        if isRemote { return }
         session.selectedUnitId = selectedUnitId
         guard let json = try? SessionFile.encode(session) else { return }
         json.withUnsafeBytes { ptr in
@@ -225,6 +297,14 @@ final class MixerController: ObservableObject {
         meterTimer = nil
         closeAllInputPreviews()
         closeAllSwitchers()
+        if remoteHandle != 0 {
+            _ = mixer_remote_close(remoteHandle)
+            remoteHandle = 0
+        }
+        for id in remoteReceiveIds.values {
+            _ = mixer_destroy_source(id)
+        }
+        remoteReceiveIds.removeAll()
         guard booted else { return }
         mixer_destroy()
         booted = false
@@ -237,6 +317,10 @@ final class MixerController: ObservableObject {
     }
 
     func previewSelectedInput() {
+        if isRemote {
+            presentError(L10n.t("msg.remoteNoInputPreview"), title: L10n.t("chrome.previewInput"))
+            return
+        }
         guard let id = selectedInputId,
               let input = session.inputs.first(where: { $0.id == id })
         else {
@@ -250,6 +334,10 @@ final class MixerController: ObservableObject {
     }
 
     func openInputPreview(inputId: UInt64, name: String) {
+        if isRemote {
+            presentError(L10n.t("msg.remoteNoInputPreview"), title: L10n.t("chrome.previewInput"))
+            return
+        }
         if let existing = inputPreviewWindows[inputId] {
             presentInputPreview(existing)
             return
@@ -319,6 +407,7 @@ final class MixerController: ObservableObject {
     }
 
     func applySession() {
+        if isRemote { return }
         session.mergeTagCatalogs()
         session.assignMonitors()
         replaceRuntime()
@@ -376,6 +465,25 @@ final class MixerController: ObservableObject {
     }
 
     private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
+        if isRemote {
+            _ = mixer_remote_auto(
+                remoteHandle,
+                unit.id,
+                preset.kind,
+                unit.durationMs(for: preset),
+                preset.swap ? 1 : 0,
+                preset.keepPreview ? 1 : 0,
+                preset.easing,
+                preset.direction,
+                preset.dipR,
+                preset.dipG,
+                preset.dipB,
+                preset.dipA <= 0 ? 1 : preset.dipA,
+                preset.softness,
+                preset.param
+            )
+            return
+        }
         let wgsl = resolvedCustomWgsl(preset)
         if wgsl.isEmpty {
             fail(mixer_unit_set_custom_wgsl(unit.id, nil), "custom wgsl")
@@ -406,6 +514,10 @@ final class MixerController: ObservableObject {
     func takeCut(unitId: UInt64? = nil) {
         let unit = unit(for: unitId)
         let preset = tbarPreset(for: unit)
+        if isRemote {
+            _ = mixer_remote_cut(remoteHandle, unit.id, preset.swap ? 1 : 0)
+            return
+        }
         fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "CUT")
         syncUnitBuses(unit.id)
     }
@@ -430,11 +542,17 @@ final class MixerController: ObservableObject {
     func firePreset(_ preset: TransitionPreset, unitId: UInt64) {
         let unit = unit(for: unitId)
         if preset.kind == EIVIZ_TRANSITION_CUT || preset.durationValue <= 1 {
-            fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "TAKE")
+            if isRemote {
+                _ = mixer_remote_cut(remoteHandle, unit.id, preset.swap ? 1 : 0)
+            } else {
+                fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "TAKE")
+            }
         } else {
             fireAuto(preset, unit: unit, reason: "TAKE")
         }
-        syncUnitBuses(unit.id)
+        if !isRemote {
+            syncUnitBuses(unit.id)
+        }
     }
 
     func previewScene(_ scene: SceneEntry) {
@@ -443,6 +561,11 @@ final class MixerController: ObservableObject {
 
     func previewScene(_ scene: SceneEntry, unitId: UInt64) {
         let unit = unit(for: unitId)
+        if isRemote {
+            _ = mixer_remote_preview(remoteHandle, unit.id, scene.gpuId)
+            selectedSceneId = scene.id
+            return
+        }
         var state = currentState(unit.id)
         state.preview_source = scene.gpuId
         fail(mixer_unit_set_state(unit.id, &state), "Preview scene")
@@ -483,6 +606,10 @@ final class MixerController: ObservableObject {
     }
 
     func setMix(_ value: Float, unitId: UInt64) {
+        if isRemote {
+            _ = mixer_remote_set_mix(remoteHandle, unitId, value)
+            return
+        }
         var state = currentState(unitId)
         state.mix = value
         normalizePixelSortDefaults(unitId)
@@ -519,6 +646,41 @@ final class MixerController: ObservableObject {
     }
 
     func upsertInput(_ input: InputEntry, replacing: UInt64?) {
+        if isRemote {
+            if replacing == nil, input.kind == .still || input.kind == .video {
+                guard let path = input.pathOrAddress else { return }
+                let kind = input.kind == .still ? "still" : "video"
+                let code = MixerFFI.withCString(path) { pathPtr in
+                    MixerFFI.withCString(kind) { kindPtr in
+                        MixerFFI.withCString(input.name) { namePtr in
+                            mixer_remote_upload(remoteHandle, pathPtr, kindPtr, namePtr, input.videoLoop ? 1 : 0, remoteRevision)
+                        }
+                    }
+                }
+                if code != 0 {
+                    presentInputError(L10n.t("msg.uploadFailed"))
+                    return
+                }
+                pollRemote(force: true)
+                return
+            }
+            if input.kind == .mix,
+               input.mixSource != .sessionMultiview,
+               let unit = session.units.first(where: { $0.id == input.mixTargetId }),
+               mixUnitUses(unit, sourceId: replacing ?? input.id)
+            {
+                presentInputError(L10n.t("msg.mixCycle"), editing: replacing != nil)
+                return
+            }
+            var entry = input
+            if let id = replacing {
+                entry.id = id
+            } else if entry.id == 0 || session.inputs.contains(where: { $0.id == entry.id }) {
+                entry.id = session.nextInputId
+            }
+            _ = mutateRemote(MixerRemote.upsertInput(entry))
+            return
+        }
         if input.kind == .mix,
            input.mixSource != .sessionMultiview,
            let unit = session.units.first(where: { $0.id == input.mixTargetId }),
@@ -554,6 +716,10 @@ final class MixerController: ObservableObject {
               let index = session.inputs.firstIndex(where: { $0.id == id }),
               !session.inputs[index].isBuiltin
         else { return }
+        if isRemote {
+            _ = mutateRemote(MixerRemote.deleteInput(id))
+            return
+        }
         closeInputPreview(id)
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
@@ -566,6 +732,11 @@ final class MixerController: ObservableObject {
     }
 
     func addScene() {
+        if isRemote {
+            let scene = SceneEntry(id: session.nextSceneId, name: "Scene \(session.nextSceneId)")
+            _ = mutateRemote(MixerRemote.upsertScene(scene))
+            return
+        }
         let scene = session.addScene(name: "Scene \(session.nextSceneId)", input: nil)
         pushScene(scene)
         previewScene(scene)
@@ -580,6 +751,10 @@ final class MixerController: ObservableObject {
 
     func deleteScene(_ scene: SceneEntry) {
         guard session.scenes.count > 1 else { return }
+        if isRemote {
+            _ = mutateRemote(MixerRemote.deleteScene(scene.id))
+            return
+        }
         closeInputPreview(scene.gpuId)
         _ = mixer_destroy_scene(scene.gpuId)
         session.scenes.removeAll { $0.id == scene.id }
@@ -602,12 +777,22 @@ final class MixerController: ObservableObject {
               let index = session.inputs.firstIndex(where: { $0.id == video.id })
         else { return }
         session.inputs[index].videoLoop.toggle()
-        _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
+        if isRemote {
+            _ = mixer_remote_video_loop(remoteHandle, video.id, session.inputs[index].videoLoop ? 1 : 0)
+        } else {
+            _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
+        }
         objectWillChange.send()
     }
 
     func toggleScenePlay(_ scene: SceneEntry) {
-        guard let video = sceneVideo(scene), let info = copyVideoInfo(video.id) else { return }
+        guard let video = sceneVideo(scene) else { return }
+        if isRemote {
+            _ = mixer_remote_video_play(remoteHandle, video.id, 1)
+            objectWillChange.send()
+            return
+        }
+        guard let info = copyVideoInfo(video.id) else { return }
         _ = mixer_video_set_playing(video.id, info.playing == 0 ? 1 : 0)
         objectWillChange.send()
     }
@@ -703,8 +888,10 @@ final class MixerController: ObservableObject {
         if let index = session.units.firstIndex(where: { $0.id == unit.id }) {
             session.units[index] = unit
         }
-        fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-        fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
+        if !isRemote {
+            fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
+            fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
+        }
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name
@@ -760,6 +947,7 @@ final class MixerController: ObservableObject {
     }
 
     func addOutput(_ output: OutputEntry) {
+        if isRemote { return }
         var entry = output
         if entry.transport != .omt {
             entry.useGpu = false
@@ -796,6 +984,7 @@ final class MixerController: ObservableObject {
     }
 
     func openNewMultiview() {
+        if isRemote { return }
         guard FlipBudget.tryOpen(1) else { return }
         let unitId = session.settings.defaultMultiviewUnitId == 0
             ? selectedUnitId
@@ -921,6 +1110,7 @@ final class MixerController: ObservableObject {
     }
 
     func pushMultiview(_ layout: MultiviewLayout) {
+        if isRemote { return }
         guard let index = session.multiviews.firstIndex(where: { $0.id == layout.id }) else { return }
         var item = layout
         item.ensureTiles()
@@ -1039,18 +1229,30 @@ final class MixerController: ObservableObject {
         if slot.transitionKind == EIVIZ_TRANSITION_CUT || ms <= 1 {
             session.units[unitIndex].overlays[slotIndex].enabled = enabled
             overlayOn[id] = enabled
-            pushOverlays(unitId: unit.id)
+            if isRemote {
+                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), 1, enabled ? 1 : 0)
+            } else {
+                pushOverlays(unitId: unit.id)
+            }
             return
         }
         if enabled {
             session.units[unitIndex].overlays[slotIndex].enabled = true
             overlayOn[id] = true
+            if isRemote {
+                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), ms, 1)
+                return
+            }
             pushOverlays(unitId: unit.id)
             fail(mixer_unit_overlay_auto(unit.id, 1, ms, &desc), "overlay auto")
             return
         }
         session.units[unitIndex].overlays[slotIndex].enabled = false
         overlayOn[id] = false
+        if isRemote {
+            _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), ms, 0)
+            return
+        }
         pushOverlays(forceEnabled: id, unitId: unit.id)
         fail(mixer_unit_overlay_auto(unit.id, 0, ms, &desc), "overlay auto")
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
@@ -1161,7 +1363,8 @@ final class MixerController: ObservableObject {
     }
 
     func recreateMixer() {
-        replaceSession(session)
+        shutdown()
+        boot()
     }
 
     private func replaceSession(_ loaded: MixerSessionData) {
@@ -1256,19 +1459,34 @@ final class MixerController: ObservableObject {
     func videoPlayToggle() {
         guard let id = fileVideoId else { return }
         videoPlaying.toggle()
-        _ = mixer_video_set_playing(id, videoPlaying ? 1 : 0)
+        if isRemote {
+            _ = mixer_remote_video_play(remoteHandle, id, videoPlaying ? 1 : 0)
+        } else {
+            _ = mixer_video_set_playing(id, videoPlaying ? 1 : 0)
+        }
     }
 
     func videoRestart() {
         guard let id = fileVideoId else { return }
-        _ = mixer_video_seek(id, 0)
-        _ = mixer_video_set_playing(id, 1)
+        if isRemote {
+            _ = mixer_remote_video_seek(remoteHandle, id, 0)
+            _ = mixer_remote_video_play(remoteHandle, id, 1)
+        } else {
+            _ = mixer_video_seek(id, 0)
+            _ = mixer_video_set_playing(id, 1)
+        }
         videoPlaying = true
         videoFraction = 0
     }
 
     func videoSeek(_ value: Double) {
-        guard let id = fileVideoId, let info = copyVideoInfo(id) else { return }
+        guard let id = fileVideoId else { return }
+        if isRemote {
+            _ = mixer_remote_video_seek(remoteHandle, id, Int64((max(0, min(1, value)) * 10_000_000).rounded()))
+            videoFraction = value
+            return
+        }
+        guard let info = copyVideoInfo(id) else { return }
         let duration = max(info.duration_hns, 1)
         let hns = Int64((max(0, min(1, value)) * Double(duration)).rounded())
         _ = mixer_video_seek(id, hns)
@@ -1417,6 +1635,7 @@ final class MixerController: ObservableObject {
     }
 
     func pushScene(_ scene: SceneEntry) {
+        if isRemote { return }
         var layers = scene.layers.map { layer -> EivizOverlayDesc in
             var desc = MixerFFI.emptyOverlay()
             desc.source_id = layer.inputId
@@ -1438,6 +1657,10 @@ final class MixerController: ObservableObject {
     }
 
     func pushOverlays(forceEnabled: UUID? = nil, unitId: UInt64? = nil) {
+        if isRemote {
+            commitRemoteOverlays(unitId: unitId ?? selectedUnitId)
+            return
+        }
         let unit = session.units.first { $0.id == (unitId ?? selectedUnitId) } ?? selectedUnit
         var state = MixerFFI.emptyState()
         _ = mixer_unit_get_state(unit.id, &state)
@@ -1516,6 +1739,10 @@ final class MixerController: ObservableObject {
 
     private func tick() {
         if handleMixerFatal() { return }
+        if isRemote {
+            updateStatus()
+            return
+        }
         var buffer = [EivizAudioPeak](repeating: MixerFFI.zeroed(), count: 32)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_copy_audio_peaks(ptr.baseAddress, UInt32(ptr.count))
@@ -1601,6 +1828,12 @@ final class MixerController: ObservableObject {
     }
 
     private func updateStatus() {
+        if isRemote {
+            status = remoteHandle == 0
+                ? L10n.t("msg.remoteConnectFailed")
+                : L10n.format("msg.remoteConnected", "\(remoteRevision)")
+            return
+        }
         let unit = selectedUnit
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
     }
@@ -1753,6 +1986,191 @@ final class MixerController: ObservableObject {
         var catalog = session.sceneTags
         TagCatalog.mergeInto(&catalog, tags)
         session.sceneTags = catalog
+    }
+
+    func surfaceRole(kind: UInt32, unitId: UInt64? = nil) -> SurfaceRole {
+        let unit = unitId ?? selectedUnitId
+        guard isRemote else {
+            return .unit(unitId: unit, kind: kind)
+        }
+        if kind == EIVIZ_OUTPUT_PREVIEW, let source = remotePublishedSource(.muPreview, unitId: unit) {
+            return .monitor(monitorId: MixerRemote.previewMonitor ^ (unit << 8), sourceId: source)
+        }
+        if kind == EIVIZ_OUTPUT_PROGRAM, let source = remotePublishedSource(.muProgram, unitId: unit) {
+            return .monitor(monitorId: MixerRemote.programMonitor ^ (unit << 8), sourceId: source)
+        }
+        return .monitor(monitorId: 0, sourceId: 0)
+    }
+
+    func surfaceRoleMultiview(_ layout: MultiviewLayout) -> SurfaceRole {
+        guard isRemote else {
+            return .monitor(monitorId: layout.monitorId, sourceId: layout.gpuId)
+        }
+        if let source = remotePublishedMultiview(layout.gpuId) {
+            return .monitor(monitorId: MixerRemote.multiviewMonitor ^ (layout.id << 8), sourceId: source)
+        }
+        return .monitor(monitorId: 0, sourceId: 0)
+    }
+
+    func remoteMultiviewUnavailable(_ layout: MultiviewLayout) -> Bool {
+        isRemote && remotePublishedMultiview(layout.gpuId) == nil
+    }
+
+    func commitRemoteScene(_ scene: SceneEntry) -> Bool {
+        mutateRemote(MixerRemote.upsertScene(scene))
+    }
+
+    private func commitRemoteOverlays(unitId: UInt64) {
+        guard let unit = session.units.first(where: { $0.id == unitId }) else { return }
+        for (index, slot) in unit.overlays.enumerated() {
+            let code = MixerRemote.mutate(
+                remoteHandle,
+                MixerRemote.setOverlaySlot(unitId: unitId, index: UInt32(index), slot: slot),
+                expected: remoteRevision
+            )
+            if code != 0 {
+                presentError(L10n.t("msg.revisionConflict"), title: L10n.t("chrome.overlay"))
+                pollRemote(force: true)
+                return
+            }
+            remoteRevision += 1
+        }
+        pollRemote(force: true)
+    }
+
+    @discardableResult
+    private func mutateRemote(_ json: String) -> Bool {
+        let code = MixerRemote.mutate(remoteHandle, json, expected: remoteRevision)
+        if code != 0 {
+            presentError(L10n.t("msg.revisionConflict"), title: L10n.t("chrome.overlay"))
+            pollRemote(force: true)
+            return false
+        }
+        pollRemote(force: true)
+        return true
+    }
+
+    private func pollRemote(force: Bool = false) {
+        guard remoteHandle != 0 else {
+            status = L10n.t("msg.remoteConnectFailed")
+            return
+        }
+        let statusJson = MixerRemote.status(remoteHandle)
+        var connected = false
+        var lag = false
+        var error = ""
+        var epoch = remoteEpoch
+        if let data = statusJson.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            connected = root["connected"] as? Bool ?? false
+            lag = root["lag"] as? Bool ?? false
+            error = root["error"] as? String ?? ""
+            if let revision = root["revision"] as? NSNumber {
+                remoteRevision = revision.uint64Value
+            }
+            if let value = root["epoch"] as? String {
+                epoch = value
+            }
+        }
+        if !connected {
+            status = L10n.t("msg.remoteDisconnected")
+        } else if !error.isEmpty {
+            status = error
+        } else if lag {
+            status = L10n.t("msg.remoteResync")
+        } else {
+            status = L10n.format("msg.remoteConnected", "\(remoteRevision)")
+        }
+        if let mixValue = MixerRemote.mix(from: MixerRemote.live(remoteHandle), unitId: selectedUnitId), !tbarDragging, !tbarLocked {
+            mix = mixValue
+        }
+        applyRemoteLiveBuses()
+        let docChanged = force || epoch != remoteEpoch || remoteRevision != remotePulledRevision
+        remoteEpoch = epoch
+        remotePulledRevision = remoteRevision
+        if connected, docChanged || force {
+            let json = MixerRemote.snapshot(remoteHandle)
+            if let data = json.data(using: .utf8), let loaded = try? SessionFile.decode(data) {
+                let keepUnit = selectedUnitId
+                let keepScene = selectedSceneId
+                let keepInput = selectedInputId
+                session = loaded
+                selectedUnitId = session.units.contains(where: { $0.id == keepUnit }) ? keepUnit : (session.units.first?.id ?? 1)
+                selectedSceneId = keepScene
+                selectedInputId = keepInput
+                syncPublishedVideo()
+                bumpSurfaceEpoch()
+            }
+        }
+        objectWillChange.send()
+    }
+
+    private func applyRemoteLiveBuses() {
+        guard let data = MixerRemote.live(remoteHandle).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let units = root["units"] as? [String: Any]
+        else { return }
+        for unit in session.units {
+            guard let live = units[String(unit.id)] as? [String: Any] else { continue }
+            let preview = (live["previewSource"] as? NSNumber)?.uint64Value ?? 0
+            let program = (live["programSource"] as? NSNumber)?.uint64Value ?? 0
+            applyBusSources(unitId: unit.id, preview: preview, program: program)
+        }
+    }
+
+    private func publishedOutputs() -> [OutputEntry] {
+        session.outputs.filter {
+            $0.enabled
+                && ($0.transport == .omt || $0.transport == .ndi)
+                && ($0.sourceKind == .muPreview || $0.sourceKind == .muProgram || $0.sourceKind == .multiview)
+        }
+    }
+
+    private func remotePublishedSource(_ kind: OutputSourceKind, unitId: UInt64) -> UInt64? {
+        let matches = publishedOutputs().filter { $0.sourceKind == kind && $0.unitId == unitId }
+        guard matches.count == 1, let output = matches.first else { return nil }
+        return MixerRemote.sourceBase | output.id
+    }
+
+    private func remotePublishedMultiview(_ layoutGpuId: UInt64) -> UInt64? {
+        let matches = publishedOutputs().filter { $0.sourceKind == .multiview && $0.sourceId == layoutGpuId }
+        guard matches.count == 1, let output = matches.first else { return nil }
+        return MixerRemote.sourceBase | output.id
+    }
+
+    private func syncPublishedVideo() {
+        let outputs = publishedOutputs()
+        var keep: [UInt64: UInt64] = [:]
+        for output in outputs {
+            let id = MixerRemote.sourceBase | output.id
+            keep[output.id] = id
+            if remoteReceiveIds[output.id] == id {
+                continue
+            }
+            let code: Int32
+            if output.transport == .ndi {
+                code = MixerFFI.withCString(output.name) { mixer_ndi_connect(id, $0, 3, 0) }
+            } else {
+                code = MixerFFI.withCString(output.name) { mixer_omt_connect(id, $0, 1, 3, 0) }
+            }
+            if code == 0 {
+                remoteReceiveIds[output.id] = id
+            }
+        }
+        for (outputId, sourceId) in remoteReceiveIds where keep[outputId] == nil {
+            _ = mixer_destroy_source(sourceId)
+            remoteReceiveIds.removeValue(forKey: outputId)
+        }
+        let unit = selectedUnitId
+        let previewOk = publishedOutputs().filter { $0.sourceKind == .muPreview && $0.unitId == unit }.count == 1
+        let programOk = publishedOutputs().filter { $0.sourceKind == .muProgram && $0.unitId == unit }.count == 1
+        videoUnavailable = !previewOk || !programOk
+        if videoUnavailable {
+            warnText = L10n.t("msg.videoUnavailable")
+        } else if warnText == L10n.t("msg.videoUnavailable") {
+            warnText = ""
+        }
     }
 
     @discardableResult

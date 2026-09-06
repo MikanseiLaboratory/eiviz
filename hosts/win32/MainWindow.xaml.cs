@@ -43,6 +43,7 @@ public partial class MainWindow : Window
     private ListFilter _inputFilter = ListFilter.All;
     private ListFilter _sceneFilter = ListFilter.All;
     private ICollectionView? _inputView;
+    private Session _session => ((App)Application.Current).Session;
 
     public MainWindow()
     {
@@ -60,7 +61,12 @@ public partial class MainWindow : Window
         RebuildMeters();
         _meterTimer.Tick += (_, _) => TickMeters();
         _meterTimer.Start();
-        _tbarTimer.Tick += (_, _) => SyncTBarsFromMixer();
+        _tbarTimer.Tick += (_, _) =>
+        {
+            ((App)Application.Current).Backend.Poll();
+            WarnText.Text = ((App)Application.Current).Backend.StatusText;
+            SyncTBarsFromMixer();
+        };
         _tbarTimer.Start();
         Closed += (_, _) =>
         {
@@ -76,13 +82,66 @@ public partial class MainWindow : Window
         {
             ApplyBusColors();
             ApplyAspect();
+            BindPreviewProgram();
             AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
         };
     }
 
-    private Session _session => ((App)Application.Current).Session;
+    internal void ReloadFromSession()
+    {
+        var selectedUnit = _session.SelectedUnitId;
+        var selectedScene = _selectedScene?.Id;
+        var selectedInput = InputList.SelectedItem is InputEntry input ? input.Id : 0UL;
+        BindInputList();
+        RebuildInputTabs();
+        RebuildSceneTabs();
+        UnitBox.ItemsSource = null;
+        UnitBox.ItemsSource = _session.Units;
+        _suppressUnitChange = true;
+        UnitBox.SelectedItem = _session.Units.FirstOrDefault(item => item.Id == selectedUnit)
+            ?? _session.Units.FirstOrDefault();
+        _suppressUnitChange = false;
+        RebuildScenes();
+        if (selectedScene is ulong sceneId)
+        {
+            var scene = _session.Scenes.FirstOrDefault(item => item.Id == sceneId);
+            if (scene is not null)
+                SelectScene(scene);
+        }
+        else if (_session.Scenes.Count > 0)
+            SelectScene(_session.Scenes[0]);
+        if (selectedInput != 0)
+        {
+            var keep = _session.Inputs.FirstOrDefault(item => item.Id == selectedInput);
+            if (keep is not null)
+                InputList.SelectedItem = keep;
+        }
+        RebuildTransitions();
+        RebuildOverlayToggles();
+        RebuildMeters();
+        ApplyAspect();
+        BindPreviewProgram();
+        WarnText.Text = ((App)Application.Current).Backend.StatusText;
+        _overlay?.Reload(SelectedUnit);
+    }
+
+    private void BindPreviewProgram()
+    {
+        if (Application.Current is App app)
+            app.Backend.BindPreviewProgram(PreviewHost, ProgramHost, SelectedUnit.Id);
+        else
+        {
+            PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
+            ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
+        }
+        var outputs = ((App)Application.Current).Backend.PublishedOutputs();
+        var previewOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuPreview && item.UnitId == SelectedUnit.Id) == 1;
+        var programOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuProgram && item.UnitId == SelectedUnit.Id) == 1;
+        if (App.IsRemote && (!previewOk || !programOk) && string.IsNullOrEmpty(WarnText.Text))
+            WarnText.Text = Loc.T("msg.videoUnavailable");
+    }
 
 
     private MixingUnitEntry SelectedUnit =>
@@ -457,13 +516,21 @@ public partial class MainWindow : Window
         if (SceneVideo(scene) is not { } video)
             return;
         video.VideoLoop = !video.VideoLoop;
-        MixerNative.VideoSetLoop(video.Id, video.VideoLoop ? 1u : 0u);
+        ((App)Application.Current).Backend.VideoLoop(video.Id, video.VideoLoop);
         RefreshSceneTiles();
     }
 
     private void ToggleScenePlay(SceneEntry scene)
     {
-        if (SceneVideo(scene) is not { } video || !TryVideoInfo(video.Id, out var info))
+        if (SceneVideo(scene) is not { } video)
+            return;
+        if (App.IsRemote)
+        {
+            ((App)Application.Current).Backend.VideoPlay(video.Id, true);
+            RefreshSceneTiles();
+            return;
+        }
+        if (!TryVideoInfo(video.Id, out var info))
             return;
         MixerNative.VideoSetPlaying(video.Id, info.Playing == 0 ? 1u : 0u);
         RefreshSceneTiles();
@@ -887,6 +954,17 @@ public partial class MainWindow : Window
 
     internal void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
     {
+        var index = (uint)Math.Max(0, unit.Overlays.IndexOf(slot));
+        var ms = slot.DurationUnit == MixerNative.DurationMs
+            ? Math.Max(1, slot.DurationValue)
+            : unit.DurationMs(slot.DurationValue);
+        if (Application.Current is App { Backend.IsRemote: true } remoteApp)
+        {
+            slot.Enabled = enabled;
+            remoteApp.Backend.OverlayAuto(unit.Id, index, ms, enabled);
+            NotifyOverlayUi();
+            return;
+        }
         var desc = new OverlayDesc
         {
             SourceId = slot.SceneGpuId,
@@ -897,9 +975,6 @@ public partial class MainWindow : Window
             AudioFollow = slot.AudioFollow ? 1u : 0u,
             Hidden = slot.Hidden ? 1u : 0u
         };
-        var ms = slot.DurationUnit == MixerNative.DurationMs
-            ? Math.Max(1, slot.DurationValue)
-            : unit.DurationMs(slot.DurationValue);
         if (slot.TransitionKind == MixerNative.TransitionCut || ms <= 1)
         {
             slot.Enabled = enabled;
@@ -1018,6 +1093,8 @@ public partial class MainWindow : Window
 
     internal void OpenNewMultiview(ulong unitId)
     {
+        if (App.IsRemote)
+            return;
         if (!FlipBudget.TryOpen(1, this))
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
@@ -1199,6 +1276,15 @@ public partial class MainWindow : Window
     {
         if (tbar.IsMouseCaptureWithin || locked || latching)
             return;
+        if (Application.Current is App app && app.Backend.TryGetMix(unitId, out var mix))
+        {
+            if (Math.Abs(tbar.Value - mix) < 0.002)
+                return;
+            latching = true;
+            tbar.Value = mix;
+            latching = false;
+            return;
+        }
         unsafe
         {
             UnitState state = default;
@@ -1272,7 +1358,14 @@ public partial class MainWindow : Window
 
     private void VideoPlay_Click(object sender, RoutedEventArgs e)
     {
-        if (SelectedVideoId() is not ulong id || !TryVideoInfo(id, out var info))
+        if (SelectedVideoId() is not ulong id)
+            return;
+        if (App.IsRemote)
+        {
+            ((App)Application.Current).Backend.VideoPlay(id, true);
+            return;
+        }
+        if (!TryVideoInfo(id, out var info))
             return;
         MixerNative.VideoSetPlaying(id, info.Playing == 0 ? 1u : 0u);
         TickVideo();
@@ -1282,7 +1375,10 @@ public partial class MainWindow : Window
     {
         if (SelectedVideoId() is not ulong id)
             return;
-        MixerNative.VideoSeek(id, 0);
+        if (App.IsRemote)
+            ((App)Application.Current).Backend.VideoSeek(id, 0);
+        else
+            MixerNative.VideoSeek(id, 0);
         TickVideo();
     }
 
@@ -1326,6 +1422,11 @@ public partial class MainWindow : Window
         else
         {
             _lastSeekSentMs = Environment.TickCount64;
+        }
+        if (App.IsRemote)
+        {
+            ((App)Application.Current).Backend.VideoSeek(id, (long)(Math.Clamp(VideoSeek.Value, 0, 1) * Math.Max(1, info.DurationHns)));
+            return;
         }
         MixerNative.VideoSeek(id, (long)(Math.Clamp(VideoSeek.Value, 0, 1) * info.DurationHns));
     }
@@ -1441,11 +1542,34 @@ public partial class MainWindow : Window
         };
         try
         {
+            if (App.IsRemote && dialog.Kind is InputKind.Still or InputKind.Video)
+            {
+                if (!((App)Application.Current).Backend.UploadMedia(
+                    dialog.ResultPath!,
+                    dialog.Kind == InputKind.Still ? "still" : "video",
+                    dialog.ResultName ?? "",
+                    dialog.ResultVideoLoop,
+                    ((App)Application.Current).Backend.Revision,
+                    out var error))
+                {
+                    MessageBox.Show(this, error, Loc.T("msg.addInput"));
+                    return;
+                }
+                RefreshInputList();
+                RebuildMeters();
+                return;
+            }
             ApplyInputSource(input, dialog, replacing: false);
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, Loc.T("msg.addInput"));
+            return;
+        }
+        if (App.IsRemote)
+        {
+            RefreshInputList();
+            RebuildMeters();
             return;
         }
         _session.Inputs.Add(input);
@@ -1489,6 +1613,11 @@ public partial class MainWindow : Window
 
     private void PreviewInput_Click(object sender, RoutedEventArgs e)
     {
+        if (App.IsRemote)
+        {
+            MessageBox.Show(this, Loc.T("msg.remoteNoInputPreview"), Loc.T("chrome.previewInput"));
+            return;
+        }
         if (InputList.SelectedItem is not InputEntry input)
         {
             MessageBox.Show(this, Loc.T("msg.selectInputPreview"));
@@ -1561,7 +1690,7 @@ public partial class MainWindow : Window
                     && input.MixTargetId == dialog.ResultMixTargetId
                     && input.MixAudioBusId == dialog.ResultMixAudioBusId
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
-        if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
+        if (!App.IsRemote && replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
             MixerApply.DropSource(input.Id);
             MixerNative.FlushAudio(input.Id);
@@ -1597,6 +1726,14 @@ public partial class MainWindow : Window
         input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
         input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
         input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;
+        if (App.IsRemote)
+        {
+            if (Application.Current is not App app)
+                throw new InvalidOperationException(Loc.T("msg.remoteConnectFailed"));
+            if (!app.Backend.Mutate(MutationJson.UpsertInput(input), app.Backend.Revision, out var error))
+                throw new InvalidOperationException(error);
+            return;
+        }
         if (keepLive)
         {
             if (dialog.Kind == InputKind.Omt)
@@ -1696,6 +1833,8 @@ public partial class MainWindow : Window
             MessageBox.Show(this, Loc.T("msg.builtinDelete"));
             return;
         }
+        if (TryRemoteMutate(MutationJson.DeleteInput(input.Id), Loc.T("msg.selectInputDelete")))
+            return;
         CloseInputPreview(input.Id);
         MixerApply.DropSource(input.Id);
         MixerNative.FlushAudio(input.Id);
@@ -1732,6 +1871,16 @@ public partial class MainWindow : Window
 
     private void AddScene_Click(object sender, RoutedEventArgs e)
     {
+        if (App.IsRemote)
+        {
+            var draft = new SceneEntry
+            {
+                Id = _session.NextSceneId,
+                Name = $"Scene {_session.NextSceneId}"
+            };
+            TryRemoteMutate(MutationJson.UpsertScene(draft), Loc.T("chrome.scenes"));
+            return;
+        }
         var scene = _session.AddScene($"Scene {_session.NextSceneId}");
         MixerApply.TryDefineScene(scene, SceneWidth, SceneHeight);
         RebuildScenes();
@@ -1757,6 +1906,8 @@ public partial class MainWindow : Window
             MessageBox.Show(this, Loc.T("msg.oneScene"));
             return;
         }
+        if (TryRemoteMutate(MutationJson.DeleteScene(removed.Id), Loc.T("msg.selectSceneDelete")))
+            return;
         CloseInputPreview(removed.GpuId);
         MixerApply.DestroyScene(removed.GpuId);
         _session.Scenes.Remove(removed);
@@ -1822,8 +1973,7 @@ public partial class MainWindow : Window
         if (_suppressUnitChange || UnitBox.SelectedItem is not MixingUnitEntry unit)
             return;
         _session.SelectedUnitId = unit.Id;
-        PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
-        ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+        BindPreviewProgram();
         ApplyAspect();
         _overlay?.Reload(unit);
         _tbarPresetIndex = 0;
@@ -2009,7 +2159,7 @@ public partial class MainWindow : Window
     private void Preferences_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new PreferencesWindow { Owner = this };
-        if (dialog.ShowDialog() == true && dialog.RendererChanged)
+        if (dialog.ShowDialog() == true && (dialog.RendererChanged || dialog.ConnectionChanged))
             ((App)Application.Current).ReloadSession(_session);
     }
 
@@ -2017,6 +2167,8 @@ public partial class MainWindow : Window
     {
         var dialog = new SettingsWindow(_session) { Owner = this };
         if (dialog.ShowDialog() != true)
+            return;
+        if (App.IsRemote)
             return;
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
@@ -2045,6 +2197,9 @@ public partial class MainWindow : Window
         _session.Settings.VmixTcpEnabled = dialog.Settings.VmixTcpEnabledValue;
         _session.Settings.NativeApiEnabled = dialog.Settings.NativeApiEnabledValue;
         _session.Settings.NativeApiPort = dialog.Settings.NativeApiPort == 0 ? 9400 : dialog.Settings.NativeApiPort;
+        AppPrefs.Current.NativeApiEnabled = _session.Settings.NativeApiEnabledValue;
+        AppPrefs.Current.NativeApiPort = _session.Settings.NativeApiPort;
+        AppPrefs.Current.Save();
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         RefreshSceneTiles();
@@ -2110,6 +2265,15 @@ public partial class MainWindow : Window
             else if (input.Kind == InputKind.Uvc)
                 MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
         }
+    }
+
+    private bool TryRemoteMutate(string json, string title)
+    {
+        if (!App.IsRemote || Application.Current is not App app)
+            return false;
+        if (!app.Backend.Mutate(json, app.Backend.Revision, out var error))
+            MessageBox.Show(this, error, title);
+        return true;
     }
 
     private void ApplyOutputs(IReadOnlyList<OutputEntry> outputs)

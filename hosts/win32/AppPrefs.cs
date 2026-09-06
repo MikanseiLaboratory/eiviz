@@ -29,6 +29,13 @@ internal sealed class AppPrefs
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    public HostConnectionMode ConnectionMode { get; set; } = HostConnectionMode.Local;
+    public string RemoteUrl { get; set; } = "ws://127.0.0.1:9400";
+    public bool NativeApiEnabled { get; set; } = true;
+    public string NativeApiBind { get; set; } = "127.0.0.1";
+    public uint NativeApiPort { get; set; } = 9400;
+    public string NativeApiRole { get; set; } = "admin";
+    public string MediaDirectory { get; set; } = "";
     public AppLanguage Language { get; set; } = DefaultLanguage();
     public AppThemeMode Theme { get; set; } = AppThemeMode.Dark;
     public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;

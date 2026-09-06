@@ -40,6 +40,9 @@ public partial class SceneTile : UserControl
         CollapsedNumber.Text = number.ToString();
         if (scene.PreviewCollapsed)
             Monitor.SetWanted(false);
+        Monitor.SetWanted(false);
+        if (Application.Current is App { Backend.CanShowSceneThumbs: false })
+            return;
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
         ApplyCollapsed();
     }

@@ -10,11 +10,17 @@ namespace Eiviz.Host;
 
 internal static class MixerApply
 {
-    public static void DefineScene(SceneEntry scene, uint width, uint height) =>
+    public static void DefineScene(SceneEntry scene, uint width, uint height)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
         PushScene(scene, width, height);
+    }
 
     public static void PushMultiview(MultiviewLayout layout, uint width, uint height)
     {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
         var session = Application.Current is App app ? app.Session : null;
         PushLayout(layout, width, height, session);
     }
@@ -47,10 +53,16 @@ internal static class MixerApply
 
     public static bool TryAddOutput(OutputEntry output) => Try(() => AddOutput(output));
 
-    public static bool Cut(ulong unitId, bool swap) => Try(() =>
+    public static bool Cut(ulong unitId, bool swap) =>
+        Application.Current is App app ? app.Backend.Cut(unitId, swap) : CutLocal(unitId, swap);
+
+    internal static bool CutLocal(ulong unitId, bool swap) => Try(() =>
         MixerNative.ThrowIfFailed(MixerNative.Cut(unitId, swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT"));
 
-    public static bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset)
+    public static bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset) =>
+        Application.Current is App app ? app.Backend.Auto(unitId, unit, preset) : AutoLocal(unitId, unit, preset);
+
+    internal static bool AutoLocal(ulong unitId, MixingUnitEntry unit, TransitionPreset preset)
     {
         return Try(() => Auto(unitId, preset.Kind, preset.DurationMsFor(unit), preset.Swap, preset.KeepPreview,
             preset.Easing, preset.Direction, preset.DipR, preset.DipG, preset.DipB, preset.DipA,
@@ -111,7 +123,10 @@ internal static class MixerApply
             "AUTO");
     }
 
-    public static bool PreviewScene(ulong unitId, ulong sceneGpuId) => Try(() =>
+    public static bool PreviewScene(ulong unitId, ulong sceneGpuId) =>
+        Application.Current is App app ? app.Backend.Preview(unitId, sceneGpuId) : PreviewLocal(unitId, sceneGpuId);
+
+    internal static bool PreviewLocal(ulong unitId, ulong sceneGpuId) => Try(() =>
     {
         unsafe
         {
@@ -122,7 +137,10 @@ internal static class MixerApply
         }
     });
 
-    public static bool SetMix(ulong unitId, float mix, TransitionPreset? preset = null) => Try(() =>
+    public static bool SetMix(ulong unitId, float mix, TransitionPreset? preset = null) =>
+        Application.Current is App app ? app.Backend.SetMix(unitId, mix, preset) : SetMixLocal(unitId, mix, preset);
+
+    internal static bool SetMixLocal(ulong unitId, float mix, TransitionPreset? preset = null) => Try(() =>
     {
         unsafe
         {
@@ -147,7 +165,11 @@ internal static class MixerApply
         }
     });
 
-    public static bool PatchAux(ulong unitId, MixingUnitEntry unit) => Try(() =>
+    public static bool PatchAux(ulong unitId, MixingUnitEntry unit)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return true;
+        return Try(() =>
     {
         unsafe
         {
@@ -161,6 +183,7 @@ internal static class MixerApply
             MixerNative.SetUnitState(unitId, &state);
         }
     });
+    }
 
     public static bool TryDefineScene(SceneEntry scene, uint width, uint height) =>
         Try(() => PushScene(scene, width, height));

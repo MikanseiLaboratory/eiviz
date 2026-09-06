@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use crate::ids::ResourceKind;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ResourcePhase {
     Ready,
     Retrying,
@@ -21,7 +23,8 @@ impl ResourcePhase {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceStatus {
     pub kind: ResourceKind,
     pub id: u64,
@@ -29,12 +32,14 @@ pub struct ResourceStatus {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiveState {
     pub units: HashMap<u64, UnitLiveState>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnitLiveState {
     pub program_source: u64,
     pub preview_source: u64,

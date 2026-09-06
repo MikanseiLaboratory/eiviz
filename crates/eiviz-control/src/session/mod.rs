@@ -2,6 +2,7 @@
 //! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
 
 pub mod migration;
+pub mod mutate;
 pub mod reconcile;
 pub mod store;
 pub mod validate;

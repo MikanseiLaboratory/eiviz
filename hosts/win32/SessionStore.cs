@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Windows;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
@@ -22,9 +23,20 @@ internal static class SessionStore
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
+    public static Session FromJson(string json)
+    {
+        var dto = JsonSerializer.Deserialize<Document>(json, Json)
+            ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
+        return dto.ToSession();
+    }
+
+    public static string ToJson(Session session) => JsonSerializer.Serialize(Document.From(session), Json);
+
     public static void Publish(Session session)
     {
-        MixerNative.SessionReplaceText(JsonSerializer.Serialize(Document.From(session), Json));
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        MixerNative.SessionReplaceText(ToJson(session));
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);

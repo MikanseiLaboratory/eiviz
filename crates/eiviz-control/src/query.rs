@@ -30,9 +30,12 @@ impl Default for Capabilities {
                 "Cut".into(),
                 "Auto".into(),
                 "SetMix".into(),
+                "OverlayAuto".into(),
+                "MutateSession".into(),
                 "ReplaceSession".into(),
                 "GetSnapshot".into(),
                 "Subscribe".into(),
+                "BeginMediaUpload".into(),
             ],
             presentation_abi: true,
             native_api: true,
@@ -50,6 +53,7 @@ pub struct Snapshot {
     pub resources: Vec<crate::live::ResourceStatus>,
     pub capabilities: Capabilities,
     pub lifecycle: crate::lifecycle::Lifecycle,
+    pub epoch: String,
 }
 
 #[cfg(test)]

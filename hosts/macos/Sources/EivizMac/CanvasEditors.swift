@@ -120,7 +120,11 @@ struct SceneEditorView: View {
 
             VStack(alignment: .leading) {
                 Text("Live preview").fontWeight(.bold)
-                if let scene = current, editorMonitor != 0 {
+                if mixer.isRemote {
+                    Text(L10n.t("msg.videoUnavailable"))
+                        .foregroundStyle(EivizTheme.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let scene = current, editorMonitor != 0 {
                     MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: scene.gpuId))
                         .id(editorMonitor)
                         .aspectRatio(projectAspect, contentMode: .fit)
@@ -144,14 +148,20 @@ struct SceneEditorView: View {
                             TagCatalog.replace(&scene.tags, selectedTags)
                             mixer.session.scenes[i] = scene
                             mixer.mergeSceneTags(scene.tags)
-                            mixer.pushScene(scene)
+                            if mixer.isRemote {
+                                _ = mixer.commitRemoteScene(scene)
+                            } else {
+                                mixer.pushScene(scene)
+                            }
                         }
                         dismiss()
                     }
                     Button("Cancel") {
                         if let i = sceneIndex {
                             mixer.session.scenes[i].layers = original
-                            mixer.pushScene(mixer.session.scenes[i])
+                            if !mixer.isRemote {
+                                mixer.pushScene(mixer.session.scenes[i])
+                            }
                         }
                         dismiss()
                     }
@@ -165,7 +175,9 @@ struct SceneEditorView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
-            if editorMonitor == 0 {
+            if mixer.isRemote {
+                editorMonitor = 0
+            } else if editorMonitor == 0 {
                 editorMonitor = mixer.allocateMonitorId()
             }
             original = current?.layers ?? []

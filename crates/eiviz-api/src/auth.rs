@@ -23,6 +23,15 @@ impl Role {
         }
     }
 
+    pub fn from_name(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "operate" => Self::Operate,
+            "configure" => Self::Configure,
+            "admin" => Self::Admin,
+            _ => Self::Read,
+        }
+    }
+
     pub fn allows(self, required: Role) -> bool {
         self as u8 >= required as u8
     }
@@ -32,6 +41,7 @@ impl Role {
 pub struct AuthConfig {
     pub token: String,
     pub require_auth: bool,
+    pub max_role: Role,
 }
 
 impl AuthConfig {
@@ -50,9 +60,26 @@ impl AuthConfig {
         let require_auth = std::env::var("EIVIZ_API_REQUIRE_AUTH")
             .map(|value| value != "0")
             .unwrap_or(!token.is_empty());
+        let max_role = std::env::var("EIVIZ_API_ROLE")
+            .ok()
+            .map(|value| Role::from_name(&value))
+            .unwrap_or(if token.is_empty() {
+                Role::Read
+            } else {
+                Role::Admin
+            });
         Self {
             token,
             require_auth,
+            max_role,
+        }
+    }
+
+    pub fn granted_role(&self, requested: Role) -> Role {
+        if requested < self.max_role {
+            requested
+        } else {
+            self.max_role
         }
     }
 
@@ -83,6 +110,7 @@ mod tests {
         let auth = AuthConfig {
             token: "secret".into(),
             require_auth: true,
+            max_role: Role::Admin,
         };
         assert!(auth.check("secret"));
         assert!(!auth.check("secre"));

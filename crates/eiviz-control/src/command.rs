@@ -1,4 +1,5 @@
-use crate::session::{Document, InputKind};
+use crate::session::{Document, InputDto, InputKind, OverlaySlot, SceneDto, SceneLayer, UnitDto};
+use serde::{Deserialize, Serialize};
 
 /// Client-originated mutation. Live ops change Mix Effect state. Session ops
 /// edit the canonical document. Ops never carry GPU handles or native surfaces.
@@ -64,6 +65,10 @@ pub enum Command {
     },
     ReplaceSession {
         document: Box<Document>,
+        expected_revision: Option<u64>,
+    },
+    MutateSession {
+        mutation: Box<SessionMutation>,
         expected_revision: Option<u64>,
     },
     Snapshot {
@@ -134,7 +139,10 @@ impl Command {
     }
 
     pub fn is_session(&self) -> bool {
-        matches!(self, Self::ReplaceSession { .. })
+        matches!(
+            self,
+            Self::ReplaceSession { .. } | Self::MutateSession { .. }
+        )
     }
 
     pub fn requires_idempotency(&self) -> bool {
@@ -146,5 +154,62 @@ impl Command {
 
     pub fn expected_input_kind_for_path(kind: InputKind) -> bool {
         matches!(kind, InputKind::Still | InputKind::Video)
+    }
+}
+
+/// Collaborative document edit. Applied against a staged clone, then replaced
+/// through the same reconcile path as `ReplaceSession`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SessionMutation {
+    UpsertInput {
+        input: Box<InputDto>,
+    },
+    DeleteInput {
+        id: u64,
+    },
+    UpsertScene {
+        scene: Box<SceneDto>,
+    },
+    DeleteScene {
+        id: u64,
+    },
+    SetSceneLayers {
+        scene_id: u64,
+        layers: Vec<SceneLayer>,
+    },
+    UpsertUnit {
+        unit: Box<UnitDto>,
+    },
+    DeleteUnit {
+        id: u64,
+    },
+    SetOverlaySlot {
+        unit_id: u64,
+        index: u32,
+        slot: Box<OverlaySlot>,
+    },
+    AddMediaInput {
+        name: String,
+        media_kind: InputKind,
+        host_path: String,
+        video_loop: bool,
+        tags: Vec<String>,
+    },
+}
+
+impl SessionMutation {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::UpsertInput { .. } => "UpsertInput",
+            Self::DeleteInput { .. } => "DeleteInput",
+            Self::UpsertScene { .. } => "UpsertScene",
+            Self::DeleteScene { .. } => "DeleteScene",
+            Self::SetSceneLayers { .. } => "SetSceneLayers",
+            Self::UpsertUnit { .. } => "UpsertUnit",
+            Self::DeleteUnit { .. } => "DeleteUnit",
+            Self::SetOverlaySlot { .. } => "SetOverlaySlot",
+            Self::AddMediaInput { .. } => "AddMediaInput",
+        }
     }
 }

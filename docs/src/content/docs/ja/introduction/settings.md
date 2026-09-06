@@ -106,12 +106,12 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 ## Web API
 
-vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。それぞれ設定から独立してオン/オフできます。セッションファイルに保存されます。
+vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。HTTPとTCPはセッションファイルに保存されます。WebSocketのbindアドレス、token、最大role、メディア保存先はホストの環境設定（またはheadlessのCLI/環境変数）です。設定の有効/ポートもホスト待ち受けに使います。
 
 - HTTP: Mixer起動時にHTTPサーバーを開く。既定はオン。ポートの既定は8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html)をポート8099で開く。既定はオン。ポートは固定
-- WebSocket: Protobuf制御APIをループバックで開く。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`
-- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのトークンは`EIVIZ_API_TOKEN`です
+- WebSocket: Protobuf制御API。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`。既定bindはloopbackです。loopback以外はtoken必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません
+- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのtokenは環境設定の待ち受けtoken、headlessでは`EIVIZ_API_TOKEN`です
 
 HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。WebSocketの待ち受け失敗も同じで、その面だけオフにして警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
 
@@ -140,6 +140,18 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 ### テーマ
 
 ダーク、ライト、OS設定を選択可能です。
+
+### 接続
+
+このコンピューターのローカルMixerか、WebSocket経由のリモートeivizです。リモートURLとtokenは別保存です（Windows Credential Manager/macOS Keychain）。接続モードの変更はMixerを再起動します。
+
+リモート時の設定は確認専用です。言語、テーマ、接続先はクライアント側で編集できます。
+
+リモートのPreview/Program/Multiview映像は、すでに有効なNDIまたはOMT出力（`MuPreview`/`MuProgram`/`Multiview`）だけを受信します。eivizは出力を追加作成しません。該当なし、または複数一致のときはUnavailableと出します。
+
+### API待ち受け（ホスト）
+
+bindアドレス、待ち受けtoken、アップロード保存先です。loopback以外はtoken必須です。リモートクライアントから追加したStill/Videoはこのディレクトリへ保存されます。
 
 ### ヘルプ
 

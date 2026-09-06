@@ -23,6 +23,7 @@ pub use media_macos::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod main_thread;
 mod native_ws;
+mod remote_client;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
@@ -115,6 +116,13 @@ impl ControlFacade for MixerFacade {
             .lock()
             .map(|svc| svc.lifecycle())
             .unwrap_or(eiviz_control::Lifecycle::Failed)
+    }
+
+    fn epoch(&self) -> String {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.epoch().to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -1254,14 +1262,22 @@ pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitSt
     if state.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    // SAFETY: caller keeps UnitState valid for this call.
     let state = unsafe { *state };
+    let code = unit_set_state_inner(unit_id, &state);
+    if code == OK {
+        crate::runtime::note_live("SetUnitState");
+    }
+    code
+}
+
+pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
     if state.overlay_count > state.overlays.len() as u32
         || state.mv_slot_count > state.mv_slots.len() as u32
         || !(0.0..=1.0).contains(&state.mix)
     {
         return ERR_INVALID_ARGUMENT;
     }
+    let state = *state;
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
@@ -1581,6 +1597,19 @@ pub unsafe extern "C" fn mixer_unit_overlay_auto(
         return ERR_INVALID_ARGUMENT;
     }
     let desc = unsafe { *desc };
+    let code = overlay_auto_inner(unit_id, target_enabled, duration_ms, desc);
+    if code == OK {
+        crate::runtime::note_live("OverlayAuto");
+    }
+    code
+}
+
+pub(crate) fn overlay_auto_inner(
+    unit_id: u64,
+    target_enabled: u32,
+    duration_ms: u32,
+    desc: OverlayDesc,
+) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -2760,6 +2789,15 @@ pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize)
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_snapshot(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, cap) };
+    crate::runtime::copy_snapshot_bytes(buf)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_configure(
     enabled: u32,
     port: u32,
@@ -2787,6 +2825,52 @@ pub unsafe extern "C" fn mixer_tcp_listen_owner(out: *mut u8, cap: usize) -> i32
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_ws_configure(enabled: u32, port: u32) -> i32 {
     crate::native_ws::configure(enabled != 0, port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_configure_bind(
+    enabled: u32,
+    host: *const c_char,
+    port: u32,
+) -> i32 {
+    let host = if host.is_null() {
+        "127.0.0.1"
+    } else {
+        unsafe { CStr::from_ptr(host) }.to_str().unwrap_or("127.0.0.1")
+    };
+    crate::native_ws::configure_bind(enabled != 0, host, port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_configure_owned(
+    enabled: u32,
+    host: *const c_char,
+    port: u32,
+    token: *const c_char,
+    max_role: *const c_char,
+    media_directory: *const c_char,
+) -> i32 {
+    let host = if host.is_null() {
+        "127.0.0.1"
+    } else {
+        unsafe { CStr::from_ptr(host) }.to_str().unwrap_or("127.0.0.1")
+    };
+    let token = if token.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(token) }.to_str().unwrap_or("")
+    };
+    let max_role = if max_role.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(max_role) }.to_str().unwrap_or("")
+    };
+    let media = if media_directory.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(media_directory) }.to_str().unwrap_or("")
+    };
+    crate::native_ws::configure_owned(enabled != 0, host, port, token, max_role, media)
 }
 
 #[unsafe(no_mangle)]

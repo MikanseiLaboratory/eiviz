@@ -48,6 +48,11 @@ pub enum Event {
         meta: EnvelopeMeta,
         error: ControlError,
     },
+    Discovered {
+        meta: EnvelopeMeta,
+        kind: String,
+        payload: String,
+    },
     Shutdown {
         meta: EnvelopeMeta,
     },
@@ -65,6 +70,7 @@ impl Event {
             | Self::TransitionCompleted { meta, .. }
             | Self::Lag { meta, .. }
             | Self::Failed { meta, .. }
+            | Self::Discovered { meta, .. }
             | Self::Shutdown { meta } => meta,
         }
     }
@@ -80,6 +86,7 @@ impl Event {
             Self::TransitionCompleted { .. } => "TransitionCompleted",
             Self::Lag { .. } => "Lag",
             Self::Failed { .. } => "Failed",
+            Self::Discovered { .. } => "Discovered",
             Self::Shutdown { .. } => "Shutdown",
         }
     }
@@ -98,6 +105,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::AudioSetInput { .. } => "AudioSetInput",
         Command::AudioSetBus { .. } => "AudioSetBus",
         Command::ReplaceSession { .. } => "ReplaceSession",
+        Command::MutateSession { .. } => "MutateSession",
         Command::Snapshot { .. } => "Snapshot",
         Command::Discover { .. } => "Discover",
         Command::Shutdown => "Shutdown",

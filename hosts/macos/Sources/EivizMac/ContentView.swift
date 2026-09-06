@@ -452,6 +452,7 @@ struct ContentView: View {
             previewColor: mixer.session.settings.previewColor.color,
             programColor: mixer.session.settings.programColor.color,
             inactiveColor: mixer.session.settings.inactiveColor.color,
+            showThumb: !mixer.isRemote,
             onPreview: { mixer.previewScene(scene) },
             onCut: { mixer.cutScene(scene) },
             onLoop: { mixer.toggleSceneLoop(scene) },
@@ -610,8 +611,16 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .background(color.color)
-            MetalPreviewRepresentable(role: .unit(unitId: mixer.selectedUnitId, kind: kind))
+            MetalPreviewRepresentable(role: mixer.surfaceRole(kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
+                .overlay {
+                    if mixer.isRemote && mixer.videoUnavailable {
+                        Text(L10n.t("msg.videoUnavailable"))
+                            .multilineTextAlignment(.center)
+                            .padding(8)
+                            .foregroundStyle(EivizTheme.warn)
+                    }
+                }
         }
         .aspectRatio(
             CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),

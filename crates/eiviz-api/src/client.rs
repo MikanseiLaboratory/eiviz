@@ -1,13 +1,20 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use sha2::{Digest, Sha256};
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::codec::{WS_SUBPROTOCOL, decode_envelope, encode_envelope};
+use crate::media::DEFAULT_CHUNK_SIZE;
 use crate::proto::{
-    ClientHello, Cut, Envelope, GetSnapshot, Request, Response, Role, envelope, request,
+    AbortMediaUpload, BeginMediaUpload, ClientHello, CommitMediaUpload, Cut, Envelope, Event,
+    GetSnapshot, OverlayAuto, Request, Response, Role, Subscribe, UploadMediaChunk, envelope,
+    request, response,
 };
 use eiviz_control::error::{ControlError, ControlResult};
 
@@ -33,7 +40,7 @@ impl ControlClient {
                 payload: Some(request::Payload::GetSnapshot(GetSnapshot {})),
             })
             .await?;
-        if let Some(crate::proto::response::Payload::Snapshot(snapshot)) = response.payload {
+        if let Some(response::Payload::Snapshot(snapshot)) = response.payload {
             String::from_utf8(snapshot.document_json)
                 .map_err(|error| ControlError::internal(error.to_string()))
         } else {
@@ -42,70 +49,73 @@ impl ControlClient {
     }
 
     pub async fn cut(&self, unit_id: u64, swap: bool) -> ControlResult<()> {
-        let response = self
-            .roundtrip(Request {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                expected_revision: 0,
-                payload: Some(request::Payload::Cut(Cut {
-                    unit: Some(crate::proto::ResourceRef {
-                        kind: "unit".into(),
-                        id: unit_id,
-                        guid: String::new(),
-                        name: String::new(),
-                    }),
-                    input: None,
-                    swap,
-                })),
-            })
-            .await?;
+        let response = self.roundtrip(live_cut(unit_id, swap)).await?;
         status_ok(&response)
     }
 
     pub async fn preview(&self, unit_id: u64, scene_id: u64) -> ControlResult<()> {
-        let response = self
-            .roundtrip(Request {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                expected_revision: 0,
-                payload: Some(request::Payload::Preview(crate::proto::Preview {
-                    unit: Some(crate::proto::ResourceRef {
-                        kind: "unit".into(),
-                        id: unit_id,
-                        guid: String::new(),
-                        name: String::new(),
-                    }),
-                    scene: Some(crate::proto::ResourceRef {
-                        kind: "scene".into(),
-                        id: scene_id,
-                        guid: String::new(),
-                        name: String::new(),
-                    }),
-                })),
-            })
-            .await?;
-        status_ok(&response)
+        status_ok(&self.roundtrip(preview_req(unit_id, scene_id)).await?)
     }
 
     pub async fn auto(&self, unit_id: u64, duration_ms: u32, swap: bool) -> ControlResult<()> {
-        let response = self
-            .roundtrip(Request {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                expected_revision: 0,
-                payload: Some(request::Payload::Auto(crate::proto::Auto {
-                    unit: Some(crate::proto::ResourceRef {
-                        kind: "unit".into(),
-                        id: unit_id,
-                        guid: String::new(),
-                        name: String::new(),
-                    }),
-                    input: None,
-                    kind: 0,
+        self.auto_full(unit_id, 0, duration_ms, swap, true, 0, 0, 0.0, 0.0, 0.0, 1.0, 0.02, 0.0)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn auto_full(
+        &self,
+        unit_id: u64,
+        kind: u32,
+        duration_ms: u32,
+        swap: bool,
+        keep_preview: bool,
+        easing: u32,
+        direction: u32,
+        dip_r: f32,
+        dip_g: f32,
+        dip_b: f32,
+        dip_a: f32,
+        softness: f32,
+        param: f32,
+    ) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(auto_req(
+                    unit_id,
+                    kind,
                     duration_ms,
                     swap,
-                    keep_preview: true,
-                })),
-            })
-            .await?;
-        status_ok(&response)
+                    keep_preview,
+                    easing,
+                    direction,
+                    dip_r,
+                    dip_g,
+                    dip_b,
+                    dip_a,
+                    softness,
+                    param,
+                ))
+                .await?,
+        )
+    }
+
+    pub async fn overlay_auto(
+        &self,
+        unit_id: u64,
+        index: u32,
+        duration_ms: u32,
+        to_on: bool,
+    ) -> ControlResult<()> {
+        status_ok(&self.roundtrip(overlay_req(unit_id, index, duration_ms, to_on)).await?)
+    }
+
+    pub async fn mutate_session(
+        &self,
+        mutation_json: Vec<u8>,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        status_ok(&self.roundtrip(mutate_req(mutation_json, expected_revision)).await?)
     }
 
     pub async fn replace_session(
@@ -114,16 +124,7 @@ impl ControlClient {
         expected_revision: u64,
     ) -> ControlResult<()> {
         let response = self
-            .roundtrip(Request {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                expected_revision,
-                payload: Some(request::Payload::ReplaceSession(
-                    crate::proto::ReplaceSession {
-                        document_json,
-                        expected_revision,
-                    },
-                )),
-            })
+            .roundtrip(replace_req(document_json, expected_revision))
             .await?;
         status_ok(&response)
     }
@@ -139,51 +140,658 @@ impl ControlClient {
         status_ok(&response)
     }
 
-    async fn roundtrip(&self, request: Request) -> ControlResult<Response> {
-        self.roundtrip_ws(request).await
+    pub async fn connect(&self) -> ControlResult<ControlSession> {
+        ControlSession::open(self.endpoint.clone(), self.token.clone()).await
     }
 
-    async fn roundtrip_ws(&self, request: Request) -> ControlResult<Response> {
-        let mut req = self
-            .endpoint
-            .as_str()
-            .into_client_request()
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        req.headers_mut().insert(
-            "Sec-WebSocket-Protocol",
-            tokio_tungstenite::tungstenite::http::HeaderValue::from_static(WS_SUBPROTOCOL),
-        );
-        let (mut ws, _) = connect_async(req)
+    async fn roundtrip(&self, request: Request) -> ControlResult<Response> {
+        let session = self.connect().await?;
+        session.roundtrip(request).await
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionView {
+    pub connected: bool,
+    pub epoch: String,
+    pub revision: u64,
+    pub sequence: u64,
+    pub document_json: Vec<u8>,
+    pub live_json: Vec<u8>,
+    pub error: String,
+    pub lag: bool,
+}
+
+pub struct ControlSession {
+    tx: mpsc::Sender<SessionOp>,
+    events: Arc<Mutex<Vec<String>>>,
+    view: Arc<Mutex<SessionView>>,
+}
+
+enum SessionOp {
+    Request {
+        request: Request,
+        reply: oneshot::Sender<ControlResult<Response>>,
+    },
+}
+
+impl ControlSession {
+    async fn open(endpoint: String, token: String) -> ControlResult<Self> {
+        let (tx, rx) = mpsc::channel::<SessionOp>(32);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let view = Arc::new(Mutex::new(SessionView::default()));
+        let events_worker = Arc::clone(&events);
+        let view_worker = Arc::clone(&view);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            session_supervisor(endpoint, token, rx, events_worker, view_worker, ready_tx).await;
+        });
+        ready_rx
             .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let hello = Envelope {
-            kind: Some(envelope::Kind::Hello(ClientHello {
-                protocol: WS_SUBPROTOCOL.into(),
-                client_name: "eivizctl".into(),
-                client_instance_id: uuid::Uuid::new_v4().to_string(),
-                token: self.token.clone(),
-                role: Role::Admin as i32,
-            })),
+            .map_err(|_| ControlError::unavailable("client worker"))??;
+        Ok(Self { tx, events, view })
+    }
+
+    pub fn view(&self) -> SessionView {
+        self.view.lock().map(|slot| slot.clone()).unwrap_or_default()
+    }
+
+    pub async fn subscribe(&self, after_sequence: u64) -> ControlResult<Response> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::Subscribe(Subscribe { after_sequence })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        Ok(response)
+    }
+
+    pub async fn snapshot(&self) -> ControlResult<Response> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::GetSnapshot(GetSnapshot {})),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)?;
+        Ok(response)
+    }
+
+    pub async fn cut(&self, unit_id: u64, swap: bool) -> ControlResult<()> {
+        let response = self.roundtrip(live_cut(unit_id, swap)).await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn preview(&self, unit_id: u64, scene_id: u64) -> ControlResult<()> {
+        let response = self.roundtrip(preview_req(unit_id, scene_id)).await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn auto_full(
+        &self,
+        unit_id: u64,
+        kind: u32,
+        duration_ms: u32,
+        swap: bool,
+        keep_preview: bool,
+        easing: u32,
+        direction: u32,
+        dip_r: f32,
+        dip_g: f32,
+        dip_b: f32,
+        dip_a: f32,
+        softness: f32,
+        param: f32,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(auto_req(
+                unit_id,
+                kind,
+                duration_ms,
+                swap,
+                keep_preview,
+                easing,
+                direction,
+                dip_r,
+                dip_g,
+                dip_b,
+                dip_a,
+                softness,
+                param,
+            ))
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn set_mix(&self, unit_id: u64, value: f32) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::SetMix(crate::proto::SetMix {
+                    unit: Some(ref_unit(unit_id)),
+                    value,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn overlay_auto(
+        &self,
+        unit_id: u64,
+        index: u32,
+        duration_ms: u32,
+        to_on: bool,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(overlay_req(unit_id, index, duration_ms, to_on))
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn mutate_session(
+        &self,
+        mutation_json: Vec<u8>,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(mutate_req(mutation_json, expected_revision))
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn replace_session(
+        &self,
+        document_json: Vec<u8>,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(replace_req(document_json, expected_revision))
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn video_play(&self, input_id: u64, playing: bool) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::VideoPlay(crate::proto::VideoPlay {
+                    input: Some(ref_input(input_id)),
+                    playing,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn video_loop(&self, input_id: u64, looping: bool) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::VideoLoop(crate::proto::VideoLoop {
+                    input: Some(ref_input(input_id)),
+                    looping,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn video_seek(&self, input_id: u64, position_hns: i64) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::VideoSeek(crate::proto::VideoSeek {
+                    input: Some(ref_input(input_id)),
+                    position_hns,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn upload_file(
+        &self,
+        path: &Path,
+        kind: &str,
+        input_name: &str,
+        video_loop: bool,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        let bytes = std::fs::read(path).map_err(|error| ControlError::io(error.to_string()))?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ControlError::invalid("file name"))?;
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let begin = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::BeginMediaUpload(BeginMediaUpload {
+                    file_name: file_name.into(),
+                    media_kind: kind.into(),
+                    size_bytes: bytes.len() as u64,
+                    sha256_hex: sha,
+                    input_name: input_name.into(),
+                    video_loop,
+                })),
+            })
+            .await?;
+        status_ok(&begin)?;
+        let Some(response::Payload::UploadAccepted(accepted)) = begin.payload else {
+            return Err(ControlError::unavailable("upload not accepted"));
         };
-        ws.send(Message::Binary(encode_envelope(&hello).into()))
-            .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        let req = Envelope {
-            kind: Some(envelope::Kind::Request(request)),
+        let chunk = if accepted.chunk_size == 0 {
+            DEFAULT_CHUNK_SIZE as usize
+        } else {
+            accepted.chunk_size as usize
         };
-        ws.send(Message::Binary(encode_envelope(&req).into()))
+        let mut offset = 0u64;
+        for piece in bytes.chunks(chunk) {
+            let sent = self
+                .roundtrip(Request {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    expected_revision: 0,
+                    payload: Some(request::Payload::UploadMediaChunk(UploadMediaChunk {
+                        upload_id: accepted.upload_id.clone(),
+                        offset,
+                        data: piece.to_vec(),
+                    })),
+                })
+                .await;
+            let failed = match sent {
+                Ok(response) => status_ok(&response).err(),
+                Err(error) => Some(error),
+            };
+            if let Some(error) = failed {
+                let _ = self
+                    .roundtrip(Request {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        expected_revision: 0,
+                        payload: Some(request::Payload::AbortMediaUpload(AbortMediaUpload {
+                            upload_id: accepted.upload_id.clone(),
+                        })),
+                    })
+                    .await;
+                return Err(error);
+            }
+            offset += piece.len() as u64;
+        }
+        let commit = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision,
+                payload: Some(request::Payload::CommitMediaUpload(CommitMediaUpload {
+                    upload_id: accepted.upload_id,
+                    expected_revision,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &commit);
+        status_ok(&commit)
+    }
+
+    pub fn take_events(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .map(|mut slot| std::mem::take(&mut *slot))
+            .unwrap_or_default()
+    }
+
+    async fn roundtrip(&self, request: Request) -> ControlResult<Response> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(SessionOp::Request {
+                request,
+                reply: reply_tx,
+            })
             .await
-            .map_err(|error| ControlError::io(error.to_string()))?;
-        while let Some(msg) = ws.next().await {
-            let msg = msg.map_err(|error| ControlError::io(error.to_string()))?;
-            if let Message::Binary(bytes) = msg {
-                let env = decode_envelope(&bytes).map_err(ControlError::invalid)?;
-                if let Some(envelope::Kind::Response(response)) = env.kind {
-                    return Ok(response);
+            .map_err(|_| ControlError::unavailable("client closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| ControlError::unavailable("client closed"))?
+    }
+}
+
+async fn session_supervisor(
+    endpoint: String,
+    token: String,
+    mut rx: mpsc::Receiver<SessionOp>,
+    events: Arc<Mutex<Vec<String>>>,
+    view: Arc<Mutex<SessionView>>,
+    ready: oneshot::Sender<ControlResult<()>>,
+) {
+    let mut ready = Some(ready);
+    let mut delay = Duration::from_millis(200);
+    loop {
+        match session_once(
+            &endpoint,
+            &token,
+            &mut rx,
+            &events,
+            &view,
+            ready.take(),
+        )
+        .await
+        {
+            Ok(()) => return,
+            Err(error) => {
+                if let Ok(mut slot) = view.lock() {
+                    slot.connected = false;
+                    slot.error = error.clone();
                 }
+                if rx.is_closed() {
+                    return;
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
             }
         }
-        Err(ControlError::unavailable("connection closed"))
+    }
+}
+
+async fn session_once(
+    endpoint: &str,
+    token: &str,
+    rx: &mut mpsc::Receiver<SessionOp>,
+    events: &Arc<Mutex<Vec<String>>>,
+    view: &Arc<Mutex<SessionView>>,
+    ready: Option<oneshot::Sender<ControlResult<()>>>,
+) -> Result<(), String> {
+    let mut req = endpoint
+        .into_client_request()
+        .map_err(|error| error.to_string())?;
+    req.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_static(WS_SUBPROTOCOL),
+    );
+    let (mut ws, _) = match connect_async(req).await {
+        Ok(pair) => pair,
+        Err(error) => {
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(ControlError::io(error.to_string())));
+            }
+            return Err(error.to_string());
+        }
+    };
+    let hello = Envelope {
+        kind: Some(envelope::Kind::Hello(ClientHello {
+            protocol: WS_SUBPROTOCOL.into(),
+            client_name: "eiviz-host".into(),
+            client_instance_id: uuid::Uuid::new_v4().to_string(),
+            token: token.into(),
+            role: Role::Admin as i32,
+        })),
+    };
+    if let Err(error) = ws
+        .send(Message::Binary(encode_envelope(&hello).into()))
+        .await
+    {
+        if let Some(ready) = ready {
+            let _ = ready.send(Err(ControlError::io(error.to_string())));
+        }
+        return Err(error.to_string());
+    }
+    if let Ok(mut slot) = view.lock() {
+        slot.connected = true;
+        slot.error.clear();
+        slot.lag = false;
+    }
+    if let Some(ready) = ready {
+        let _ = ready.send(Ok(()));
+    }
+    let mut pending: HashMap<String, oneshot::Sender<ControlResult<Response>>> = HashMap::new();
+    let mut last_seq = 0u64;
+    let mut ping = tokio::time::interval(Duration::from_secs(20));
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            op = rx.recv() => {
+                let Some(SessionOp::Request { request, reply }) = op else { return Ok(()); };
+                pending.insert(request.request_id.clone(), reply);
+                let env = Envelope {
+                    kind: Some(envelope::Kind::Request(request)),
+                };
+                ws.send(Message::Binary(encode_envelope(&env).into()))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            msg = ws.next() => {
+                let Some(msg) = msg else { return Err("disconnected".into()); };
+                let msg = msg.map_err(|error| error.to_string())?;
+                match msg {
+                    Message::Binary(bytes) => {
+                        let env = decode_envelope(&bytes).map_err(|error| error)?;
+                        match env.kind {
+                            Some(envelope::Kind::Response(response)) => {
+                                apply_response(view, &response);
+                                if let Some(reply) = pending.remove(&response.request_id) {
+                                    let _ = reply.send(Ok(response));
+                                }
+                            }
+                            Some(envelope::Kind::Event(event)) => {
+                                apply_event(view, events, &event, &mut last_seq);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Message::Ping(payload) => {
+                        ws.send(Message::Pong(payload)).await.ok();
+                    }
+                    Message::Pong(_) => {}
+                    Message::Close(_) => return Err("closed".into()),
+                    _ => {}
+                }
+            }
+            _ = ping.tick() => {
+                ws.send(Message::Ping(Vec::new().into()))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+}
+
+fn apply_response(view: &Arc<Mutex<SessionView>>, response: &Response) {
+    let Ok(mut slot) = view.lock() else {
+        return;
+    };
+    if let Some(response::Payload::Snapshot(snapshot)) = &response.payload {
+        slot.revision = snapshot.revision;
+        slot.sequence = snapshot.sequence;
+        slot.epoch = snapshot.epoch.clone();
+        if !snapshot.document_json.is_empty() {
+            slot.document_json = snapshot.document_json.clone();
+        }
+        if !snapshot.live_json.is_empty() {
+            slot.live_json = snapshot.live_json.clone();
+        }
+        slot.lag = false;
+        slot.error.clear();
+    } else if response.revision != 0 {
+        slot.revision = response.revision;
+        slot.sequence = response.sequence;
+    }
+    if let Some(status) = &response.status {
+        if !status.code.is_empty() && status.code != "OK" {
+            slot.error = status.message.clone();
+        }
+    }
+}
+
+fn apply_event(
+    view: &Arc<Mutex<SessionView>>,
+    events: &Arc<Mutex<Vec<String>>>,
+    event: &Event,
+    last_seq: &mut u64,
+) {
+    if let Ok(mut slot) = events.lock() {
+        slot.push(event.kind.clone());
+    }
+    let Ok(mut slot) = view.lock() else {
+        return;
+    };
+    if !event.epoch.is_empty() && !slot.epoch.is_empty() && event.epoch != slot.epoch {
+        slot.lag = true;
+        slot.epoch = event.epoch.clone();
+    }
+    if *last_seq != 0 && event.sequence > *last_seq + 1 {
+        slot.lag = true;
+    }
+    if event.kind == "Lag" {
+        slot.lag = true;
+    }
+    *last_seq = (*last_seq).max(event.sequence);
+    slot.sequence = slot.sequence.max(event.sequence);
+    slot.revision = slot.revision.max(event.session_revision);
+    if !event.document_json.is_empty() {
+        slot.document_json = event.document_json.clone();
+    }
+    if !event.live_json.is_empty() {
+        slot.live_json = event.live_json.clone();
+    }
+}
+
+fn live_cut(unit_id: u64, swap: bool) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::Cut(Cut {
+            unit: Some(ref_unit(unit_id)),
+            input: None,
+            swap,
+        })),
+    }
+}
+
+fn preview_req(unit_id: u64, scene_id: u64) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::Preview(crate::proto::Preview {
+            unit: Some(ref_unit(unit_id)),
+            scene: Some(crate::proto::ResourceRef {
+                kind: "scene".into(),
+                id: scene_id,
+                guid: String::new(),
+                name: String::new(),
+            }),
+        })),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn auto_req(
+    unit_id: u64,
+    kind: u32,
+    duration_ms: u32,
+    swap: bool,
+    keep_preview: bool,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    softness: f32,
+    param: f32,
+) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::Auto(crate::proto::Auto {
+            unit: Some(ref_unit(unit_id)),
+            input: None,
+            kind,
+            duration_ms,
+            swap,
+            keep_preview,
+            easing,
+            direction,
+            dip_r,
+            dip_g,
+            dip_b,
+            dip_a,
+            softness,
+            param,
+        })),
+    }
+}
+
+fn overlay_req(unit_id: u64, index: u32, duration_ms: u32, to_on: bool) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::OverlayAuto(OverlayAuto {
+            unit: Some(ref_unit(unit_id)),
+            index,
+            duration_ms,
+            to_on,
+        })),
+    }
+}
+
+fn mutate_req(mutation_json: Vec<u8>, expected_revision: u64) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision,
+        payload: Some(request::Payload::MutateSession(
+            crate::proto::MutateSession {
+                expected_revision,
+                mutation_json,
+            },
+        )),
+    }
+}
+
+fn replace_req(document_json: Vec<u8>, expected_revision: u64) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision,
+        payload: Some(request::Payload::ReplaceSession(
+            crate::proto::ReplaceSession {
+                document_json,
+                expected_revision,
+            },
+        )),
+    }
+}
+
+fn ref_unit(unit_id: u64) -> crate::proto::ResourceRef {
+    crate::proto::ResourceRef {
+        kind: "unit".into(),
+        id: unit_id,
+        guid: String::new(),
+        name: String::new(),
+    }
+}
+
+fn ref_input(input_id: u64) -> crate::proto::ResourceRef {
+    crate::proto::ResourceRef {
+        kind: "input".into(),
+        id: input_id,
+        guid: String::new(),
+        name: String::new(),
     }
 }
 
@@ -193,6 +801,8 @@ fn status_ok(response: &Response) -> ControlResult<()> {
     };
     if status.code.is_empty() || status.code == "OK" {
         Ok(())
+    } else if status.code == "CONFLICT" {
+        Err(ControlError::conflict(status.message.clone()))
     } else {
         Err(ControlError::invalid(status.message.clone()))
     }

@@ -7,17 +7,19 @@ eivizのシステムアーキテクチャです。 プラットフォームを�
 
 ## 全体像
 
-eivizは1プロセスで動作します。  
+eivizの映像合成はMixerを1プロセスとして動かします。  
 映像と音声の状態機械はMixer（Rust + wgpu）にあり、OSごとのUIホストが内部のC ABIでそれを操作します。ホスト実装は`hosts/win32`（WPF）、`hosts/macos`（SwiftUI）、`hosts/linux`（開発中）です。
 
 ホストはウィンドウ、操作、プレビュー面など、UI表示と操作を担当します。  
 映像合成、音声処理、入出力の管理、セッションデータはMixerが担当し、根幹の処理をアーキテクチャ上UIから完全に分離することで高いパフォーマンスとクロスプラットフォームを両立しています。
 
-外部からの制御はMixer内の`ControlService`が正本です。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じディスパッチャへ入ります。C ABIはホストとMixerの内部FFIであり、公開APIではありません。
+外部からの制御はMixer内の`ControlService`が正本です。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じディスパッチャへ入ります。C ABIはホストとMixerの内部FFIであり、公開APIではありません。APIのlisten（bind、token、メディア保存先）はホストが所有し、セッションJSONには入れません。
+
+Windows/macOSは**リモートGUI**としても起動できます。これは別プロセスです。UIはNDI/OMT受信とHWND/NSView表示のためにローカルMixerを載せますが、リモートのセッションJSONをクライアントGPUへ`SessionReplace`しません。ライブ操作とセッション編集は、信頼できるLANまたはVPN上の認証付き`ws://`で接続先の`ControlService`へ送ります。このリリースではTLSを提供しません。詳細は[eiviz API](/eiviz/ja/developers/api/)です。
 
 ```mermaid
 flowchart TB
-  subgraph proc["1プロセス"]
+  subgraph proc["Mixerプロセス"]
     host["ホストUI"]
     abi["C ABI"]
     subgraph mixer["Mixer"]
@@ -36,6 +38,24 @@ flowchart TB
   clock --> host
 ```
 
+```mermaid
+flowchart LR
+  subgraph client["リモートGUIプロセス"]
+    rui["ホストUI"]
+    recv["受信専用Mixer"]
+  end
+  subgraph server["ホストまたはheadless"]
+    ctrl2["ControlService"]
+    gpu["Mixer GPU"]
+    ndi["有効なNDI / OMT"]
+  end
+  rui -->|Protobuf ws| ctrl2
+  ctrl2 --> gpu
+  gpu --> ndi
+  ndi -->|既存出力のみ| recv
+  recv --> rui
+```
+
 ## 責務
 
 | | Mixer | ホスト |
@@ -46,6 +66,14 @@ flowchart TB
 | シーンタイルなど | GPUから読み戻す | サムネを表示する |
 
 Mixerはプロセスに1つです。ライブプレビュー以外、ホストへGPUポインタは渡しません。入力・シーン・Mixing Unitは整数IDで指します。
+
+リモートGUIは受信専用のMixerをもう1つ持ちます。Preview/Program/Multiviewは、接続先ですでに有効なNDIまたはOMT出力がちょうど1本のときだけ受信します。無い、または複数ある場合はUnavailableです。追加のNDI/OMT出力は作りません。Input Previewとシーンサムネイルは出しません。
+
+## リモートGUI
+
+リモートクライアントとローカルホストは、同じWindows/macOS UIを使います。PreferencesでLocalまたはRemoteを選びます。リモートでは設定UIは確認のみです。クライアント自身のPreferences（言語、接続、ホスト側の待ち受けtoken）は編集できます。
+
+セッション編集は型付きの`MutateSession`と`expected_revision`です。衝突したら再読込し、黙ってマージしません。Still/Videoの追加は、クライアントのファイルをホストのメディアディレクトリへ送り、ホスト側でInputを足します。Mixing Unitのライブ操作（`Cut`、`Preview`、`Auto`、Overlay）は`eivizctl`と同じ`ControlService`を通ります。
 
 ## 並行性
 
@@ -217,6 +245,8 @@ TAKEやTバーで受信を作り直さないよう、外れてもしばらくフ
 ## ホスト
 
 OSごとのホストは`hosts/win32`、`hosts/macos`、`hosts/linux`に分かれます。ライブのPreview/Program、開いているMultiview、Scene Editor、Overlay窓、スイッチャーのPreview/Programは、ネイティブ面へMixerが直接描きます。Windowsは子ウィンドウ（HWND）、macOSはNSViewにwgpuがMetalレイヤを付けます。
+
+リモートGUIでは、それらのライブ面はホストGPUのシーンではなく、すでに有効なNDI/OMT出力の受信です。シーンタイル、スイッチャーのシーンサムネ、入力プレビューはローカルではGPU読み戻しサムネで、リモートではプレースホルダです。シーンやMix Inputを足してもswapchainは増えません。Mix InputはMixing UnitのバスまたはセッションMultiviewの遅延エイリアスで、FrameDelayのリングを読み、同じサムネ経路を使います。
 
 WindowsのDXGI flip面（swapchain）は同時に多く作れません。[設定](/eiviz/ja/introduction/settings/)の映像出力先ウィンドウの上限が、開いているswapchainの本数を抑えます。Preview/Program/Multiviewをリアルタイムに表示するのに使います。たとえばSwitcher UIはPreviewとProgramを出すので2スロット使います。設定から上げられますが、不安定になる可能性があります。窓を閉じるとswapchainは外れ、枠が空きます。本体ウィンドウを閉じると補助窓も閉じてプロセスを終了します。
 

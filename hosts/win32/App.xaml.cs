@@ -10,7 +10,9 @@ namespace Eiviz.Host;
 
 public partial class App : Application
 {
-    internal Session Session { get; private set; } = null!;
+    internal Session Session { get; set; } = null!;
+    internal IEivizBackend Backend { get; private set; } = null!;
+    internal static bool IsRemote => Current is App app && app.Backend.IsRemote;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -30,7 +32,13 @@ public partial class App : Application
             if (MixerNative.Ping() != 0x4549_5649)
                 throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
             Session = Session.Default();
-            BootMixer();
+            if (AppPrefs.Current.ConnectionMode == HostConnectionMode.Remote)
+                BootRemote();
+            else
+            {
+                Backend = new LocalEivizBackend();
+                BootMixer();
+            }
         }
         catch (Exception ex)
         {
@@ -39,13 +47,27 @@ public partial class App : Application
         }
     }
 
+    internal void ReplaceDocument(Session session)
+    {
+        Session = session;
+        if (MainWindow is MainWindow window)
+            window.ReloadFromSession();
+    }
+
     private void ReplaceSession(Session session)
     {
+        Backend?.Dispose();
         foreach (var unit in Session.Units.ToArray())
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();
         Session = session;
-        BootMixer();
+        if (AppPrefs.Current.ConnectionMode == HostConnectionMode.Remote)
+            BootRemote();
+        else
+        {
+            Backend = new LocalEivizBackend();
+            BootMixer();
+        }
     }
 
     /// Restart the mixer and replace the main window so surfaces attach on first
@@ -96,6 +118,34 @@ public partial class App : Application
         SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
+    }
+
+    private void BootRemote()
+    {
+        MixerNative.ThrowIfFailed(
+            MixerNative.CreateWithBackend(
+                AppPrefs.Current.CreateAbi,
+                0,
+                60,
+                1),
+            "GPU mixer initialization");
+        MixerNative.DefineGenerator(MixerNative.Black, MixerNative.GenSolid, 0, 0, 0, 1, 0);
+        FlipBudget.Configure(0);
+        var url = string.IsNullOrWhiteSpace(AppPrefs.Current.RemoteUrl)
+            ? "ws://127.0.0.1:9400"
+            : AppPrefs.Current.RemoteUrl.Trim();
+        try
+        {
+            Backend = RemoteEivizBackend.Open(url, CredentialStore.Load(url));
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("ERROR", ex.Message);
+            Dispatcher.BeginInvoke(
+                () => MessageBox.Show(ex.Message, Loc.T("msg.remoteConnectFailed")),
+                DispatcherPriority.ApplicationIdle);
+            Backend = new DisconnectedRemoteBackend();
+        }
     }
 
     internal static void ApplyVmixApi()
@@ -164,16 +214,28 @@ public partial class App : Application
 
     private static void ApplyNativeApi(App app, SessionSettings settings)
     {
-        var port = settings.NativeApiPort == 0 ? 9400u : settings.NativeApiPort;
-        var enabled = settings.NativeApiEnabledValue;
-        var code = MixerNative.WsConfigure(enabled ? 1u : 0u, port);
+        if (app.Backend.IsRemote)
+            return;
+        var prefs = AppPrefs.Current;
+        var port = prefs.NativeApiPort == 0 ? 9400u : prefs.NativeApiPort;
+        var bind = string.IsNullOrWhiteSpace(prefs.NativeApiBind) ? "127.0.0.1" : prefs.NativeApiBind.Trim();
+        var enabled = prefs.NativeApiEnabled;
+        var token = CredentialStore.Load("listen");
+        var code = MixerNative.WsConfigureOwned(
+            enabled ? 1u : 0u,
+            bind,
+            port,
+            token,
+            prefs.NativeApiRole ?? "admin",
+            prefs.MediaDirectory ?? "");
         if (code == 0)
             return;
         if (!enabled || code != 5)
             MixerNative.ThrowIfFailed(code, "Configure Protobuf WebSocket API");
 
-        settings.NativeApiEnabled = false;
-        var disable = MixerNative.WsConfigure(0, port);
+        prefs.NativeApiEnabled = false;
+        prefs.Save();
+        var disable = MixerNative.WsConfigureOwned(0, bind, port, "", "", "");
         if (disable != 0)
             HostLog.Write("WARN", $"disable Protobuf WebSocket API after listen failure: {disable}");
 
@@ -307,8 +369,12 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        foreach (var unit in Session.Units.ToArray())
-            MixerNative.DestroyUnit(unit.Id);
+        Backend?.Dispose();
+        if (!IsRemote)
+        {
+            foreach (var unit in Session.Units.ToArray())
+                MixerNative.DestroyUnit(unit.Id);
+        }
         MixerNative.Destroy();
         base.OnExit(e);
     }

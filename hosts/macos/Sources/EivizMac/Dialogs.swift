@@ -32,10 +32,15 @@ struct SettingsView: View {
                     else if category == 5 { webApi }
                     else { advanced }
                 }
+                .disabled(mixer.isRemote)
                 Spacer()
                 HStack {
                     Spacer()
                     Button("OK") {
+                        if mixer.isRemote {
+                            dismiss()
+                            return
+                        }
                         if !copyUmaInfo().available {
                             mixer.session.settings.rebarOptimization = false
                         }
@@ -47,6 +52,8 @@ struct SettingsView: View {
                         for layout in mixer.session.multiviews {
                             mixer.pushMultiview(layout)
                         }
+                        AppPrefs.shared.nativeApiEnabled = mixer.session.settings.nativeApiEnabled
+                        AppPrefs.shared.nativeApiPort = mixer.session.settings.nativeApiPort
                         AppPrefs.shared.save()
                         mixer.applyVmixApi()
                         mixer.publishSession()
@@ -542,7 +549,11 @@ struct PreferencesView: View {
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
     @State private var originalRenderer = AppPrefs.shared.renderer
+    @State private var originalConnection = AppPrefs.shared.connectionMode
+    @State private var originalRemoteUrl = AppPrefs.shared.remoteUrl
     @State private var renderer = AppPrefs.shared.renderer
+    @State private var remoteToken = KeychainStore.load(account: AppPrefs.shared.remoteUrl)
+    @State private var listenToken = KeychainStore.load(account: "listen")
     @State private var reverting = false
 
     var body: some View {
@@ -569,6 +580,29 @@ struct PreferencesView: View {
             Text(L10n.t("prefs.rendererHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            Text(L10n.t("prefs.connection"))
+            Picker("", selection: $prefs.connectionMode) {
+                Text(L10n.t("prefs.connectionLocal")).tag(HostConnectionMode.local)
+                Text(L10n.t("prefs.connectionRemote")).tag(HostConnectionMode.remote)
+            }
+            .frame(width: 280)
+            Text(L10n.t("prefs.remoteUrl"))
+            mixerTextField($prefs.remoteUrl, placeholder: "ws://127.0.0.1:9400")
+            Text(L10n.t("prefs.remoteToken"))
+            SecureField("", text: $remoteToken)
+                .frame(width: 320)
+            Text(L10n.t("prefs.apiBind"))
+            mixerTextField($prefs.nativeApiBind, placeholder: "127.0.0.1")
+            Text(L10n.t("prefs.apiPort"))
+            mixerUintField($prefs.nativeApiPort)
+            Text(L10n.t("prefs.apiToken"))
+            SecureField("", text: $listenToken)
+                .frame(width: 320)
+            Text(L10n.t("prefs.mediaDirectory"))
+            mixerTextField($prefs.mediaDirectory, placeholder: "")
+            Text(L10n.t("prefs.connectionHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Text(L10n.t("prefs.help")).fontWeight(.bold)
             Link(L10n.t("prefs.docsUrl"), destination: URL(string: L10n.t("prefs.docsUrl"))!)
             Text("eiviz").font(.title)
@@ -585,9 +619,13 @@ struct PreferencesView: View {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
                     prefs.renderer = renderer
+                    KeychainStore.save(account: prefs.remoteUrl, token: remoteToken)
+                    KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
-                    if renderer != originalRenderer {
+                    let connectionChanged = prefs.connectionMode != originalConnection
+                        || prefs.remoteUrl != originalRemoteUrl
+                    if renderer != originalRenderer || connectionChanged {
                         mixer.recreateMixer()
                     }
                     dismiss()
@@ -610,7 +648,11 @@ struct PreferencesView: View {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
             originalRenderer = prefs.renderer
+            originalConnection = prefs.connectionMode
+            originalRemoteUrl = prefs.remoteUrl
             renderer = prefs.renderer
+            remoteToken = KeychainStore.load(account: prefs.remoteUrl)
+            listenToken = KeychainStore.load(account: "listen")
         }
         .onChange(of: prefs.language) { _, _ in
             if !reverting {
@@ -1183,9 +1225,17 @@ struct MultiviewView: View {
             }
             .buttonStyle(MixerButtonStyle())
             if let layout {
-                MetalPreviewRepresentable(role: .monitor(monitorId: layout.monitorId, sourceId: layout.gpuId))
-                    .frame(minHeight: 280)
-                    .background(Color.black)
+                ZStack {
+                    MetalPreviewRepresentable(role: mixer.surfaceRoleMultiview(layout))
+                        .frame(minHeight: 280)
+                        .background(Color.black)
+                    if mixer.remoteMultiviewUnavailable(layout) {
+                        Text(L10n.t("msg.videoUnavailable"))
+                            .foregroundStyle(EivizTheme.dim)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                    }
+                }
             } else {
                 Text("Add a Multiview in Settings.")
                     .foregroundStyle(EivizTheme.dim)

@@ -82,11 +82,20 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
             let snap = client.snapshot_json().await.map_err(|e| e.to_string())?;
             println!("{snap}");
         }
-        Cmd::Watch => loop {
-            let snap = client.snapshot_json().await.map_err(|e| e.to_string())?;
-            println!("{snap}");
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        },
+        Cmd::Watch => {
+            let session = client.connect().await.map_err(|e| e.to_string())?;
+            session.subscribe(0).await.map_err(|e| e.to_string())?;
+            loop {
+                for kind in session.take_events() {
+                    println!("{kind}");
+                }
+                let view = session.view();
+                if !view.document_json.is_empty() {
+                    println!("{}", String::from_utf8_lossy(&view.document_json));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
         Cmd::Preview { unit, scene } => {
             client
                 .preview(unit, scene)

@@ -90,6 +90,10 @@ pub trait MixerPort: Send {
         preview: u64,
         mix: f32,
     ) -> ControlResult<()>;
+    fn overlay_auto(&mut self, spec: OverlayAutoApply) -> ControlResult<()> {
+        let _ = spec;
+        Ok(())
+    }
     fn unit_live(&self, unit_id: u64) -> ControlResult<UnitLiveState>;
     fn live_state(&self) -> ControlResult<LiveState>;
 
@@ -240,6 +244,22 @@ pub struct AutoApply {
     pub incoming: u64,
     pub softness: f32,
     pub param: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayAutoApply {
+    pub unit_id: u64,
+    pub to_on: bool,
+    pub duration_ms: u32,
+    pub source_id: u64,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub opacity: f32,
+    pub z: i32,
+    pub audio_follow: bool,
+    pub hidden: bool,
 }
 
 /// In-memory mixer used by API/contract tests. It does not touch GPU or I/O.

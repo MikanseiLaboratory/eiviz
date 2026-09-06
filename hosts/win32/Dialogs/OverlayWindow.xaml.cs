@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Eiviz.Host;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
@@ -127,6 +128,12 @@ public partial class OverlayWindow : Window
     private void Push()
     {
         MixerApply.PatchAux(_unit.Id, _unit);
+        if (Application.Current is App { Backend.IsRemote: true } app && _selected is not null)
+        {
+            var index = (uint)Math.Max(0, _unit.Overlays.IndexOf(_selected));
+            if (!app.Backend.Mutate(MutationJson.SetOverlaySlot(_unit.Id, index, _selected), app.Backend.Revision, out var error))
+                MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
+        }
         if (Owner is MainWindow main)
             main.RebuildOverlayToggles();
     }

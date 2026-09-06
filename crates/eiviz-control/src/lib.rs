@@ -21,7 +21,7 @@ pub mod service;
 pub mod session;
 pub mod video_trigger;
 
-pub use command::{Command, Incoming};
+pub use command::{Command, Incoming, SessionMutation};
 pub use error::{ControlError, ControlResult};
 pub use event::Event;
 pub use event_hub::EventHub;

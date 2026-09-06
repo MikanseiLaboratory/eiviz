@@ -252,8 +252,16 @@ struct SwitcherView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .background(color.color)
-            MetalPreviewRepresentable(role: .unit(unitId: unitId, kind: kind))
+            MetalPreviewRepresentable(role: mixer.surfaceRole(kind: kind, unitId: unitId))
                 .frame(minWidth: 320, minHeight: 180)
+                .overlay {
+                    if mixer.isRemote && mixer.videoUnavailable {
+                        Text(L10n.t("msg.videoUnavailable"))
+                            .multilineTextAlignment(.center)
+                            .padding(8)
+                            .foregroundStyle(EivizTheme.warn)
+                    }
+                }
         }
         .aspectRatio(
             CGFloat(unit.width) / max(1, CGFloat(unit.height)),
@@ -322,16 +330,22 @@ private struct SwitcherSceneThumb: View {
                 .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
             if !scene.previewCollapsed {
-                ThumbRepresentable(
-                    sourceId: scene.gpuId,
-                    width: 142,
-                    height: 80,
-                    interval: interval,
-                    wanted: wanted,
-                    onClick: onPreview
-                )
-                .frame(width: 142, height: 80)
-                .background(Color.black)
+                if mixer.isRemote {
+                    Color.black.frame(width: 142, height: 80)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onPreview)
+                } else {
+                    ThumbRepresentable(
+                        sourceId: scene.gpuId,
+                        width: 142,
+                        height: 80,
+                        interval: interval,
+                        wanted: wanted,
+                        onClick: onPreview
+                    )
+                    .frame(width: 142, height: 80)
+                    .background(Color.black)
+                }
             }
         }
         .frame(width: 148)
