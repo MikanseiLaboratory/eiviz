@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
     EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
-    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OverlayDesc, Rect, SCENE_BASE,
-    SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
-    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OUTPUT_SOURCE,
+    OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
+    TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
+    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
@@ -15,8 +16,8 @@ use eiviz_mixer::{
     mixer_define_generator, mixer_define_mix_input, mixer_define_scene, mixer_destroy,
     mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send,
     mixer_output_add, mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut,
-    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_acquire_frame, mixer_unit_auto,
+    mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
     mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(windows)]
@@ -182,7 +183,8 @@ fn dx12_compose_omt_and_program_out() {
                 0,
                 1,
                 0,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -195,7 +197,8 @@ fn dx12_compose_omt_and_program_out() {
                 0,
                 1,
                 0,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -229,7 +232,8 @@ fn omt_program_shows_fade_during_auto() {
                 0,
                 1,
                 0,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -330,7 +334,8 @@ fn omt_multiview_output_is_received() {
                 0,
                 1,
                 1,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -343,7 +348,8 @@ fn omt_multiview_output_is_received() {
                 1,
                 1,
                 0,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -396,6 +402,7 @@ fn omt_program_sends_master_audio() {
                 0,
                 1,
                 0,
+                1,
                 1
             ),
             OK
@@ -437,7 +444,8 @@ fn dx12_omt_gpu_in_and_out() {
                 0,
                 1,
                 1,
-                0
+                0,
+                1
             ),
             OK
         );
@@ -833,7 +841,8 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                     0,
                     1,
                     0,
-                    0
+                    0,
+                    1
                 ),
                 OK
             );
@@ -851,7 +860,8 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 0,
                 1,
                 0,
-                0
+                0,
+                1
             ),
             ERR_IO
         );
@@ -1314,5 +1324,67 @@ fn cut_program_sentinel_keeps_program() {
         assert_eq!(out.preview_source, SRC_BLUE);
         assert_eq!(out.incoming_source, 0);
     }
+    mixer_destroy();
+}
+
+#[test]
+fn snapshot_writes_png() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    thread::sleep(Duration::from_millis(350));
+    let path = std::env::temp_dir().join("eiviz-snapshot-test.png");
+    let _ = std::fs::remove_file(&path);
+    let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    let mut code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, cpath.as_ptr()) };
+    if code != OK {
+        thread::sleep(Duration::from_millis(250));
+        code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, cpath.as_ptr()) };
+    }
+    assert_eq!(code, OK);
+    let bytes = std::fs::read(&path).expect("png");
+    assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let _ = std::fs::remove_file(&path);
+    let bars = full_layer(SRC_BARS);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &bars), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let scene_path = std::env::temp_dir().join("eiviz-scene-snapshot-test.png");
+    let _ = std::fs::remove_file(&scene_path);
+    let scene_cpath = CString::new(scene_path.to_string_lossy().as_bytes()).unwrap();
+    let mut scene_code = unsafe { mixer_snapshot(scene_id(1), 0, scene_cpath.as_ptr()) };
+    if scene_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        scene_code = unsafe { mixer_snapshot(scene_id(1), 0, scene_cpath.as_ptr()) };
+    }
+    assert_eq!(scene_code, OK);
+    let scene_bytes = std::fs::read(&scene_path).expect("scene png");
+    assert!(scene_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let _ = std::fs::remove_file(&scene_path);
+    let jpeg_path = std::env::temp_dir().join("eiviz-snapshot-test.jpg");
+    let _ = std::fs::remove_file(&jpeg_path);
+    let jpeg_cpath = CString::new(jpeg_path.to_string_lossy().as_bytes()).unwrap();
+    let mut jpeg_code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, jpeg_cpath.as_ptr()) };
+    if jpeg_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        jpeg_code = unsafe { mixer_snapshot(1, OUTPUT_PROGRAM, jpeg_cpath.as_ptr()) };
+    }
+    assert_eq!(jpeg_code, OK);
+    let jpeg_bytes = std::fs::read(&jpeg_path).expect("jpeg");
+    assert_eq!(&jpeg_bytes[..2], &[0xFF, 0xD8]);
+    let _ = std::fs::remove_file(&jpeg_path);
+    let input_path = std::env::temp_dir().join("eiviz-input-snapshot-test.png");
+    let _ = std::fs::remove_file(&input_path);
+    let input_cpath = CString::new(input_path.to_string_lossy().as_bytes()).unwrap();
+    let mut input_code = unsafe { mixer_snapshot(SRC_COLOR, OUTPUT_SOURCE, input_cpath.as_ptr()) };
+    if input_code != OK {
+        thread::sleep(Duration::from_millis(250));
+        input_code = unsafe { mixer_snapshot(SRC_COLOR, OUTPUT_SOURCE, input_cpath.as_ptr()) };
+    }
+    assert_eq!(input_code, OK);
+    let input_bytes = std::fs::read(&input_path).expect("input png");
+    assert!(input_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let _ = std::fs::remove_file(&input_path);
     mixer_destroy();
 }

@@ -32,6 +32,7 @@ mod rebar;
 mod save;
 mod session;
 pub mod simd;
+mod snapshot;
 mod tcp_listen_owner;
 mod thumb;
 mod upload;
@@ -43,11 +44,11 @@ pub use abi::{
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
     ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
     MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect,
-    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
+    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
+    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -130,6 +131,7 @@ struct LiveOutput {
     audio_bus_id: u64,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
+    skip_idle_encode: bool,
     tx: mpsc::Sender<SendCmd>,
 }
 
@@ -144,6 +146,7 @@ struct OutputSnap {
     fps_d: u32,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
+    skip_idle_encode: bool,
     tx: mpsc::Sender<SendCmd>,
 }
 
@@ -152,12 +155,16 @@ impl OutputSnap {
         pack_copy_key(self.source_kind, self.source_id, self.unit_id)
     }
 
+    fn wants_video(&self) -> bool {
+        !self.skip_idle_encode || self.video_sub.load(Ordering::Relaxed)
+    }
+
     fn cpu_video(&self) -> bool {
-        !self.use_gpu && self.video_sub.load(Ordering::Relaxed)
+        !self.use_gpu && self.wants_video()
     }
 
     fn gpu_video(&self) -> bool {
-        self.use_gpu && self.video_sub.load(Ordering::Relaxed)
+        self.use_gpu && self.wants_video()
     }
 }
 
@@ -453,6 +460,12 @@ enum GpuCmd {
     SetMonitorInterval {
         monitor_id: u64,
         frames: u32,
+    },
+    Snapshot {
+        unit_id: u64,
+        kind: u32,
+        path: String,
+        reply: mpsc::Sender<i32>,
     },
     Shutdown,
 }
@@ -1769,6 +1782,38 @@ pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+pub(crate) fn take_snapshot(unit_id: u64, kind: u32, path: &str) -> i32 {
+    let path = path.to_string();
+    send_gpu_and_wait(|mixer, reply| {
+        if mixer
+            .cmds
+            .send(GpuCmd::Snapshot {
+                unit_id,
+                kind,
+                path,
+                reply,
+            })
+            .is_err()
+        {
+            return ERR_DEVICE;
+        }
+        OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_snapshot(unit_id: u64, kind: u32, path: *const c_char) -> i32 {
+    if path.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    // SAFETY: path is a NUL-terminated UTF-8 C string.
+    let path = unsafe { CStr::from_ptr(path) }.to_str().unwrap_or_default();
+    if path.is_empty() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    take_snapshot(unit_id, kind, path)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_start(
     id: u64,
@@ -2181,6 +2226,7 @@ pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char)
             unit_id,
             0,
             0,
+            1,
         )
     }
 }
@@ -2195,6 +2241,7 @@ pub unsafe extern "C" fn mixer_output_add(
     unit_id: u64,
     use_gpu: u32,
     audio_bus_id: u64,
+    skip_idle_encode: u32,
 ) -> i32 {
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -2214,6 +2261,7 @@ pub unsafe extern "C" fn mixer_output_add(
         return ERR_IO;
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
+    let skip_idle_encode = transport == OUT_OMT && skip_idle_encode != 0;
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
     let audio_bus_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
         0
@@ -2295,6 +2343,7 @@ pub unsafe extern "C" fn mixer_output_add(
                 audio_bus_id,
                 video_sub,
                 use_gpu,
+                skip_idle_encode,
                 tx: worker.tx.clone(),
             },
         );
@@ -3235,6 +3284,7 @@ fn render_loop(
     let mut mem_at = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
+    let mut pending_snapshots: Vec<(u64, u32, String, mpsc::Sender<i32>)> = Vec::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
@@ -3310,7 +3360,16 @@ fn render_loop(
                 GpuCmd::SetMonitorInterval { monitor_id, frames } => {
                     presenters.set_monitor_interval(monitor_id, frames)
                 }
+                GpuCmd::Snapshot {
+                    unit_id,
+                    kind,
+                    path,
+                    reply,
+                } => pending_snapshots.push((unit_id, kind, path, reply)),
                 GpuCmd::Shutdown => {
+                    for (_, _, _, reply) in pending_snapshots.drain(..) {
+                        let _ = reply.send(ERR_DEVICE);
+                    }
                     drop(presenters);
                     let _ = device.device.poll(wgpu::PollType::Wait {
                         submission_index: None,
@@ -3435,6 +3494,7 @@ fn render_loop(
                         .unwrap_or(fps_den),
                     video_sub: Arc::clone(&output.video_sub),
                     use_gpu: output.use_gpu,
+                    skip_idle_encode: output.skip_idle_encode,
                     tx: output.tx.clone(),
                 }
             }));
@@ -3479,6 +3539,12 @@ fn render_loop(
                 .collect();
             let mut compose_sources = due_monitors;
             compose_sources.extend_from_slice(&due_thumbs);
+            for (id, ..) in &pending_snapshots {
+                if snapshot.iter().any(|(unit_id, ..)| *unit_id == *id) {
+                    continue;
+                }
+                compose_sources.push(*id);
+            }
             let (mut used_scenes, used_uploads) = collect_frame_live_ids(
                 &scene_specs,
                 &snapshot,
@@ -3774,6 +3840,13 @@ fn render_loop(
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
+            flush_snapshots(
+                &device,
+                &mut composer,
+                &frame_delay,
+                &telemetry,
+                &mut pending_snapshots,
+            );
             thumbs.advance(&device);
             emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap, pts);
             emit_gpu_encode(&gpu_copies, pts);
@@ -3910,6 +3983,60 @@ fn render_loop(
             }
         }
         next += frame_dt;
+    }
+}
+
+fn snapshot_texture<'a>(
+    composer: &'a Composer,
+    frame_delay: &'a FrameDelay,
+    source_id: u64,
+    kind: u32,
+) -> Option<&'a wgpu::Texture> {
+    if crate::abi::is_scene(source_id) {
+        return composer
+            .scene_texture(source_id)
+            .or_else(|| frame_delay.scene_rgba_at(source_id, 0));
+    }
+    if kind == OUTPUT_SOURCE {
+        return composer.mix_texture(source_id).or_else(|| {
+            composer
+                .source_can_copy(source_id)
+                .then(|| composer.source_texture(source_id))
+                .flatten()
+        });
+    }
+    composer
+        .rgba_texture(source_id, kind)
+        .or_else(|| frame_delay.rgba(source_id, kind))
+}
+
+fn flush_snapshots(
+    device: &GpuDevice,
+    composer: &mut Composer,
+    frame_delay: &FrameDelay,
+    telemetry: &Mutex<Telemetry>,
+    pending: &mut Vec<(u64, u32, String, mpsc::Sender<i32>)>,
+) {
+    for (source_id, kind, path, reply) in pending.drain(..) {
+        let blitted = (kind == OUTPUT_SOURCE
+            && snapshot_texture(composer, frame_delay, source_id, kind).is_none())
+        .then(|| composer.blit_source_rgba(device, source_id));
+        let code = match snapshot_texture(composer, frame_delay, source_id, kind)
+            .or(blitted.as_ref().and_then(|item| item.as_ref()))
+        {
+            Some(tex) => match crate::snapshot::save_texture(device, tex, &path) {
+                Ok(()) => OK,
+                Err(error) => {
+                    set_error(telemetry, error);
+                    ERR_IO
+                }
+            },
+            None => {
+                set_error(telemetry, "snapshot source not ready");
+                ERR_IO
+            }
+        };
+        let _ = reply.send(code);
     }
 }
 
@@ -4628,6 +4755,32 @@ mod tests {
     }
 
     #[test]
+    fn skip_idle_encode_gates_video() {
+        let (tx, _) = mpsc::channel();
+        let idle = OutputSnap {
+            output_id: 1,
+            source_kind: SRC_KIND_MU_PROGRAM,
+            source_id: 1,
+            unit_id: 1,
+            audio_bus_id: 1,
+            fps_n: 60,
+            fps_d: 1,
+            video_sub: Arc::new(AtomicBool::new(false)),
+            use_gpu: false,
+            skip_idle_encode: true,
+            tx: tx.clone(),
+        };
+        assert!(!idle.wants_video());
+        assert!(!idle.cpu_video());
+        let always = OutputSnap {
+            skip_idle_encode: false,
+            ..idle
+        };
+        assert!(always.wants_video());
+        assert!(always.cpu_video());
+    }
+
+    #[test]
     fn take_fatal_rejects_null() {
         assert_eq!(
             unsafe { mixer_take_fatal(std::ptr::null_mut(), 8) },
@@ -4701,6 +4854,7 @@ mod tests {
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(true)),
             use_gpu: false,
+            skip_idle_encode: true,
             tx: mpsc::channel().0,
         }];
         let (scenes, uploads) = collect_live_ids(&specs, &[], &[], &outputs, &HashMap::new());

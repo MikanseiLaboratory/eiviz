@@ -33,7 +33,7 @@ struct LayoutPresetMosaic: View {
                         height: max(1, box.3 * geo.size.height - 1)
                     )
                     ZStack {
-                        Rectangle().fill(Color(white: 0.29))
+                        Rectangle().fill(EivizTheme.list)
                         Rectangle().stroke(Color.black, lineWidth: 1)
                         Text("\(index + 1)")
                             .font(.system(size: min(18, min(rect.width, rect.height) * 0.42), weight: .bold))

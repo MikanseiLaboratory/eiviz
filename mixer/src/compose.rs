@@ -2082,7 +2082,9 @@ impl Composer {
                 device,
                 width,
                 height,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
             );
             let view = texture.create_view(&Default::default());
             let mut encoder = device.device.create_command_encoder(&Default::default());
@@ -2132,7 +2134,9 @@ impl Composer {
                     device,
                     width,
                     height,
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC,
                 );
                 let view = texture.create_view(&Default::default());
                 self.sources.insert(
@@ -2260,6 +2264,52 @@ impl Composer {
 
     pub fn source_texture(&self, source_id: u64) -> Option<&wgpu::Texture> {
         self.sources.get(&source_id).map(|gpu| &gpu.texture)
+    }
+
+    pub fn source_can_copy(&self, source_id: u64) -> bool {
+        self.sources.get(&source_id).is_some_and(|gpu| {
+            !gpu.packed && gpu.texture.usage().contains(wgpu::TextureUsages::COPY_SRC)
+        })
+    }
+
+    pub fn source_rgba_size(&self, source_id: u64) -> Option<(u32, u32)> {
+        if let Some(scene) = self.scenes.get(&source_id) {
+            return Some((scene.width.max(1), scene.height.max(1)));
+        }
+        if let Some(tex) = self.mix_textures.get(&source_id) {
+            let size = tex.size();
+            return Some((size.width.max(1), size.height.max(1)));
+        }
+        let gpu = self.sources.get(&source_id)?;
+        let width = if gpu.packed {
+            gpu.width.saturating_mul(2)
+        } else {
+            gpu.width
+        };
+        Some((width.max(1), gpu.height.max(1)))
+    }
+
+    pub fn blit_source_rgba(
+        &mut self,
+        device: &GpuDevice,
+        source_id: u64,
+    ) -> Option<wgpu::Texture> {
+        let (width, height) = self.source_rgba_size(source_id)?;
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC;
+        let texture = make_texture(device, width, height, usage);
+        let view = texture.create_view(&Default::default());
+        let mut encoder = device
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz snapshot blit"),
+            });
+        if !self.blit_source_to(device, &mut encoder, source_id, &view) {
+            return None;
+        }
+        device.submit(Some(encoder.finish()));
+        Some(texture)
     }
 
     pub fn scene_texture(&self, scene_id: u64) -> Option<&wgpu::Texture> {

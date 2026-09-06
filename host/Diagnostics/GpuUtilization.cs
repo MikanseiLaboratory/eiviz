@@ -4,18 +4,30 @@ namespace Eiviz.Host;
 
 internal static class GpuUtilization
 {
+    private static readonly object Gate = new();
     private static readonly Sampler Engine = new();
+    private static float _last;
 
     public static float Percent()
     {
-        try
+        lock (Gate)
         {
-            return Engine.Sample();
+            try
+            {
+                _last = Engine.Sample();
+            }
+            catch
+            {
+                _last = 0;
+            }
+            return _last;
         }
-        catch
-        {
-            return 0;
-        }
+    }
+
+    public static float Last()
+    {
+        lock (Gate)
+            return _last;
     }
 
     private sealed class Sampler : IDisposable

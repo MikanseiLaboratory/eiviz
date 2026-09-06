@@ -238,13 +238,20 @@ struct SettingsView: View {
                         if value != .omt {
                             output.wrappedValue.useGpu = false
                         }
+                        mixer.addOutput(output.wrappedValue)
                     }
                 )) {
                     Text("OMT").tag(OutputTransport.omt)
                     Text("NDI®").tag(OutputTransport.ndi)
                 }
                 if output.wrappedValue.transport == .omt {
-                    Toggle("GPU", isOn: output.useGpu)
+                    Toggle("GPU", isOn: Binding(
+                        get: { output.wrappedValue.useGpu },
+                        set: { value in
+                            output.wrappedValue.useGpu = value
+                            mixer.addOutput(output.wrappedValue)
+                        }
+                    ))
                 }
                 Toggle("Enabled", isOn: Binding(
                     get: { output.wrappedValue.enabled },
@@ -258,6 +265,15 @@ struct SettingsView: View {
                     _ = mixer_output_remove(output.wrappedValue.id)
                     mixer.session.outputs.removeAll { $0.id == output.wrappedValue.id }
                 }
+            }
+            if output.wrappedValue.transport == .omt {
+                Toggle(L10n.t("settings.skipEncodeWhenNoReceivers"), isOn: Binding(
+                    get: { output.wrappedValue.skipEncodeWhenNoReceivers },
+                    set: { value in
+                        output.wrappedValue.skipEncodeWhenNoReceivers = value
+                        mixer.addOutput(output.wrappedValue)
+                    }
+                ))
             }
             HStack {
                 Picker("", selection: Binding(
@@ -567,6 +583,7 @@ struct PreferencesView: View {
             }
         }
         .onChange(of: prefs.theme) { _, _ in
+            EivizTheme.applyAppAppearance()
             if !reverting { prefs.save() }
         }
     }
@@ -608,6 +625,7 @@ struct AddInputView: View {
     @State private var mixPreview = false
     @State private var mixAudioBusId: UInt64 = 0
     @State private var mixBuffer: UInt32 = 1
+    @State private var selectedTags: [String] = []
 
     var body: some View {
         HStack(spacing: 0) {
@@ -623,6 +641,7 @@ struct AddInputView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(EivizTheme.dim)
                 }
+                TagCheckView(input: true, selected: $selectedTags)
                 form
                 Spacer()
                 HStack {
@@ -838,6 +857,7 @@ struct AddInputView: View {
         refreshOmt()
         refreshNdi()
         refreshUvc()
+        selectedTags = []
         guard let editing else { return }
         name = editing.name
         category = editing.kind.category
@@ -877,6 +897,7 @@ struct AddInputView: View {
             ? editing.mixAudioBusId
             : 0
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
+        selectedTags = editing.tags
     }
 
     private func defaultName() -> String {
@@ -989,6 +1010,8 @@ struct AddInputView: View {
             input.guid = editing.guid
             input.id = editing.id
         }
+        TagCatalog.replace(&input.tags, selectedTags)
+        mixer.mergeInputTags(input.tags)
         mixer.upsertInput(input, replacing: editing?.id)
         return true
     }
@@ -1040,7 +1063,7 @@ struct MixingUnitView: View {
             HStack {
                 Spacer()
                 Button("OK") {
-                    mixer.saveUnit(unit)
+                    mixer.commitUnit(unit)
                     dismiss()
                 }
                 Button("Cancel") { dismiss() }
@@ -1379,7 +1402,7 @@ private struct MosaicThumb: View {
                     let ph = max(1, CGFloat(pane.height) * h - 1)
                     ZStack {
                         Rectangle()
-                            .fill(Color(white: index == selectedPane ? 0.43 : 0.29))
+                            .fill(index == selectedPane ? EivizTheme.button : EivizTheme.list)
                             .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
                         Text("\(index + 1)")
                             .font(.system(size: min(18, max(7, min(pw, ph) * 0.42)), weight: .bold))

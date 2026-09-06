@@ -23,6 +23,19 @@ enum InputKind: String, Codable, CaseIterable {
         case .mix: return "Mix"
         }
     }
+
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix]
+
+    func sameCategory(as other: InputKind) -> Bool {
+        self == other || (isColour && other.isColour)
+    }
+
+    var isColour: Bool {
+        switch self {
+        case .color, .bars, .black: return true
+        default: return false
+        }
+    }
 }
 
 enum MixSource: String, Codable {
@@ -812,9 +825,11 @@ struct OutputEntry: Identifiable, Codable {
     var useGpu: Bool = true
     var enabled: Bool = true
     var audioBusId: UInt64 = 1
+    var skipEncodeWhenNoReceivers: Bool = true
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioBusId
+        case skipEncodeWhenNoReceivers
     }
 
     init(
@@ -826,7 +841,8 @@ struct OutputEntry: Identifiable, Codable {
         unitId: UInt64 = 1,
         useGpu: Bool = true,
         enabled: Bool = true,
-        audioBusId: UInt64 = 1
+        audioBusId: UInt64 = 1,
+        skipEncodeWhenNoReceivers: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -837,6 +853,7 @@ struct OutputEntry: Identifiable, Codable {
         self.useGpu = useGpu
         self.enabled = enabled
         self.audioBusId = audioBusId
+        self.skipEncodeWhenNoReceivers = skipEncodeWhenNoReceivers
     }
 
     init(from decoder: Decoder) throws {
@@ -850,6 +867,7 @@ struct OutputEntry: Identifiable, Codable {
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
+        skipEncodeWhenNoReceivers = try container.decodeIfPresent(Bool.self, forKey: .skipEncodeWhenNoReceivers) ?? true
     }
 }
 
@@ -1356,6 +1374,19 @@ struct MixerSessionData: Codable {
             buses[i].deviceKind = .coreAudio
         }
     }
+
+    mutating func mergeTagCatalogs() {
+        inputTags = TagCatalog.normalizeList(inputTags)
+        sceneTags = TagCatalog.normalizeList(sceneTags)
+        for i in inputs.indices {
+            TagCatalog.replace(&inputs[i].tags, inputs[i].tags)
+            TagCatalog.mergeInto(&inputTags, inputs[i].tags)
+        }
+        for i in scenes.indices {
+            TagCatalog.replace(&scenes[i].tags, scenes[i].tags)
+            TagCatalog.mergeInto(&sceneTags, scenes[i].tags)
+        }
+    }
 }
 
 enum SessionFile {
@@ -1368,6 +1399,7 @@ enum SessionFile {
     static func decode(_ data: Data) throws -> MixerSessionData {
         var session = try JSONDecoder().decode(MixerSessionData.self, from: data)
         session.assignMonitors()
+        session.mergeTagCatalogs()
         return session
     }
 }

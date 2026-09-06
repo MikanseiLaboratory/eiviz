@@ -70,6 +70,11 @@ struct SwitcherView: View {
             SwitcherScenesSheet(unitId: unitId)
                 .environmentObject(mixer)
         }
+        .onChange(of: mixer.session.sceneTags) { _, tags in
+            if let sceneTag, !tags.contains(sceneTag) {
+                self.sceneTag = nil
+            }
+        }
     }
 
     private var transitions: some View {
@@ -140,9 +145,9 @@ struct SwitcherView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    tagTab(L10n.t("tag.all"), selected: sceneTag == nil) { sceneTag = nil }
+                    tagTab(L10n.t("tag.all"), selected: sceneTag == nil, filter: .all) { sceneTag = nil }
                     ForEach(mixer.session.sceneTags, id: \.self) { tag in
-                        tagTab(tag, selected: sceneTag == tag) { sceneTag = tag }
+                        tagTab(tag, selected: sceneTag == tag, filter: .tag(tag)) { sceneTag = tag }
                     }
                 }
             }
@@ -158,7 +163,7 @@ struct SwitcherView: View {
         }
     }
 
-    private func tagTab(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func tagTab(_ title: String, selected: Bool, filter: ListFilter, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: selected ? .semibold : .regular))
@@ -168,6 +173,15 @@ struct SwitcherView: View {
                 Rectangle()
                     .fill(selected ? mixer.session.settings.previewColor.color : Color.clear)
                     .frame(height: 2)
+            }
+            .contextMenu {
+                Button(L10n.t("tag.add")) { mixer.addCatalogTag(input: false) }
+                if filter.mode == .tag, let tag = filter.tag {
+                    Button(L10n.t("tag.rename")) { mixer.renameCatalogTag(input: false, current: tag) }
+                    Button(L10n.t("tag.delete"), role: .destructive) {
+                        mixer.deleteCatalogTag(input: false, name: tag)
+                    }
+                }
             }
     }
 
@@ -218,7 +232,6 @@ struct SwitcherView: View {
             inactiveColor: mixer.session.settings.inactiveColor.color,
             onPreview: { mixer.previewScene(scene, unitId: unitId) },
             onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
-            onHide: { mixer.hideSceneOnSwitcher(unitId, scene.id) },
             onEdit: { mixer.openSceneEditor(scene) }
         )
     }
@@ -291,7 +304,6 @@ private struct SwitcherSceneThumb: View {
     let inactiveColor: Color
     let onPreview: () -> Void
     let onCollapse: () -> Void
-    let onHide: () -> Void
     let onEdit: () -> Void
 
     @State private var appeared = false
@@ -306,10 +318,9 @@ private struct SwitcherSceneThumb: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(Color(white: 0.2))
+                .background(EivizTheme.chrome)
                 .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
-                .overlay(RightClickCatcher(action: onCollapse))
             if !scene.previewCollapsed {
                 ThumbRepresentable(
                     sourceId: scene.gpuId,
@@ -327,10 +338,9 @@ private struct SwitcherSceneThumb: View {
         .background(rowFill)
         .overlay(Rectangle().stroke(rowStroke, lineWidth: 2))
         .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onEdit)
         .onTapGesture(perform: onPreview)
-        .contextMenu {
-            Button(L10n.t("switcher.hideHere"), action: onHide)
-        }
+        .background(RightClickCatcher(action: onCollapse))
         .onAppear { appeared = true }
         .onDisappear { appeared = false }
     }
@@ -404,34 +414,3 @@ private struct SwitcherScenesSheet: View {
     }
 }
 
-private struct RightClickCatcher: NSViewRepresentable {
-    let action: () -> Void
-
-    func makeNSView(context: Context) -> RightClickNSView {
-        let view = RightClickNSView()
-        view.action = action
-        return view
-    }
-
-    func updateNSView(_ nsView: RightClickNSView, context: Context) {
-        nsView.action = action
-    }
-}
-
-private final class RightClickNSView: NSView {
-    var action: (() -> Void)?
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard let event = NSApp.currentEvent else { return nil }
-        switch event.type {
-        case .rightMouseDown, .rightMouseUp:
-            return self
-        default:
-            return nil
-        }
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        action?()
-    }
-}

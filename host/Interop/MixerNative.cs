@@ -20,6 +20,7 @@ internal static partial class MixerNative
     internal const ulong AudioBusPeakBase = 0x0004_0000UL;
     internal const uint OutputProgram = 0;
     internal const uint OutputPreview = 1;
+    internal const uint OutputSource = 3;
     internal const uint TransitionCut = 0;
     internal const uint TransitionFade = 1;
     internal const uint TransitionDip = 2;
@@ -288,7 +289,10 @@ internal static partial class MixerNative
     internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId);
+    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int Snapshot(ulong unitId, uint kind, string path);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_remove")]
     internal static partial int OutputRemove(ulong outputId);

@@ -794,6 +794,8 @@ pub struct OutputDto {
     pub enabled: bool,
     #[serde(default = "one")]
     pub audio_bus_id: u64,
+    #[serde(default = "default_true")]
+    pub skip_encode_when_no_receivers: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1096,6 +1098,7 @@ mod tests {
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.inputs[0].kind, InputKind::Bars);
         assert_eq!(doc.outputs[0].audio_bus_id, 1);
+        assert!(doc.outputs[0].skip_encode_when_no_receivers);
         assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(doc.units[0].transitions.len(), 2);
         assert!(doc.settings.rebar_optimization);
@@ -1128,6 +1131,19 @@ mod tests {
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.outputs[0].audio_bus_id, 0);
+    }
+
+    #[test]
+    fn skip_encode_when_no_receivers_false_roundtrip() {
+        let src = r#"{
+  "version": 2,
+  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "skipEncodeWhenNoReceivers": false }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert!(!doc.outputs[0].skip_encode_when_no_receivers);
+        let bytes = canonicalize_bytes(src.as_bytes()).expect("canonicalize");
+        let again = parse(&bytes).unwrap();
+        assert!(!again.outputs[0].skip_encode_when_no_receivers);
     }
 
     #[test]

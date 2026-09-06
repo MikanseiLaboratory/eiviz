@@ -291,7 +291,6 @@ public partial class SwitcherWindow : Window
                 e.Handled = true;
             }
         };
-        chrome.ContextMenu = ThumbMenu(scene);
         var thumb = new SceneThumb
         {
             SceneId = scene.Id,
@@ -304,28 +303,6 @@ public partial class SwitcherWindow : Window
         };
         ApplyCollapsed(thumb, scene);
         return thumb;
-    }
-
-    private ContextMenu ThumbMenu(SceneEntry scene)
-    {
-        var menu = new ContextMenu();
-        var hide = new MenuItem { Header = Loc.T("switcher.hideHere") };
-        hide.Click += (_, _) =>
-        {
-            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.All)
-            {
-                _unit.SwitcherSceneFilter = SwitcherSceneFilter.Exclude;
-                _unit.SwitcherSceneIds.Clear();
-            }
-            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.Exclude
-                && !_unit.SwitcherSceneIds.Contains(scene.Id))
-                _unit.SwitcherSceneIds.Add(scene.Id);
-            if (_unit.SwitcherSceneFilter == SwitcherSceneFilter.Include)
-                _unit.SwitcherSceneIds.Remove(scene.Id);
-            RebuildScenes();
-        };
-        menu.Items.Add(hide);
-        return menu;
     }
 
     internal void ApplySceneCollapsed()

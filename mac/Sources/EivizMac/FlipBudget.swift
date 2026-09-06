@@ -48,11 +48,12 @@ enum FlipBudget {
     nonisolated(unsafe) private static weak var lastAttach: MetalSurfaceView?
     nonisolated(unsafe) private static var attachTick: UInt64 = 0
     nonisolated(unsafe) private static var seenLost: UInt64 = 0
+    nonisolated(unsafe) private static var refuseQueued = false
 
     static func configure(_ limit: UInt32) {
         limitSetting = isAllowed(limit) ? limit : 0
         ceiling = limitSetting == 0
-            ? min(GpuPresentStore.observedCeiling ?? autoDefault, autoDefault)
+            ? max(autoDefault, GpuPresentStore.observedCeiling ?? autoDefault)
             : Int(limitSetting)
     }
 
@@ -94,10 +95,9 @@ enum FlipBudget {
         guard let victim = lastAttach, attached > 2 else { return }
         guard nowMs() &- attachTick <= learnWindowMs else { return }
         victim.releaseNative()
-        if limitSetting == 0, attached >= 2 {
+        if limitSetting == 0, attached >= autoDefault {
             GpuPresentStore.save(attached)
         }
-        ceiling = max(2, attached)
     }
 
     private static func effectiveMax() -> Int {
@@ -109,10 +109,23 @@ enum FlipBudget {
     }
 
     private static func showRefuse() {
-        let alert = NSAlert()
-        alert.messageText = L10n.t("msg.flipBudget")
-        alert.alertStyle = .informational
-        alert.runModal()
+        DispatchQueue.main.async {
+            guard !refuseQueued else { return }
+            refuseQueued = true
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = L10n.t("msg.flipBudget")
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            AppKitDialog.elevate(alert)
+            let finish = { refuseQueued = false }
+            if let parent = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible) {
+                alert.beginSheetModal(for: parent) { _ in finish() }
+            } else {
+                alert.runModal()
+                finish()
+            }
+        }
     }
 
     private static func nowMs() -> UInt64 {

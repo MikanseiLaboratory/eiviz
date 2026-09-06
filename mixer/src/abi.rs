@@ -84,6 +84,8 @@ pub const OUTPUT_PREVIEW: u32 = 1;
 /// Host/C ABI bus id for a Multiview surface (`EIVIZ_OUTPUT_MULTIVIEW`).
 #[allow(dead_code)]
 pub const OUTPUT_MULTIVIEW: u32 = 2;
+/// `mixer_snapshot` kind: `unit_id` is an Input/source GPU id, not a Mixing Unit.
+pub const OUTPUT_SOURCE: u32 = 3;
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;

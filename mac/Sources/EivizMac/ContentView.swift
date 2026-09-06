@@ -34,13 +34,14 @@ struct ContentView: View {
         }
         .background(EivizTheme.background)
         .foregroundStyle(EivizTheme.text)
+        .preferredColorScheme(EivizTheme.colorScheme)
         .id("\(prefs.language)-\(prefs.theme)-\(prefs.localeRevision)")
         .sheet(isPresented: $mixer.showSettings) { SettingsView() }
         .sheet(isPresented: $mixer.showPreferences) { PreferencesView() }
         .sheet(isPresented: $mixer.showAddInput, onDismiss: { mixer.editingInput = nil }) {
             AddInputView(editing: mixer.editingInput)
         }
-        .sheet(isPresented: $mixer.showMixingUnit) {
+        .sheet(isPresented: $mixer.showMixingUnit, onDismiss: { mixer.editingUnit = nil }) {
             MixingUnitView(unit: mixer.editingUnit ?? mixer.selectedUnit)
         }
         .sheet(isPresented: $mixer.showSceneEditor) { SceneEditorView() }
@@ -75,6 +76,7 @@ struct ContentView: View {
                 Text("▾")
             }
             Spacer()
+            Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
@@ -364,7 +366,8 @@ struct ContentView: View {
             HSplitView {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
-                    List(mixer.session.inputs, selection: $mixer.selectedInputId) { input in
+                    CatalogTabBar(input: true)
+                    List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
                         Text(input.name)
                             .tag(input.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -386,6 +389,12 @@ struct ContentView: View {
                             mixer.showAddInput = true
                         }
                         Button("Preview") { mixer.previewSelectedInput() }
+                        Button(L10n.t("chrome.screenshot")) {
+                            guard let id = mixer.selectedInputId,
+                                  let input = mixer.session.inputs.first(where: { $0.id == id })
+                            else { return }
+                            mixer.snapshotInput(input)
+                        }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
                     .buttonStyle(MixerButtonStyle())
@@ -402,9 +411,10 @@ struct ContentView: View {
                         }
                     }
                     .buttonStyle(MixerButtonStyle())
+                    CatalogTabBar(input: false)
                     ScrollView {
                         WrapFlowLayout(spacing: 8) {
-                            ForEach(mixer.session.scenes) { scene in
+                            ForEach(mixer.session.scenes.filter { mixer.sceneFilter.matchesScene($0) }) { scene in
                                 sceneTile(scene)
                             }
                         }
@@ -433,6 +443,7 @@ struct ContentView: View {
             preview: preview,
             program: program,
             selected: mixer.selectedSceneId == scene.id,
+            previewCollapsed: scene.previewCollapsed,
             interval: mixer.session.settings.resolvedPresentInterval,
             loopOn: video?.videoLoop == true,
             playing: mixer.scenePlaying(scene),
@@ -448,7 +459,9 @@ struct ContentView: View {
             onAudio: { mixer.toggleSceneAudio(scene) },
             onOpenPreview: { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) },
             onEdit: { mixer.openSceneEditor(scene) },
-            onDelete: { mixer.deleteScene(scene) }
+            onDelete: { mixer.deleteScene(scene) },
+            onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
+            onSnapshot: { mixer.snapshotScene(scene) }
         ))
     }
 

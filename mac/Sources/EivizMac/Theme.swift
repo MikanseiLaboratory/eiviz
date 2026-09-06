@@ -11,6 +11,40 @@ enum EivizTheme {
         }
     }
 
+    static var colorScheme: ColorScheme? {
+        switch AppPrefs.shared.theme {
+        case .dark: return .dark
+        case .light: return .light
+        case .system: return nil
+        }
+    }
+
+    static var nsBackground: NSColor {
+        isDark
+            ? NSColor(srgbRed: 26 / 255, green: 26 / 255, blue: 26 / 255, alpha: 1)
+            : NSColor(srgbRed: 240 / 255, green: 240 / 255, blue: 240 / 255, alpha: 1)
+    }
+
+    static var nsStatusBar: NSColor {
+        isDark
+            ? NSColor(srgbRed: 17 / 255, green: 17 / 255, blue: 17 / 255, alpha: 1)
+            : NSColor(srgbRed: 224 / 255, green: 224 / 255, blue: 224 / 255, alpha: 1)
+    }
+
+    static func applyAppAppearance() {
+        switch AppPrefs.shared.theme {
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+        case .system:
+            NSApp.appearance = nil
+        }
+        for window in NSApp.windows {
+            window.appearance = NSApp.appearance
+        }
+    }
+
     static var background: Color { isDark ? rgb(26, 26, 26) : rgb(240, 240, 240) }
     static var chrome: Color { isDark ? rgb(37, 37, 37) : rgb(228, 228, 228) }
     static var panel: Color { isDark ? rgb(22, 22, 22) : rgb(234, 234, 234) }
@@ -465,5 +499,37 @@ struct MixerFloatField: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+struct RightClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> RightClickNSView {
+        let view = RightClickNSView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: RightClickNSView, context: Context) {
+        nsView.action = action
+    }
+}
+
+final class RightClickNSView: NSView {
+    var action: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent else { return nil }
+        switch event.type {
+        case .rightMouseDown, .rightMouseUp:
+            return self
+        default:
+            return nil
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        action?()
     }
 }

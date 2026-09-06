@@ -846,6 +846,7 @@ public sealed class OutputEntry
     public bool UseGpu { get; set; }
     public bool Enabled { get; set; } = true;
     public ulong AudioBusId { get; set; } = 1;
+    public bool SkipEncodeWhenNoReceivers { get; set; } = true;
 }
 
 public enum MvLabelUnit

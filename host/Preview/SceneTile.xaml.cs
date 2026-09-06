@@ -12,6 +12,11 @@ public partial class SceneTile : UserControl
     {
         InitializeComponent();
         MouseLeftButtonUp += (_, _) => Select();
+        MouseDoubleClick += (_, e) =>
+        {
+            Raise(SceneEditRequested);
+            e.Handled = true;
+        };
     }
 
     public SceneEntry? Scene { get; private set; }
@@ -24,6 +29,7 @@ public partial class SceneTile : UserControl
     public event EventHandler<SceneEntry>? ScenePreviewRequested;
     public event EventHandler<SceneEntry>? SceneCloseRequested;
     public event EventHandler<SceneEntry>? SceneCollapseToggled;
+    public event EventHandler<SceneEntry>? SceneSnapshotRequested;
 
     public void Bind(SceneEntry scene, int number, bool selected, uint presentInterval = 3, Color? previewColor = null, Color? inactiveColor = null)
     {
@@ -32,6 +38,8 @@ public partial class SceneTile : UserControl
         CollapsedTitle.Text = scene.Name;
         Number.Text = number.ToString();
         CollapsedNumber.Text = number.ToString();
+        if (scene.PreviewCollapsed)
+            Monitor.SetWanted(false);
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
         ApplyCollapsed();
     }
@@ -136,6 +144,12 @@ public partial class SceneTile : UserControl
     private void Preview_Click(object sender, RoutedEventArgs e) => Raise(ScenePreviewRequested);
 
     private void Settings_Click(object sender, RoutedEventArgs e) => Raise(SceneEditRequested);
+
+    private void Settings_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        Raise(SceneSnapshotRequested);
+        e.Handled = true;
+    }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Raise(SceneCloseRequested);
 

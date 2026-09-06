@@ -284,6 +284,7 @@ public partial class MainWindow : Window
             ApplySceneTileThumbs();
             NotifySwitcherCollapsed();
         };
+        tile.SceneSnapshotRequested += (_, selected) => SnapshotScene(selected);
         return tile;
     }
 
@@ -1153,11 +1154,9 @@ public partial class MainWindow : Window
             if (MixerNative.CopyStats(&stats) == 0)
                 FlipBudget.ObserveLost(stats.SurfaceLost);
         }
-        _resources.Sample();
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
-        RefreshSceneTiles();
         _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
@@ -1356,6 +1355,47 @@ public partial class MainWindow : Window
             Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
     }
 
+    private void Snapshot_Click(object sender, RoutedEventArgs e) =>
+        SaveSnapshot(SelectedUnit.Id, MixerNative.OutputProgram, SelectedUnit.Name);
+
+    internal void SnapshotScene(SceneEntry scene) =>
+        SaveSnapshot(scene.GpuId, 0, scene.Name);
+
+    internal void SnapshotInput(InputEntry input) =>
+        SaveSnapshot(input.Id, MixerNative.OutputSource, input.Name);
+
+    private void SaveSnapshot(ulong sourceId, uint kind, string name)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = Loc.T("filter.snapshot"),
+            DefaultExt = ".png",
+            AddExtension = true,
+            FileName = SnapshotFileName(name)
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+        try
+        {
+            MixerNative.ThrowIfFailed(
+                MixerNative.Snapshot(sourceId, kind, dialog.FileName),
+                "Screenshot");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("chrome.screenshot"));
+        }
+    }
+
+    private static string SnapshotFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        if (string.IsNullOrWhiteSpace(cleaned))
+            cleaned = "eiviz";
+        return cleaned + ".png";
+    }
+
     private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
 
     private void Logs_Click(object sender, RoutedEventArgs e) => OpenLogs();
@@ -1458,6 +1498,16 @@ public partial class MainWindow : Window
             return;
         }
         OpenInputPreview(input);
+    }
+
+    private void SnapshotInput_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+        {
+            MessageBox.Show(this, Loc.T("msg.selectInputPreview"));
+            return;
+        }
+        SnapshotInput(input);
     }
 
     private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.Name);
@@ -2105,5 +2155,6 @@ public partial class MainWindow : Window
         && left.UnitId == right.UnitId
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled
-        && left.AudioBusId == right.AudioBusId;
+        && left.AudioBusId == right.AudioBusId
+        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
 }
