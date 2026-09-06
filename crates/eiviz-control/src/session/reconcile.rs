@@ -79,6 +79,10 @@ pub enum ReconcileOp {
         user: String,
         pass: String,
     },
+    ConfigureNativeApi {
+        enabled: bool,
+        port: u32,
+    },
 }
 
 #[inline(never)]
@@ -285,6 +289,16 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             port: next.settings.vmix_api_port,
             user: next.settings.vmix_api_user.clone(),
             pass: next.settings.vmix_api_password.clone(),
+        });
+    }
+
+    if previous.is_none_or(|prev| {
+        prev.settings.native_api_enabled != next.settings.native_api_enabled
+            || prev.settings.native_api_port != next.settings.native_api_port
+    }) {
+        ops.push(ReconcileOp::ConfigureNativeApi {
+            enabled: next.settings.native_api_enabled,
+            port: next.settings.native_api_port,
         });
     }
 
@@ -512,6 +526,10 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             user,
             pass,
         } => port.configure_vmix_api(*http_enabled, *tcp_enabled, *api_port, user, pass),
+        ReconcileOp::ConfigureNativeApi {
+            enabled,
+            port: ws_port,
+        } => port.configure_native_api(*enabled, *ws_port),
         _ => Ok(()),
     }
 }

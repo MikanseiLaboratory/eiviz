@@ -40,7 +40,9 @@ public partial class SettingsWindow : Window
             VmixApiPort = session.Settings.VmixApiPort == 0 ? 8088 : session.Settings.VmixApiPort,
             VmixApiUser = session.Settings.VmixApiUser ?? "",
             VmixApiPassword = session.Settings.VmixApiPassword ?? "",
-            VmixTcpEnabled = session.Settings.VmixTcpEnabledValue
+            VmixTcpEnabled = session.Settings.VmixTcpEnabledValue,
+            NativeApiEnabled = session.Settings.NativeApiEnabledValue,
+            NativeApiPort = session.Settings.NativeApiPort == 0 ? 9400 : session.Settings.NativeApiPort
         };
         foreach (var output in session.Outputs)
         {
@@ -70,7 +72,9 @@ public partial class SettingsWindow : Window
         PaintBusColors();
         WebApiEnabledBox.IsChecked = Settings.VmixApiEnabledValue;
         WebApiTcpEnabledBox.IsChecked = Settings.VmixTcpEnabledValue;
+        WebApiWsEnabledBox.IsChecked = Settings.NativeApiEnabledValue;
         WebApiPortBox.Text = Settings.VmixApiPort.ToString();
+        WebApiWsPortBox.Text = Settings.NativeApiPort.ToString();
         WebApiUserBox.Text = Settings.VmixApiUser;
         WebApiPasswordBox.Password = Settings.VmixApiPassword;
     }
@@ -112,7 +116,9 @@ public partial class SettingsWindow : Window
         PaintBusColors();
         WebApiEnabledBox.IsChecked = true;
         WebApiTcpEnabledBox.IsChecked = true;
+        WebApiWsEnabledBox.IsChecked = true;
         WebApiPortBox.Text = "8088";
+        WebApiWsPortBox.Text = "9400";
         WebApiUserBox.Text = "";
         WebApiPasswordBox.Password = "";
     }
@@ -430,7 +436,7 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() != true)
             return;
         var unit = MvUnitBox.SelectedItem as MixingUnitEntry ?? _session.Units[0];
-        ((App)Application.Current).Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+        MixerApply.PushMultiview(layout, unit.Width, unit.Height);
     }
 
     private void DeleteMv_Click(object sender, RoutedEventArgs e)
@@ -634,8 +640,11 @@ public partial class SettingsWindow : Window
         _session.NextBusId = _nextBusId;
         Settings.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
         Settings.VmixTcpEnabled = WebApiTcpEnabledBox.IsChecked == true;
+        Settings.NativeApiEnabled = WebApiWsEnabledBox.IsChecked == true;
         if (uint.TryParse(WebApiPortBox.Text.Trim(), out var apiPort) && apiPort is > 0 and <= 65535)
             Settings.VmixApiPort = apiPort;
+        if (uint.TryParse(WebApiWsPortBox.Text.Trim(), out var wsPort) && wsPort is > 0 and <= 65535)
+            Settings.NativeApiPort = wsPort;
         Settings.VmixApiUser = WebApiUserBox.Text ?? "";
         Settings.VmixApiPassword = WebApiPasswordBox.Password ?? "";
         DialogResult = true;

@@ -22,6 +22,7 @@ mod media_macos;
 pub use media_macos::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod main_thread;
+mod native_ws;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
@@ -2728,6 +2729,16 @@ pub extern "C" fn mixer_tcp_configure(enabled: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_tcp_listen_owner(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::vmix_tcp::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_ws_configure(enabled: u32, port: u32) -> i32 {
+    crate::native_ws::configure(enabled != 0, port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    unsafe { crate::native_ws::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]

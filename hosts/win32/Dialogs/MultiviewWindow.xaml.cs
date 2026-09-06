@@ -148,7 +148,7 @@ public partial class MultiviewWindow : Window
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == _session.Settings.DefaultMultiviewUnitId)
             ?? _session.Units[0];
-        ((App)Application.Current).Commands.PushMultiviewNow(_layout, unit.Width, unit.Height);
+        MixerApply.PushMultiview(_layout, unit.Width, unit.Height);
         MultiviewHost.UpdateMonitorSource(_layout.GpuId);
     }
 

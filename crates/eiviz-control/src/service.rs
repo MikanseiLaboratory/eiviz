@@ -329,9 +329,7 @@ impl ControlService {
         }
         let live = self.port.live_state().unwrap_or_default();
         for op in &repair_live(&committed, &live) {
-            if let Err(error) = self.port.apply_reconcile(&committed, op, &mut statuses) {
-                return Err(error);
-            }
+            self.port.apply_reconcile(&committed, op, &mut statuses)?;
         }
         let meta = self.meta(request_id);
         self.hub.publish(Event::SessionChanged {
@@ -804,6 +802,9 @@ mod tests {
             _u: &str,
             _pw: &str,
         ) -> ControlResult<()> {
+            Ok(())
+        }
+        fn configure_native_api(&mut self, _e: bool, _p: u32) -> ControlResult<()> {
             Ok(())
         }
         fn apply_reconcile(

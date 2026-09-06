@@ -11,11 +11,13 @@ license.workspace = true
 
 [features]
 default = []
-control-api = ["dep:eiviz-api"]
+# Always compiled. Kept so older `cargo build --features control-api` still works.
+control-api = []
 
 [dependencies]
 eiviz-control.workspace = true
-eiviz-api = { workspace = true, optional = true }
+eiviz-api.workspace = true
+tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

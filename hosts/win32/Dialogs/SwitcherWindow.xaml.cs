@@ -69,8 +69,6 @@ public partial class SwitcherWindow : Window
 
     private Session Session => ((App)Application.Current).Session;
 
-    private MixerCommands Commands => ((App)Application.Current).Commands;
-
     internal void ApplyMixerMix() =>
         MainWindow.ApplyTBarFromMixer(_unit.Id, TBar, ref _tbarLatching, ref _tbarLocked);
 
@@ -332,7 +330,7 @@ public partial class SwitcherWindow : Window
         var scene = Session.Scenes.FirstOrDefault(item => item.Id == sceneId);
         if (scene is null)
             return;
-        Commands.TryEnqueue(new PreviewSceneCommand(_unit.Id, scene.GpuId));
+        MixerApply.PreviewScene(_unit.Id, scene.GpuId);
         RefreshBusTitles();
         RefreshSceneThumbs();
     }
@@ -434,9 +432,9 @@ public partial class SwitcherWindow : Window
     private void FirePreset(TransitionPreset preset)
     {
         if (preset.Kind == MixerNative.TransitionCut || preset.DurationValue <= 1)
-            Commands.TryEnqueue(new CutCommand(_unit.Id, preset.Swap));
+            MixerApply.Cut(_unit.Id, preset.Swap);
         else
-            Commands.TryEnqueue(preset.ToAuto(_unit.Id, _unit));
+            preset.ApplyAuto(_unit.Id, _unit);
         RefreshBusTitles();
         RefreshSceneThumbs();
     }
@@ -470,10 +468,10 @@ public partial class SwitcherWindow : Window
             _tbarLatching = true;
             TBar.Value = 1;
             _tbarLatching = false;
-            Commands.TryEnqueue(new CutCommand(_unit.Id, TbarPreset().Swap));
+            MixerApply.Cut(_unit.Id, TbarPreset().Swap);
             return;
         }
-        Commands.TryEnqueue(new SetMixCommand(_unit.Id, mix, TbarPreset()));
+        MixerApply.SetMix(_unit.Id, mix, TbarPreset());
     }
 
     private void TBar_MouseUp(object sender, MouseButtonEventArgs e) => FinishTBar();

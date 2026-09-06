@@ -56,7 +56,7 @@ eiviz-headless canonicalize --session show.eiviz.json
 eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 ```
 
-`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline.
+`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when it is enabled in Settings.
 
 Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime failure.
 
@@ -66,4 +66,3 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 - Remote bind requires auth and TLS termination
 - Logs are structured-enough text on stderr
 - Back up canonical session JSON from `eiviz-headless canonicalize`
-- If a GUI later starts headless, spawn the shipped `eiviz-headless` binary; do not duplicate lifecycle in C#/Swift

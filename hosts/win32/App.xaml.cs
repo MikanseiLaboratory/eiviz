@@ -10,7 +10,6 @@ namespace Eiviz.Host;
 
 public partial class App : Application
 {
-    internal MixerCommands Commands { get; private set; } = null!;
     internal Session Session { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -86,7 +85,6 @@ public partial class App : Application
         MixerNative.ThrowIfFailed(
             MixerNative.Create(0, Session.Settings.MasterFpsNum, Session.Settings.MasterFpsDen),
             "DX12 mixer initialization");
-        Commands = new MixerCommands();
         FlipBudget.Configure(Session.Settings.FlipSwapchainLimit);
         MixerNative.VideoFormat = Session.Settings.InternalColorFormat == InternalColorFormat.Bgra
             ? MixerNative.FormatBgra
@@ -105,6 +103,7 @@ public partial class App : Application
         var password = settings.VmixApiPassword ?? "";
         ApplyHttpApi(app, settings, port, user, password);
         ApplyTcpApi(app, settings);
+        ApplyNativeApi(app, settings);
     }
 
     private static void ApplyHttpApi(App app, SessionSettings settings, uint port, string user, string password)
@@ -159,6 +158,33 @@ public partial class App : Application
             DispatcherPriority.ApplicationIdle);
     }
 
+    private static void ApplyNativeApi(App app, SessionSettings settings)
+    {
+        var port = settings.NativeApiPort == 0 ? 9400u : settings.NativeApiPort;
+        var enabled = settings.NativeApiEnabledValue;
+        var code = MixerNative.WsConfigure(enabled ? 1u : 0u, port);
+        if (code == 0)
+            return;
+        if (!enabled || code != 5)
+            MixerNative.ThrowIfFailed(code, "Configure Protobuf WebSocket API");
+
+        settings.NativeApiEnabled = false;
+        var disable = MixerNative.WsConfigure(0, port);
+        if (disable != 0)
+            HostLog.Write("WARN", $"disable Protobuf WebSocket API after listen failure: {disable}");
+
+        var ownerName = MixerNative.WsListenOwnerText();
+        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
+        HostLog.Write(
+            "WARN",
+            owner is null
+                ? $"Protobuf WebSocket API listen failed on port {port}; disabled"
+                : $"Protobuf WebSocket API listen failed on port {port}; in use by {owner}; disabled");
+        app.Dispatcher.BeginInvoke(
+            () => ShowWsListenFailed(port, owner),
+            DispatcherPriority.ApplicationIdle);
+    }
+
     private static void ShowHttpListenFailed(uint port, string? owner)
     {
         var text = string.IsNullOrEmpty(owner)
@@ -172,6 +198,14 @@ public partial class App : Application
         var text = string.IsNullOrEmpty(owner)
             ? Loc.T("msg.tcpListenFailed")
             : Loc.Format("msg.tcpListenFailedOwner", owner);
+        ShowApiWarning(text);
+    }
+
+    private static void ShowWsListenFailed(uint port, string? owner)
+    {
+        var text = string.IsNullOrEmpty(owner)
+            ? Loc.Format("msg.wsListenFailed", port)
+            : Loc.Format("msg.wsListenFailedOwner", port, owner);
         ShowApiWarning(text);
     }
 
@@ -216,43 +250,43 @@ public partial class App : Application
                     MixerNative.GeneratorSetTone(input.Id, input.ToneHz, input.ToneLevelDbfs);
                     break;
                 case InputKind.Still when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new LoadStillCommand(input.Id, input.PathOrAddress));
+                    MixerApply.LoadStill(input.Id, input.PathOrAddress);
                     break;
                 case InputKind.Video when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new StartVideoCommand(
+                    MixerApply.StartVideo(
                         input.Id,
                         input.PathOrAddress,
                         input.VideoLoop,
                         input.VideoStartsPlaying,
-                        input.FrameBufferFrames));
+                        input.FrameBufferFrames);
                     break;
                 case InputKind.Uvc when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
+                    MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
                     break;
                 case InputKind.Omt when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new ConnectOmtCommand(
+                    MixerApply.ConnectOmt(
                         input.Id,
                         input.PathOrAddress,
                         input.UseGpu,
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
                         input.BandwidthSave,
                         input.KeepFullOnMultiview,
-                        input.OmtQuality));
+                        input.OmtQuality);
                     break;
                 case InputKind.Ndi when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    Commands.TryEnqueue(new ConnectNdiCommand(
+                    MixerApply.ConnectNdi(
                         input.Id,
                         input.PathOrAddress,
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
-                        input.NdiBandwidth));
+                        input.NdiBandwidth);
                     break;
                 case InputKind.Mix when !network && input.MixTargetId != 0:
-                    Commands.TryEnqueue(new DefineMixInputCommand(
+                    MixerApply.DefineMixInput(
                         input.Id,
                         input.MixTargetId,
                         InputKindNames.MixSourceKind(input.MixSource),
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
-                        input.MixAudioBusId));
+                        input.MixAudioBusId);
                     break;
             }
         }

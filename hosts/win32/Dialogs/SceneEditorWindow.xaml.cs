@@ -12,7 +12,6 @@ public partial class SceneEditorWindow : Window
 {
     private readonly SceneEntry _scene;
     private readonly Session _session;
-    private readonly MixerCommands _commands;
     private readonly uint _width;
     private readonly uint _height;
     private readonly List<SceneLayer> _original;
@@ -31,7 +30,6 @@ public partial class SceneEditorWindow : Window
         InitializeComponent();
         _scene = scene;
         _session = session;
-        _commands = ((App)Application.Current).Commands;
         _width = width;
         _height = height;
         _original = scene.Layers.Select(Clone).ToList();
@@ -410,7 +408,7 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private void PushGpu() => _commands.DefineSceneNow(_scene, _width, _height);
+    private void PushGpu() => MixerApply.DefineScene(_scene, _width, _height);
 
     private void AddLayer_Click(object sender, RoutedEventArgs e)
     {

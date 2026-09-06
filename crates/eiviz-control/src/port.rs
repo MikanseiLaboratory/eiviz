@@ -101,6 +101,7 @@ pub trait MixerPort: Send {
         user: &str,
         pass: &str,
     ) -> ControlResult<()>;
+    fn configure_native_api(&mut self, enabled: bool, port: u32) -> ControlResult<()>;
     fn discover_omt(&self) -> ControlResult<String> {
         Ok(String::new())
     }
@@ -445,6 +446,9 @@ impl MixerPort for NullMixer {
         _user: &str,
         _pass: &str,
     ) -> ControlResult<()> {
+        Ok(())
+    }
+    fn configure_native_api(&mut self, _enabled: bool, _port: u32) -> ControlResult<()> {
         Ok(())
     }
     fn apply_reconcile(

@@ -105,13 +105,14 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Web API
 
-vMix-compatible HTTP and vMix-compatible TCP listen settings. Each can be turned on or off independently. These are stored in the session file.
+vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. Each can be turned on or off independently. These are stored in the session file.
 
 - HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
-- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth
+- WebSocket: Protobuf control API on loopback. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`
+- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens use `EIVIZ_API_TOKEN`
 
-If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. Listen start/stop and Functions are written to the mixer log (Help → Logs).
+If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is the same: that surface turns off and warns. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
 Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
 

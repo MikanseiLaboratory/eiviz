@@ -471,6 +471,14 @@ impl MixerPort for ProcessMixer {
         map_abi(http).and_then(|_| map_abi(tcp))
     }
 
+    fn configure_native_api(&mut self, enabled: bool, port: u32) -> ControlResult<()> {
+        let code = crate::native_ws::configure(enabled, port);
+        if code == crate::abi::ERR_IO {
+            return Ok(());
+        }
+        map_abi(code)
+    }
+
     fn discover_omt(&self) -> ControlResult<String> {
         let mut buf = vec![0u8; 4096];
         let n = unsafe { mixer_omt_discover(buf.as_mut_ptr(), buf.len()) };

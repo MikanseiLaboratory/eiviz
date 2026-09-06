@@ -575,22 +575,8 @@ public sealed class TransitionPreset
             ? Math.Max(1, DurationValue)
             : unit.DurationMs(DurationValue);
 
-    internal AutoCommand ToAuto(ulong unitId, MixingUnitEntry unit) =>
-        new(
-            unitId,
-            Kind,
-            DurationMsFor(unit),
-            Swap,
-            KeepPreview,
-            Easing,
-            Direction,
-            DipR,
-            DipG,
-            DipB,
-            DipA,
-            CustomWgsl,
-            Softness,
-            Param);
+    internal bool ApplyAuto(ulong unitId, MixingUnitEntry unit) =>
+        MixerApply.Auto(unitId, unit, this);
 }
 
 public enum OverlaySourceKind
@@ -930,8 +916,11 @@ public sealed class SessionSettings
     public string VmixApiUser { get; set; } = "";
     public string VmixApiPassword { get; set; } = "";
     public bool? VmixTcpEnabled { get; set; }
+    public bool? NativeApiEnabled { get; set; }
+    public uint NativeApiPort { get; set; } = 9400;
     public bool VmixApiEnabledValue => VmixApiEnabled != false;
     public bool VmixTcpEnabledValue => VmixTcpEnabled != false;
+    public bool NativeApiEnabledValue => NativeApiEnabled != false;
 
     public bool RebarOptimizationEnabled => RebarOptimization != false;
     public bool NdiGpuUploadEnabled => NdiGpuUpload != false;

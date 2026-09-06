@@ -106,13 +106,14 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 ## Web API
 
-vMix互換HTTPとvMix互換TCPの待ち受けです。それぞれ設定から独立してオン/オフできます。セッションファイルに保存されます。
+vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。それぞれ設定から独立してオン/オフできます。セッションファイルに保存されます。
 
 - HTTP: Mixer起動時にHTTPサーバーを開く。既定はオン。ポートの既定は8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html)をポート8099で開く。既定はオン。ポートは固定
-- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません
+- WebSocket: Protobuf制御APIをループバックで開く。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`
+- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのトークンは`EIVIZ_API_TOKEN`です
 
-HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
+HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。WebSocketの待ち受け失敗も同じで、その面だけオフにして警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
 
 エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
 

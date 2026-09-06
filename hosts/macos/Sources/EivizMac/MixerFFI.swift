@@ -20,6 +20,15 @@ enum MixerFFI {
         return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
     }
 
+    static func wsListenOwnerText() -> String {
+        var buffer = [UInt8](repeating: 0, count: 256)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_ws_listen_owner(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0 else { return "" }
+        return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
+    }
+
     static func lastErrorText() -> String {
         var buffer = [UInt8](repeating: 0, count: 1024)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

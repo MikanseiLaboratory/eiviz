@@ -508,6 +508,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tiny_http",
+ "tokio",
  "vmix-core",
  "vmx",
  "wgpu",

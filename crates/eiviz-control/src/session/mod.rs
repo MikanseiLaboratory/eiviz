@@ -109,6 +109,10 @@ pub struct SessionSettings {
     pub vmix_api_password: String,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub vmix_tcp_enabled: bool,
+    #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
+    pub native_api_enabled: bool,
+    #[serde(default = "native_api_port")]
+    pub native_api_port: u32,
 }
 
 impl Default for SessionSettings {
@@ -139,6 +143,8 @@ impl Default for SessionSettings {
             vmix_api_user: String::new(),
             vmix_api_password: String::new(),
             vmix_tcp_enabled: true,
+            native_api_enabled: true,
+            native_api_port: native_api_port(),
         }
     }
 }
@@ -236,6 +242,10 @@ fn three() -> u32 {
 
 fn api_port() -> u32 {
     8088
+}
+
+fn native_api_port() -> u32 {
+    9400
 }
 
 pub(crate) fn clamp_size(size: f32) -> f32 {

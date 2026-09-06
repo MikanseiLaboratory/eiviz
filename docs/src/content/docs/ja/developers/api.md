@@ -56,7 +56,7 @@ eiviz-headless canonicalize --session show.eiviz.json
 eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 ```
 
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。
+`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。GUIのMixerも、設定で有効なら同じWebSocketを待ち受けます。
 
 終了コードは引数/読込が2、セッション検証が3、GPU/runtimeが4、bindが5、その他runtime失敗が6です。
 
@@ -66,4 +66,3 @@ eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 - loopback以外へbindする場合は認証とTLS terminationを必須にします
 - ログはstderrの構造化可能なテキストです
 - バックアップはセッションJSONを`eiviz-headless canonicalize`で正規化して保管します
-- GUIからheadlessを起動する場合は同梱の`eiviz-headless`を明示的にspawnしてください

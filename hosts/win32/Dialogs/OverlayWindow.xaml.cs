@@ -126,7 +126,7 @@ public partial class OverlayWindow : Window
 
     private void Push()
     {
-        ((App)Application.Current).Commands.TryEnqueue(new PatchAuxCommand(_unit.Id, _unit));
+        MixerApply.PatchAux(_unit.Id, _unit);
         if (Owner is MainWindow main)
             main.RebuildOverlayToggles();
     }

@@ -27,7 +27,6 @@ public partial class MainWindow : Window
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
     private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
-    private readonly VideoTransport _videoTransport = new();
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly Dictionary<int, TransitionGroup> _kindMenuGroup = [];
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
@@ -85,7 +84,6 @@ public partial class MainWindow : Window
 
     private Session _session => ((App)Application.Current).Session;
 
-    private MixerCommands Commands => ((App)Application.Current).Commands;
 
     private MixingUnitEntry SelectedUnit =>
         UnitBox.SelectedItem as MixingUnitEntry ?? _session.Units[0];
@@ -493,7 +491,7 @@ public partial class MainWindow : Window
     private void SelectScene(SceneEntry scene)
     {
         _selectedScene = scene;
-        Commands.TryEnqueue(new PreviewSceneCommand(SelectedUnit.Id, scene.GpuId));
+        MixerApply.PreviewScene(SelectedUnit.Id, scene.GpuId);
         RefreshSceneTiles();
     }
 
@@ -501,9 +499,9 @@ public partial class MainWindow : Window
     {
         var unit = SelectedUnit;
         if (preset.Kind == MixerNative.TransitionCut || preset.DurationValue <= 1)
-            Commands.TryEnqueue(new CutCommand(unit.Id, preset.Swap));
+            MixerApply.Cut(unit.Id, preset.Swap);
         else
-            Commands.TryEnqueue(preset.ToAuto(unit.Id, unit));
+            preset.ApplyAuto(unit.Id, unit);
         RefreshSceneTiles();
     }
 
@@ -539,10 +537,10 @@ public partial class MainWindow : Window
             _tbarLatching = true;
             TBar.Value = 1;
             _tbarLatching = false;
-            Commands.TryEnqueue(new CutCommand(SelectedUnit.Id, TbarPreset().Swap));
+            MixerApply.Cut(SelectedUnit.Id, TbarPreset().Swap);
             return;
         }
-        Commands.TryEnqueue(new SetMixCommand(SelectedUnit.Id, mix, TbarPreset()));
+        MixerApply.SetMix(SelectedUnit.Id, mix, TbarPreset());
     }
 
     private void TBar_MouseUp(object sender, MouseButtonEventArgs e) => FinishTBar();
@@ -885,7 +883,7 @@ public partial class MainWindow : Window
     }
 
     internal void PushAuxFor(MixingUnitEntry unit) =>
-        Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+        MixerApply.PatchAux(unit.Id, unit);
 
     internal void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
     {
@@ -1024,7 +1022,7 @@ public partial class MainWindow : Window
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
         var layout = _session.AddMultiview(unitId: unit.Id);
-        Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+        MixerApply.PushMultiview(layout, unit.Width, unit.Height);
         OpenMultiviewWindow(layout);
     }
 
@@ -1039,7 +1037,7 @@ public partial class MainWindow : Window
         if (!FlipBudget.TryOpen(1, this))
             return;
         var unit = SelectedUnit;
-        Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+        MixerApply.PushMultiview(layout, unit.Width, unit.Height);
         var window = new MultiviewWindow(_session, layout);
         if (layout.AlwaysOnTop)
             window.Owner = this;
@@ -1157,7 +1155,6 @@ public partial class MainWindow : Window
         ResourceText.Text = _resources.Line();
         WarnText.Text = _resources.Warning() ?? "";
         TickVideo();
-        _videoTransport.Tick(_session, _inputPreviews.Keys);
     }
 
     private bool HandleMixerFatal()
@@ -1352,7 +1349,7 @@ public partial class MainWindow : Window
     {
         var unit = SelectedUnit;
         foreach (var layout in _session.Multiviews)
-            Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+            MixerApply.PushMultiview(layout, unit.Width, unit.Height);
     }
 
     private void Snapshot_Click(object sender, RoutedEventArgs e) =>
@@ -1566,7 +1563,7 @@ public partial class MainWindow : Window
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
-            Commands.TryEnqueue(new DropSourceCommand(input.Id));
+            MixerApply.DropSource(input.Id);
             MixerNative.FlushAudio(input.Id);
         }
         input.Name = dialog.ResultName ?? input.Name;
@@ -1604,11 +1601,11 @@ public partial class MainWindow : Window
         {
             if (dialog.Kind == InputKind.Omt)
             {
-                Commands.TryEnqueue(new LiveSaveCommand(
+                MixerApply.LiveSave(
                     input.Id,
                     input.BandwidthSave,
                     input.KeepFullOnMultiview,
-                    input.OmtQuality));
+                    input.OmtQuality);
             }
             if (dialog.Kind == InputKind.Video)
                 MixerNative.VideoSetLoop(input.Id, input.VideoLoop ? 1u : 0u);
@@ -1618,7 +1615,7 @@ public partial class MainWindow : Window
         {
             case InputKind.Color:
             case InputKind.Bars:
-                Commands.TryEnqueue(new DefineGeneratorCommand(
+                MixerApply.DefineGenerator(
                     input.Id,
                     dialog.Kind == InputKind.Bars ? MixerNative.GenBars : MixerNative.GenSolid,
                     dialog.ColorR,
@@ -1626,46 +1623,46 @@ public partial class MainWindow : Window
                     dialog.ColorB,
                     dialog.Scroll,
                     input.ToneHz,
-                    input.ToneLevelDbfs));
+                    input.ToneLevelDbfs);
                 break;
             case InputKind.Still:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
                     throw new InvalidOperationException(Loc.MissingFile("Still load"));
-                Commands.TryEnqueue(new LoadStillCommand(input.Id, dialog.ResultPath!));
+                MixerApply.LoadStill(input.Id, dialog.ResultPath!);
                 break;
             case InputKind.Video:
                 if (string.IsNullOrWhiteSpace(dialog.ResultPath) || !File.Exists(dialog.ResultPath))
                     throw new InvalidOperationException(Loc.MissingFile("Video start"));
-                Commands.TryEnqueue(new StartVideoCommand(
+                MixerApply.StartVideo(
                     input.Id,
                     dialog.ResultPath!,
                     input.VideoLoop,
                     input.VideoStartsPlaying,
-                    input.FrameBufferFrames));
+                    input.FrameBufferFrames);
                 break;
             case InputKind.Omt:
-                Commands.TryEnqueue(new ConnectOmtCommand(
+                MixerApply.ConnectOmt(
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultUseGpu,
                     dialog.ResultFrameBufferFrames,
                     input.BandwidthSave,
                     input.KeepFullOnMultiview,
-                    input.OmtQuality));
+                    input.OmtQuality);
                 break;
             case InputKind.Ndi:
-                Commands.TryEnqueue(new ConnectNdiCommand(
+                MixerApply.ConnectNdi(
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultFrameBufferFrames,
-                    input.NdiBandwidth));
+                    input.NdiBandwidth);
                 break;
             case InputKind.Uvc:
                 input.CaptureWidth = dialog.ResultCaptureWidth;
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames));
+                MixerApply.StartUvc(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames);
                 break;
             case InputKind.Mix:
                 if (dialog.ResultMixSource != MixSource.SessionMultiview)
@@ -1674,12 +1671,12 @@ public partial class MainWindow : Window
                     if (unit is not null && InputKindNames.UnitUsesSource(_session, unit, input.Id))
                         throw new InvalidOperationException(Loc.T("msg.mixCycle"));
                 }
-                Commands.TryEnqueue(new DefineMixInputCommand(
+                MixerApply.DefineMixInput(
                     input.Id,
                     dialog.ResultMixTargetId,
                     InputKindNames.MixSourceKind(dialog.ResultMixSource),
                     dialog.ResultFrameBufferFrames,
-                    dialog.ResultMixAudioBusId));
+                    dialog.ResultMixAudioBusId);
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
@@ -1700,8 +1697,7 @@ public partial class MainWindow : Window
             return;
         }
         CloseInputPreview(input.Id);
-        _videoTransport.Forget(input.Id);
-        Commands.TryEnqueue(new DropSourceCommand(input.Id));
+        MixerApply.DropSource(input.Id);
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
             scene.Layers.RemoveAll(layer => layer.InputId == input.Id);
@@ -1715,15 +1711,15 @@ public partial class MainWindow : Window
                     tile.SourceId = 0;
                 }
             }
-            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
+            MixerApply.PushMultiview(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
         foreach (var unit in _session.Units)
         {
             unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id);
-            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+            MixerApply.PatchAux(unit.Id, unit);
         }
         foreach (var scene in _session.Scenes)
-            Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
+            MixerApply.TryDefineScene(scene, SceneWidth, SceneHeight);
         _session.Inputs.Remove(input);
         RefreshInputList();
         RebuildMeters();
@@ -1737,7 +1733,7 @@ public partial class MainWindow : Window
     private void AddScene_Click(object sender, RoutedEventArgs e)
     {
         var scene = _session.AddScene($"Scene {_session.NextSceneId}");
-        Commands.TryEnqueue(new DefineSceneCommand(scene, SceneWidth, SceneHeight));
+        MixerApply.TryDefineScene(scene, SceneWidth, SceneHeight);
         RebuildScenes();
         SelectScene(scene);
         OpenSceneEditor(scene);
@@ -1762,7 +1758,7 @@ public partial class MainWindow : Window
             return;
         }
         CloseInputPreview(removed.GpuId);
-        Commands.TryEnqueue(new DestroySceneCommand(removed.GpuId));
+        MixerApply.DestroyScene(removed.GpuId);
         _session.Scenes.Remove(removed);
         foreach (var layout in _session.Multiviews)
         {
@@ -1774,12 +1770,12 @@ public partial class MainWindow : Window
                     tile.SourceId = 0;
                 }
             }
-            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
+            MixerApply.PushMultiview(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
         foreach (var unit in _session.Units)
         {
             unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Scene && slot.SceneGpuId == removed.GpuId);
-            Commands.TryEnqueue(new PatchAuxCommand(unit.Id, unit));
+            MixerApply.PatchAux(unit.Id, unit);
         }
         var fallback = _session.Scenes[0];
         unsafe
@@ -1901,7 +1897,7 @@ public partial class MainWindow : Window
         MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
         var preview = _session.Scenes.Count > 0 ? _session.Scenes[0].GpuId : MixerNative.Bars;
         var program = _session.Scenes.Count > 1 ? _session.Scenes[1].GpuId : preview;
-        Commands.PushUnitStateNow(unit.Id, MixerCommands.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
+        MixerApply.PushUnitState(unit.Id, MixerApply.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
         _session.Units.Add(unit);
         UnitBox.Items.Refresh();
         UnitBox.SelectedItem = unit;
@@ -1925,9 +1921,9 @@ public partial class MainWindow : Window
             "Configure Mixing Unit");
         MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
         foreach (var scene in _session.Scenes)
-            Commands.TryEnqueue(new DefineSceneCommand(scene, unit.Width, unit.Height));
+            MixerApply.TryDefineScene(scene, unit.Width, unit.Height);
         foreach (var layout in _session.Multiviews)
-            Commands.PushMultiviewNow(layout, unit.Width, unit.Height);
+            MixerApply.PushMultiview(layout, unit.Width, unit.Height);
         UnitBox.Items.Refresh();
         ApplyAspect();
         if (_switchers.TryGetValue(unit.Id, out var switcher))
@@ -1944,7 +1940,7 @@ public partial class MainWindow : Window
         var unit = SelectedUnit;
         foreach (var output in _session.Outputs.Where(item => item.UnitId == unit.Id).ToArray())
         {
-            Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
+            MixerApply.RemoveOutput(output.Id);
             _session.Outputs.Remove(output);
         }
         MixerNative.ThrowIfFailed(MixerNative.DestroyUnit(unit.Id), "Delete Mixing Unit");
@@ -2045,6 +2041,8 @@ public partial class MainWindow : Window
         _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
         _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
         _session.Settings.VmixTcpEnabled = dialog.Settings.VmixTcpEnabledValue;
+        _session.Settings.NativeApiEnabled = dialog.Settings.NativeApiEnabledValue;
+        _session.Settings.NativeApiPort = dialog.Settings.NativeApiPort == 0 ? 9400 : dialog.Settings.NativeApiPort;
         BusTheme.PushMultiviewLabels(_session);
         ApplyBusColors();
         RefreshSceneTiles();
@@ -2068,7 +2066,7 @@ public partial class MainWindow : Window
         foreach (var layout in _session.Multiviews)
         {
             layout.PushPresentInterval(_session.Settings);
-            Commands.PushMultiviewNow(layout, SelectedUnit.Width, SelectedUnit.Height);
+            MixerApply.PushMultiview(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
         foreach (var window in _multiviews)
             window.SyncPresentInterval();
@@ -2099,16 +2097,16 @@ public partial class MainWindow : Window
                     playing = info.Playing != 0;
                     position = info.PositionHns;
                 }
-                Commands.TryEnqueue(new StartVideoCommand(
+                MixerApply.StartVideo(
                     input.Id,
                     input.PathOrAddress,
                     input.VideoLoop,
                     playing,
                     input.FrameBufferFrames,
-                    position));
+                    position);
             }
             else if (input.Kind == InputKind.Uvc)
-                Commands.TryEnqueue(new StartUvcCommand(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames));
+                MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
         }
     }
 
@@ -2118,24 +2116,24 @@ public partial class MainWindow : Window
         var previous = _session.Outputs.ToList();
         var nextIds = next.Select(item => item.Id).ToHashSet();
         foreach (var existing in previous.Where(item => !nextIds.Contains(item.Id)))
-            Commands.TryEnqueue(new RemoveOutputCommand(existing.Id));
+            MixerApply.RemoveOutput(existing.Id);
         foreach (var output in next)
         {
             var prior = previous.FirstOrDefault(item => item.Id == output.Id);
             if (prior is not null && SameOutput(prior, output))
                 continue;
             if (prior is not null)
-                Commands.TryEnqueue(new RemoveOutputCommand(output.Id));
+                MixerApply.RemoveOutput(output.Id);
             if (!output.Enabled)
                 continue;
             if (output.Transport is OutputTransport.Omt or OutputTransport.Ndi)
             {
-                Commands.TryEnqueue(new AddOutputCommand(output));
+                MixerApply.TryAddOutput(output);
                 continue;
             }
             try
             {
-                Commands.AddOutputNow(output);
+                MixerApply.AddOutput(output);
             }
             catch (Exception ex)
             {

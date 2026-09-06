@@ -165,12 +165,26 @@ struct SettingsView: View {
                 get: { mixer.session.settings.vmixTcpEnabled },
                 set: { mixer.session.settings.vmixTcpEnabled = $0 }
             ))
+            Toggle(L10n.t("settings.webApiWsEnabled"), isOn: Binding(
+                get: { mixer.session.settings.nativeApiEnabled },
+                set: { mixer.session.settings.nativeApiEnabled = $0 }
+            ))
             Text(L10n.t("settings.webApiPort"))
             TextField("", text: Binding(
                 get: { String(mixer.session.settings.vmixApiPort) },
                 set: {
                     if let value = UInt32($0), value > 0, value <= 65_535 {
                         mixer.session.settings.vmixApiPort = value
+                    }
+                }
+            ))
+            .frame(width: 220, alignment: .leading)
+            Text(L10n.t("settings.webApiWsPort"))
+            TextField("", text: Binding(
+                get: { String(mixer.session.settings.nativeApiPort) },
+                set: {
+                    if let value = UInt32($0), value > 0, value <= 65_535 {
+                        mixer.session.settings.nativeApiPort = value
                     }
                 }
             ))

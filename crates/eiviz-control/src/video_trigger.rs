@@ -79,15 +79,17 @@ pub fn tick(
             fell_program,
             rose_preview,
         );
+        let play =
+            restarted || should_play(input.video_play_when, rose_program, rose_preview, now, prev);
         if restarted {
             actions.push((input.id, VideoAction::SeekZero));
         }
-        if paused {
-            actions.push((input.id, VideoAction::Pause));
-        } else if restarted
-            || should_play(input.video_play_when, rose_program, rose_preview, now, prev)
-        {
+        // Play/Restart on the same edge wins over Pause. Active + To Active Pause
+        // used to freeze the clip the instant it went to Program.
+        if play {
             actions.push((input.id, VideoAction::Play));
+        } else if paused {
+            actions.push((input.id, VideoAction::Pause));
         }
         previous.insert(input.id, now);
     }
@@ -207,6 +209,70 @@ mod tests {
         assert!(!actions.contains(&(2, VideoAction::Play)));
         let again = tick(&doc, &live, &mut prev);
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn on_active_play_wins_over_on_active_pause() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{
+            "id": 2,
+            "name": "Clip",
+            "kind": "Video",
+            "pathOrAddress": "clip.mp4",
+            "videoPlayWhen": "OnActive",
+            "videoRestartWhen": "OnActive",
+            "videoPauseWhen": "OnActive"
+          }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut live = LiveState::default();
+        live.units.insert(
+            1,
+            UnitLiveState {
+                program_source: crate::ids::scene_gpu_id(1),
+                preview_source: 0,
+                ..UnitLiveState::default()
+            },
+        );
+        let mut prev = HashMap::new();
+        let actions = tick(&doc, &live, &mut prev);
+        assert!(actions.contains(&(2, VideoAction::SeekZero)));
+        assert!(actions.contains(&(2, VideoAction::Play)));
+        assert!(!actions.contains(&(2, VideoAction::Pause)));
+    }
+
+    #[test]
+    fn pause_on_active_still_freezes_when_play_is_preview() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{
+            "id": 2,
+            "name": "Clip",
+            "kind": "Video",
+            "pathOrAddress": "clip.mp4",
+            "videoPlayWhen": "OnPreview",
+            "videoPauseWhen": "OnActive"
+          }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let mut live = LiveState::default();
+        live.units.insert(
+            1,
+            UnitLiveState {
+                program_source: crate::ids::scene_gpu_id(1),
+                preview_source: 0,
+                ..UnitLiveState::default()
+            },
+        );
+        let mut prev = HashMap::new();
+        let actions = tick(&doc, &live, &mut prev);
+        assert!(actions.contains(&(2, VideoAction::Pause)));
+        assert!(!actions.contains(&(2, VideoAction::Play)));
     }
 
     #[test]

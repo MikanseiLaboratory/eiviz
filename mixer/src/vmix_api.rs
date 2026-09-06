@@ -146,12 +146,14 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
 pub fn suspend() {
     stop_worker();
     crate::vmix_tcp::configure(false);
+    crate::native_ws::configure(false, 0);
 }
 
 #[cfg(test)]
 pub fn shutdown() {
     stop_worker();
     crate::vmix_tcp::configure(false);
+    crate::native_ws::configure(false, 0);
     if let Ok(mut slot) = api_slot().lock() {
         slot.server = None;
     }
