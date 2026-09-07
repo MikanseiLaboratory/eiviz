@@ -2590,7 +2590,7 @@ final class MixerController: ObservableObject {
         if item.transport == .ndi {
             return "\(item.transport.rawValue):\(item.address)"
         }
-        return "\(item.transport.rawValue):\(item.address)"
+        return "\(item.transport.rawValue):\(item.address):gpu=\(AppPrefs.shared.remoteOmtUseGpu)"
     }
 
     private func syncPublishedVideo() {
@@ -2670,7 +2670,7 @@ final class MixerController: ObservableObject {
             code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 1, 0) }
         } else {
             code = MixerFFI.withCString(resolved.address) {
-                mixer_omt_connect(id, $0, 0, 1, 0)
+                mixer_omt_connect(id, $0, AppPrefs.shared.remoteOmtUseGpu ? 1 : 0, 1, 0)
             }
         }
         return code == 0

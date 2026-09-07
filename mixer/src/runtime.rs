@@ -485,7 +485,10 @@ impl MixerPort for ProcessMixer {
         map_abi(unsafe { mixer_snapshot(unit_id, kind, c_path.as_ptr()) })
     }
 
-    fn publish_session(&mut self, document: &eiviz_control::session::Document) -> ControlResult<()> {
+    fn publish_session(
+        &mut self,
+        document: &eiviz_control::session::Document,
+    ) -> ControlResult<()> {
         let bytes = eiviz_control::session::to_vec(document)
             .map_err(|error| ControlError::invalid(error))?;
         crate::vmix_api::publish_bytes(&bytes);

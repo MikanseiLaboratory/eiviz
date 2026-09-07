@@ -589,7 +589,12 @@ pub extern "C" fn mixer_remote_audio_set_input(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_remote_audio_set_bus(handle: i32, bus_id: u64, gain: f32, mute: u32) -> i32 {
+pub extern "C" fn mixer_remote_audio_set_bus(
+    handle: i32,
+    bus_id: u64,
+    gain: f32,
+    mute: u32,
+) -> i32 {
     audio_set_bus(handle, bus_id, gain, mute)
 }
 

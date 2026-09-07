@@ -875,17 +875,18 @@ internal sealed class RemoteVideoPresenter
             }
             return false;
         }
-        var key = $"{resolved.Transport}:{resolved.Address}";
+        var useGpu = resolved.Transport == OutputTransport.Omt && AppPrefs.Current.RemoteOmtUseGpu;
+        var key = resolved.Transport == OutputTransport.Ndi
+            ? $"{resolved.Transport}:{resolved.Address}"
+            : $"{resolved.Transport}:{resolved.Address}:gpu={useGpu}";
         if (_boundKey.TryGetValue(id, out var prev) && prev == key && _connected.Contains(id))
             return true;
         MixerNative.DestroySource(id);
         _connected.Remove(id);
         _boundKey.Remove(id);
-        // Remote only displays received frames. GPU OMT decode never delivered
-        // frames from Host UYVY/VMX senders; CPU BGRA playout depth 1 does.
         var code = resolved.Transport == OutputTransport.Ndi
             ? MixerNative.ConnectNdi(id, resolved.Address, 1, 0)
-            : MixerNative.ConnectOmt(id, resolved.Address, 0, 1, 0);
+            : MixerNative.ConnectOmt(id, resolved.Address, useGpu ? 1u : 0u, 1, 0);
         if (code != 0)
         {
             HostLog.Write("ERROR", MixerNative.LastErrorText());

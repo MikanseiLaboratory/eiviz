@@ -16,7 +16,7 @@ internal static class HostVersion
                 var plus = info.IndexOf('+');
                 return plus < 0 ? info.Trim() : info[..plus].Trim();
             }
-            return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.0";
+            return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.2.1-beta.1";
         }
     }
 }
