@@ -64,6 +64,7 @@ final class MixerController: ObservableObject {
     @Published var sceneFilter = ListFilter.all
     @Published private(set) var surfaceEpoch: UInt64 = 0
     @Published private(set) var isRemote = false
+    @Published private(set) var remoteConnected = false
     @Published private(set) var remoteRevision: UInt64 = 0
     @Published var videoUnavailable = false
 
@@ -86,6 +87,12 @@ final class MixerController: ObservableObject {
     private var remoteReceiveIds: [UInt64: UInt64] = [:]
     private var remoteEpoch = ""
     private var remotePulledRevision: UInt64 = 0
+    private var remoteLag = false
+    private var remoteError = ""
+    private var remotePreviewKey = ""
+    private var remoteProgramKey = ""
+    private var remotePreviewLive = false
+    private var remoteProgramLive = false
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -146,7 +153,7 @@ final class MixerController: ObservableObject {
         startTimers()
         booted = true
         status = L10n.t("msg.remoteIdle")
-        updateStatus()
+        refreshRemoteWarn()
     }
 
     func connectRemote(url: String, token: String) {
@@ -156,6 +163,11 @@ final class MixerController: ObservableObject {
             _ = mixer_remote_close(remoteHandle)
             remoteHandle = 0
         }
+        remoteConnected = false
+        remotePreviewKey = ""
+        remoteProgramKey = ""
+        remotePreviewLive = false
+        remoteProgramLive = false
         let handle = MixerFFI.withCString(endpoint) { urlPtr in
             MixerFFI.withCString(token) { tokenPtr in
                 mixer_remote_open(urlPtr, tokenPtr)
@@ -163,7 +175,7 @@ final class MixerController: ObservableObject {
         }
         if handle <= 0 {
             presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("chrome.connect"))
-            status = L10n.t("msg.remoteConnectFailed")
+            refreshRemoteWarn()
             return
         }
         remoteHandle = handle
@@ -172,7 +184,7 @@ final class MixerController: ObservableObject {
         AppPrefs.shared.rememberRemote(endpoint)
         pollRemote(force: true)
         bumpSurfaceEpoch()
-        updateStatus()
+        refreshRemoteWarn()
     }
 
     func applyVmixApi() {
@@ -327,6 +339,11 @@ final class MixerController: ObservableObject {
             _ = mixer_remote_close(remoteHandle)
             remoteHandle = 0
         }
+        remoteConnected = false
+        remotePreviewKey = ""
+        remoteProgramKey = ""
+        remotePreviewLive = false
+        remoteProgramLive = false
         for id in remoteReceiveIds.values {
             _ = mixer_destroy_source(id)
         }
@@ -1797,7 +1814,6 @@ final class MixerController: ObservableObject {
     private func tick() {
         if handleMixerFatal() { return }
         if isRemote {
-            updateStatus()
             return
         }
         var buffer = [EivizAudioPeak](repeating: MixerFFI.zeroed(), count: 32)
@@ -1886,13 +1902,30 @@ final class MixerController: ObservableObject {
 
     private func updateStatus() {
         if isRemote {
-            status = remoteHandle == 0
-                ? L10n.t("msg.remoteConnectFailed")
-                : L10n.format("msg.remoteConnected", "\(remoteRevision)")
             return
         }
         let unit = selectedUnit
         status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+    }
+
+    private func refreshRemoteWarn() {
+        let next: String
+        if remoteHandle == 0 {
+            next = L10n.t("msg.remoteIdle")
+        } else if !remoteConnected {
+            next = L10n.t("msg.remoteDisconnected")
+        } else if !remoteError.isEmpty {
+            next = remoteError
+        } else if remoteLag {
+            next = L10n.t("msg.remoteResync")
+        } else if videoUnavailable {
+            next = L10n.t("msg.videoUnavailable")
+        } else {
+            next = ""
+        }
+        if warnText != next {
+            warnText = next
+        }
     }
 
     private func handleMixerFatal() -> Bool {
@@ -2107,9 +2140,15 @@ final class MixerController: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func mutateRemoteSettings() -> Bool {
+        mutateRemote(MixerRemote.setSettings(session))
+    }
+
     private func pollRemote(force: Bool = false) {
         guard remoteHandle != 0 else {
-            status = L10n.t("msg.remoteIdle")
+            if remoteConnected { remoteConnected = false }
+            refreshRemoteWarn()
             return
         }
         let statusJson = MixerRemote.status(remoteHandle)
@@ -2124,22 +2163,34 @@ final class MixerController: ObservableObject {
             lag = root["lag"] as? Bool ?? false
             error = root["error"] as? String ?? ""
             if let revision = root["revision"] as? NSNumber {
-                remoteRevision = revision.uint64Value
+                let value = revision.uint64Value
+                if remoteRevision != value {
+                    remoteRevision = value
+                }
             }
             if let value = root["epoch"] as? String {
                 epoch = value
             }
         }
-        if !connected {
-            status = L10n.t("msg.remoteDisconnected")
-        } else if !error.isEmpty {
-            status = error
-        } else if lag {
-            status = L10n.t("msg.remoteResync")
-        } else {
-            status = L10n.format("msg.remoteConnected", "\(remoteRevision)")
+        if remoteConnected != connected {
+            remoteConnected = connected
         }
-        if let mixValue = MixerRemote.mix(from: MixerRemote.live(remoteHandle), unitId: selectedUnitId), !tbarDragging, !tbarLocked {
+        remoteLag = lag
+        remoteError = error
+        let nextStatus: String
+        if !connected {
+            nextStatus = L10n.t("msg.remoteDisconnected")
+        } else if !error.isEmpty {
+            nextStatus = error
+        } else if lag {
+            nextStatus = L10n.t("msg.remoteResync")
+        } else {
+            nextStatus = L10n.format("msg.remoteConnected", "\(remoteRevision)")
+        }
+        if status != nextStatus {
+            status = nextStatus
+        }
+        if let mixValue = MixerRemote.mix(from: MixerRemote.live(remoteHandle), unitId: selectedUnitId), !tbarDragging, !tbarLocked, mix != mixValue {
             mix = mixValue
         }
         applyRemoteLiveBuses()
@@ -2160,7 +2211,7 @@ final class MixerController: ObservableObject {
                 bumpSurfaceEpoch()
             }
         }
-        objectWillChange.send()
+        refreshRemoteWarn()
     }
 
     private func applyRemoteLiveBuses() {
@@ -2246,8 +2297,18 @@ final class MixerController: ObservableObject {
     }
 
     private func syncPublishedVideo() {
-        let previewOk = connectRemoteChoice(MixerRemote.previewSourceId, selectedRemoteVideo(preview: true))
-        let programOk = connectRemoteChoice(MixerRemote.programSourceId, selectedRemoteVideo(preview: false))
+        let preview = selectedRemoteVideo(preview: true)
+        let program = selectedRemoteVideo(preview: false)
+        let previewKey = "\(preview.transport.rawValue):\(preview.address)"
+        let programKey = "\(program.transport.rawValue):\(program.address)"
+        if previewKey != remotePreviewKey {
+            remotePreviewKey = previewKey
+            remotePreviewLive = connectRemoteChoice(MixerRemote.previewSourceId, preview)
+        }
+        if programKey != remoteProgramKey {
+            remoteProgramKey = programKey
+            remoteProgramLive = connectRemoteChoice(MixerRemote.programSourceId, program)
+        }
         let outputs = publishedOutputs().filter { $0.sourceKind == .multiview }
         var keep: [UInt64: UInt64] = [:]
         for output in outputs {
@@ -2264,12 +2325,11 @@ final class MixerController: ObservableObject {
             _ = mixer_destroy_source(sourceId)
             remoteReceiveIds.removeValue(forKey: outputId)
         }
-        videoUnavailable = !previewOk || !programOk
-        if videoUnavailable {
-            warnText = L10n.t("msg.videoUnavailable")
-        } else if warnText == L10n.t("msg.videoUnavailable") {
-            warnText = ""
+        let unavailable = !remotePreviewLive || !remoteProgramLive
+        if videoUnavailable != unavailable {
+            videoUnavailable = unavailable
         }
+        refreshRemoteWarn()
     }
 
     @discardableResult

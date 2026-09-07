@@ -7,22 +7,25 @@ public partial class ConnectWindow : Window
     public ConnectWindow(string url, string token)
     {
         InitializeComponent();
-        UrlBox.Text = string.IsNullOrWhiteSpace(url) ? "ws://127.0.0.1:9400" : url;
+        var (host, port) = RemoteEndpoint.Split(url);
+        HostBox.Text = host;
+        PortBox.Text = port.ToString();
         TokenBox.Password = token ?? "";
         Loaded += (_, _) =>
         {
-            UrlBox.Focus();
-            UrlBox.SelectAll();
+            HostBox.Focus();
+            HostBox.SelectAll();
         };
     }
 
-    public string Url => UrlBox.Text.Trim();
+    public string Url { get; private set; } = "";
     public string Token => TokenBox.Password;
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(UrlBox.Text))
+        if (!RemoteEndpoint.TryCompose(HostBox.Text, PortBox.Text, out var url))
             return;
+        Url = url;
         DialogResult = true;
     }
 

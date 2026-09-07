@@ -178,23 +178,11 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content -Encoding ascii "$setup.sha256"
 
-      - name: Package zip
-        shell: bash
-        run: |
-          TAG="${{ needs.meta.outputs.tag }}"
-          STAGING="eiviz-${TAG}-win-x64"
-          mkdir -p "$STAGING"
-          cp -a publish/win-x64/. "$STAGING/"
-          7z a -tzip "${STAGING}.zip" "$STAGING"
-          sha256sum "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: win-x64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
             eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
 
@@ -234,7 +222,7 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
 
-      - name: Package zip
+      - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-arm64"
@@ -269,27 +257,6 @@ jobs:
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
-          cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
-          Apple Silicon (arm64) Metal preview host.
-
-          Unzip, then in Terminal:
-            cd eiviz-*-macos-arm64
-            xattr -cr .
-            open eiviz-mac.app
-            open eiviz-remote.app
-
-          eiviz-mac.app is the mixer. eiviz-remote.app operates another eiviz.
-          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
-          The loose ./eiviz-mac binary still works for local preview.
-
-          Optional still image on Scene 2:
-            ./eiviz-mac /path/to/image.png
-
-          If macOS blocks the binary: System Settings → Privacy & Security → Open Anyway.
-          CUT, AUTO, T-bar, and OMT Program send (name eiviz-mac) are available.
-          EOF
-          zip -r "${STAGING}.zip" "$STAGING"
-          shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
@@ -300,8 +267,6 @@ jobs:
         with:
           name: macos-arm64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
 
@@ -343,7 +308,7 @@ jobs:
           BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
 
-      - name: Package zip
+      - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-x64"
@@ -378,27 +343,6 @@ jobs:
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
-          cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
-          Intel (x86_64 / amd64) Metal preview host.
-
-          Unzip, then in Terminal:
-            cd eiviz-*-macos-x64
-            xattr -cr .
-            open eiviz-mac.app
-            open eiviz-remote.app
-
-          eiviz-mac.app is the mixer. eiviz-remote.app operates another eiviz.
-          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
-          The loose ./eiviz-mac binary still works for local preview.
-
-          Optional still image on Scene 2:
-            ./eiviz-mac /path/to/image.png
-
-          If macOS blocks the binary: System Settings → Privacy & Security → Open Anyway.
-          CUT, AUTO, T-bar, and OMT Program send (name eiviz-mac) are available.
-          EOF
-          zip -r "${STAGING}.zip" "$STAGING"
-          shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
@@ -409,8 +353,6 @@ jobs:
         with:
           name: macos-x64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256
 
@@ -435,15 +377,9 @@ jobs:
           make_latest: ${{ needs.meta.outputs.prerelease != 'true' }}
           generate_release_notes: true
           files: |
-            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256

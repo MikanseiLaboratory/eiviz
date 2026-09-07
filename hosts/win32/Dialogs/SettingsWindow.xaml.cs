@@ -76,21 +76,14 @@ public partial class SettingsWindow : Window
         WebApiWsPortBox.Text = Settings.NativeApiPort.ToString();
         WebApiUserBox.Text = Settings.VmixApiUser;
         WebApiPasswordBox.Password = Settings.VmixApiPassword;
-        if (App.IsRemote)
-        {
-            DisplayPanel.IsEnabled = false;
-            PerformancePanel.IsEnabled = false;
-            OutputPanel.IsEnabled = false;
-            AudioBusPanel.IsEnabled = false;
-            AdvancedPanel.IsEnabled = false;
-            WebApiPanel.IsEnabled = false;
-        }
     }
 
     public SessionSettings Settings { get; }
     public List<OutputEntry> Outputs { get; } = [];
     public List<AudioBusEntry> Buses { get; } = [];
     public bool HeadphoneCopyMaster { get; private set; }
+    public ulong NextOutputId => _nextOutputId;
+    public ulong NextBusId => _nextBusId;
     private ulong _nextBusId;
     private bool _suppressOutputs;
     private bool _rebarAvailable;

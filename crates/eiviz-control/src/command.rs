@@ -202,6 +202,14 @@ pub enum SessionMutation {
     DeleteMultiview {
         id: u64,
     },
+    SetSettings {
+        settings: Box<crate::session::SessionSettings>,
+        outputs: Vec<crate::session::OutputDto>,
+        buses: Vec<crate::session::BusDto>,
+        headphone_copy_master: bool,
+        next_output_id: u64,
+        next_bus_id: u64,
+    },
 }
 
 impl SessionMutation {
@@ -218,6 +226,7 @@ impl SessionMutation {
             Self::AddMediaInput { .. } => "AddMediaInput",
             Self::UpsertMultiview { .. } => "UpsertMultiview",
             Self::DeleteMultiview { .. } => "DeleteMultiview",
+            Self::SetSettings { .. } => "SetSettings",
         }
     }
 }

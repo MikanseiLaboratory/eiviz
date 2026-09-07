@@ -45,7 +45,22 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         expected_revision: u64,
     },
+    Mutate {
+        json: String,
+        #[arg(long, default_value_t = 0)]
+        expected_revision: u64,
+    },
+    Prefs {
+        #[command(subcommand)]
+        action: Option<PrefsCmd>,
+    },
     Shutdown,
+}
+
+#[derive(Subcommand)]
+enum PrefsCmd {
+    Get { key: String },
+    Set { key: String, value: Vec<String> },
 }
 
 #[tokio::main]
@@ -133,6 +148,19 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
                 println!("ok");
             }
         }
+        Cmd::Mutate {
+            json: body,
+            expected_revision,
+        } => {
+            client
+                .mutate_session(body.into_bytes(), expected_revision)
+                .await
+                .map_err(|e| e.to_string())?;
+            if !json {
+                println!("ok");
+            }
+        }
+        Cmd::Prefs { action } => prefs_cmd(action)?,
         Cmd::Shutdown => {
             client.shutdown().await.map_err(|e| e.to_string())?;
             if !json {
@@ -141,6 +169,47 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+fn prefs_cmd(action: Option<PrefsCmd>) -> Result<(), String> {
+    match action {
+        None => {
+            let prefs = eiviz_headless::HeadlessPrefs::load();
+            println!("path={}", eiviz_headless::HeadlessPrefs::path().display());
+            println!("{}", prefs.display());
+            Ok(())
+        }
+        Some(PrefsCmd::Get { key }) => {
+            let prefs = eiviz_headless::HeadlessPrefs::load();
+            match prefs.get(&key) {
+                Ok(Some(value)) if normalize_prefs_key(&key) == "token" => {
+                    println!("{}", if value.is_empty() { "" } else { "(set)" });
+                    Ok(())
+                }
+                Ok(Some(value)) => {
+                    println!("{value}");
+                    Ok(())
+                }
+                Ok(None) => {
+                    println!();
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Some(PrefsCmd::Set { key, value }) => {
+            let joined = value.join(" ");
+            let mut prefs = eiviz_headless::HeadlessPrefs::load();
+            prefs.set(&key, &joined)?;
+            let path = prefs.save()?;
+            println!("ok path={}", path.display());
+            Ok(())
+        }
+    }
+}
+
+fn normalize_prefs_key(key: &str) -> String {
+    key.trim().replace(['-', '_'], "").to_ascii_lowercase()
 }
 
 async fn repl(client: &ControlClient, json: bool) -> Result<(), String> {
@@ -162,6 +231,48 @@ async fn repl(client: &ControlClient, json: bool) -> Result<(), String> {
         if line.is_empty() || line == "exit" || line == "quit" {
             if line == "exit" || line == "quit" {
                 break;
+            }
+            continue;
+        }
+        if line == "prefs" {
+            if let Err(error) = prefs_cmd(None) {
+                eprintln!("{error}");
+            }
+            continue;
+        }
+        if let Some(key) = line.strip_prefix("prefs get ") {
+            if let Err(error) = prefs_cmd(Some(PrefsCmd::Get {
+                key: key.trim().to_string(),
+            })) {
+                eprintln!("{error}");
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("prefs set ") {
+            let Some((key, value)) = rest.split_once(char::is_whitespace) else {
+                eprintln!("usage: prefs set <key> <value>");
+                continue;
+            };
+            if let Err(error) = prefs_cmd(Some(PrefsCmd::Set {
+                key: key.to_string(),
+                value: vec![value.to_string()],
+            })) {
+                eprintln!("{error}");
+            }
+            continue;
+        }
+        if let Some(body) = line.strip_prefix("mutate ") {
+            if let Err(error) = run_cmd(
+                client,
+                Cmd::Mutate {
+                    json: body.to_string(),
+                    expected_revision: 0,
+                },
+                json,
+            )
+            .await
+            {
+                eprintln!("{error}");
             }
             continue;
         }

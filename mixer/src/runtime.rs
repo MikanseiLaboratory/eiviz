@@ -17,8 +17,7 @@ use crate::{
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
     mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
     mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
-    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
-    mixer_video_start,
+    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {

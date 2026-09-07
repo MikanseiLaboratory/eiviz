@@ -96,7 +96,9 @@ struct ScenePreviewTile: View, @MainActor Equatable {
                     .disabled(!hasVideo)
                 chip("Aud", action: onAudio)
                     .opacity(muted ? 0.45 : 1)
-                chip("Prev", action: onOpenPreview)
+                if showThumb {
+                    chip("Prev", action: onOpenPreview)
+                }
                 TileSetButton(title: "Set", onLeft: onEdit, onRight: onSnapshot)
             }
             .padding(2)
@@ -118,7 +120,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
         }
         .padding(.vertical, 4)
         .frame(width: 40, height: 140)
-        .background(EivizTheme.chrome)
+        .background(program ? programColor.opacity(0.28) : preview ? previewColor.opacity(0.22) : EivizTheme.chrome)
         .contentShape(Rectangle())
         .onTapGesture(perform: onPreview)
     }

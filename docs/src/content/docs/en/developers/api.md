@@ -9,7 +9,7 @@ The control plane is handled by `ControlService` inside the mixer. vMix-compatib
 
 - Protocol: `eiviz.control.v1` (`crates/eiviz-api/proto/eiviz/control/v1/control.proto`)
 - WebSocket: `ws://`, subprotocol `eiviz.protobuf.v1`, one binary frame per Envelope
-- Default listen is loopback port 9400. Bind address, port, token, max role, and media directory are host-owned (GUI Preferences, or `eiviz-headless --bind` / `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY`). They are not stored in session JSON
+- Default listen is loopback port 9400. Bind address, port, token, max role, and media directory are host-owned (GUI Preferences, `eivizctl prefs`, or `eiviz-headless --bind` / `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY`). They are not stored in session JSON
 - This release uses authenticated `ws://` on a trusted LAN or VPN only. TLS is not provided
 - Published field numbers are never reused. Removals go into `reserved`
 
@@ -54,7 +54,16 @@ eivizctl --url ws://127.0.0.1:9400 status
 eivizctl cut --unit 1
 eivizctl snapshot
 eivizctl shutdown
+eivizctl prefs
+eivizctl prefs get bind
+eivizctl prefs set bind 127.0.0.1:9400
 ```
+
+With no subcommand, eivizctl opens a REPL. Type `prefs`, `prefs get`, `prefs set`, and `mutate <json>` on a line.
+
+`prefs` edits the headless listen file: `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, and `maxRole`. Token display is `(set)`. CLI `--bind` and `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY` override the file. Values apply on the next `eiviz-headless run`.
+
+`mutate` sends `MutateSession`. Settings-window fields use `"kind":"setSettings"`. `expected_revision` 0 skips the conflict check.
 
 ## Headless daemon
 
@@ -64,13 +73,13 @@ eiviz-headless canonicalize --session show.eiviz.json
 eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 ```
 
-`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
+`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. When `--bind` is omitted, `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
 
 Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime failure.
 
 ## Operations
 
-- Rotate tokens by changing `EIVIZ_API_TOKEN` (headless) or the listen token in Preferences, then restart
+- Rotate tokens by changing `EIVIZ_API_TOKEN` or `eivizctl prefs set token` (headless), or the listen token in Preferences, then restart
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr

@@ -16,19 +16,28 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            VSplitView {
+            ZStack {
                 VSplitView {
-                    HSplitView {
-                        bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
-                        transitions
-                            .frame(minWidth: 220, idealWidth: 260)
-                        bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                    VSplitView {
+                        HSplitView {
+                            bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                            transitions
+                                .frame(minWidth: 220, idealWidth: 260)
+                            bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                        }
+                        lower
                     }
-                    lower
+                    .padding(8)
+                    audioBar
+                        .frame(minHeight: 80)
                 }
-                .padding(8)
-                audioBar
-                    .frame(minHeight: 80)
+                if mixer.isRemote && !mixer.remoteConnected {
+                    EivizTheme.background
+                        .overlay {
+                            Text(L10n.t("msg.remoteIdle"))
+                                .foregroundStyle(EivizTheme.dim)
+                        }
+                }
             }
             statusBar
         }
@@ -70,7 +79,7 @@ struct ContentView: View {
                 Button(L10n.t("chrome.connect")) { mixer.showConnect = true }
                 Menu {
                     ForEach(AppPrefs.shared.recentRemotes, id: \.self) { url in
-                        Button(url) {
+                        Button(RemoteEndpoint.display(url)) {
                             mixer.connectRemote(url: url, token: KeychainStore.load(account: url))
                         }
                     }
@@ -91,9 +100,11 @@ struct ContentView: View {
             }
             Spacer()
             Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
+                .disabled(mixer.isRemote && !mixer.remoteConnected)
             Button(L10n.t("chrome.resources")) { mixer.showResources = true }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
+                .disabled(mixer.isRemote && !mixer.remoteConnected)
             Button(L10n.t("chrome.preferences")) { mixer.showPreferences = true }
         }
         .buttonStyle(MixerButtonStyle())
@@ -402,7 +413,9 @@ struct ContentView: View {
                             mixer.editingInput = input
                             mixer.showAddInput = true
                         }
-                        Button("Preview") { mixer.previewSelectedInput() }
+                        if !mixer.isRemote {
+                            Button("Preview") { mixer.previewSelectedInput() }
+                        }
                         Button(L10n.t("chrome.screenshot")) {
                             guard let id = mixer.selectedInputId,
                                   let input = mixer.session.inputs.first(where: { $0.id == id })
@@ -592,18 +605,22 @@ struct ContentView: View {
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            mixUnitBar
-                .layoutPriority(1)
+            if !mixer.isRemote || mixer.remoteConnected {
+                mixUnitBar
+                    .layoutPriority(1)
+            }
             Spacer(minLength: 8)
             if !mixer.warnText.isEmpty {
                 Text(mixer.warnText)
                     .foregroundStyle(EivizTheme.warn)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
             if !mixer.errorText.isEmpty {
                 Text(mixer.errorText)
                     .foregroundStyle(EivizTheme.warn)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
             Text(mixer.resourceText)
                 .foregroundStyle(EivizTheme.hud)

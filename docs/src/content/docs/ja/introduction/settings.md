@@ -3,7 +3,7 @@ title: 設定
 description: セッションに保存される設定ウィンドウの項目
 ---
 
-メインウィンドウの「設定」から開きます。
+メインウィンドウの「設定」から開きます。Remoteからも同じウィンドウで接続先のセッションを編集できます。
 
 ## 表示
 
@@ -13,7 +13,7 @@ GUI上の表示を調整します。
 
 ### 色設定
 
-Preview色、Program色、非アクティブ色は、ボタンやシーンタイルの縁に使います。既定は緑、赤、灰色です。
+Preview色、Program色、非アクティブ色は、ボタンやシーンタイルの縁に使います。折り畳んだシーンタイルとスイッチャーのシーンボタンも同じ色で面を塗ります。既定は緑、赤、灰色です。
 
 ### マスターフレームレート
 
@@ -148,6 +148,10 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 ### API待ち受け（ホスト）
 
 bindアドレス、待ち受けtoken、アップロード保存先です。loopback以外はtoken必須です。未指定の保存先は`%LOCALAPPDATA%\eiviz\media`（Windows）または各OSの同等パスです。リモートクライアントから追加したStill/Videoはこのディレクトリへ保存されます。
+
+### headless
+
+GUIのない`eiviz-headless`は`eivizctl prefs`で待ち受けを編集します。ファイルは`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`です。キーは`bind`、`token`、`mediaDirectory`、`maxRole`です。反映は次の`eiviz-headless run`です。環境変数`EIVIZ_API_TOKEN`があるときはtokenより優先します。
 
 ### ヘルプ
 

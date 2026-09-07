@@ -1,5 +1,9 @@
 //! Headless host package. Binaries live in `src/bin`.
 
+pub mod prefs;
+
+pub use prefs::HeadlessPrefs;
+
 #[cfg(test)]
 mod tests {
     #[test]

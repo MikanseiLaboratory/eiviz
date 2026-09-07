@@ -32,13 +32,14 @@ struct SettingsView: View {
                     else if category == 5 { webApi }
                     else { advanced }
                 }
-                .disabled(mixer.isRemote && category != 3)
                 Spacer()
                 HStack {
                     Spacer()
                     Button("OK") {
                         if mixer.isRemote {
-                            dismiss()
+                            if mixer.mutateRemoteSettings() {
+                                dismiss()
+                            }
                             return
                         }
                         if !copyUmaInfo().available {
@@ -545,20 +546,24 @@ struct SettingsView: View {
 struct ConnectView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var mixer: MixerController
-    @State private var url = AppPrefs.shared.remoteUrl
+    @State private var host = RemoteEndpoint.split(AppPrefs.shared.remoteUrl).host
+    @State private var port = RemoteEndpoint.split(AppPrefs.shared.remoteUrl).port
     @State private var token = KeychainStore.load(account: AppPrefs.shared.remoteUrl)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L10n.t("connect.title")).fontWeight(.bold)
-            Text(L10n.t("connect.url"))
-            mixerTextField($url, placeholder: "ws://127.0.0.1:9400")
+            Text(L10n.t("connect.host"))
+            mixerTextField($host, placeholder: RemoteEndpoint.defaultHost)
+            Text(L10n.t("connect.port"))
+            mixerUintField($port)
             Text(L10n.t("connect.token"))
             SecureField("", text: $token)
                 .frame(width: 320)
             HStack {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
+                    guard let url = RemoteEndpoint.format(host: host, port: port) else { return }
                     mixer.connectRemote(url: url, token: token)
                     dismiss()
                 }

@@ -3,7 +3,7 @@ title: Settings
 description: Session-backed Settings dialog, item by item
 ---
 
-Open it from Settings in the main window.
+Open it from Settings in the main window. Remote uses the same window to edit the destination session.
 
 ## Display
 
@@ -13,7 +13,7 @@ Adjusts what you see in the GUI.
 
 ### Colours
 
-Preview, Program, and Inactive colours paint button and scene-tile chrome. Defaults are green, red, and grey.
+Preview, Program, and Inactive colours paint button and scene-tile chrome. Collapsed scene tiles and switcher scene buttons use the same colours for fill. Defaults are green, red, and grey.
 
 ### Master frame rate
 
@@ -147,6 +147,10 @@ Dark, Light, or Follow OS.
 ### API listen (host)
 
 Bind address, listen token, and uploaded media directory. Non-loopback bind requires the token. When unset, the directory is `%LOCALAPPDATA%\eiviz\media` on Windows, or the equivalent OS path. Still/Video added from a remote client land in this directory.
+
+### Headless
+
+`eiviz-headless` has no Preferences window. Edit listen values with `eivizctl prefs`. The file is `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, and `maxRole`. They apply on the next `eiviz-headless run`. `EIVIZ_API_TOKEN` wins over the file token.
 
 ### Help
 

@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:i18n="clr-namespace:Eiviz.Host.I18n"
         Title="{Binding [connect.title], Source={x:Static i18n:Loc.Source}}"
-        Height="240" Width="480"
+        Height="280" Width="480"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource DialogBackground}" Foreground="{DynamicResource TextForeground}"
         ResizeMode="NoResize">
@@ -13,8 +13,10 @@
             <Button Content="{Binding [dialog.cancel], Source={x:Static i18n:Loc.Source}}" Width="88" Height="28" Margin="8,0,0,0" IsCancel="True"/>
         </StackPanel>
         <StackPanel>
-            <TextBlock Text="{Binding [connect.url], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,4"/>
-            <TextBox x:Name="UrlBox" Margin="0,0,0,12"/>
+            <TextBlock Text="{Binding [connect.host], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,4"/>
+            <TextBox x:Name="HostBox" Margin="0,0,0,12"/>
+            <TextBlock Text="{Binding [connect.port], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,4"/>
+            <TextBox x:Name="PortBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,12"/>
             <TextBlock Text="{Binding [connect.token], Source={x:Static i18n:Loc.Source}}" Margin="0,0,0,4"/>
             <PasswordBox x:Name="TokenBox"/>
         </StackPanel>

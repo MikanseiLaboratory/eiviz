@@ -9,7 +9,7 @@ eivizの制御面はMixer内の`ControlService`が担当しています。vMix�
 
 - プロトコル: `eiviz.control.v1`（`crates/eiviz-api/proto/eiviz/control/v1/control.proto`）
 - WebSocket: `ws://`、subprotocol `eiviz.protobuf.v1`、binary frame 1枚がEnvelope 1個
-- 既定の待ち受けはloopbackのポート9400です。bindアドレス、ポート、token、最大role、メディア保存先はホスト固有です（GUIの環境設定、または`eiviz-headless --bind`/`EIVIZ_API_TOKEN`/`EIVIZ_MEDIA_DIRECTORY`）。セッションJSONには保存しません
+- 既定の待ち受けはloopbackのポート9400です。bindアドレス、ポート、token、最大role、メディア保存先はホスト固有です（GUIの環境設定、`eivizctl prefs`、または`eiviz-headless --bind`/`EIVIZ_API_TOKEN`/`EIVIZ_MEDIA_DIRECTORY`）。セッションJSONには保存しません
 - このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSは提供しません
 - 公開済みfield numberは変更・再利用しません。削除時は`reserved`へ入れます
 
@@ -54,7 +54,16 @@ eivizctl --url ws://127.0.0.1:9400 status
 eivizctl cut --unit 1
 eivizctl snapshot
 eivizctl shutdown
+eivizctl prefs
+eivizctl prefs get bind
+eivizctl prefs set bind 127.0.0.1:9400
 ```
+
+引数なしで起動するとREPLです。`prefs`、`prefs get`、`prefs set`、`mutate <json>`をそのまま打てます。
+
+`prefs`はheadlessの待ち受けファイルです。場所は`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`です。キーは`bind`、`token`、`mediaDirectory`、`maxRole`です。tokenの表示は`(set)`です。CLIの`--bind`と環境変数`EIVIZ_API_TOKEN`/`EIVIZ_MEDIA_DIRECTORY`がファイルより優先します。反映は次の`eiviz-headless run`です。
+
+`mutate`は`MutateSession`です。設定ウィンドウ相当は`kind`が`setSettings`のJSONです。`expected_revision`が0のときは衝突検査をしません。
 
 ## headless daemon
 
@@ -64,13 +73,13 @@ eiviz-headless canonicalize --session show.eiviz.json
 eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
 ```
 
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。GUIのMixerも、環境設定（bind/token/メディア保存先）または設定（有効/ポート）で待ち受けを有効にすると同じWebSocketを開きます。
+`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。`--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。GUIのMixerも、環境設定（bind/token/メディア保存先）または設定（有効/ポート）で待ち受けを有効にすると同じWebSocketを開きます。
 
 終了コードは引数/読込が2、セッション検証が3、GPU/runtimeが4、bindが5、その他runtime失敗が6です。
 
 ## 運用
 
-- token rotation: headlessは`EIVIZ_API_TOKEN`を差し替え、GUIは環境設定の待ち受けtokenを変えて再起動します
+- token rotation: headlessは`EIVIZ_API_TOKEN`または`eivizctl prefs set token`を差し替え、GUIは環境設定の待ち受けtokenを変えて再起動します
 - loopback以外へbindする場合は認証必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSが必要なら手前で終端してください
 - `--media-directory`/`EIVIZ_MEDIA_DIRECTORY`がホストのupload保存先です。未指定時はOSのローカルアプリデータ配下`eiviz/media`です
 - ログはstderrの構造化可能なテキストです

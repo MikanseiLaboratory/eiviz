@@ -224,9 +224,8 @@ fn win32_hinstance(hwnd: std::num::NonZeroIsize) -> Option<std::num::NonZeroIsiz
         fn GetModuleHandleW(name: *const u16) -> isize;
     }
     let from_window = unsafe { GetWindowLongPtrW(hwnd.get(), GWLP_HINSTANCE) };
-    std::num::NonZeroIsize::new(from_window).or_else(|| {
-        std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) })
-    })
+    std::num::NonZeroIsize::new(from_window)
+        .or_else(|| std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) }))
 }
 
 #[cfg(windows)]
@@ -387,7 +386,13 @@ fn present_monitor_group(
 fn present_pass(
     presenters: &mut Presenters,
     device: &GpuDevice,
-    planned: &[(u64, u32, crate::abi::NativeSurface, u64, Option<wgpu::TextureView>)],
+    planned: &[(
+        u64,
+        u32,
+        crate::abi::NativeSurface,
+        u64,
+        Option<wgpu::TextureView>,
+    )],
 ) -> Result<(), String> {
     let mut encoder = device
         .device
@@ -531,12 +536,10 @@ fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMo
 
 fn mark_rebuild(presenter: &mut Presenter) {
     presenter.ready = false;
-    presenter.pending = Some(
-        native_client_size(presenter.native).unwrap_or((
-            presenter.config.width.max(2),
-            presenter.config.height.max(2),
-        )),
-    );
+    presenter.pending = Some(native_client_size(presenter.native).unwrap_or((
+        presenter.config.width.max(2),
+        presenter.config.height.max(2),
+    )));
 }
 
 #[cfg(windows)]

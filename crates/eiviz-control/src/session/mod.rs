@@ -101,6 +101,7 @@ pub struct SessionSettings {
     pub multiview_label_unit: MvLabelUnit,
     #[serde(default)]
     pub multiview_label_anchor: MvLabelAnchor,
+    #[serde(default)]
     pub last_session_path: Option<String>,
     #[serde(default = "default_true", deserialize_with = "de_bool_null_true")]
     pub vmix_api_enabled: bool,

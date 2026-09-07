@@ -137,6 +137,26 @@ enum MixerRemote {
         encode(["kind": "deleteMultiview", "id": NSNumber(value: id)])
     }
 
+    static func setSettings(_ session: MixerSessionData) -> String {
+        let encoder = JSONEncoder()
+        guard let settings = try? encoder.encode(session.settings),
+              let settingsObj = try? JSONSerialization.jsonObject(with: settings),
+              let outputs = try? encoder.encode(session.outputs),
+              let outputsObj = try? JSONSerialization.jsonObject(with: outputs),
+              let buses = try? encoder.encode(session.buses),
+              let busesObj = try? JSONSerialization.jsonObject(with: buses)
+        else { return "{}" }
+        return encode([
+            "kind": "setSettings",
+            "settings": settingsObj,
+            "outputs": outputsObj,
+            "buses": busesObj,
+            "headphoneCopyMaster": session.headphoneCopyMaster,
+            "nextOutputId": NSNumber(value: session.nextOutputId),
+            "nextBusId": NSNumber(value: session.nextBusId)
+        ])
+    }
+
     static func setOverlaySlot(unitId: UInt64, index: UInt32, slot: OverlaySlot) -> String {
         let wire: [String: Any] = [
             "sceneGpuId": NSNumber(value: slot.sceneGpuId),
@@ -208,5 +228,43 @@ enum MixerRemote {
                 ]
             }
         ]
+    }
+}
+
+enum RemoteEndpoint {
+    static let defaultHost = "127.0.0.1"
+    static let defaultPort: UInt32 = 9400
+
+    static func split(_ text: String) -> (host: String, port: UInt32) {
+        var raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty {
+            return (defaultHost, defaultPort)
+        }
+        if !raw.contains("://") {
+            raw = "ws://" + raw
+        }
+        guard let url = URL(string: raw), let host = url.host, !host.isEmpty else {
+            return (defaultHost, defaultPort)
+        }
+        let port = url.port.map { UInt32(clamping: $0) } ?? defaultPort
+        return (host, port == 0 ? defaultPort : min(port, 65535))
+    }
+
+    static func format(host: String, port: UInt32) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let safePort = min(max(port, 1), 65535)
+        if trimmed.contains(":") && !trimmed.hasPrefix("[") {
+            return "ws://[\(trimmed)]:\(safePort)"
+        }
+        return "ws://\(trimmed):\(safePort)"
+    }
+
+    static func display(_ text: String) -> String {
+        let parts = split(text)
+        if parts.host.contains(":") && !parts.host.hasPrefix("[") {
+            return "[\(parts.host)]:\(parts.port)"
+        }
+        return "\(parts.host):\(parts.port)"
     }
 }

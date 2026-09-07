@@ -2835,7 +2835,9 @@ pub unsafe extern "C" fn mixer_ws_configure_bind(
     let host = if host.is_null() {
         "127.0.0.1"
     } else {
-        unsafe { CStr::from_ptr(host) }.to_str().unwrap_or("127.0.0.1")
+        unsafe { CStr::from_ptr(host) }
+            .to_str()
+            .unwrap_or("127.0.0.1")
     };
     crate::native_ws::configure_bind(enabled != 0, host, port)
 }
@@ -2852,7 +2854,9 @@ pub unsafe extern "C" fn mixer_ws_configure_owned(
     let host = if host.is_null() {
         "127.0.0.1"
     } else {
-        unsafe { CStr::from_ptr(host) }.to_str().unwrap_or("127.0.0.1")
+        unsafe { CStr::from_ptr(host) }
+            .to_str()
+            .unwrap_or("127.0.0.1")
     };
     let token = if token.is_null() {
         ""
@@ -2867,7 +2871,9 @@ pub unsafe extern "C" fn mixer_ws_configure_owned(
     let media = if media_directory.is_null() {
         ""
     } else {
-        unsafe { CStr::from_ptr(media_directory) }.to_str().unwrap_or("")
+        unsafe { CStr::from_ptr(media_directory) }
+            .to_str()
+            .unwrap_or("")
     };
     crate::native_ws::configure_owned(enabled != 0, host, port, token, max_role, media)
 }

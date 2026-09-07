@@ -151,6 +151,30 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             document.multiviews.retain(|item| item.id != id);
             Ok(())
         }
+        SessionMutation::SetSettings {
+            settings,
+            outputs,
+            buses,
+            headphone_copy_master,
+            next_output_id,
+            next_bus_id,
+        } => {
+            let renderer = document.settings.renderer;
+            let last_session_path = document.settings.last_session_path.clone();
+            document.settings = *settings;
+            document.settings.renderer = renderer;
+            document.settings.last_session_path = last_session_path;
+            document.outputs = outputs;
+            document.buses = buses;
+            document.headphone_copy_master = headphone_copy_master;
+            if next_output_id != 0 {
+                document.next_output_id = next_output_id;
+            }
+            if next_bus_id != 0 {
+                document.next_bus_id = next_bus_id;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -361,5 +385,45 @@ mod tests {
         let published = doc.published_video_outputs();
         assert_eq!(published.len(), 1);
         assert_eq!(published[0].name, "PGM");
+    }
+
+    #[test]
+    fn set_settings_replaces_settings_and_outputs() {
+        let mut doc = bars();
+        doc.settings.renderer = crate::session::Renderer::Vulkan;
+        doc.settings.last_session_path = Some("show.json".into());
+        let mut settings = doc.settings.clone();
+        settings.vmix_api_port = 9099;
+        settings.renderer = crate::session::Renderer::Auto;
+        settings.last_session_path = None;
+        apply(
+            &mut doc,
+            SessionMutation::SetSettings {
+                settings: Box::new(settings),
+                outputs: vec![crate::session::OutputDto {
+                    id: 100,
+                    name: "PGM".into(),
+                    transport: crate::session::OutputTransport::Omt,
+                    source_kind: crate::session::OutputSourceKind::MuProgram,
+                    source_id: 0,
+                    unit_id: 1,
+                    use_gpu: true,
+                    enabled: true,
+                    audio_bus_id: 1,
+                    skip_encode_when_no_receivers: true,
+                }],
+                buses: vec![],
+                headphone_copy_master: true,
+                next_output_id: 101,
+                next_bus_id: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.settings.vmix_api_port, 9099);
+        assert_eq!(doc.settings.renderer, crate::session::Renderer::Vulkan);
+        assert_eq!(doc.settings.last_session_path.as_deref(), Some("show.json"));
+        assert_eq!(doc.outputs.len(), 1);
+        assert!(doc.headphone_copy_master);
+        assert_eq!(doc.next_output_id, 101);
     }
 }

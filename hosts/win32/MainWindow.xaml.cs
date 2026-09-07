@@ -66,7 +66,7 @@ public partial class MainWindow : Window
         _tbarTimer.Tick += (_, _) =>
         {
             ((App)Application.Current).Backend.Poll();
-            RefreshRemoteStatus();
+            RefreshStatusBar();
             SyncTBarsFromMixer();
         };
         _tbarTimer.Start();
@@ -84,8 +84,12 @@ public partial class MainWindow : Window
         {
             ApplyBusColors();
             ApplyAspect();
-            BindPreviewProgram();
-            FillVideoSources();
+            RefreshStatusBar();
+            if (!HostRole.IsRemote || ((App)Application.Current).Backend.Connected)
+            {
+                FillVideoSources();
+                BindPreviewProgram();
+            }
             AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
@@ -142,6 +146,9 @@ public partial class MainWindow : Window
         ConnectButton.Visibility = Visibility.Visible;
         PreviewSourceBox.Visibility = Visibility.Visible;
         ProgramSourceBox.Visibility = Visibility.Visible;
+        PreviewInputButton.Visibility = Visibility.Collapsed;
+        RemoteIdleText.Text = Loc.T("msg.remoteIdle");
+        ApplyRemoteLiveUi(false);
     }
 
     private void FillVideoSources()
@@ -213,12 +220,12 @@ public partial class MainWindow : Window
         if (!app.TryConnectRemote(url, token, out var error))
         {
             MessageBox.Show(this, error, Loc.T("msg.remoteConnectFailed"));
-            RefreshRemoteStatus();
+            RefreshStatusBar();
             return;
         }
         FillVideoSources();
         BindPreviewProgram();
-        RefreshRemoteStatus();
+        RefreshStatusBar();
     }
 
     private void BindPreviewProgram()
@@ -230,7 +237,7 @@ public partial class MainWindow : Window
             PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
         }
-        RefreshRemoteStatus();
+        RefreshStatusBar();
     }
 
     internal void BindPreviewProgramSurfaces(SwapchainHost preview, SwapchainHost program, ulong unitId)
@@ -239,23 +246,40 @@ public partial class MainWindow : Window
             app.Backend.BindPreviewProgram(preview, program, unitId);
     }
 
-    private void RefreshRemoteStatus()
+    private void ApplyRemoteLiveUi(bool live)
+    {
+        var overlay = live ? Visibility.Collapsed : Visibility.Visible;
+        if (RemoteIdleOverlay.Visibility != overlay)
+            RemoteIdleOverlay.Visibility = overlay;
+        var mix = live ? Visibility.Visible : Visibility.Collapsed;
+        if (MixUnitBar.Visibility != mix)
+            MixUnitBar.Visibility = mix;
+        if (SnapshotButton.IsEnabled != live)
+            SnapshotButton.IsEnabled = live;
+        if (SettingsButton.IsEnabled != live)
+            SettingsButton.IsEnabled = live;
+    }
+
+    private void RefreshStatusBar()
     {
         if (Application.Current is not App app)
             return;
+        if (HostRole.IsRemote)
+            ApplyRemoteLiveUi(app.Backend.Connected);
+        var warn = StatusWarn(app);
+        if (WarnText.Text != warn)
+            WarnText.Text = warn;
+    }
+
+    private string StatusWarn(App app)
+    {
         if (!HostRole.IsRemote)
-        {
-            WarnText.Text = app.Backend.StatusText;
-            return;
-        }
-        if (app.Backend is RemoteEivizBackend remote)
-        {
-            WarnText.Text = !remote.RemotePreviewOk || !remote.RemoteProgramOk
-                ? Loc.T("msg.videoUnavailable")
-                : remote.StatusText;
-            return;
-        }
-        WarnText.Text = app.Backend.StatusText;
+            return _resources.Warning() ?? "";
+        if (app.Backend is not RemoteEivizBackend remote || !remote.Connected)
+            return app.Backend.StatusText;
+        if (!remote.RemotePreviewOk || !remote.RemoteProgramOk)
+            return Loc.T("msg.videoUnavailable");
+        return _resources.Warning() ?? "";
     }
 
 
@@ -585,22 +609,20 @@ public partial class MainWindow : Window
 
     private ulong CurrentProgramSceneId()
     {
-        unsafe
+        if (Application.Current is App app)
         {
-            UnitState state = default;
-            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
-                return state.ProgramSource;
+            app.Backend.BusSources(SelectedUnit.Id, out _, out var program);
+            return program;
         }
         return 0;
     }
 
     private ulong CurrentPreviewSceneGpuId()
     {
-        unsafe
+        if (Application.Current is App app)
         {
-            UnitState state = default;
-            if (MixerNative.GetUnitState(SelectedUnit.Id, &state) == 0)
-                return state.PreviewSource;
+            app.Backend.BusSources(SelectedUnit.Id, out var preview, out _);
+            return preview;
         }
         return 0;
     }
@@ -1195,7 +1217,7 @@ public partial class MainWindow : Window
                 menu.Items.Add(new MenuItem { Header = Loc.T("chrome.connectRecent"), IsEnabled = false });
                 foreach (var url in remotes)
                 {
-                    var item = new MenuItem { Header = url, Tag = url };
+                    var item = new MenuItem { Header = RemoteEndpoint.Display(url), Tag = url };
                     item.Click += (_, _) => ConnectTo(url, CredentialStore.Load(url));
                     menu.Items.Add(item);
                 }
@@ -1389,7 +1411,7 @@ public partial class MainWindow : Window
                 FlipBudget.ObserveLost(stats.SurfaceLost);
         }
         ResourceText.Text = _resources.Line();
-        WarnText.Text = _resources.Warning() ?? "";
+        RefreshStatusBar();
         TickVideo();
     }
 
@@ -2328,7 +2350,18 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true)
             return;
         if (App.IsRemote)
+        {
+            RemoteMutate(
+                MutationJson.SetSettings(
+                    dialog.Settings,
+                    dialog.Outputs,
+                    dialog.Buses,
+                    dialog.HeadphoneCopyMaster,
+                    dialog.NextOutputId,
+                    dialog.NextBusId),
+                Loc.T("chrome.settings"));
             return;
+        }
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
         _session.Settings.MasterFpsNum = dialog.Settings.MasterFpsNum;

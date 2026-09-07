@@ -362,6 +362,17 @@ public partial class SwitcherWindow : Window
                 : scene.GpuId == previewId
                     ? preview
                     : inactive;
+            if (thumb.Collapsed is Border collapsedBorder)
+            {
+                var color = scene.GpuId == programId
+                    ? BusTheme.Program(Session.Settings)
+                    : scene.GpuId == previewId
+                        ? BusTheme.Preview(Session.Settings)
+                        : Color.FromRgb(0x33, 0x33, 0x33);
+                collapsedBorder.Background = scene.GpuId == programId || scene.GpuId == previewId
+                    ? new SolidColorBrush(Color.FromArgb(80, color.R, color.G, color.B))
+                    : new SolidColorBrush(color);
+            }
         }
         ApplyThumbSubscriptions();
     }
@@ -387,15 +398,8 @@ public partial class SwitcherWindow : Window
     {
         previewId = 0;
         programId = 0;
-        unsafe
-        {
-            UnitState state = default;
-            if (MixerNative.GetUnitState(_unit.Id, &state) == 0)
-            {
-                previewId = state.PreviewSource;
-                programId = state.ProgramSource;
-            }
-        }
+        if (Application.Current is App app)
+            app.Backend.BusSources(_unit.Id, out previewId, out programId);
     }
 
     private void RebuildTransitions()

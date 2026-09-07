@@ -72,6 +72,10 @@ public partial class SceneTile : UserControl
         _borderColor = color;
         Chrome.BorderBrush = new SolidColorBrush(color);
         Chrome.BorderThickness = new Thickness(3);
+        var fill = program || preview
+            ? Color.FromArgb(80, color.R, color.G, color.B)
+            : Color.FromRgb(0x33, 0x33, 0x33);
+        CollapsedBody.Background = new SolidColorBrush(fill);
     }
 
     public void SetTransport(bool hasVideo, bool loop, bool playing, bool muted)

@@ -21,10 +21,10 @@
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Click="Snapshot_Click"/>
+                    <Button x:Name="SnapshotButton" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Click="Snapshot_Click"/>
                     <Button Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
                     <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
-                    <Button Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
+                    <Button x:Name="SettingsButton" Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
                     <Button Content="{Binding [chrome.preferences], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Preferences_Click"/>
                 </StackPanel>
             </Grid>
@@ -33,8 +33,7 @@
             <DockPanel>
                 <TextBlock x:Name="ResourceText" DockPanel.Dock="Right" Foreground="{DynamicResource HudForeground}" Margin="16,0,0,0"
                            Cursor="Hand" MouseLeftButtonUp="ResourceHud_MouseUp"/>
-                <TextBlock x:Name="WarnText" DockPanel.Dock="Right" Foreground="{DynamicResource WarnForeground}" Margin="0,0,12,0"/>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel x:Name="MixUnitBar" DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="{Binding [chrome.mixingUnit], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox x:Name="UnitBox" Width="280" SelectionChanged="UnitBox_SelectionChanged"/>
                     <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="AddUnit_Click"/>
@@ -42,9 +41,12 @@
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
                 </StackPanel>
+                <TextBlock x:Name="WarnText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                           Foreground="{DynamicResource WarnForeground}" Margin="12,0,12,0"/>
             </DockPanel>
         </Border>
         <Grid>
+            <Grid x:Name="WorkspaceRoot">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" MinHeight="200"/>
                 <RowDefinition Height="140" MinHeight="80"/>
@@ -167,7 +169,7 @@
                             </Grid.ColumnDefinitions>
                             <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Height="32" Click="AddInput_Click"/>
                             <Button Grid.Column="2" Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Height="32" Click="EditInput_Click"/>
-                            <Button Grid.Column="4" Content="{Binding [chrome.previewInput], Source={x:Static i18n:Loc.Source}}" Height="32" Click="PreviewInput_Click"/>
+                            <Button x:Name="PreviewInputButton" Grid.Column="4" Content="{Binding [chrome.previewInput], Source={x:Static i18n:Loc.Source}}" Height="32" Click="PreviewInput_Click"/>
                             <Button Grid.Column="6" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Height="32" Click="SnapshotInput_Click"/>
                             <Button Grid.Column="8" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Height="32" Click="RemoveInput_Click"/>
                         </Grid>
@@ -228,6 +230,11 @@
                         </ScrollViewer>
                     </Grid>
                 </DockPanel>
+            </Border>
+        </Grid>
+            <Border x:Name="RemoteIdleOverlay" Background="{DynamicResource WindowBackground}" Visibility="Collapsed">
+                <TextBlock x:Name="RemoteIdleText" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Foreground="{DynamicResource DimForeground}"/>
             </Border>
         </Grid>
     </DockPanel>

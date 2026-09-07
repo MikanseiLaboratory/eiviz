@@ -46,8 +46,8 @@ enum Cmd {
     Run {
         #[arg(long)]
         session: PathBuf,
-        #[arg(long, default_value = "127.0.0.1:9400")]
-        bind: String,
+        #[arg(long)]
+        bind: Option<String>,
         #[arg(
             long,
             env = "EIVIZ_MEDIA_DIRECTORY",
@@ -104,7 +104,7 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
     Ok(())
 }
 
-fn run_daemon(session: PathBuf, bind: String, media_directory: Option<PathBuf>) -> Result<(), u8> {
+fn run_daemon(session: PathBuf, bind: Option<String>, media_directory: Option<PathBuf>) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
         let _ = (session, bind, media_directory);
@@ -120,15 +120,35 @@ fn run_daemon(session: PathBuf, bind: String, media_directory: Option<PathBuf>) 
 #[cfg(feature = "runtime")]
 fn run_daemon_runtime(
     session: PathBuf,
-    bind: String,
+    bind: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
+    let prefs = eiviz_headless::HeadlessPrefs::load();
+    let bind = bind
+        .or(prefs.bind.clone())
+        .unwrap_or_else(|| "127.0.0.1:9400".into());
+    let media_directory = media_directory.or_else(|| {
+        prefs
+            .media_directory
+            .as_ref()
+            .map(PathBuf::from)
+    });
     let document = load_valid(&session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
         EXIT_BIND
     })?;
-    let auth = AuthConfig::from_env();
+    let mut auth = AuthConfig::from_env();
+    if auth.token.is_empty() {
+        if let Some(token) = prefs.token.clone().filter(|value| !value.is_empty()) {
+            auth.token = token;
+            auth.require_auth = true;
+            auth.max_role = eiviz_api::Role::Admin;
+        }
+    }
+    if let Some(role) = prefs.max_role.as_deref() {
+        auth.max_role = eiviz_api::Role::from_name(role);
+    }
     if !ws_addr.ip().is_loopback() && !auth.require_auth {
         eprintln!("eiviz-headless error=bind remote bind requires authentication");
         return Err(EXIT_BIND);
