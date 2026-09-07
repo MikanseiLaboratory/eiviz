@@ -1079,7 +1079,10 @@ mod tests {
             let doc = svc.document().unwrap();
             assert_eq!(doc.outputs.len(), 2);
             assert_eq!(doc.outputs[0].name, "eiviz-pgm");
-            assert_eq!(doc.outputs[1].source_kind, crate::session::OutputSourceKind::MuPreview);
+            assert_eq!(
+                doc.outputs[1].source_kind,
+                crate::session::OutputSourceKind::MuPreview
+            );
             assert_eq!(doc.next_output_id, 102);
         });
     }

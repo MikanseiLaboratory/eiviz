@@ -160,7 +160,11 @@ impl Command {
 /// Collaborative document edit. Applied against a staged clone, then replaced
 /// through the same reconcile path as `ReplaceSession`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SessionMutation {
     UpsertInput {
         input: Box<InputDto>,
