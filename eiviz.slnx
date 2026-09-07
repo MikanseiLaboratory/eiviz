@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/hosts/win32/">
     <Project Path="hosts/win32/Eiviz.Host.csproj" />
+    <Project Path="hosts/win32/Eiviz.Remote.csproj" />
   </Folder>
 </Solution>

@@ -120,6 +120,20 @@ jobs:
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Host.exe")) {
             throw "Published output is missing Eiviz.Host.exe"
           }
+          dotnet publish hosts\win32\Eiviz.Remote.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o "${{ github.workspace }}\publish\win-x64-remote" `
+            -p:Version=${{ needs.meta.outputs.base }} `
+            -p:InformationalVersion=${{ needs.meta.outputs.version }}
+          foreach ($name in @("Eiviz.Remote.exe", "Eiviz.Remote.dll", "Eiviz.Remote.deps.json", "Eiviz.Remote.runtimeconfig.json")) {
+            $src = Join-Path "${{ github.workspace }}\publish\win-x64-remote" $name
+            if (-not (Test-Path $src)) {
+              throw "Published Remote output is missing $name"
+            }
+            Copy-Item $src "${{ github.workspace }}\publish\win-x64\"
+          }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Remote.exe")) {
             throw "Published output is missing Eiviz.Remote.exe"
           }
@@ -227,6 +241,7 @@ jobs:
           BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
+          cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
           cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
           cp target/release/eiviz-headless "$STAGING/"
@@ -240,6 +255,7 @@ jobs:
           fi
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
@@ -250,6 +266,7 @@ jobs:
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
@@ -333,6 +350,7 @@ jobs:
           BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
+          cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
           cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
@@ -346,6 +364,7 @@ jobs:
           fi
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
@@ -356,6 +375,7 @@ jobs:
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'

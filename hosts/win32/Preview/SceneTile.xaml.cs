@@ -38,13 +38,11 @@ public partial class SceneTile : UserControl
         CollapsedTitle.Text = scene.Name;
         Number.Text = number.ToString();
         CollapsedNumber.Text = number.ToString();
-        if (scene.PreviewCollapsed)
-            Monitor.SetWanted(false);
         Monitor.SetWanted(false);
-        if (Application.Current is App { Backend.CanShowSceneThumbs: false })
+        ApplyCollapsed();
+        if (HostRole.IsRemote || Application.Current is App { Backend.CanShowSceneThumbs: false })
             return;
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
-        ApplyCollapsed();
     }
 
     public void SetPresentInterval(uint presentInterval) =>
@@ -87,7 +85,7 @@ public partial class SceneTile : UserControl
 
     public void ApplyCollapsed()
     {
-        var collapsed = Scene?.PreviewCollapsed == true;
+        var collapsed = HostRole.IsRemote || Scene?.PreviewCollapsed == true;
         Width = collapsed ? 40 : 176;
         Height = 140;
         ExpandedBody.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
@@ -100,6 +98,8 @@ public partial class SceneTile : UserControl
 
     private void Chrome_RightClick(object sender, MouseButtonEventArgs e)
     {
+        if (HostRole.IsRemote)
+            return;
         if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null)
             return;
         if (Scene is not { } scene)

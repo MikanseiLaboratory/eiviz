@@ -316,9 +316,12 @@ pub enum InputKind {
     Black,
     Still,
     Video,
-    Omt,
-    Ndi,
-    Uvc,
+    #[serde(rename = "OMT", alias = "Omt")]
+    OMT,
+    #[serde(rename = "NDI", alias = "Ndi")]
+    NDI,
+    #[serde(rename = "UVC", alias = "Uvc")]
+    UVC,
     Mix,
 }
 
@@ -1280,7 +1283,7 @@ mod tests {
   "version": 2,
   "inputTags": ["Cameras", "VTR"],
   "sceneTags": ["Open"],
-  "inputs": [{ "id": 10, "name": "Cam 1", "kind": "Ndi", "tags": ["Cameras"] }],
+  "inputs": [{ "id": 10, "name": "Cam 1", "kind": "NDI", "tags": ["Cameras"] }],
   "scenes": [{ "id": 1, "name": "Scene 1", "tags": ["Open"], "previewCollapsed": true }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap();

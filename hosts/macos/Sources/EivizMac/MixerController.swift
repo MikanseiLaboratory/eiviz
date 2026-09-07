@@ -8,6 +8,21 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct RemoteVideoItem: Hashable {
+    var transport: OutputTransport
+    var address: String
+    var label: String
+
+    static func == (lhs: RemoteVideoItem, rhs: RemoteVideoItem) -> Bool {
+        lhs.transport == rhs.transport && lhs.address == rhs.address
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(transport)
+        hasher.combine(address)
+    }
+}
+
 @MainActor
 final class MixerController: ObservableObject {
     @Published var session = MixerSessionData.default()
@@ -39,6 +54,7 @@ final class MixerController: ObservableObject {
     @Published var showMultiviewSlots = false
     @Published var showResources = false
     @Published var showLogs = false
+    @Published var showConnect = false
     @Published var editingUnit: MixingUnitEntry?
     @Published var editingScene: SceneEntry?
     @Published var openMultiview: MultiviewLayout?
@@ -77,7 +93,7 @@ final class MixerController: ObservableObject {
 
     func boot() {
         guard !booted else { return }
-        isRemote = AppPrefs.isRemoteProcess
+        isRemote = HostRole.isRemote
         guard mixer_ping() == 0x4549_5649 else {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
@@ -127,24 +143,33 @@ final class MixerController: ObservableObject {
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
         FlipBudget.configure(0)
         GpuPresentStore.load()
-        let url = AppPrefs.shared.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let endpoint = url.isEmpty ? "ws://127.0.0.1:9400" : url
-        let token = KeychainStore.load(account: endpoint)
+        startTimers()
+        booted = true
+        status = L10n.t("msg.remoteIdle")
+        updateStatus()
+    }
+
+    func connectRemote(url: String, token: String) {
+        let endpoint = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !endpoint.isEmpty else { return }
+        if remoteHandle != 0 {
+            _ = mixer_remote_close(remoteHandle)
+            remoteHandle = 0
+        }
         let handle = MixerFFI.withCString(endpoint) { urlPtr in
             MixerFFI.withCString(token) { tokenPtr in
                 mixer_remote_open(urlPtr, tokenPtr)
             }
         }
         if handle <= 0 {
-            presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("prefs.connection"))
-            startTimers()
-            booted = true
-            updateStatus()
+            presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("chrome.connect"))
+            status = L10n.t("msg.remoteConnectFailed")
             return
         }
         remoteHandle = handle
-        startTimers()
-        booted = true
+        KeychainStore.save(account: endpoint, token: token)
+        AppPrefs.shared.remoteUrl = endpoint
+        AppPrefs.shared.rememberRemote(endpoint)
         pollRemote(force: true)
         bumpSurfaceEpoch()
         updateStatus()
@@ -305,6 +330,8 @@ final class MixerController: ObservableObject {
         for id in remoteReceiveIds.values {
             _ = mixer_destroy_source(id)
         }
+        _ = mixer_destroy_source(MixerRemote.previewSourceId)
+        _ = mixer_destroy_source(MixerRemote.programSourceId)
         remoteReceiveIds.removeAll()
         guard booted else { return }
         mixer_destroy()
@@ -2023,11 +2050,11 @@ final class MixerController: ObservableObject {
         guard isRemote else {
             return .unit(unitId: unit, kind: kind)
         }
-        if kind == EIVIZ_OUTPUT_PREVIEW, let source = remotePublishedSource(.muPreview, unitId: unit) {
-            return .monitor(monitorId: MixerRemote.previewMonitor ^ (unit << 8), sourceId: source)
+        if kind == EIVIZ_OUTPUT_PREVIEW, !selectedRemoteVideo(preview: true).address.isEmpty {
+            return .monitor(monitorId: MixerRemote.previewMonitor ^ (unit << 8), sourceId: MixerRemote.previewSourceId)
         }
-        if kind == EIVIZ_OUTPUT_PROGRAM, let source = remotePublishedSource(.muProgram, unitId: unit) {
-            return .monitor(monitorId: MixerRemote.programMonitor ^ (unit << 8), sourceId: source)
+        if kind == EIVIZ_OUTPUT_PROGRAM, !selectedRemoteVideo(preview: false).address.isEmpty {
+            return .monitor(monitorId: MixerRemote.programMonitor ^ (unit << 8), sourceId: MixerRemote.programSourceId)
         }
         return .monitor(monitorId: 0, sourceId: 0)
     }
@@ -2082,7 +2109,7 @@ final class MixerController: ObservableObject {
 
     private func pollRemote(force: Bool = false) {
         guard remoteHandle != 0 else {
-            status = L10n.t("msg.remoteConnectFailed")
+            status = L10n.t("msg.remoteIdle")
             return
         }
         let statusJson = MixerRemote.status(remoteHandle)
@@ -2157,10 +2184,10 @@ final class MixerController: ObservableObject {
         }
     }
 
-    private func remotePublishedSource(_ kind: OutputSourceKind, unitId: UInt64) -> UInt64? {
+    private func remotePublishedSource(_ kind: OutputSourceKind, unitId: UInt64) -> OutputEntry? {
         let matches = publishedOutputs().filter { $0.sourceKind == kind && $0.unitId == unitId }
-        guard matches.count == 1, let output = matches.first else { return nil }
-        return MixerRemote.sourceBase | output.id
+        guard matches.count == 1 else { return nil }
+        return matches.first
     }
 
     private func remotePublishedMultiview(_ layoutGpuId: UInt64) -> UInt64? {
@@ -2169,8 +2196,59 @@ final class MixerController: ObservableObject {
         return MixerRemote.sourceBase | output.id
     }
 
+    func remoteVideoItems() -> [RemoteVideoItem] {
+        var items = [RemoteVideoItem(transport: .omt, address: "", label: L10n.t("chrome.videoNone"))]
+        var seen = Set<String>()
+        func add(_ transport: OutputTransport, _ address: String) {
+            let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = "\(transport.rawValue):\(trimmed)"
+            guard seen.insert(key).inserted else { return }
+            let prefix = transport == .ndi ? "NDI" : "OMT"
+            items.append(RemoteVideoItem(transport: transport, address: trimmed, label: "\(prefix)  \(trimmed)"))
+        }
+        for line in MixerFFI.discover({ mixer_omt_discover($0, $1) }) { add(.omt, line) }
+        for line in MixerFFI.discover({ mixer_ndi_discover($0, $1) }) { add(.ndi, line) }
+        for output in session.outputs where output.enabled && (output.transport == .omt || output.transport == .ndi) {
+            add(output.transport, output.name)
+        }
+        return items
+    }
+
+    func selectedRemoteVideo(preview: Bool) -> RemoteVideoItem {
+        let prefs = AppPrefs.shared
+        let address = (preview ? prefs.previewVideoAddress : prefs.programVideoAddress)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = preview ? prefs.previewVideoTransport : prefs.programVideoTransport
+        let transport: OutputTransport = raw.uppercased() == "NDI" ? .ndi : .omt
+        if !address.isEmpty {
+            let prefix = transport == .ndi ? "NDI" : "OMT"
+            return RemoteVideoItem(transport: transport, address: address, label: "\(prefix)  \(address)")
+        }
+        if let output = remotePublishedSource(preview ? .muPreview : .muProgram, unitId: selectedUnitId) {
+            let prefix = output.transport == .ndi ? "NDI" : "OMT"
+            return RemoteVideoItem(transport: output.transport, address: output.name, label: "\(prefix)  \(output.name)")
+        }
+        return RemoteVideoItem(transport: .omt, address: "", label: L10n.t("chrome.videoNone"))
+    }
+
+    func setRemoteVideo(preview: Bool, item: RemoteVideoItem) {
+        if preview {
+            AppPrefs.shared.previewVideoAddress = item.address
+            AppPrefs.shared.previewVideoTransport = item.transport == .ndi ? "NDI" : "OMT"
+        } else {
+            AppPrefs.shared.programVideoAddress = item.address
+            AppPrefs.shared.programVideoTransport = item.transport == .ndi ? "NDI" : "OMT"
+        }
+        AppPrefs.shared.save()
+        syncPublishedVideo()
+        bumpSurfaceEpoch()
+    }
+
     private func syncPublishedVideo() {
-        let outputs = publishedOutputs()
+        let previewOk = connectRemoteChoice(MixerRemote.previewSourceId, selectedRemoteVideo(preview: true))
+        let programOk = connectRemoteChoice(MixerRemote.programSourceId, selectedRemoteVideo(preview: false))
+        let outputs = publishedOutputs().filter { $0.sourceKind == .multiview }
         var keep: [UInt64: UInt64] = [:]
         for output in outputs {
             let id = MixerRemote.sourceBase | output.id
@@ -2178,13 +2256,7 @@ final class MixerController: ObservableObject {
             if remoteReceiveIds[output.id] == id {
                 continue
             }
-            let code: Int32
-            if output.transport == .ndi {
-                code = MixerFFI.withCString(output.name) { mixer_ndi_connect(id, $0, 3, 0) }
-            } else {
-                code = MixerFFI.withCString(output.name) { mixer_omt_connect(id, $0, 1, 3, 0) }
-            }
-            if code == 0 {
+            if connectRemoteChoice(id, RemoteVideoItem(transport: output.transport, address: output.name, label: output.name)) {
                 remoteReceiveIds[output.id] = id
             }
         }
@@ -2192,15 +2264,25 @@ final class MixerController: ObservableObject {
             _ = mixer_destroy_source(sourceId)
             remoteReceiveIds.removeValue(forKey: outputId)
         }
-        let unit = selectedUnitId
-        let previewOk = publishedOutputs().filter { $0.sourceKind == .muPreview && $0.unitId == unit }.count == 1
-        let programOk = publishedOutputs().filter { $0.sourceKind == .muProgram && $0.unitId == unit }.count == 1
         videoUnavailable = !previewOk || !programOk
         if videoUnavailable {
             warnText = L10n.t("msg.videoUnavailable")
         } else if warnText == L10n.t("msg.videoUnavailable") {
             warnText = ""
         }
+    }
+
+    @discardableResult
+    private func connectRemoteChoice(_ id: UInt64, _ item: RemoteVideoItem) -> Bool {
+        _ = mixer_destroy_source(id)
+        guard !item.address.isEmpty else { return false }
+        let code: Int32
+        if item.transport == .ndi {
+            code = MixerFFI.withCString(item.address) { mixer_ndi_connect(id, $0, 3, 0) }
+        } else {
+            code = MixerFFI.withCString(item.address) { mixer_omt_connect(id, $0, 1, 3, 0) }
+        }
+        return code == 0
     }
 
     @discardableResult

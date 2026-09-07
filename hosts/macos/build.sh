@@ -55,7 +55,10 @@ if [ -f "$EIVIZ_MIXER_LIBDIR/libndi.6.dylib" ]; then
 fi
 chmod +x "$ROOT/hosts/macos/relocate-dylib.sh" "$ROOT/hosts/macos/package-app.sh"
 "$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
+"$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/package-app.sh" "$BIN"
 echo "eiviz-mac -> $BIN/eiviz-mac"
-file "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
+echo "eiviz-remote -> $BIN/eiviz-remote"
+file "$BIN/eiviz-mac" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 otool -L "$BIN/eiviz-mac"
+otool -L "$BIN/eiviz-remote"

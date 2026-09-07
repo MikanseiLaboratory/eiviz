@@ -14,9 +14,10 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="{Binding [chrome.new], Source={x:Static i18n:Loc.Source}}" Width="64" Click="NewSession_Click"/>
-                    <Button Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
-                    <Button Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
+                    <Button x:Name="NewSessionButton" Content="{Binding [chrome.new], Source={x:Static i18n:Loc.Source}}" Width="64" Click="NewSession_Click"/>
+                    <Button x:Name="SaveSessionButton" Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
+                    <Button x:Name="LoadSessionButton" Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
+                    <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
@@ -65,7 +66,11 @@
                     <Border x:Name="PreviewFrame" BorderBrush="#00FF00" BorderThickness="2" Background="{DynamicResource VideoSurface}">
                         <DockPanel>
                             <Border x:Name="PreviewHeader" DockPanel.Dock="Top" Background="#00FF00" Padding="8,4">
-                                <TextBlock x:Name="PreviewHeaderText" Text="{Binding [chrome.preview], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" Foreground="#111"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="PreviewSourceBox" DockPanel.Dock="Right" Width="220" Height="22"
+                                              Visibility="Collapsed" SelectionChanged="PreviewSource_SelectionChanged"/>
+                                    <TextBlock x:Name="PreviewHeaderText" Text="{Binding [chrome.preview], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" Foreground="#111" VerticalAlignment="Center"/>
+                                </DockPanel>
                             </Border>
                             <preview:SwapchainHost x:Name="PreviewHost" OutputKind="1" UnitId="1"/>
                         </DockPanel>
@@ -104,7 +109,11 @@
                     <Border x:Name="ProgramFrame" BorderBrush="#FF0000" BorderThickness="2" Background="{DynamicResource VideoSurface}">
                         <DockPanel>
                             <Border x:Name="ProgramHeader" DockPanel.Dock="Top" Background="#FF0000" Padding="8,4">
-                                <TextBlock x:Name="ProgramHeaderText" Text="{Binding [chrome.program], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="ProgramSourceBox" DockPanel.Dock="Right" Width="220" Height="22"
+                                              Visibility="Collapsed" SelectionChanged="ProgramSource_SelectionChanged"/>
+                                    <TextBlock x:Name="ProgramHeaderText" Text="{Binding [chrome.program], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
+                                </DockPanel>
                             </Border>
                             <preview:SwapchainHost x:Name="ProgramHost" OutputKind="0" UnitId="1"/>
                         </DockPanel>

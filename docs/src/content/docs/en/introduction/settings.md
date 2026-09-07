@@ -142,7 +142,7 @@ Dark, Light, or Follow OS.
 
 ### Connection
 
-`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Steps and video handling are in [Remote connection](/eiviz/en/features/remote/).
+`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Remote connects from the Connect button in the top left. Steps and video handling are in [Remote connection](/eiviz/en/features/remote/).
 
 ### API listen (host)
 

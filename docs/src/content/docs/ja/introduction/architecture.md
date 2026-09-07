@@ -15,7 +15,7 @@ eivizの映像合成はMixerを1プロセスとして動かします。
 
 外部からの制御はMixer内の`ControlService`が担当しています。vMix互換HTTP（既定8088）、vMix互換TCP（8099）、Protobuf WebSocket（既定9400）は同じ経路を通ってディスパッチャーへ入ります。  
 
-Windows/macOSは`Eiviz.Remote.exe`/`eiviz-remote.app`としても起動できます。クライアントは受信用のMixerと`eiviz_remote`を読み、操作は接続先の`ControlService`へ送ります。プロトコルは[eiviz API](/eiviz/ja/developers/api/)をご確認ください。
+Windowsは`Eiviz.Host.exe`、macOSは`eiviz-mac.app`がMixerです。操作クライアントは`Eiviz.Remote.exe`/`eiviz-remote.app`です。クライアントは受信用のMixerと`eiviz_remote`を読み、操作は接続先の`ControlService`へ送ります。プロトコルは[eiviz API](/eiviz/ja/developers/api/)をご確認ください。
 
 ```mermaid
 flowchart TB

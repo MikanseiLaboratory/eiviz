@@ -12,7 +12,7 @@ public partial class App : Application
 {
     internal Session Session { get; set; } = null!;
     internal IEivizBackend Backend { get; private set; } = null!;
-    internal static bool IsRemote => Current is App app && app.Backend.IsRemote;
+    internal static bool IsRemote => HostRole.IsRemote;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -32,8 +32,8 @@ public partial class App : Application
             if (MixerNative.Ping() != 0x4549_5649)
                 throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
             Session = Session.Default();
-            if (HostProcess.IsRemote)
-                BootRemote();
+            if (HostRole.IsRemote)
+                BootRemoteMixer();
             else
             {
                 Backend = new LocalEivizBackend();
@@ -61,8 +61,8 @@ public partial class App : Application
             MixerNative.DestroyUnit(unit.Id);
         MixerNative.Destroy();
         Session = session;
-        if (HostProcess.IsRemote)
-            BootRemote();
+        if (HostRole.IsRemote)
+            BootRemoteMixer();
         else
         {
             Backend = new LocalEivizBackend();
@@ -120,7 +120,7 @@ public partial class App : Application
         SessionStore.Publish(Session);
     }
 
-    private void BootRemote()
+    private void BootRemoteMixer()
     {
         MixerNative.ThrowIfFailed(
             MixerNative.CreateWithBackend(
@@ -131,20 +131,29 @@ public partial class App : Application
             "GPU mixer initialization");
         MixerNative.DefineGenerator(MixerNative.Black, MixerNative.GenSolid, 0, 0, 0, 1, 0);
         FlipBudget.Configure(0);
-        var url = string.IsNullOrWhiteSpace(AppPrefs.Current.RemoteUrl)
-            ? "ws://127.0.0.1:9400"
-            : AppPrefs.Current.RemoteUrl.Trim();
+        Backend = new DisconnectedRemoteBackend();
+    }
+
+    internal bool TryConnectRemote(string url, string token, out string error)
+    {
+        var endpoint = url.Trim();
         try
         {
-            Backend = RemoteEivizBackend.Open(url, CredentialStore.Load(url));
+            var next = RemoteEivizBackend.Open(endpoint, token ?? "");
+            Backend?.Dispose();
+            Backend = next;
+            CredentialStore.Save(endpoint, token ?? "");
+            AppPrefs.Current.RemoteUrl = endpoint;
+            AppPrefs.Current.RememberRemote(endpoint);
+            error = "";
+            return true;
         }
         catch (Exception ex)
         {
             HostLog.Write("ERROR", ex.Message);
-            Dispatcher.BeginInvoke(
-                () => MessageBox.Show(ex.Message, Loc.T("msg.remoteConnectFailed")),
-                DispatcherPriority.ApplicationIdle);
-            Backend = new DisconnectedRemoteBackend();
+            error = ex.Message;
+            Backend ??= new DisconnectedRemoteBackend();
+            return false;
         }
     }
 
@@ -326,10 +335,10 @@ public partial class App : Application
                         input.VideoStartsPlaying,
                         input.FrameBufferFrames);
                     break;
-                case InputKind.Uvc when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                case InputKind.UVC when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
                     break;
-                case InputKind.Omt when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                case InputKind.OMT when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectOmt(
                         input.Id,
                         input.PathOrAddress,
@@ -339,7 +348,7 @@ public partial class App : Application
                         input.KeepFullOnMultiview,
                         input.OmtQuality);
                     break;
-                case InputKind.Ndi when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                case InputKind.NDI when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectNdi(
                         input.Id,
                         input.PathOrAddress,

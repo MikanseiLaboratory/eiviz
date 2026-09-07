@@ -54,7 +54,7 @@ internal static class MutationJson
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        Converters = { new InputKindJsonConverter(), new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
     public static string SetSceneLayers(ulong sceneId, IEnumerable<SceneLayer> layers) =>
@@ -379,6 +379,8 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public bool CanShowSceneThumbs => false;
     public ulong Revision { get; private set; }
     public string StatusText => _status;
+    public bool RemotePreviewOk => _presenter.PreviewOk;
+    public bool RemoteProgramOk => _presenter.ProgramOk;
     public event Action? Changed;
 
     public static RemoteEivizBackend Open(string url, string token)
@@ -526,7 +528,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         Application.Current is App app ? HostPresentation.From(app.Session) : [];
 
     public void BindPreviewProgram(SwapchainHost preview, SwapchainHost program, ulong unitId) =>
-        _presenter.Bind(preview, program, unitId, PublishedOutputs());
+        _presenter.Bind(preview, program, RemoteVideoCatalog.FromPrefs(true), RemoteVideoCatalog.FromPrefs(false));
 
     public void BindMultiview(SwapchainHost host, MultiviewLayout layout) =>
         _presenter.BindMultiview(host, layout, PublishedOutputs());
@@ -551,25 +553,42 @@ internal static class HostPresentation
 
 internal sealed class RemoteVideoPresenter
 {
-    private const ulong SourceBase = 0x0005_0000;
+    private const ulong PreviewSourceId = 0x0005_0001;
+    private const ulong ProgramSourceId = 0x0005_0002;
     private const ulong PreviewMonitor = 0x0006_0001;
     private const ulong ProgramMonitor = 0x0006_0002;
     private const ulong MultiviewMonitor = 0x0006_0003;
+    private const ulong MultiviewSourceBase = 0x0005_0100;
     private readonly HashSet<ulong> _connected = [];
+    public bool PreviewOk { get; private set; }
+    public bool ProgramOk { get; private set; }
 
-    public void Sync(IReadOnlyList<PublishedVideoOutput> outputs)
+    public void Bind(SwapchainHost preview, SwapchainHost program, RemoteVideoChoice previewChoice, RemoteVideoChoice programChoice)
     {
-        var keep = new HashSet<ulong>();
-        foreach (var output in outputs)
+        PreviewOk = Connect(PreviewSourceId, previewChoice);
+        ProgramOk = Connect(ProgramSourceId, programChoice);
+        BindOne(preview, PreviewMonitor, PreviewOk ? PreviewSourceId : null);
+        BindOne(program, ProgramMonitor, ProgramOk ? ProgramSourceId : null);
+    }
+
+    public void BindMultiview(SwapchainHost host, MultiviewLayout layout, IReadOnlyList<PublishedVideoOutput> outputs)
+    {
+        SyncMultiview(outputs);
+        BindOne(host, MultiviewMonitor | (layout.Id << 8), SourceForMultiview(outputs, layout.GpuId));
+    }
+
+    public void Sync(IReadOnlyList<PublishedVideoOutput> outputs) => SyncMultiview(outputs);
+
+    private void SyncMultiview(IReadOnlyList<PublishedVideoOutput> outputs)
+    {
+        var keep = new HashSet<ulong> { PreviewSourceId, ProgramSourceId };
+        foreach (var output in outputs.Where(item => item.SourceKind == OutputSourceKind.Multiview))
         {
-            var id = SourceBase | output.Id;
+            var id = MultiviewSourceBase | output.Id;
             keep.Add(id);
             if (_connected.Contains(id))
                 continue;
-            var code = output.Transport == OutputTransport.Ndi
-                ? MixerNative.ConnectNdi(id, output.Name, 3, 0)
-                : MixerNative.ConnectOmt(id, output.Name, 1, 3, 0);
-            if (code == 0)
+            if (Connect(id, new RemoteVideoChoice(output.Transport, output.Name)))
                 _connected.Add(id);
         }
         foreach (var id in _connected.ToArray())
@@ -581,33 +600,27 @@ internal sealed class RemoteVideoPresenter
         }
     }
 
-    public void Bind(SwapchainHost preview, SwapchainHost program, ulong unitId, IReadOnlyList<PublishedVideoOutput> outputs)
-    {
-        Sync(outputs);
-        BindOne(preview, PreviewMonitor, SourceFor(outputs, OutputSourceKind.MuPreview, unitId));
-        BindOne(program, ProgramMonitor, SourceFor(outputs, OutputSourceKind.MuProgram, unitId));
-    }
-
-    public void BindMultiview(SwapchainHost host, MultiviewLayout layout, IReadOnlyList<PublishedVideoOutput> outputs)
-    {
-        Sync(outputs);
-        BindOne(host, MultiviewMonitor | (layout.Id << 8), SourceForMultiview(outputs, layout.GpuId));
-    }
-
-    private static ulong? SourceFor(IReadOnlyList<PublishedVideoOutput> outputs, OutputSourceKind kind, ulong unitId)
-    {
-        var matches = outputs.Where(item => item.SourceKind == kind && item.UnitId == unitId).ToList();
-        if (matches.Count != 1)
-            return null;
-        return SourceBase | matches[0].Id;
-    }
-
     private static ulong? SourceForMultiview(IReadOnlyList<PublishedVideoOutput> outputs, ulong layoutGpuId)
     {
         var matches = outputs.Where(item => item.SourceKind == OutputSourceKind.Multiview && item.SourceId == layoutGpuId).ToList();
         if (matches.Count != 1)
             return null;
-        return SourceBase | matches[0].Id;
+        return MultiviewSourceBase | matches[0].Id;
+    }
+
+    private bool Connect(ulong id, RemoteVideoChoice choice)
+    {
+        MixerNative.DestroySource(id);
+        _connected.Remove(id);
+        if (choice.IsEmpty)
+            return false;
+        var code = choice.Transport == OutputTransport.Ndi
+            ? MixerNative.ConnectNdi(id, choice.Address, 3, 0)
+            : MixerNative.ConnectOmt(id, choice.Address, 1, 3, 0);
+        if (code != 0)
+            return false;
+        _connected.Add(id);
+        return true;
     }
 
     private void BindOne(SwapchainHost host, ulong monitorId, ulong? sourceId)
@@ -616,7 +629,6 @@ internal sealed class RemoteVideoPresenter
             host.RetargetMonitor(monitorId, id);
         else
         {
-            // Keep the HWND swapchain in monitor mode so Unavailable can paint.
             host.ReleaseNative();
             host.IsMonitor = true;
             host.MonitorId = 0;
@@ -625,13 +637,107 @@ internal sealed class RemoteVideoPresenter
     }
 }
 
+internal readonly record struct RemoteVideoChoice(OutputTransport Transport, string Address)
+{
+    public bool IsEmpty => string.IsNullOrWhiteSpace(Address);
+}
+
+internal sealed class RemoteVideoItem
+{
+    public required RemoteVideoChoice Choice { get; init; }
+    public required string Label { get; init; }
+    public override string ToString() => Label;
+}
+
+internal static class RemoteVideoCatalog
+{
+    public static List<RemoteVideoItem> List(Session session)
+    {
+        var items = new List<RemoteVideoItem>
+        {
+            new() { Choice = new RemoteVideoChoice(OutputTransport.Omt, ""), Label = I18n.Loc.T("chrome.videoNone") }
+        };
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        void Add(OutputTransport transport, string address)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                return;
+            var key = $"{transport}:{address}";
+            if (!seen.Add(key))
+                return;
+            var prefix = transport == OutputTransport.Ndi ? "NDI" : "OMT";
+            items.Add(new RemoteVideoItem
+            {
+                Choice = new RemoteVideoChoice(transport, address),
+                Label = $"{prefix}  {address}"
+            });
+        }
+        foreach (var line in Split(MixerNative.DiscoverText()))
+            Add(OutputTransport.Omt, line);
+        foreach (var line in Split(MixerNative.DiscoverNdiText()))
+            Add(OutputTransport.Ndi, line);
+        foreach (var output in session.Outputs.Where(item =>
+                     item.Enabled && item.Transport is OutputTransport.Omt or OutputTransport.Ndi))
+            Add(output.Transport, output.Name);
+        return items;
+    }
+
+    public static RemoteVideoChoice FromPrefs(bool preview)
+    {
+        var prefs = AppPrefs.Current;
+        var address = preview ? prefs.PreviewVideoAddress : prefs.ProgramVideoAddress;
+        var transport = ParseTransport(preview ? prefs.PreviewVideoTransport : prefs.ProgramVideoTransport);
+        if (!string.IsNullOrWhiteSpace(address))
+            return new RemoteVideoChoice(transport, address);
+        return UniqueOutput(preview ? OutputSourceKind.MuPreview : OutputSourceKind.MuProgram);
+    }
+
+    public static void Save(bool preview, RemoteVideoChoice choice)
+    {
+        var name = choice.Transport == OutputTransport.Ndi ? "NDI" : "OMT";
+        if (preview)
+        {
+            AppPrefs.Current.PreviewVideoAddress = choice.Address;
+            AppPrefs.Current.PreviewVideoTransport = name;
+        }
+        else
+        {
+            AppPrefs.Current.ProgramVideoAddress = choice.Address;
+            AppPrefs.Current.ProgramVideoTransport = name;
+        }
+        AppPrefs.Current.Save();
+    }
+
+    public static OutputTransport ParseTransport(string? value) =>
+        string.Equals(value, "NDI", StringComparison.OrdinalIgnoreCase)
+            ? OutputTransport.Ndi
+            : OutputTransport.Omt;
+
+    private static RemoteVideoChoice UniqueOutput(OutputSourceKind kind)
+    {
+        if (Application.Current is not App app)
+            return new RemoteVideoChoice(OutputTransport.Omt, "");
+        var matches = HostPresentation.From(app.Session)
+            .Where(item => item.SourceKind == kind && item.UnitId == app.Session.SelectedUnitId)
+            .ToList();
+        if (matches.Count != 1)
+            return new RemoteVideoChoice(OutputTransport.Omt, "");
+        return new RemoteVideoChoice(matches[0].Transport, matches[0].Name);
+    }
+
+    private static IEnumerable<string> Split(string text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? []
+            : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+}
+
 internal sealed class DisconnectedRemoteBackend : IEivizBackend
 {
     public bool IsRemote => true;
     public bool CanPreviewInputs => false;
     public bool CanShowSceneThumbs => false;
     public ulong Revision => 0;
-    public string StatusText => I18n.Loc.T("msg.remoteConnectFailed");
+    public string StatusText => I18n.Loc.T("msg.remoteIdle");
     public event Action? Changed { add { } remove { } }
     public void Poll() { }
     public bool Cut(ulong unitId, bool swap) { _ = (unitId, swap); return false; }

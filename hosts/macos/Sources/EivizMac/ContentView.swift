@@ -38,6 +38,7 @@ struct ContentView: View {
         .id("\(prefs.language)-\(prefs.theme)-\(prefs.localeRevision)")
         .sheet(isPresented: $mixer.showSettings) { SettingsView() }
         .sheet(isPresented: $mixer.showPreferences) { PreferencesView() }
+        .sheet(isPresented: $mixer.showConnect) { ConnectView() }
         .sheet(isPresented: $mixer.showAddInput, onDismiss: { mixer.editingInput = nil }) {
             AddInputView(editing: mixer.editingInput)
         }
@@ -65,15 +66,28 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack {
-            Button(L10n.t("chrome.new")) { mixer.newSession() }
-            Button(L10n.t("chrome.save")) { mixer.saveSession() }
-            Button(L10n.t("chrome.load")) { mixer.loadSession() }
-            Menu {
-                ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
-                    Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
+            if mixer.isRemote {
+                Button(L10n.t("chrome.connect")) { mixer.showConnect = true }
+                Menu {
+                    ForEach(AppPrefs.shared.recentRemotes, id: \.self) { url in
+                        Button(url) {
+                            mixer.connectRemote(url: url, token: KeychainStore.load(account: url))
+                        }
+                    }
+                } label: {
+                    Text("▾")
                 }
-            } label: {
-                Text("▾")
+            } else {
+                Button(L10n.t("chrome.new")) { mixer.newSession() }
+                Button(L10n.t("chrome.save")) { mixer.saveSession() }
+                Button(L10n.t("chrome.load")) { mixer.loadSession() }
+                Menu {
+                    ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
+                        Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
+                    }
+                } label: {
+                    Text("▾")
+                }
             }
             Spacer()
             Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
@@ -443,7 +457,7 @@ struct ContentView: View {
             preview: preview,
             program: program,
             selected: mixer.selectedSceneId == scene.id,
-            previewCollapsed: scene.previewCollapsed,
+            previewCollapsed: mixer.isRemote || scene.previewCollapsed,
             interval: mixer.session.settings.resolvedPresentInterval,
             loopOn: video?.videoLoop == true,
             playing: mixer.scenePlaying(scene),
@@ -461,7 +475,7 @@ struct ContentView: View {
             onOpenPreview: { mixer.openInputPreview(inputId: scene.gpuId, name: scene.name) },
             onEdit: { mixer.openSceneEditor(scene) },
             onDelete: { mixer.deleteScene(scene) },
-            onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
+            onCollapse: { if !mixer.isRemote { mixer.toggleSceneCollapsed(scene.id) } },
             onSnapshot: { mixer.snapshotScene(scene) }
         ))
     }
@@ -604,23 +618,32 @@ struct ContentView: View {
     }
 
     private func bus(title: String, color: RgbColor, kind: UInt32) -> some View {
-        VStack(spacing: 0) {
-            Text(title)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(color.headerForeground)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(color.color)
+        let preview = kind == EIVIZ_OUTPUT_PREVIEW
+        return VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(color.headerForeground)
+                if mixer.isRemote {
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { mixer.selectedRemoteVideo(preview: preview) },
+                        set: { mixer.setRemoteVideo(preview: preview, item: $0) }
+                    )) {
+                        ForEach(videoItems(preview: preview), id: \.self) { item in
+                            Text(item.label).tag(item)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(color.color)
             MetalPreviewRepresentable(role: mixer.surfaceRole(kind: kind))
                 .frame(minWidth: 320, minHeight: 180)
-                .overlay {
-                    if mixer.isRemote && mixer.videoUnavailable {
-                        Text(L10n.t("msg.videoUnavailable"))
-                            .multilineTextAlignment(.center)
-                            .padding(8)
-                            .foregroundStyle(EivizTheme.warn)
-                    }
-                }
         }
         .aspectRatio(
             CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
@@ -628,6 +651,15 @@ struct ContentView: View {
         )
         .background(Rectangle().stroke(color.color, lineWidth: 2))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func videoItems(preview: Bool) -> [RemoteVideoItem] {
+        var items = mixer.remoteVideoItems()
+        let selected = mixer.selectedRemoteVideo(preview: preview)
+        if !items.contains(selected) {
+            items.insert(selected, at: min(1, items.count))
+        }
+        return items
     }
 }
 

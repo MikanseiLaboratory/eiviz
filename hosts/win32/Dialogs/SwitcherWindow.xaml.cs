@@ -40,8 +40,13 @@ public partial class SwitcherWindow : Window
             ApplyBusColors();
             RefreshBusTitles();
             RefreshSceneThumbs();
-            PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
-            ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+            if (HostRole.IsRemote && Application.Current.MainWindow is MainWindow main)
+                main.BindPreviewProgramSurfaces(PreviewHost, ProgramHost, unit.Id);
+            else
+            {
+                PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputPreview);
+                ProgramHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+            }
         };
         Closed += (_, _) =>
         {
@@ -193,7 +198,8 @@ public partial class SwitcherWindow : Window
             {
                 thumb.Label.Text = scene.Name;
                 thumb.CollapsedLabel.Text = scene.Name;
-                thumb.Host.Bind(scene.GpuId, 148, 80, interval);
+                if (!HostRole.IsRemote)
+                    thumb.Host.Bind(scene.GpuId, 148, 80, interval);
                 ApplyCollapsed(thumb, scene);
             }
             else
@@ -217,7 +223,8 @@ public partial class SwitcherWindow : Window
     private SceneThumb CreateThumb(SceneEntry scene)
     {
         var host = new ThumbView { Height = 80 };
-        host.Bind(scene.GpuId, 148, 80, Session.Settings.ResolvedPresentInterval());
+        if (!HostRole.IsRemote)
+            host.Bind(scene.GpuId, 148, 80, Session.Settings.ResolvedPresentInterval());
         var label = new TextBlock
         {
             Text = scene.Name,
@@ -271,6 +278,11 @@ public partial class SwitcherWindow : Window
         chrome.Child = root;
         chrome.PreviewMouseRightButtonDown += (_, e) =>
         {
+            if (HostRole.IsRemote)
+            {
+                e.Handled = true;
+                return;
+            }
             scene.PreviewCollapsed = !scene.PreviewCollapsed;
             if (_thumbs.TryGetValue(scene.Id, out var live))
                 ApplyCollapsed(live, scene);
@@ -316,7 +328,7 @@ public partial class SwitcherWindow : Window
 
     private static void ApplyCollapsed(SceneThumb thumb, SceneEntry scene)
     {
-        var collapsed = scene.PreviewCollapsed;
+        var collapsed = HostRole.IsRemote || scene.PreviewCollapsed;
         thumb.Chrome.Width = collapsed ? 32 : 148;
         thumb.Chrome.Height = 104;
         thumb.Expanded.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
@@ -361,7 +373,7 @@ public partial class SwitcherWindow : Window
         {
             if (!_thumbs.TryGetValue(scene.Id, out var thumb))
                 continue;
-            if (scene.PreviewCollapsed)
+            if (HostRole.IsRemote || scene.PreviewCollapsed)
             {
                 thumb.Host.SetWanted(false);
                 continue;

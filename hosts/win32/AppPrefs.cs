@@ -40,8 +40,13 @@ internal sealed class AppPrefs
     public AppThemeMode Theme { get; set; } = AppThemeMode.Dark;
     public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;
     public List<string> RecentSessions { get; set; } = [];
+    public List<string> RecentRemotes { get; set; } = [];
     public List<string> RecentStills { get; set; } = [];
     public List<string> RecentVideos { get; set; } = [];
+    public string PreviewVideoAddress { get; set; } = "";
+    public string PreviewVideoTransport { get; set; } = "OMT";
+    public string ProgramVideoAddress { get; set; } = "";
+    public string ProgramVideoTransport { get; set; } = "OMT";
 
     public static AppPrefs Current { get; private set; } = Load();
 
@@ -49,7 +54,7 @@ internal sealed class AppPrefs
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "eiviz",
-            HostProcess.IsRemote ? "remote-prefs.json" : "prefs.json");
+            HostRole.IsRemote ? "remote-prefs.json" : "prefs.json");
 
     public static string DefaultMediaDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "eiviz", "media");
@@ -68,6 +73,7 @@ internal sealed class AppPrefs
                 if (loaded is not null)
                 {
                     loaded.RecentSessions = Clean(loaded.RecentSessions, RecentCap);
+                    loaded.RecentRemotes = Clean(loaded.RecentRemotes, RecentCap);
                     loaded.RecentStills = Clean(loaded.RecentStills, InputCap);
                     loaded.RecentVideos = Clean(loaded.RecentVideos, InputCap);
                     if (string.IsNullOrWhiteSpace(loaded.MediaDirectory))
@@ -97,6 +103,12 @@ internal sealed class AppPrefs
     public void RememberSession(string path)
     {
         Remember(RecentSessions, path, RecentCap);
+        Save();
+    }
+
+    public void RememberRemote(string url)
+    {
+        Remember(RecentRemotes, url, RecentCap);
         Save();
     }
 

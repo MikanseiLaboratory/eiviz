@@ -632,10 +632,10 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             })
             .into_iter()
             .collect(),
-        InputKind::Video | InputKind::Uvc => vec![ReconcileOp::StartVideo(VideoStartApply {
+        InputKind::Video | InputKind::UVC => vec![ReconcileOp::StartVideo(VideoStartApply {
             id: input.id,
             path: input.path_or_address.clone().unwrap_or_default(),
-            capture: input.kind == InputKind::Uvc,
+            capture: input.kind == InputKind::UVC,
             loop_playback: input.video_loop,
             playing: matches!(
                 input.video_play_when,
@@ -648,8 +648,8 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             frame_buffer_frames: input.frame_buffer_frames,
             position_hns: 0,
         })],
-        InputKind::Omt => vec![ReconcileOp::ConnectOmt(live_connect(input))],
-        InputKind::Ndi => vec![ReconcileOp::ConnectNdi(live_connect(input))],
+        InputKind::OMT => vec![ReconcileOp::ConnectOmt(live_connect(input))],
+        InputKind::NDI => vec![ReconcileOp::ConnectNdi(live_connect(input))],
         InputKind::Mix => vec![ReconcileOp::DefineMixInput(MixInputApply {
             id: input.id,
             target_id: input.mix_target_id,
@@ -671,7 +671,7 @@ fn live_connect(input: &InputDto) -> LiveConnectApply {
         use_gpu: input.use_gpu,
         frame_buffer_frames: input.frame_buffer_frames,
         quality_or_bandwidth: match input.kind {
-            InputKind::Ndi => {
+            InputKind::NDI => {
                 if input.ndi_bandwidth == NdiBandwidth::Lowest {
                     1
                 } else {

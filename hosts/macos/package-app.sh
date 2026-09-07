@@ -12,7 +12,7 @@ assemble() {
   local app="$DIR/${bin}.app"
   rm -rf "$app"
   mkdir -p "$app/Contents/MacOS"
-  cp "$DIR/eiviz-mac" "$app/Contents/MacOS/$bin"
+  cp "$DIR/$bin" "$app/Contents/MacOS/$bin"
   cp "$DIR/libeiviz_mixer.dylib" "$app/Contents/MacOS/"
   cp "$DIR/libeiviz_remote.dylib" "$app/Contents/MacOS/"
   if [ -f "$DIR/libndi.dylib" ]; then

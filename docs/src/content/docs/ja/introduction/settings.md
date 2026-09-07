@@ -143,7 +143,7 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 
 ### 接続
 
-このコンピューターのMixerは`Eiviz.Host.exe`、別のeivizを操作するクライアントは`Eiviz.Remote.exe`です。手順と映像の扱いは[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
+このコンピューターのMixerは`Eiviz.Host.exe`、別のeivizを操作するクライアントは`Eiviz.Remote.exe`です。Remoteは左上のConnectから接続します。手順と映像の扱いは[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
 
 ### API待ち受け（ホスト）
 

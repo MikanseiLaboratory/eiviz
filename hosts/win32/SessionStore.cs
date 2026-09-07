@@ -13,7 +13,7 @@ internal static class SessionStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new InputKindJsonConverter(), new JsonStringEnumConverter() }
     };
 
     public static void Save(Session session, string path)
@@ -468,4 +468,34 @@ internal static class SessionStore
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute
     };
+}
+
+internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
+{
+    public override InputKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.GetString();
+        return text switch
+        {
+            "OMT" or "Omt" or "omt" => InputKind.OMT,
+            "NDI" or "Ndi" or "ndi" => InputKind.NDI,
+            "UVC" or "Uvc" or "uvc" => InputKind.UVC,
+            "Color" or "color" => InputKind.Color,
+            "Bars" or "bars" => InputKind.Bars,
+            "Black" or "black" => InputKind.Black,
+            "Still" or "still" => InputKind.Still,
+            "Video" or "video" => InputKind.Video,
+            "Mix" or "mix" => InputKind.Mix,
+            _ => throw new JsonException($"Unknown InputKind '{text}'.")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, InputKind value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            InputKind.OMT => "OMT",
+            InputKind.NDI => "NDI",
+            InputKind.UVC => "UVC",
+            _ => value.ToString()
+        });
 }

@@ -231,7 +231,7 @@ struct SwitcherView: View {
             programColor: mixer.session.settings.programColor.color,
             inactiveColor: mixer.session.settings.inactiveColor.color,
             onPreview: { mixer.previewScene(scene, unitId: unitId) },
-            onCollapse: { mixer.toggleSceneCollapsed(scene.id) },
+            onCollapse: { if !mixer.isRemote { mixer.toggleSceneCollapsed(scene.id) } },
             onEdit: { mixer.openSceneEditor(scene) }
         )
     }
@@ -254,14 +254,6 @@ struct SwitcherView: View {
                 .background(color.color)
             MetalPreviewRepresentable(role: mixer.surfaceRole(kind: kind, unitId: unitId))
                 .frame(minWidth: 320, minHeight: 180)
-                .overlay {
-                    if mixer.isRemote && mixer.videoUnavailable {
-                        Text(L10n.t("msg.videoUnavailable"))
-                            .multilineTextAlignment(.center)
-                            .padding(8)
-                            .foregroundStyle(EivizTheme.warn)
-                    }
-                }
         }
         .aspectRatio(
             CGFloat(unit.width) / max(1, CGFloat(unit.height)),
@@ -314,9 +306,11 @@ private struct SwitcherSceneThumb: View {
     let onCollapse: () -> Void
     let onEdit: () -> Void
 
+    @EnvironmentObject private var mixer: MixerController
     @State private var appeared = false
 
-    private var wanted: Bool { !scene.previewCollapsed && (preview || program || appeared) }
+    private var collapsed: Bool { mixer.isRemote || scene.previewCollapsed }
+    private var wanted: Bool { !collapsed && (preview || program || appeared) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -329,23 +323,17 @@ private struct SwitcherSceneThumb: View {
                 .background(EivizTheme.chrome)
                 .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
-            if !scene.previewCollapsed {
-                if mixer.isRemote {
-                    Color.black.frame(width: 142, height: 80)
-                        .contentShape(Rectangle())
-                        .onTapGesture(perform: onPreview)
-                } else {
-                    ThumbRepresentable(
-                        sourceId: scene.gpuId,
-                        width: 142,
-                        height: 80,
-                        interval: interval,
-                        wanted: wanted,
-                        onClick: onPreview
-                    )
-                    .frame(width: 142, height: 80)
-                    .background(Color.black)
-                }
+            if !collapsed {
+                ThumbRepresentable(
+                    sourceId: scene.gpuId,
+                    width: 142,
+                    height: 80,
+                    interval: interval,
+                    wanted: wanted,
+                    onClick: onPreview
+                )
+                .frame(width: 142, height: 80)
+                .background(Color.black)
             }
         }
         .frame(width: 148)

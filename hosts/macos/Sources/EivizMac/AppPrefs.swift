@@ -27,10 +27,15 @@ final class AppPrefs: ObservableObject {
     @Published var theme: AppThemeMode
     @Published var renderer: GpuRenderer
     @Published var recentSessions: [String]
+    @Published var recentRemotes: [String]
     @Published var recentStills: [String]
     @Published var recentVideos: [String]
     @Published var connectionMode: HostConnectionMode
     @Published var remoteUrl: String
+    @Published var previewVideoAddress: String
+    @Published var previewVideoTransport: String
+    @Published var programVideoAddress: String
+    @Published var programVideoTransport: String
     @Published var nativeApiEnabled: Bool
     @Published var nativeApiBind: String
     @Published var nativeApiPort: UInt32
@@ -53,15 +58,11 @@ final class AppPrefs: ObservableObject {
     private static var storeURL: URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        let name = isRemoteProcess ? "remote-prefs.json" : "prefs.json"
+        let name = HostRole.isRemote ? "remote-prefs.json" : "prefs.json"
         return root.appendingPathComponent("eiviz", isDirectory: true).appendingPathComponent(name)
     }
 
-    static var isRemoteProcess: Bool {
-        let name = ProcessInfo.processInfo.processName
-        return name.caseInsensitiveCompare("eiviz-remote") == .orderedSame
-            || name.caseInsensitiveCompare("Eiviz.Remote") == .orderedSame
-    }
+    static var isRemoteProcess: Bool { HostRole.isRemote }
 
     private init() {
         let loaded = Self.load()
@@ -69,10 +70,15 @@ final class AppPrefs: ObservableObject {
         theme = loaded.theme
         renderer = loaded.renderer
         recentSessions = loaded.recentSessions
+        recentRemotes = loaded.recentRemotes
         recentStills = loaded.recentStills
         recentVideos = loaded.recentVideos
         connectionMode = loaded.connectionMode
         remoteUrl = loaded.remoteUrl
+        previewVideoAddress = loaded.previewVideoAddress
+        previewVideoTransport = loaded.previewVideoTransport
+        programVideoAddress = loaded.programVideoAddress
+        programVideoTransport = loaded.programVideoTransport
         nativeApiEnabled = loaded.nativeApiEnabled
         nativeApiBind = loaded.nativeApiBind
         nativeApiPort = loaded.nativeApiPort
@@ -86,10 +92,15 @@ final class AppPrefs: ObservableObject {
         dto.theme = theme
         dto.renderer = renderer
         dto.recentSessions = recentSessions
+        dto.recentRemotes = recentRemotes
         dto.recentStills = recentStills
         dto.recentVideos = recentVideos
         dto.connectionMode = connectionMode
         dto.remoteUrl = remoteUrl
+        dto.previewVideoAddress = previewVideoAddress
+        dto.previewVideoTransport = previewVideoTransport
+        dto.programVideoAddress = programVideoAddress
+        dto.programVideoTransport = programVideoTransport
         dto.nativeApiEnabled = nativeApiEnabled
         dto.nativeApiBind = nativeApiBind
         dto.nativeApiPort = nativeApiPort
@@ -103,6 +114,11 @@ final class AppPrefs: ObservableObject {
 
     func rememberSession(_ path: String) {
         recentSessions = remember(recentSessions, path, cap: 12)
+        save()
+    }
+
+    func rememberRemote(_ url: String) {
+        recentRemotes = remember(recentRemotes, url, cap: 12)
         save()
     }
 
@@ -146,10 +162,15 @@ final class AppPrefs: ObservableObject {
         var theme: AppThemeMode = .dark
         var renderer: GpuRenderer = .auto
         var recentSessions: [String] = []
+        var recentRemotes: [String] = []
         var recentStills: [String] = []
         var recentVideos: [String] = []
         var connectionMode: HostConnectionMode = .local
         var remoteUrl: String = "ws://127.0.0.1:9400"
+        var previewVideoAddress: String = ""
+        var previewVideoTransport: String = "OMT"
+        var programVideoAddress: String = ""
+        var programVideoTransport: String = "OMT"
         var nativeApiEnabled: Bool = true
         var nativeApiBind: String = "127.0.0.1"
         var nativeApiPort: UInt32 = 9400
@@ -164,10 +185,15 @@ final class AppPrefs: ObservableObject {
             theme = try container.decodeIfPresent(AppThemeMode.self, forKey: .theme) ?? .dark
             renderer = try container.decodeIfPresent(GpuRenderer.self, forKey: .renderer) ?? .auto
             recentSessions = try container.decodeIfPresent([String].self, forKey: .recentSessions) ?? []
+            recentRemotes = try container.decodeIfPresent([String].self, forKey: .recentRemotes) ?? []
             recentStills = try container.decodeIfPresent([String].self, forKey: .recentStills) ?? []
             recentVideos = try container.decodeIfPresent([String].self, forKey: .recentVideos) ?? []
             connectionMode = try container.decodeIfPresent(HostConnectionMode.self, forKey: .connectionMode) ?? .local
             remoteUrl = try container.decodeIfPresent(String.self, forKey: .remoteUrl) ?? "ws://127.0.0.1:9400"
+            previewVideoAddress = try container.decodeIfPresent(String.self, forKey: .previewVideoAddress) ?? ""
+            previewVideoTransport = try container.decodeIfPresent(String.self, forKey: .previewVideoTransport) ?? "OMT"
+            programVideoAddress = try container.decodeIfPresent(String.self, forKey: .programVideoAddress) ?? ""
+            programVideoTransport = try container.decodeIfPresent(String.self, forKey: .programVideoTransport) ?? "OMT"
             nativeApiEnabled = try container.decodeIfPresent(Bool.self, forKey: .nativeApiEnabled) ?? true
             nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"
             nativeApiPort = try container.decodeIfPresent(UInt32.self, forKey: .nativeApiPort) ?? 9400

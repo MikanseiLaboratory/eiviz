@@ -7,9 +7,9 @@ enum InputKind: String, Codable, CaseIterable {
     case black = "Black"
     case still = "Still"
     case video = "Video"
-    case omt = "Omt"
-    case ndi = "Ndi"
-    case uvc = "Uvc"
+    case omt = "OMT"
+    case ndi = "NDI"
+    case uvc = "UVC"
     case mix = "Mix"
 
     var category: String {
@@ -19,9 +19,30 @@ enum InputKind: String, Codable, CaseIterable {
         case .video: return "Video"
         case .omt: return "OMT"
         case .ndi: return "NDI®"
-        case .uvc: return "Video Capture"
+        case .uvc: return "UVC"
         case .mix: return "Mix"
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        switch raw {
+        case "OMT", "Omt": self = .omt
+        case "NDI", "Ndi": self = .ndi
+        case "UVC", "Uvc": self = .uvc
+        default:
+            guard let value = InputKind(rawValue: raw) else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "Unknown InputKind \(raw)")
+                )
+            }
+            self = value
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 
     static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix]
@@ -90,7 +111,7 @@ enum NdiBandwidth: String, Codable {
     var rawUInt: UInt32 { self == .lowest ? 1 : 0 }
 }
 
-enum OutputTransport: String, Codable {
+enum OutputTransport: String, Codable, Hashable {
     case omt = "Omt"
     case ndi = "Ndi"
     case deckLink = "DeckLink"

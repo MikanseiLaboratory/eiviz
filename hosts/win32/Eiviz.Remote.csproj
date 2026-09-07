@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -8,6 +8,12 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>preview</LangVersion>
+    <AssemblyName>Eiviz.Remote</AssemblyName>
+    <RootNamespace>Eiviz.Host</RootNamespace>
+    <DefineConstants>$(DefineConstants);EIVIZ_REMOTE</DefineConstants>
+    <OutputPath>$(MSBuildThisFileDirectory)bin\remote\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**</DefaultItemExcludes>
     <Authors>Shugo Kawamura; Mikansei Laboratory</Authors>
     <Copyright>Copyright 2026 Shugo Kawamura / Mikansei Laboratory</Copyright>
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>

@@ -405,9 +405,9 @@ fn input_type(kind: InputKind) -> String {
         InputKind::Bars => "Colour",
         InputKind::Still => "Image",
         InputKind::Video => "Video",
-        InputKind::Omt => "OMT",
-        InputKind::Ndi => "NDI",
-        InputKind::Uvc => "Capture",
+        InputKind::OMT => "OMT",
+        InputKind::NDI => "NDI",
+        InputKind::UVC => "Capture",
         InputKind::Mix => "Mix",
     }
     .into()

@@ -48,7 +48,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = Loc.T(HostProcess.IsRemote ? "app.titleRemote" : "app.title");
+        Title = Loc.T(HostRole.IsRemote ? "app.titleRemote" : "app.title");
+        ApplyRemoteChrome();
         BindInputList();
         RebuildInputTabs();
         RebuildSceneTabs();
@@ -84,6 +85,7 @@ public partial class MainWindow : Window
             ApplyBusColors();
             ApplyAspect();
             BindPreviewProgram();
+            FillVideoSources();
             AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
@@ -123,8 +125,100 @@ public partial class MainWindow : Window
         RebuildOverlayToggles();
         RebuildMeters();
         ApplyAspect();
+        FillVideoSources();
         BindPreviewProgram();
         _overlay?.Reload(SelectedUnit);
+    }
+
+    private bool _suppressVideoSource;
+
+    private void ApplyRemoteChrome()
+    {
+        if (!HostRole.IsRemote)
+            return;
+        NewSessionButton.Visibility = Visibility.Collapsed;
+        SaveSessionButton.Visibility = Visibility.Collapsed;
+        LoadSessionButton.Visibility = Visibility.Collapsed;
+        ConnectButton.Visibility = Visibility.Visible;
+        PreviewSourceBox.Visibility = Visibility.Visible;
+        ProgramSourceBox.Visibility = Visibility.Visible;
+    }
+
+    private void FillVideoSources()
+    {
+        if (!HostRole.IsRemote)
+            return;
+        _suppressVideoSource = true;
+        var previewChoice = RemoteVideoCatalog.FromPrefs(true);
+        var programChoice = RemoteVideoCatalog.FromPrefs(false);
+        PreviewSourceBox.ItemsSource = WithChoice(RemoteVideoCatalog.List(_session), previewChoice);
+        ProgramSourceBox.ItemsSource = WithChoice(RemoteVideoCatalog.List(_session), programChoice);
+        SelectChoice(PreviewSourceBox, previewChoice);
+        SelectChoice(ProgramSourceBox, programChoice);
+        _suppressVideoSource = false;
+    }
+
+    private static List<RemoteVideoItem> WithChoice(List<RemoteVideoItem> items, RemoteVideoChoice choice)
+    {
+        if (!choice.IsEmpty && items.All(item => item.Choice != choice))
+        {
+            var prefix = choice.Transport == OutputTransport.Ndi ? "NDI" : "OMT";
+            items.Insert(1, new RemoteVideoItem { Choice = choice, Label = $"{prefix}  {choice.Address}" });
+        }
+        return items;
+    }
+
+    private static void SelectChoice(ComboBox box, RemoteVideoChoice choice)
+    {
+        foreach (RemoteVideoItem item in box.Items)
+        {
+            if (item.Choice == choice)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+        if (box.Items.Count > 0)
+            box.SelectedIndex = 0;
+    }
+
+    private void PreviewSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressVideoSource || PreviewSourceBox.SelectedItem is not RemoteVideoItem item)
+            return;
+        RemoteVideoCatalog.Save(true, item.Choice);
+        BindPreviewProgram();
+    }
+
+    private void ProgramSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressVideoSource || ProgramSourceBox.SelectedItem is not RemoteVideoItem item)
+            return;
+        RemoteVideoCatalog.Save(false, item.Choice);
+        BindPreviewProgram();
+    }
+
+    private void Connect_Click(object sender, RoutedEventArgs e)
+    {
+        var url = AppPrefs.Current.RemoteUrl;
+        var token = CredentialStore.Load(url);
+        if (!ConnectWindow.TryPrompt(this, url, token, out var nextUrl, out var nextToken))
+            return;
+        ConnectTo(nextUrl, nextToken);
+    }
+
+    private void ConnectTo(string url, string token)
+    {
+        var app = (App)Application.Current;
+        if (!app.TryConnectRemote(url, token, out var error))
+        {
+            MessageBox.Show(this, error, Loc.T("msg.remoteConnectFailed"));
+            RefreshRemoteStatus();
+            return;
+        }
+        FillVideoSources();
+        BindPreviewProgram();
+        RefreshRemoteStatus();
     }
 
     private void BindPreviewProgram()
@@ -136,28 +230,32 @@ public partial class MainWindow : Window
             PreviewHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputPreview);
             ProgramHost.RetargetUnit(SelectedUnit.Id, MixerNative.OutputProgram);
         }
-        var outputs = ((App)Application.Current).Backend.PublishedOutputs();
-        var previewOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuPreview && item.UnitId == SelectedUnit.Id) == 1;
-        var programOk = outputs.Count(item => item.SourceKind == OutputSourceKind.MuProgram && item.UnitId == SelectedUnit.Id) == 1;
-        RefreshRemoteStatus(previewOk, programOk);
+        RefreshRemoteStatus();
     }
 
-    private void RefreshRemoteStatus(bool? previewOk = null, bool? programOk = null)
+    internal void BindPreviewProgramSurfaces(SwapchainHost preview, SwapchainHost program, ulong unitId)
+    {
+        if (Application.Current is App app)
+            app.Backend.BindPreviewProgram(preview, program, unitId);
+    }
+
+    private void RefreshRemoteStatus()
     {
         if (Application.Current is not App app)
             return;
-        if (!app.Backend.IsRemote)
+        if (!HostRole.IsRemote)
         {
             WarnText.Text = app.Backend.StatusText;
             return;
         }
-        var outputs = app.Backend.PublishedOutputs();
-        var unitId = SelectedUnit.Id;
-        var preview = previewOk ?? outputs.Count(item => item.SourceKind == OutputSourceKind.MuPreview && item.UnitId == unitId) == 1;
-        var program = programOk ?? outputs.Count(item => item.SourceKind == OutputSourceKind.MuProgram && item.UnitId == unitId) == 1;
-        WarnText.Text = !preview || !program
-            ? Loc.T("msg.videoUnavailable")
-            : app.Backend.StatusText;
+        if (app.Backend is RemoteEivizBackend remote)
+        {
+            WarnText.Text = !remote.RemotePreviewOk || !remote.RemoteProgramOk
+                ? Loc.T("msg.videoUnavailable")
+                : remote.StatusText;
+            return;
+        }
+        WarnText.Text = app.Backend.StatusText;
     }
 
 
@@ -1087,20 +1185,39 @@ public partial class MainWindow : Window
     private void OpenRecent_Click(object sender, RoutedEventArgs e)
     {
         var menu = new ContextMenu();
-        var recent = AppPrefs.Current.ExistingSessions().ToList();
-        if (recent.Count == 0)
+        if (HostRole.IsRemote)
         {
-            menu.Items.Add(new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false });
+            var remotes = AppPrefs.Current.RecentRemotes;
+            if (remotes.Count == 0)
+                menu.Items.Add(new MenuItem { Header = Loc.T("chrome.connectRecent"), IsEnabled = false });
+            else
+            {
+                menu.Items.Add(new MenuItem { Header = Loc.T("chrome.connectRecent"), IsEnabled = false });
+                foreach (var url in remotes)
+                {
+                    var item = new MenuItem { Header = url, Tag = url };
+                    item.Click += (_, _) => ConnectTo(url, CredentialStore.Load(url));
+                    menu.Items.Add(item);
+                }
+            }
         }
         else
         {
-            var header = new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false };
-            menu.Items.Add(header);
-            foreach (var path in recent)
+            var recent = AppPrefs.Current.ExistingSessions().ToList();
+            if (recent.Count == 0)
             {
-                var item = new MenuItem { Header = System.IO.Path.GetFileName(path), Tag = path };
-                item.Click += (_, _) => LoadSessionFrom(path);
-                menu.Items.Add(item);
+                menu.Items.Add(new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false });
+            }
+            else
+            {
+                var header = new MenuItem { Header = Loc.T("chrome.openRecent"), IsEnabled = false };
+                menu.Items.Add(header);
+                foreach (var path in recent)
+                {
+                    var item = new MenuItem { Header = System.IO.Path.GetFileName(path), Tag = path };
+                    item.Click += (_, _) => LoadSessionFrom(path);
+                    menu.Items.Add(item);
+                }
             }
         }
         menu.PlacementTarget = OpenRecentButton;
@@ -1715,18 +1832,18 @@ public partial class MainWindow : Window
                 (dialog.Kind == InputKind.Video
                     && input.PathOrAddress == dialog.ResultPath
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
-                || (dialog.Kind == InputKind.Uvc
+                || (dialog.Kind == InputKind.UVC
                     && input.PathOrAddress == dialog.ResultPath
                     && input.CaptureWidth == dialog.ResultCaptureWidth
                     && input.CaptureHeight == dialog.ResultCaptureHeight
                     && input.CaptureFpsNum == dialog.ResultCaptureFpsNum
                     && input.CaptureFpsDen == dialog.ResultCaptureFpsDen
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
-                || (dialog.Kind is InputKind.Omt or InputKind.Ndi
+                || (dialog.Kind is InputKind.OMT or InputKind.NDI
                     && input.PathOrAddress == dialog.ResultPath
-                    && input.UseGpu == (dialog.Kind == InputKind.Omt && dialog.ResultUseGpu)
+                    && input.UseGpu == (dialog.Kind == InputKind.OMT && dialog.ResultUseGpu)
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
-                    && (dialog.Kind != InputKind.Ndi || input.NdiBandwidth == dialog.ResultNdiBandwidth))
+                    && (dialog.Kind != InputKind.NDI || input.NdiBandwidth == dialog.ResultNdiBandwidth))
                 || (dialog.Kind == InputKind.Mix
                     && input.MixSource == dialog.ResultMixSource
                     && input.MixTargetId == dialog.ResultMixTargetId
@@ -1748,8 +1865,8 @@ public partial class MainWindow : Window
         input.Scroll = dialog.Scroll;
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
-        input.UseGpu = dialog.Kind == InputKind.Omt && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Video or InputKind.Uvc or InputKind.Mix
+        input.UseGpu = dialog.Kind == InputKind.OMT && dialog.ResultUseGpu;
+        input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix
             ? dialog.ResultFrameBufferFrames
             : 1;
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
@@ -1757,13 +1874,13 @@ public partial class MainWindow : Window
         input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
         if (dialog.Kind == InputKind.Mix)
             input.BusMask = 0;
-        input.BandwidthSave = dialog.Kind == InputKind.Omt
+        input.BandwidthSave = dialog.Kind == InputKind.OMT
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
-        input.KeepFullOnMultiview = dialog.Kind == InputKind.Omt
+        input.KeepFullOnMultiview = dialog.Kind == InputKind.OMT
             && dialog.ResultKeepFullOnMultiview;
-        input.OmtQuality = dialog.Kind == InputKind.Omt ? dialog.ResultOmtQuality : OmtQuality.Default;
-        input.NdiBandwidth = dialog.Kind == InputKind.Ndi ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
+        input.OmtQuality = dialog.Kind == InputKind.OMT ? dialog.ResultOmtQuality : OmtQuality.Default;
+        input.NdiBandwidth = dialog.Kind == InputKind.NDI ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
         input.VideoLoop = dialog.Kind == InputKind.Video && dialog.ResultVideoLoop;
         input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
         input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
@@ -1778,7 +1895,7 @@ public partial class MainWindow : Window
         }
         if (keepLive)
         {
-            if (dialog.Kind == InputKind.Omt)
+            if (dialog.Kind == InputKind.OMT)
             {
                 MixerApply.LiveSave(
                     input.Id,
@@ -1819,7 +1936,7 @@ public partial class MainWindow : Window
                     input.VideoStartsPlaying,
                     input.FrameBufferFrames);
                 break;
-            case InputKind.Omt:
+            case InputKind.OMT:
                 MixerApply.ConnectOmt(
                     input.Id,
                     dialog.ResultPath!,
@@ -1829,14 +1946,14 @@ public partial class MainWindow : Window
                     input.KeepFullOnMultiview,
                     input.OmtQuality);
                 break;
-            case InputKind.Ndi:
+            case InputKind.NDI:
                 MixerApply.ConnectNdi(
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultFrameBufferFrames,
                     input.NdiBandwidth);
                 break;
-            case InputKind.Uvc:
+            case InputKind.UVC:
                 input.CaptureWidth = dialog.ResultCaptureWidth;
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
@@ -2201,7 +2318,7 @@ public partial class MainWindow : Window
     private void Preferences_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new PreferencesWindow { Owner = this };
-        if (dialog.ShowDialog() == true && (dialog.RendererChanged || dialog.ConnectionChanged))
+        if (dialog.ShowDialog() == true && dialog.RendererChanged)
             ((App)Application.Current).ReloadSession(_session);
     }
 
@@ -2304,7 +2421,7 @@ public partial class MainWindow : Window
                     input.FrameBufferFrames,
                     position);
             }
-            else if (input.Kind == InputKind.Uvc)
+            else if (input.Kind == InputKind.UVC)
                 MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
         }
     }

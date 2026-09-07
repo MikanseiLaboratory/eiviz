@@ -61,7 +61,7 @@ public partial class ResourceMonitorWindow : Window
             usages.TryGetValue(input.Id, out var usage);
             var ram = usage.RamBytes;
             var vram = usage.VramBytes;
-            var cpu = input.Kind is InputKind.Omt or InputKind.Ndi or InputKind.Uvc or InputKind.Video ? "live" : "—";
+            var cpu = input.Kind is InputKind.OMT or InputKind.NDI or InputKind.UVC or InputKind.Video ? "live" : "—";
             rows.Add(new Row(
                 input.Name,
                 input.Kind.ToString(),

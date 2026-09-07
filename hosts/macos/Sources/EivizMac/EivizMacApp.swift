@@ -1,6 +1,12 @@
 import SwiftUI
 
-@main
+public enum EivizLaunch {
+    public static func run(remote: Bool) {
+        HostRole.isRemote = remote
+        EivizMacApp.main()
+    }
+}
+
 struct EivizMacApp: App {
     @StateObject private var mixer = MixerController()
 
@@ -10,7 +16,7 @@ struct EivizMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(L10n.t(AppPrefs.isRemoteProcess ? "app.titleRemote" : "app.title")) {
+        WindowGroup(L10n.t(HostRole.isRemote ? "app.titleRemote" : "app.title")) {
             ContentView()
                 .environmentObject(mixer)
                 .environment(\.mixerSurfaceEpoch, mixer.surfaceEpoch)

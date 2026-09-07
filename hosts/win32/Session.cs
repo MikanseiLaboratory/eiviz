@@ -9,9 +9,9 @@ public enum InputKind
     Black,
     Still,
     Video,
-    Omt,
-    Ndi,
-    Uvc,
+    OMT,
+    NDI,
+    UVC,
     Mix
 }
 
@@ -348,9 +348,9 @@ internal static class InputKindNames
         InputKind.Color,
         InputKind.Still,
         InputKind.Video,
-        InputKind.Omt,
-        InputKind.Ndi,
-        InputKind.Uvc,
+        InputKind.OMT,
+        InputKind.NDI,
+        InputKind.UVC,
         InputKind.Mix
     ];
 
@@ -359,9 +359,9 @@ internal static class InputKindNames
         InputKind.Color or InputKind.Bars or InputKind.Black => "Colours",
         InputKind.Still => "Still",
         InputKind.Video => "Video",
-        InputKind.Omt => "OMT",
-        InputKind.Ndi => "NDI®",
-        InputKind.Uvc => "Video Capture",
+        InputKind.OMT => "OMT",
+        InputKind.NDI => "NDI®",
+        InputKind.UVC => "UVC",
         InputKind.Mix => "Mix",
         _ => kind.ToString()
     };

@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Eiviz.Remote'">
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)obj\remote\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(MSBuildThisFileDirectory)obj\remote\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

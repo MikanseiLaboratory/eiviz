@@ -53,7 +53,7 @@ Inputs一覧の上にタブが並んでいます。どれか1つを選ぶと、�
 
 - **すべて** — 全部
 - **各タグ** — そのタグが付いたもの
-- **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
+- **Kind** — Colours / Still / Video / OMT / NDI® / UVC / Mix
 
 ### タグの管理
 

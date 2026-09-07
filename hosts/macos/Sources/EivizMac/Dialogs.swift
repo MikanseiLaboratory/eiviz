@@ -542,6 +542,36 @@ struct SettingsView: View {
 
 }
 
+struct ConnectView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var mixer: MixerController
+    @State private var url = AppPrefs.shared.remoteUrl
+    @State private var token = KeychainStore.load(account: AppPrefs.shared.remoteUrl)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("connect.title")).fontWeight(.bold)
+            Text(L10n.t("connect.url"))
+            mixerTextField($url, placeholder: "ws://127.0.0.1:9400")
+            Text(L10n.t("connect.token"))
+            SecureField("", text: $token)
+                .frame(width: 320)
+            HStack {
+                Spacer()
+                Button(L10n.t("dialog.ok")) {
+                    mixer.connectRemote(url: url, token: token)
+                    dismiss()
+                }
+                Button(L10n.t("dialog.cancel")) { dismiss() }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+        .background(EivizTheme.dialog)
+        .foregroundStyle(EivizTheme.text)
+    }
+}
+
 struct PreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var mixer: MixerController
@@ -549,9 +579,7 @@ struct PreferencesView: View {
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
     @State private var originalRenderer = AppPrefs.shared.renderer
-    @State private var originalRemoteUrl = AppPrefs.shared.remoteUrl
     @State private var renderer = AppPrefs.shared.renderer
-    @State private var remoteToken = KeychainStore.load(account: AppPrefs.shared.remoteUrl)
     @State private var listenToken = KeychainStore.load(account: "listen")
     @State private var reverting = false
 
@@ -579,13 +607,7 @@ struct PreferencesView: View {
             Text(L10n.t("prefs.rendererHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            if mixer.isRemote {
-                Text(L10n.t("prefs.remoteUrl"))
-                mixerTextField($prefs.remoteUrl, placeholder: "ws://127.0.0.1:9400")
-                Text(L10n.t("prefs.remoteToken"))
-                SecureField("", text: $remoteToken)
-                    .frame(width: 320)
-            } else {
+            if !mixer.isRemote {
                 Text(L10n.t("prefs.apiBind"))
                 mixerTextField($prefs.nativeApiBind, placeholder: "127.0.0.1")
                 Text(L10n.t("prefs.apiPort"))
@@ -616,12 +638,10 @@ struct PreferencesView: View {
                 Button(L10n.t("dialog.ok")) {
                     prefs.renderer = renderer
                     prefs.mediaDirectory = prefs.resolvedMediaDirectory
-                    KeychainStore.save(account: prefs.remoteUrl, token: remoteToken)
                     KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
-                    let remoteChanged = mixer.isRemote && prefs.remoteUrl != originalRemoteUrl
-                    if renderer != originalRenderer || remoteChanged {
+                    if renderer != originalRenderer {
                         mixer.recreateMixer()
                     }
                     dismiss()
@@ -702,7 +722,7 @@ struct AddInputView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(["Colours", "Still", "Video", "OMT", "NDI®", "Video Capture", "Mix"], id: \.self, selection: $category) { item in
+            List(["Colours", "Still", "Video", "OMT", "NDI®", "UVC", "Mix"], id: \.self, selection: $category) { item in
                 Text(item).tag(item)
             }
             .frame(width: 200)
@@ -807,7 +827,7 @@ struct AddInputView: View {
             frameBufferPicker($buffer)
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
-        case "Video Capture":
+        case "UVC":
             Button("Refresh devices") { refreshUvc() }
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
@@ -995,7 +1015,7 @@ struct AddInputView: View {
             let unit = mixer.session.units.first { $0.id == mixTargetId }?.name ?? "Mix"
             return "\(unit) \(mixPreview ? "PRV" : "PGM")"
         default:
-            return uvcList.first { $0.id == selectedUvc }?.name ?? "Video Capture"
+            return uvcList.first { $0.id == selectedUvc }?.name ?? "UVC"
         }
     }
 

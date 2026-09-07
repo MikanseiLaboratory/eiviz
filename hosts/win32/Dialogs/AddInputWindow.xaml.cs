@@ -19,7 +19,7 @@ public partial class AddInputWindow : Window
     public AddInputWindow()
     {
         InitializeComponent();
-        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.Omt, InputKind.Ndi, InputKind.Uvc, InputKind.Mix })
+        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.OMT, InputKind.NDI, InputKind.UVC, InputKind.Mix })
         {
             var button = new Button
             {
@@ -121,8 +121,8 @@ public partial class AddInputWindow : Window
         var mediaBuffer = Math.Clamp(input.FrameBufferFrames == 0 ? 3 : input.FrameBufferFrames, 1u, 8u).ToString();
         SelectTag(VideoBufferBox, mediaBuffer);
         SelectTag(UvcBufferBox, mediaBuffer);
-        OmtAddress.Text = input.Kind == InputKind.Omt ? input.PathOrAddress ?? "" : "";
-        NdiAddress.Text = input.Kind == InputKind.Ndi ? input.PathOrAddress ?? "" : "";
+        OmtAddress.Text = input.Kind == InputKind.OMT ? input.PathOrAddress ?? "" : "";
+        NdiAddress.Text = input.Kind == InputKind.NDI ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
         SelectTag(OmtQualityBox, ((int)input.OmtQuality).ToString());
         SelectTag(OmtBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
@@ -144,7 +144,7 @@ public partial class AddInputWindow : Window
             SelectTag(MixAudioBox, input.MixAudioBusId.ToString());
             SelectTag(MixBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         }
-        if (input.Kind == InputKind.Uvc && !string.IsNullOrWhiteSpace(input.PathOrAddress))
+        if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
             {
@@ -177,9 +177,9 @@ public partial class AddInputWindow : Window
         ColourPanel.Visibility = VisibleIf(InputKind.Color);
         StillPanel.Visibility = VisibleIf(InputKind.Still);
         VideoPanel.Visibility = VisibleIf(InputKind.Video);
-        OmtPanel.Visibility = VisibleIf(InputKind.Omt);
-        NdiPanel.Visibility = VisibleIf(InputKind.Ndi);
-        UvcPanel.Visibility = VisibleIf(InputKind.Uvc);
+        OmtPanel.Visibility = VisibleIf(InputKind.OMT);
+        NdiPanel.Visibility = VisibleIf(InputKind.NDI);
+        UvcPanel.Visibility = VisibleIf(InputKind.UVC);
         MixPanel.Visibility = VisibleIf(InputKind.Mix);
         MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
         foreach (Button button in CategoryPanel.Children)
@@ -355,7 +355,7 @@ public partial class AddInputWindow : Window
                 ResultFrameBufferFrames = ReadBuffer(VideoBufferBox, 3);
                 Remember(VideoHistory, ResultPath);
                 break;
-            case InputKind.Omt:
+            case InputKind.OMT:
                 if (string.IsNullOrWhiteSpace(OmtAddress.Text))
                     return;
                 ResultPath = OmtAddress.Text.Trim();
@@ -366,7 +366,7 @@ public partial class AddInputWindow : Window
                 ResultKeepFullOnMultiview = OmtMvBox.IsChecked == true;
                 ResultOmtQuality = ReadOmtQuality(OmtQualityBox);
                 break;
-            case InputKind.Ndi:
+            case InputKind.NDI:
                 if (string.IsNullOrWhiteSpace(NdiAddress.Text))
                     return;
                 ResultPath = NdiAddress.Text.Trim();
@@ -391,7 +391,7 @@ public partial class AddInputWindow : Window
                     ? $"{target.Name} MV"
                     : $"{target.Name} {(ResultMixSource == MixSource.MuPreview ? "PRV" : "PGM")}";
                 break;
-            case InputKind.Uvc:
+            case InputKind.UVC:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
                     return;
                 if (UvcModeBox.SelectedItem is not ComboBoxItem modeItem || modeItem.Tag is not MixerVideoCaptureMode mode)

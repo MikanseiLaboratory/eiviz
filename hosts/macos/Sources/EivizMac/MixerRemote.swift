@@ -37,6 +37,8 @@ enum MixerRemote {
     static let programMonitor: UInt64 = 0x0006_0002
     static let multiviewMonitor: UInt64 = 0x0006_0003
     static let sourceBase: UInt64 = 0x0005_0000
+    static let previewSourceId: UInt64 = 0x0005_0001
+    static let programSourceId: UInt64 = 0x0005_0002
 
     static func copy(_ handle: Int32, _ fn: (UnsafeMutablePointer<UInt8>?, Int) -> Int32, cap: Int = 1 << 20) -> String {
         var size = cap

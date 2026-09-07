@@ -9,23 +9,26 @@ Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator 
 
 1. Enable API listen on the destination (`Eiviz.Host.exe` Preferences, or `eiviz-headless run --bind`)
 2. Set a listen token
-3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`) and enter the WebSocket URL and token in Preferences
+3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`) and click Connect in the top left
+4. Enter the WebSocket URL and token, then OK
 
 The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. Host listen fields are in [Settings](/eiviz/en/introduction/settings/).
+
+The Connect ▾ menu lists recent URLs.
 
 Multiple clients can stay connected; live state stays aligned through subscribe.
 
 ## Video
 
-Preview, Program, and Multiview receive the destination's already-enabled NDI or OMT outputs. Live video appears when exactly one output matches `SourceKind` MuPreview, MuProgram, or Multiview for that Mixing Unit or Multiview. Other counts show Unavailable.
+Preview and Program use the same PRV/PGM frames as Host. Pick the NDI or OMT source from each header menu. Multiview shows live video when the destination has exactly one enabled NDI or OMT output for that layout. Input Preview is for Host.
 
-Scene lists and switcher scene buttons are placeholders. Input Preview is for `Eiviz.Host.exe`.
+The scene list and switcher scene buttons show every Scene, collapsed. Thumbnails are for Host.
 
 Adding Still/Video picks a file on the client, stores it in the destination media directory, then adds an Input.
 
 ## Settings
 
-Display, performance, outputs, audio, and Web API stay on the destination Settings window for review. Adding, opening, editing tiles, and deleting Multiview layouts are sent from the client. Language, theme, and the connection URL belong to `Eiviz.Remote.exe` Preferences.
+Display, performance, outputs, audio, and Web API stay on the destination Settings window for review. Adding, opening, editing tiles, and deleting Multiview layouts are sent from the client. Language and theme belong to `Eiviz.Remote.exe` Preferences.
 
 Session edits use `MutateSession` with `expected_revision`. A mismatched revision is rejected; reload and try again.
 
