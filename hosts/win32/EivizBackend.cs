@@ -150,16 +150,26 @@ internal static class MutationJson
         bool headphoneCopyMaster,
         ulong nextOutputId,
         ulong nextBusId) =>
-        JsonSerializer.Serialize(new
+        JsonSerializer.Serialize(new SetSettingsWire
         {
-            kind = "setSettings",
-            settings,
-            outputs,
-            buses,
-            headphoneCopyMaster,
-            nextOutputId,
-            nextBusId
+            Settings = settings,
+            Outputs = outputs,
+            Buses = buses,
+            HeadphoneCopyMaster = headphoneCopyMaster,
+            NextOutputId = nextOutputId,
+            NextBusId = nextBusId
         }, DocumentJson);
+
+    private sealed class SetSettingsWire
+    {
+        public string Kind { get; set; } = "setSettings";
+        public SessionSettings Settings { get; set; } = new();
+        public IEnumerable<OutputEntry> Outputs { get; set; } = [];
+        public IEnumerable<AudioBusEntry> Buses { get; set; } = [];
+        public bool HeadphoneCopyMaster { get; set; }
+        public ulong NextOutputId { get; set; }
+        public ulong NextBusId { get; set; }
+    }
 
     private sealed class InputWire
     {

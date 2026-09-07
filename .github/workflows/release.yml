@@ -255,6 +255,8 @@ jobs:
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
+          codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           chmod +x packaging/macos/package-pkg.sh
@@ -341,6 +343,8 @@ jobs:
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
+          codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           chmod +x packaging/macos/package-pkg.sh

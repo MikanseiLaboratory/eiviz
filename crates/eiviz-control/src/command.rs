@@ -215,11 +215,11 @@ pub enum SessionMutation {
         settings: Box<crate::session::SessionSettings>,
         outputs: Vec<crate::session::OutputDto>,
         buses: Vec<crate::session::BusDto>,
-        #[serde(alias = "headphone_copy_master")]
-        headphone_copy_master: bool,
-        #[serde(alias = "next_output_id")]
+        #[serde(default, alias = "headphone_copy_master")]
+        headphone_copy_master: Option<bool>,
+        #[serde(default, alias = "next_output_id")]
         next_output_id: u64,
-        #[serde(alias = "next_bus_id")]
+        #[serde(default, alias = "next_bus_id")]
         next_bus_id: u64,
     },
 }
@@ -307,7 +307,7 @@ mod tests {
         else {
             panic!("expected setSettings");
         };
-        assert!(!headphone_copy_master);
+        assert!(!headphone_copy_master.unwrap());
         assert_eq!(next_output_id, 102);
         assert_eq!(next_bus_id, 3);
         assert_eq!(outputs.len(), 2);
@@ -316,6 +316,30 @@ mod tests {
         assert_eq!(outputs[0].unit_id, 1);
         assert_eq!(outputs[1].source_kind, OutputSourceKind::MuPreview);
         assert_eq!(outputs[1].id, 101);
+    }
+
+    #[test]
+    fn set_settings_json_may_omit_headphone_copy_master() {
+        let json = r#"{
+            "kind": "setSettings",
+            "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+            "outputs": [],
+            "buses": []
+        }"#;
+        let parsed: SessionMutation =
+            serde_json::from_str(json).expect("setSettings without headphone");
+        let SessionMutation::SetSettings {
+            headphone_copy_master,
+            next_output_id,
+            next_bus_id,
+            ..
+        } = parsed
+        else {
+            panic!("expected setSettings");
+        };
+        assert_eq!(headphone_copy_master, None);
+        assert_eq!(next_output_id, 0);
+        assert_eq!(next_bus_id, 0);
     }
 
     #[test]

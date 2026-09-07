@@ -166,7 +166,9 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             document.settings.last_session_path = last_session_path;
             document.outputs = outputs;
             document.buses = buses;
-            document.headphone_copy_master = headphone_copy_master;
+            if let Some(enabled) = headphone_copy_master {
+                document.headphone_copy_master = enabled;
+            }
             if next_output_id != 0 {
                 document.next_output_id = next_output_id;
             }
@@ -413,7 +415,7 @@ mod tests {
                     skip_encode_when_no_receivers: true,
                 }],
                 buses: vec![],
-                headphone_copy_master: true,
+                headphone_copy_master: Some(true),
                 next_output_id: 101,
                 next_bus_id: 3,
             },
@@ -425,5 +427,25 @@ mod tests {
         assert_eq!(doc.outputs.len(), 1);
         assert!(doc.headphone_copy_master);
         assert_eq!(doc.next_output_id, 101);
+    }
+
+    #[test]
+    fn set_settings_without_headphone_keeps_existing() {
+        let mut doc = bars();
+        doc.headphone_copy_master = true;
+        let settings = doc.settings.clone();
+        apply(
+            &mut doc,
+            SessionMutation::SetSettings {
+                settings: Box::new(settings),
+                outputs: vec![],
+                buses: vec![],
+                headphone_copy_master: None,
+                next_output_id: 0,
+                next_bus_id: 0,
+            },
+        )
+        .unwrap();
+        assert!(doc.headphone_copy_master);
     }
 }
