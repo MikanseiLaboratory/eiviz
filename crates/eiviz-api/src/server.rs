@@ -222,7 +222,7 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
                     continue;
                 }
                 meter_ticks = meter_ticks.wrapping_add(1);
-                if meter_ticks % 3 == 0 {
+                if meter_ticks.is_multiple_of(3) {
                     state.control.publish_meters();
                 }
                 last_activity = Instant::now();

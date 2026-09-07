@@ -195,7 +195,7 @@ pub struct ControlSession {
 
 enum SessionOp {
     Request {
-        request: Request,
+        request: Box<Request>,
         reply: oneshot::Sender<ControlResult<Response>>,
     },
     Close {
@@ -589,7 +589,7 @@ impl ControlSession {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(SessionOp::Request {
-                request,
+                request: Box::new(request),
                 reply: reply_tx,
             })
             .await
@@ -716,7 +716,7 @@ async fn session_once(
                     Some(SessionOp::Request { request, reply }) => {
                         pending.insert(request.request_id.clone(), reply);
                         let env = Envelope {
-                            kind: Some(envelope::Kind::Request(request)),
+                            kind: Some(envelope::Kind::Request(*request)),
                         };
                         ws.send(Message::Binary(encode_envelope(&env).into()))
                             .await

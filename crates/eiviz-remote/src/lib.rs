@@ -125,7 +125,7 @@ pub fn close(handle: i32) -> i32 {
     };
     let session = Arc::clone(&slot.session);
     let runtime = slot.handle.clone();
-    let _ = runtime.block_on(async move {
+    runtime.block_on(async move {
         let _ = tokio::time::timeout(Duration::from_secs(2), session.close()).await;
     });
     let _ = slot.stop.send(true);
