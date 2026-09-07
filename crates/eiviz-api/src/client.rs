@@ -180,6 +180,9 @@ pub struct SessionView {
     pub sequence: u64,
     pub document_json: Vec<u8>,
     pub live_json: Vec<u8>,
+    /// Session revision last time `document_json` was replaced. Live ops keep
+    /// `revision` in sync without implying a document reload.
+    pub document_revision: u64,
     pub error: String,
     pub lag: bool,
 }
@@ -215,10 +218,11 @@ impl ControlSession {
     }
 
     pub fn view(&self) -> SessionView {
-        self.view
-            .lock()
-            .map(|slot| slot.clone())
-            .unwrap_or_default()
+        self.with_view(SessionView::clone).unwrap_or_default()
+    }
+
+    pub fn with_view<R>(&self, f: impl FnOnce(&SessionView) -> R) -> Option<R> {
+        self.view.lock().ok().map(|slot| f(&slot))
     }
 
     pub async fn subscribe(&self, after_sequence: u64) -> ControlResult<Response> {
@@ -638,6 +642,7 @@ fn apply_response(view: &Arc<Mutex<SessionView>>, response: &Response) {
         slot.epoch = snapshot.epoch.clone();
         if !snapshot.document_json.is_empty() {
             slot.document_json = snapshot.document_json.clone();
+            slot.document_revision = slot.revision;
         }
         if !snapshot.live_json.is_empty() {
             slot.live_json = snapshot.live_json.clone();
@@ -679,9 +684,15 @@ fn apply_event(
     }
     *last_seq = (*last_seq).max(event.sequence);
     slot.sequence = slot.sequence.max(event.sequence);
-    slot.revision = slot.revision.max(event.session_revision);
     if !event.document_json.is_empty() {
         slot.document_json = event.document_json.clone();
+        if event.session_revision != 0 {
+            slot.revision = event.session_revision;
+            slot.document_revision = event.session_revision;
+        }
+    } else if event.kind == "SessionChanged" && event.session_revision != 0 {
+        slot.revision = event.session_revision;
+        slot.document_revision = event.session_revision;
     }
     if !event.live_json.is_empty() {
         slot.live_json = event.live_json.clone();
@@ -817,10 +828,21 @@ fn status_ok(response: &Response) -> ControlResult<()> {
     };
     if status.code.is_empty() || status.code == "OK" {
         Ok(())
-    } else if status.code == "CONFLICT" {
-        Err(ControlError::conflict(status.message.clone()))
     } else {
-        Err(ControlError::invalid(status.message.clone()))
+        Err(status_error(&status.code, &status.message))
+    }
+}
+
+fn status_error(code: &str, message: &str) -> ControlError {
+    match code {
+        "CONFLICT" => ControlError::conflict(message),
+        "NOT_FOUND" => ControlError::not_found(message),
+        "UNAVAILABLE" => ControlError::unavailable(message),
+        "PERMISSION_DENIED" => ControlError::permission(message),
+        "IO" => ControlError::io(message),
+        "INTERNAL" => ControlError::internal(message),
+        "AMBIGUOUS" => ControlError::ambiguous(message),
+        _ => ControlError::invalid(message),
     }
 }
 
@@ -840,4 +862,19 @@ pub async fn wait_ready(endpoint: &str, token: &str, timeout: Duration) -> Contr
 
 pub fn shared_client(endpoint: String, token: String) -> Arc<ControlClient> {
     Arc::new(ControlClient::websocket(endpoint, token))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionView;
+
+    #[test]
+    fn live_revision_does_not_imply_document_revision() {
+        let view = SessionView {
+            revision: 9,
+            ..SessionView::default()
+        };
+        assert_eq!(view.document_revision, 0);
+        assert_eq!(view.revision, 9);
+    }
 }

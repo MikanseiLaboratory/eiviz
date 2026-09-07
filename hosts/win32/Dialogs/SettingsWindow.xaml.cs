@@ -479,6 +479,8 @@ public partial class SettingsWindow : Window
 
     private void AddOutput_Click(object sender, RoutedEventArgs e)
     {
+        if (_nextOutputId < 100)
+            _nextOutputId = 100;
         Outputs.Add(new OutputEntry
         {
             Id = _nextOutputId++,

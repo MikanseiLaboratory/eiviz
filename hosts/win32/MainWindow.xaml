@@ -18,6 +18,7 @@
                     <Button x:Name="SaveSessionButton" Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
                     <Button x:Name="LoadSessionButton" Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
                     <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
+                    <Button x:Name="DisconnectButton" Content="{Binding [chrome.disconnect], Source={x:Static i18n:Loc.Source}}" Width="104" Margin="8,0,0,0" Click="Disconnect_Click" Visibility="Collapsed" IsEnabled="False"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">

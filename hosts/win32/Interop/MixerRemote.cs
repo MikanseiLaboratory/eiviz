@@ -57,9 +57,8 @@ internal static partial class MixerRemote
 
     private unsafe delegate int Utf8Copy(byte* buffer, nuint cap);
 
-    private static unsafe string CopyUtf8(Utf8Copy call, int startCap = 1 << 20)
+    private static unsafe string CopyUtf8(Utf8Copy call, ref byte[] buffer)
     {
-        var buffer = new byte[startCap];
         for (;;)
         {
             unsafe
@@ -80,14 +79,14 @@ internal static partial class MixerRemote
         }
     }
 
-    internal static unsafe string SnapshotText(int handle) =>
-        CopyUtf8((ptr, cap) => CopySnapshot(handle, ptr, cap));
+    internal static unsafe string SnapshotText(int handle, ref byte[] buffer) =>
+        CopyUtf8((ptr, cap) => CopySnapshot(handle, ptr, cap), ref buffer);
 
-    internal static unsafe string LiveText(int handle) =>
-        CopyUtf8((ptr, cap) => CopyLive(handle, ptr, cap), 1 << 16);
+    internal static unsafe string LiveText(int handle, ref byte[] buffer) =>
+        CopyUtf8((ptr, cap) => CopyLive(handle, ptr, cap), ref buffer);
 
-    internal static unsafe string StatusText(int handle) =>
-        CopyUtf8((ptr, cap) => CopyStatus(handle, ptr, cap), 4096);
+    internal static unsafe string StatusText(int handle, ref byte[] buffer) =>
+        CopyUtf8((ptr, cap) => CopyStatus(handle, ptr, cap), ref buffer);
 
     internal static int MutateCode(int handle, string json, ulong expectedRevision)
     {

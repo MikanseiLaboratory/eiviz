@@ -7,14 +7,14 @@ Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator 
 
 ## Connect
 
-1. Enable API listen on the destination (`Eiviz.Host.exe` Preferences, or `eiviz-headless run --bind`)
+1. Enable API listen on the destination (`Eiviz.Host.exe` Preferences, or [Headless](/eiviz/en/features/headless/) `eiviz-headless run`)
 2. Set a listen token
 3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`)
 4. Click Connect in the top left, enter the IP, port, and token, then OK. The operator UI opens after the connection succeeds.
 
-The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. Host listen fields are in [Settings](/eiviz/en/introduction/settings/).
+The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
 
-The Connect ▾ menu lists recent destinations.
+The Connect ▾ menu lists recent destinations. Disconnect closes the connection.
 
 Multiple clients can stay connected; live state stays aligned through subscribe.
 

@@ -235,6 +235,9 @@ struct SettingsView: View {
                 Text("Outputs").fontWeight(.bold)
                 Spacer()
                 Button("+") {
+                    if mixer.session.nextOutputId < 100 {
+                        mixer.session.nextOutputId = 100
+                    }
                     let output = OutputEntry(
                         id: mixer.session.nextOutputId,
                         name: "eiviz-out-\(mixer.session.nextOutputId)",

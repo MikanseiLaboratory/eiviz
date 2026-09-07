@@ -362,8 +362,11 @@ pub enum NdiBandwidth {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OutputTransport {
     #[default]
+    #[serde(alias = "OMT", alias = "omt")]
     Omt,
+    #[serde(alias = "NDI", alias = "ndi")]
     Ndi,
+    #[serde(alias = "deckLink")]
     DeckLink,
 }
 

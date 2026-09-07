@@ -34,6 +34,10 @@ The `.app` is required for NDI® discovery and send. If macOS blocks it: System 
 
 Same steps, with the `macos-x64` pkg.
 
+### Linux
+
+Linux currently ships as CLI (headless) only. Build from source and run `eiviz-headless`. See [Headless](https://mikanseilaboratory.github.io/eiviz/en/features/headless/). A Release build is strongly recommended for performance.
+
 ## What it is
 
 A next-generation production graphics tool, built by video operators for video operations.

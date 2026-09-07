@@ -400,7 +400,7 @@ impl ControlService {
             .document_cloned()
             .ok_or_else(|| ControlError::unavailable("session not published"))?;
         mutate::apply(&mut document, mutation)?;
-        self.replace_session(document, expected_revision, request_id)
+        self.replace_session(document.canonicalize(), expected_revision, request_id)
     }
 
     fn apply_overlay_auto(
@@ -1039,6 +1039,48 @@ mod tests {
                 .mutate_session(SessionMutation::DeleteInput { id: 2 }, Some(1), "stale")
                 .unwrap_err();
             assert!(matches!(err, ControlError::Conflict { .. }));
+        });
+    }
+
+    #[test]
+    fn mutate_set_settings_from_host_json_adds_omt_outputs() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            svc.replace_session(bars_doc(), None, "boot").unwrap();
+            let json = br#"{
+                "kind": "setSettings",
+                "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+                "outputs": [{
+                    "id": 100,
+                    "name": "eiviz-pgm",
+                    "transport": "Omt",
+                    "sourceKind": "MuProgram",
+                    "unitId": 1,
+                    "useGpu": true,
+                    "enabled": true,
+                    "audioBusId": 1
+                }, {
+                    "id": 101,
+                    "name": "eiviz-prv",
+                    "transport": "Omt",
+                    "sourceKind": "MuPreview",
+                    "unitId": 1,
+                    "useGpu": true,
+                    "enabled": true,
+                    "audioBusId": 1
+                }],
+                "buses": [],
+                "headphoneCopyMaster": false,
+                "nextOutputId": 102,
+                "nextBusId": 3
+            }"#;
+            let mutation: SessionMutation = serde_json::from_slice(json).unwrap();
+            svc.mutate_session(mutation, Some(1), "settings").unwrap();
+            let doc = svc.document().unwrap();
+            assert_eq!(doc.outputs.len(), 2);
+            assert_eq!(doc.outputs[0].name, "eiviz-pgm");
+            assert_eq!(doc.outputs[1].source_kind, crate::session::OutputSourceKind::MuPreview);
+            assert_eq!(doc.next_output_id, 102);
         });
     }
 

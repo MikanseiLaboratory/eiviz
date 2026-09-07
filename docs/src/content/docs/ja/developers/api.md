@@ -67,6 +67,8 @@ eivizctl prefs set bind 127.0.0.1:9400
 
 ## headless daemon
 
+オペレーター向けの起動、REPL、Remote接続は[headless](/eiviz/ja/features/headless/)です。この節はdaemonの契約です。
+
 ```bash
 eiviz-headless validate --session show.eiviz.json
 eiviz-headless canonicalize --session show.eiviz.json

@@ -46,7 +46,7 @@ NDI®の発見と送出には`.app`バージョンのインストールが必要
 
 ### Linux 
 
-現在CLI(headless)モードのみ対応しています。ソースコードをビルドし、`headless`ディレクトリにある`eiviz-headless`を実行してください。
+現在CLI(headless)モードのみ対応しています。ソースコードをビルドし、`eiviz-headless`を実行してください。手順は[headless](https://mikanseilaboratory.github.io/eiviz/ja/features/headless/)です。
 パフォーマンスの観点から、Releaseビルドで実行することを強く推奨します。
 
 ## 開発のAI利用について

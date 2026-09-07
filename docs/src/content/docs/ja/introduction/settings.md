@@ -151,7 +151,7 @@ bindアドレス、待ち受けtoken、アップロード保存先です。loopb
 
 ### headless
 
-GUIのない`eiviz-headless`は`eivizctl prefs`で待ち受けを編集します。ファイルは`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`です。キーは`bind`、`token`、`mediaDirectory`、`maxRole`です。反映は次の`eiviz-headless run`です。環境変数`EIVIZ_API_TOKEN`があるときはtokenより優先します。
+GUIのない運用は[headless](/eiviz/ja/features/headless/)です。待ち受けは`eivizctl prefs`で編集します。
 
 ### ヘルプ
 

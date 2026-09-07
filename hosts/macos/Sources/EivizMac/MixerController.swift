@@ -86,7 +86,8 @@ final class MixerController: ObservableObject {
     private var remoteHandle: Int32 = 0
     private var remoteReceiveIds: [UInt64: UInt64] = [:]
     private var remoteEpoch = ""
-    private var remotePulledRevision: UInt64 = 0
+    private var remotePulledDocumentRevision: UInt64 = 0
+    private var remoteLiveSequence: UInt64 = 0
     private var remoteLag = false
     private var remoteError = ""
     private var remotePreviewKey = ""
@@ -168,6 +169,9 @@ final class MixerController: ObservableObject {
         remoteProgramKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteEpoch = ""
+        remotePulledDocumentRevision = 0
+        remoteLiveSequence = 0
         let handle = MixerFFI.withCString(endpoint) { urlPtr in
             MixerFFI.withCString(token) { tokenPtr in
                 mixer_remote_open(urlPtr, tokenPtr)
@@ -183,6 +187,33 @@ final class MixerController: ObservableObject {
         AppPrefs.shared.remoteUrl = endpoint
         AppPrefs.shared.rememberRemote(endpoint)
         pollRemote(force: true)
+        bumpSurfaceEpoch()
+        refreshRemoteWarn()
+    }
+
+    func disconnectRemote() {
+        guard isRemote else { return }
+        closeAllSwitchers()
+        closeAllMultiviews()
+        showOverlay = false
+        if remoteHandle != 0 {
+            _ = mixer_remote_close(remoteHandle)
+            remoteHandle = 0
+        }
+        remoteConnected = false
+        remotePreviewKey = ""
+        remoteProgramKey = ""
+        remotePreviewLive = false
+        remoteProgramLive = false
+        remoteEpoch = ""
+        remotePulledDocumentRevision = 0
+        remoteLiveSequence = 0
+        for id in remoteReceiveIds.values {
+            _ = mixer_destroy_source(id)
+        }
+        remoteReceiveIds.removeAll()
+        _ = mixer_destroy_source(MixerRemote.previewSourceId)
+        _ = mixer_destroy_source(MixerRemote.programSourceId)
         bumpSurfaceEpoch()
         refreshRemoteWarn()
     }
@@ -344,6 +375,9 @@ final class MixerController: ObservableObject {
         remoteProgramKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteEpoch = ""
+        remotePulledDocumentRevision = 0
+        remoteLiveSequence = 0
         for id in remoteReceiveIds.values {
             _ = mixer_destroy_source(id)
         }
@@ -2119,7 +2153,7 @@ final class MixerController: ObservableObject {
                 expected: remoteRevision
             )
             if code != 0 {
-                presentError(L10n.t("msg.revisionConflict"), title: L10n.t("chrome.overlay"))
+                presentError(remoteMutateError(), title: L10n.t("chrome.overlay"))
                 pollRemote(force: true)
                 return
             }
@@ -2132,12 +2166,24 @@ final class MixerController: ObservableObject {
     private func mutateRemote(_ json: String) -> Bool {
         let code = MixerRemote.mutate(remoteHandle, json, expected: remoteRevision)
         if code != 0 {
-            presentError(L10n.t("msg.revisionConflict"), title: L10n.t("chrome.overlay"))
+            presentError(remoteMutateError(), title: L10n.t("chrome.settings"))
             pollRemote(force: true)
             return false
         }
         pollRemote(force: true)
         return true
+    }
+
+    private func remoteMutateError() -> String {
+        let statusJson = MixerRemote.status(remoteHandle)
+        if let data = statusJson.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = root["error"] as? String,
+           !error.isEmpty
+        {
+            return error
+        }
+        return L10n.t("msg.revisionConflict")
     }
 
     @discardableResult
@@ -2156,17 +2202,28 @@ final class MixerController: ObservableObject {
         var lag = false
         var error = ""
         var epoch = remoteEpoch
+        var documentRevision = remoteRevision
+        var sequence = remoteLiveSequence
         if let data = statusJson.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         {
             connected = root["connected"] as? Bool ?? false
             lag = root["lag"] as? Bool ?? false
             error = root["error"] as? String ?? ""
-            if let revision = root["revision"] as? NSNumber {
+            if let value = root["documentRevision"] as? NSNumber, value.uint64Value != 0 {
+                documentRevision = value.uint64Value
+                if remoteRevision != documentRevision {
+                    remoteRevision = documentRevision
+                }
+            } else if let revision = root["revision"] as? NSNumber {
                 let value = revision.uint64Value
+                documentRevision = value
                 if remoteRevision != value {
                     remoteRevision = value
                 }
+            }
+            if let value = root["sequence"] as? NSNumber {
+                sequence = value.uint64Value
             }
             if let value = root["epoch"] as? String {
                 epoch = value
@@ -2190,14 +2247,18 @@ final class MixerController: ObservableObject {
         if status != nextStatus {
             status = nextStatus
         }
-        if let mixValue = MixerRemote.mix(from: MixerRemote.live(remoteHandle), unitId: selectedUnitId), !tbarDragging, !tbarLocked, mix != mixValue {
-            mix = mixValue
+        if force || sequence != remoteLiveSequence {
+            let liveJson = MixerRemote.live(remoteHandle)
+            if !liveJson.isEmpty {
+                remoteLiveSequence = sequence
+                if let mixValue = MixerRemote.mix(from: liveJson, unitId: selectedUnitId), !tbarDragging, !tbarLocked, mix != mixValue {
+                    mix = mixValue
+                }
+                applyRemoteLiveBuses(liveJson)
+            }
         }
-        applyRemoteLiveBuses()
-        let docChanged = force || epoch != remoteEpoch || remoteRevision != remotePulledRevision
-        remoteEpoch = epoch
-        remotePulledRevision = remoteRevision
-        if connected, docChanged || force {
+        let docChanged = force || epoch != remoteEpoch || documentRevision != remotePulledDocumentRevision
+        if connected, docChanged {
             let json = MixerRemote.snapshot(remoteHandle)
             if let data = json.data(using: .utf8), let loaded = try? SessionFile.decode(data) {
                 let keepUnit = selectedUnitId
@@ -2207,6 +2268,8 @@ final class MixerController: ObservableObject {
                 selectedUnitId = session.units.contains(where: { $0.id == keepUnit }) ? keepUnit : (session.units.first?.id ?? 1)
                 selectedSceneId = keepScene
                 selectedInputId = keepInput
+                remoteEpoch = epoch
+                remotePulledDocumentRevision = documentRevision
                 syncPublishedVideo()
                 bumpSurfaceEpoch()
             }
@@ -2214,8 +2277,8 @@ final class MixerController: ObservableObject {
         refreshRemoteWarn()
     }
 
-    private func applyRemoteLiveBuses() {
-        guard let data = MixerRemote.live(remoteHandle).data(using: .utf8),
+    private func applyRemoteLiveBuses(_ liveJson: String) {
+        guard let data = liveJson.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let units = root["units"] as? [String: Any]
         else { return }

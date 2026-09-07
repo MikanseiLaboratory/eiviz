@@ -67,7 +67,7 @@ flowchart LR
 
 Mixerはプロセスに1つです。ライブプレビュー以外、ホストへGPUポインタは渡しません。入力・シーン・Mixing Unitは整数IDで指します。
 
-リモート接続時のプロセス構成は上図です。操作手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
+リモート接続時のプロセス構成は上図です。操作手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。GUIなしのMixerは[headless](/eiviz/ja/features/headless/)です。
 
 ## 並行性
 

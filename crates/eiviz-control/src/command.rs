@@ -160,7 +160,7 @@ impl Command {
 /// Collaborative document edit. Applied against a staged clone, then replaced
 /// through the same reconcile path as `ReplaceSession`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SessionMutation {
     UpsertInput {
         input: Box<InputDto>,
@@ -175,6 +175,7 @@ pub enum SessionMutation {
         id: u64,
     },
     SetSceneLayers {
+        #[serde(alias = "scene_id")]
         scene_id: u64,
         layers: Vec<SceneLayer>,
     },
@@ -185,14 +186,18 @@ pub enum SessionMutation {
         id: u64,
     },
     SetOverlaySlot {
+        #[serde(alias = "unit_id")]
         unit_id: u64,
         index: u32,
         slot: Box<OverlaySlot>,
     },
     AddMediaInput {
         name: String,
+        #[serde(alias = "media_kind")]
         media_kind: InputKind,
+        #[serde(alias = "host_path")]
         host_path: String,
+        #[serde(alias = "video_loop")]
         video_loop: bool,
         tags: Vec<String>,
     },
@@ -206,8 +211,11 @@ pub enum SessionMutation {
         settings: Box<crate::session::SessionSettings>,
         outputs: Vec<crate::session::OutputDto>,
         buses: Vec<crate::session::BusDto>,
+        #[serde(alias = "headphone_copy_master")]
         headphone_copy_master: bool,
+        #[serde(alias = "next_output_id")]
         next_output_id: u64,
+        #[serde(alias = "next_bus_id")]
         next_bus_id: u64,
     },
 }
@@ -228,5 +236,106 @@ impl SessionMutation {
             Self::DeleteMultiview { .. } => "DeleteMultiview",
             Self::SetSettings { .. } => "SetSettings",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionMutation;
+    use crate::session::{OutputSourceKind, OutputTransport};
+
+    #[test]
+    fn host_set_settings_json_uses_camel_case_fields() {
+        let json = r#"{
+            "kind": "setSettings",
+            "settings": {
+                "masterFpsNum": 60000,
+                "masterFpsDen": 1001,
+                "internalColorFormat": "Uyvy",
+                "rebarOptimization": false,
+                "vmixApiEnabledValue": true,
+                "rebarOptimizationEnabled": false
+            },
+            "outputs": [{
+                "id": 100,
+                "name": "eiviz-pgm",
+                "transport": "Omt",
+                "sourceKind": "MuProgram",
+                "sourceId": 0,
+                "unitId": 1,
+                "useGpu": true,
+                "enabled": true,
+                "audioBusId": 1,
+                "skipEncodeWhenNoReceivers": true
+            }, {
+                "id": 101,
+                "name": "eiviz-prv",
+                "transport": "Omt",
+                "sourceKind": "MuPreview",
+                "unitId": 1,
+                "useGpu": true,
+                "enabled": true,
+                "audioBusId": 1
+            }],
+            "buses": [{
+                "id": 1,
+                "name": "Master",
+                "role": "Master",
+                "deviceKind": "None",
+                "deviceId": "",
+                "mapLeft": 0,
+                "mapRight": 1,
+                "gain": 1,
+                "mute": false
+            }],
+            "headphoneCopyMaster": false,
+            "nextOutputId": 102,
+            "nextBusId": 3
+        }"#;
+        let parsed: SessionMutation = serde_json::from_str(json).expect("host setSettings JSON");
+        let SessionMutation::SetSettings {
+            outputs,
+            headphone_copy_master,
+            next_output_id,
+            next_bus_id,
+            ..
+        } = parsed
+        else {
+            panic!("expected setSettings");
+        };
+        assert!(!headphone_copy_master);
+        assert_eq!(next_output_id, 102);
+        assert_eq!(next_bus_id, 3);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].transport, OutputTransport::Omt);
+        assert_eq!(outputs[0].source_kind, OutputSourceKind::MuProgram);
+        assert_eq!(outputs[0].unit_id, 1);
+        assert_eq!(outputs[1].source_kind, OutputSourceKind::MuPreview);
+        assert_eq!(outputs[1].id, 101);
+    }
+
+    #[test]
+    fn set_overlay_slot_json_uses_camel_case_unit_id() {
+        let json = r#"{
+            "kind": "setOverlaySlot",
+            "unitId": 1,
+            "index": 0,
+            "slot": {
+                "sceneGpuId": 1,
+                "x": 0.62,
+                "y": 0.08,
+                "width": 0.32,
+                "height": 0.32,
+                "opacity": 1,
+                "z": 0,
+                "enabled": true
+            }
+        }"#;
+        let parsed: SessionMutation = serde_json::from_str(json).expect("host overlay JSON");
+        let SessionMutation::SetOverlaySlot { unit_id, index, .. } = parsed else {
+            panic!("expected setOverlaySlot");
+        };
+        assert_eq!(unit_id, 1);
+        assert_eq!(index, 0);
     }
 }

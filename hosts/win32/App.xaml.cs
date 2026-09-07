@@ -157,6 +157,16 @@ public partial class App : Application
         }
     }
 
+    internal void DisconnectRemote()
+    {
+        if (!HostRole.IsRemote)
+            return;
+        if (Backend is DisconnectedRemoteBackend)
+            return;
+        Backend?.Dispose();
+        Backend = new DisconnectedRemoteBackend();
+    }
+
     internal static void ApplyVmixApi()
     {
         var app = (App)Current;

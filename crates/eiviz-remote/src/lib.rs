@@ -13,7 +13,7 @@ mod abi;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::path::Path;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -23,9 +23,15 @@ use eiviz_api::client::{ControlSession, SessionView};
 
 use crate::abi::{ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK};
 
+struct MixCoalesce {
+    pending: Mutex<HashMap<u64, f32>>,
+    scheduled: AtomicBool,
+}
+
 struct RemoteSlot {
     handle: tokio::runtime::Handle,
     session: Arc<ControlSession>,
+    mix: Arc<MixCoalesce>,
     stop: tokio::sync::watch::Sender<bool>,
     join: Option<JoinHandle<()>>,
 }
@@ -94,6 +100,10 @@ pub unsafe fn open(url: *const c_char, token: *const c_char) -> i32 {
                     RemoteSlot {
                         handle,
                         session,
+                        mix: Arc::new(MixCoalesce {
+                            pending: Mutex::new(HashMap::new()),
+                            scheduled: AtomicBool::new(false),
+                        }),
                         stop: stop_tx,
                         join: Some(join),
                     },
@@ -125,8 +135,8 @@ fn with_slot<T>(handle: i32, f: impl FnOnce(&RemoteSlot) -> T) -> Option<T> {
     map.get(&handle).map(f)
 }
 
-fn view(handle: i32) -> Option<SessionView> {
-    with_slot(handle, |slot| slot.session.view())
+fn session(handle: i32) -> Option<Arc<ControlSession>> {
+    with_slot(handle, |slot| Arc::clone(&slot.session))
 }
 
 pub unsafe fn copy_snapshot(handle: i32, out: *mut u8, cap: usize) -> i32 {
@@ -143,6 +153,7 @@ pub unsafe fn copy_status(handle: i32, out: *mut u8, cap: usize) -> i32 {
             "connected": view.connected,
             "epoch": view.epoch,
             "revision": view.revision,
+            "documentRevision": view.document_revision,
             "sequence": view.sequence,
             "error": view.error,
             "lag": view.lag,
@@ -155,9 +166,11 @@ fn copy_bytes(handle: i32, out: *mut u8, cap: usize, f: impl Fn(&SessionView) ->
     if out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
-    let bytes = match view(handle) {
-        Some(view) => f(&view),
-        None => return -ERR_NOT_CREATED,
+    let Some(session) = session(handle) else {
+        return -ERR_NOT_CREATED;
+    };
+    let Some(bytes) = session.with_view(f) else {
+        return -ERR_NOT_CREATED;
     };
     if bytes.len() > cap {
         return -1;
@@ -180,24 +193,30 @@ fn run<T>(handle: i32, fut: impl std::future::Future<Output = T>) -> Option<T> {
     Some(rt.block_on(fut))
 }
 
-pub fn cut(handle: i32, unit_id: u64, swap: u32) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+fn spawn_live(handle: i32, fut: impl std::future::Future<Output = i32> + Send + 'static) -> i32 {
+    let Some(rt) = with_slot(handle, |slot| slot.handle.clone()) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    let _ = rt.spawn(fut);
+    OK
+}
+
+pub fn cut(handle: i32, unit_id: u64, swap: u32) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
         map_result(session.cut(unit_id, swap != 0).await)
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn preview(handle: i32, unit_id: u64, scene_id: u64) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(session.preview(unit_id, scene_id).await)
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -217,10 +236,10 @@ pub fn auto(
     softness: f32,
     param: f32,
 ) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(
             session
                 .auto_full(
@@ -241,31 +260,68 @@ pub fn auto(
                 .await,
         )
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn set_mix(handle: i32, unit_id: u64, value: f32) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some((session, mix, rt)) = with_slot(handle, |slot| {
+        (
+            Arc::clone(&slot.session),
+            Arc::clone(&slot.mix),
+            slot.handle.clone(),
+        )
+    }) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
-        map_result(session.set_mix(unit_id, value).await)
-    })
-    .unwrap_or(ERR_NOT_CREATED)
+    if let Ok(mut pending) = mix.pending.lock() {
+        pending.insert(unit_id, value);
+    } else {
+        return ERR_IO;
+    }
+    if mix
+        .scheduled
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return OK;
+    }
+    let _ = rt.spawn(async move {
+        flush_mix(session, mix).await;
+    });
+    OK
+}
+
+async fn flush_mix(session: Arc<ControlSession>, mix: Arc<MixCoalesce>) {
+    loop {
+        let batch = match mix.pending.lock() {
+            Ok(mut pending) => {
+                if pending.is_empty() {
+                    mix.scheduled.store(false, Ordering::SeqCst);
+                    return;
+                }
+                std::mem::take(&mut *pending)
+            }
+            Err(_) => {
+                mix.scheduled.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        for (unit_id, value) in batch {
+            let _ = session.set_mix(unit_id, value).await;
+        }
+    }
 }
 
 pub fn overlay_auto(handle: i32, unit_id: u64, index: u32, duration_ms: u32, to_on: u32) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(
             session
                 .overlay_auto(unit_id, index, duration_ms, to_on != 0)
                 .await,
         )
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub unsafe fn mutate(handle: i32, json: *const u8, len: usize, expected_revision: u64) -> i32 {
@@ -273,7 +329,7 @@ pub unsafe fn mutate(handle: i32, json: *const u8, len: usize, expected_revision
         return ERR_INVALID_ARGUMENT;
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) }.to_vec();
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     run(handle, async move {
@@ -287,7 +343,7 @@ pub unsafe fn replace(handle: i32, json: *const u8, len: usize, expected_revisio
         return ERR_INVALID_ARGUMENT;
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) }.to_vec();
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     run(handle, async move {
@@ -297,33 +353,30 @@ pub unsafe fn replace(handle: i32, json: *const u8, len: usize, expected_revisio
 }
 
 pub fn video_play(handle: i32, input_id: u64, playing: u32) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(session.video_play(input_id, playing != 0).await)
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn video_loop(handle: i32, input_id: u64, looping: u32) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(session.video_loop(input_id, looping != 0).await)
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub fn video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    spawn_live(handle, async move {
         map_result(session.video_seek(input_id, position_hns).await)
     })
-    .unwrap_or(ERR_NOT_CREATED)
 }
 
 pub unsafe fn upload(
@@ -340,7 +393,7 @@ pub unsafe fn upload(
     if path.is_empty() || kind.is_empty() {
         return ERR_INVALID_ARGUMENT;
     }
-    let Some(session) = with_slot(handle, |slot| Arc::clone(&slot.session)) else {
+    let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     run(handle, async move {

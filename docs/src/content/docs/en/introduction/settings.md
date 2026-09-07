@@ -150,7 +150,7 @@ Bind address, listen token, and uploaded media directory. Non-loopback bind requ
 
 ### Headless
 
-`eiviz-headless` has no Preferences window. Edit listen values with `eivizctl prefs`. The file is `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, and `maxRole`. They apply on the next `eiviz-headless run`. `EIVIZ_API_TOKEN` wins over the file token.
+Running without a GUI is [Headless](/eiviz/en/features/headless/). Edit listen values with `eivizctl prefs`.
 
 ### Help
 

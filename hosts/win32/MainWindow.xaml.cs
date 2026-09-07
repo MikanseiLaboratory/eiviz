@@ -144,6 +144,7 @@ public partial class MainWindow : Window
         SaveSessionButton.Visibility = Visibility.Collapsed;
         LoadSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
+        DisconnectButton.Visibility = Visibility.Visible;
         PreviewSourceBox.Visibility = Visibility.Visible;
         ProgramSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
@@ -214,6 +215,19 @@ public partial class MainWindow : Window
         ConnectTo(nextUrl, nextToken);
     }
 
+    private void Disconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var app = (App)Application.Current;
+        _overlay?.Close();
+        CloseAllSwitchers();
+        foreach (var window in _multiviews.ToArray())
+            window.Close();
+        PreviewHost.ReleaseNative();
+        ProgramHost.ReleaseNative();
+        app.DisconnectRemote();
+        RefreshStatusBar();
+    }
+
     private void ConnectTo(string url, string token)
     {
         var app = (App)Application.Current;
@@ -258,6 +272,8 @@ public partial class MainWindow : Window
             SnapshotButton.IsEnabled = live;
         if (SettingsButton.IsEnabled != live)
             SettingsButton.IsEnabled = live;
+        if (DisconnectButton.IsEnabled != live)
+            DisconnectButton.IsEnabled = live;
     }
 
     private void RefreshStatusBar()

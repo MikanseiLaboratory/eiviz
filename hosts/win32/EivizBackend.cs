@@ -414,11 +414,16 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     private readonly int _handle;
     private readonly RemoteVideoPresenter _presenter = new();
     private string _status = "";
-    private ulong _seenRevision;
+    private ulong _seenDocumentRevision;
+    private ulong _seenSequence;
     private string _epoch = "";
     private bool _connected;
     private readonly Dictionary<ulong, (ulong Preview, ulong Program)> _buses = [];
     private readonly Dictionary<ulong, float> _mix = [];
+    private byte[] _statusBuf = new byte[4096];
+    private byte[] _liveBuf = new byte[1 << 16];
+    private byte[] _snapBuf = new byte[1 << 20];
+    private string _lastRemoteError = "";
 
     public RemoteEivizBackend(int handle) => _handle = handle;
     public bool IsRemote => true;
@@ -445,19 +450,29 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     private void Pull(bool force)
     {
-        var statusJson = MixerRemote.StatusText(_handle);
+        var statusJson = MixerRemote.StatusText(_handle, ref _statusBuf);
         var connected = false;
         var lag = false;
         var error = "";
         var epoch = _epoch;
+        var documentRevision = Revision;
+        var sequence = _seenSequence;
         try
         {
             using var status = JsonDocument.Parse(string.IsNullOrEmpty(statusJson) ? "{}" : statusJson);
             connected = status.RootElement.TryGetProperty("connected", out var c) && c.GetBoolean();
             lag = status.RootElement.TryGetProperty("lag", out var l) && l.GetBoolean();
             error = status.RootElement.TryGetProperty("error", out var e) ? e.GetString() ?? "" : "";
+            _lastRemoteError = error;
             if (status.RootElement.TryGetProperty("revision", out var r))
                 Revision = r.GetUInt64();
+            documentRevision = status.RootElement.TryGetProperty("documentRevision", out var dr)
+                ? dr.GetUInt64()
+                : Revision;
+            if (documentRevision != 0)
+                Revision = documentRevision;
+            if (status.RootElement.TryGetProperty("sequence", out var seq))
+                sequence = seq.GetUInt64();
             epoch = status.RootElement.TryGetProperty("epoch", out var ep) ? ep.GetString() ?? "" : epoch;
         }
         catch
@@ -474,17 +489,21 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         else
             _status = I18n.Loc.Format("msg.remoteConnected", Revision);
 
-        PullLive();
-        var docChanged = force || Revision != _seenRevision || epoch != _epoch;
-        _epoch = epoch;
+        if (force || sequence != _seenSequence)
+        {
+            PullLive();
+            _seenSequence = sequence;
+        }
+        var docChanged = force || documentRevision != _seenDocumentRevision || epoch != _epoch;
         if (!docChanged || Application.Current is not App app)
             return;
-        var json = MixerRemote.SnapshotText(_handle);
+        var json = MixerRemote.SnapshotText(_handle, ref _snapBuf);
         if (string.IsNullOrEmpty(json))
             return;
         var next = SessionStore.FromJson(json);
         next.SelectedUnitId = app.Session.SelectedUnitId;
-        _seenRevision = Revision;
+        _seenDocumentRevision = documentRevision;
+        _epoch = epoch;
         app.ReplaceDocument(next);
         SyncPublishedVideo();
         Changed?.Invoke();
@@ -509,6 +528,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset)
     {
         _ = preset;
+        _mix[unitId] = mix;
         return MixerRemote.SetMix(_handle, unitId, mix) == 0;
     }
 
@@ -527,15 +547,23 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public bool Mutate(string json, ulong expectedRevision, out string error)
     {
         var code = MixerRemote.MutateCode(_handle, json, expectedRevision);
+        Pull(force: true);
         if (code == 0)
         {
             error = "";
-            Pull(force: true);
             return true;
         }
-        error = code == -3 ? I18n.Loc.T("msg.revisionConflict") : I18n.Loc.Error("Mutate session", code < 0 ? -code : code);
-        Pull(force: true);
+        error = MutateError(code);
         return false;
+    }
+
+    private string MutateError(int code)
+    {
+        if (!string.IsNullOrEmpty(_lastRemoteError))
+            return _lastRemoteError;
+        return code == -3
+            ? I18n.Loc.T("msg.revisionConflict")
+            : I18n.Loc.Error("Mutate session", code < 0 ? -code : code);
     }
 
     public bool UploadMedia(string path, string kind, string name, bool videoLoop, ulong expectedRevision, out string error)
@@ -570,7 +598,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     {
         try
         {
-            var json = MixerRemote.LiveText(_handle);
+            var json = MixerRemote.LiveText(_handle, ref _liveBuf);
             if (string.IsNullOrEmpty(json))
                 return;
             using var doc = JsonDocument.Parse(json);
@@ -607,7 +635,11 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public void SyncPublishedVideo() => _presenter.Sync(PublishedOutputs());
 
-    public void Dispose() => MixerRemote.Close(_handle);
+    public void Dispose()
+    {
+        _presenter.Release();
+        MixerRemote.Close(_handle);
+    }
 }
 
 internal static class HostPresentation
@@ -706,6 +738,17 @@ internal sealed class RemoteVideoPresenter
             host.MonitorId = 0;
             host.SourceId = 0;
         }
+    }
+
+    public void Release()
+    {
+        foreach (var id in _connected.ToArray())
+            MixerNative.DestroySource(id);
+        _connected.Clear();
+        MixerNative.DestroySource(PreviewSourceId);
+        MixerNative.DestroySource(ProgramSourceId);
+        PreviewOk = false;
+        ProgramOk = false;
     }
 }
 

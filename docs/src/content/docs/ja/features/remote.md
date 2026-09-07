@@ -7,14 +7,14 @@ Windowsは`Eiviz.Host.exe`（Mixer）と`Eiviz.Remote.exe`（操作クライア�
 
 ## 接続
 
-1. 接続先でAPI待ち受けを有効にする（`Eiviz.Host.exe`の環境設定、または`eiviz-headless run --bind`）
+1. 接続先でAPI待ち受けを有効にする（`Eiviz.Host.exe`の環境設定、または[headless](/eiviz/ja/features/headless/)の`eiviz-headless run`）
 2. 待ち受けtokenを設定する
 3. `Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）を起動する
 4. 左上のConnectでIP、ポート、tokenを入れてOKする。接続すると操作画面が開きます
 
-接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションJSONには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。
+接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションJSONには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。接続先が`eiviz-headless`のときは、待ち受けとtokenは[headless](/eiviz/ja/features/headless/)です。
 
-Connectの▾から最近使った接続先を選べます。
+Connectの▾から最近使った接続先を選べます。Disconnectで切断します。
 
 複数クライアントが同時に接続でき、ライブ状態は購読で揃います。
 

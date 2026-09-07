@@ -77,6 +77,8 @@ struct ContentView: View {
         HStack {
             if mixer.isRemote {
                 Button(L10n.t("chrome.connect")) { mixer.showConnect = true }
+                Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
+                    .disabled(!mixer.remoteConnected)
                 Menu {
                     ForEach(AppPrefs.shared.recentRemotes, id: \.self) { url in
                         Button(RemoteEndpoint.display(url)) {

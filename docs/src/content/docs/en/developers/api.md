@@ -67,6 +67,8 @@ With no subcommand, eivizctl opens a REPL. Type `prefs`, `prefs get`, `prefs set
 
 ## Headless daemon
 
+Operator steps for start, REPL, and Remote are in [Headless](/eiviz/en/features/headless/). This section is the daemon contract.
+
 ```bash
 eiviz-headless validate --session show.eiviz.json
 eiviz-headless canonicalize --session show.eiviz.json
