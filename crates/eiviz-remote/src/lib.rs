@@ -197,7 +197,7 @@ fn spawn_live(handle: i32, fut: impl std::future::Future<Output = i32> + Send + 
     let Some(rt) = with_slot(handle, |slot| slot.handle.clone()) else {
         return ERR_NOT_CREATED;
     };
-    let _ = rt.spawn(fut);
+    drop(rt.spawn(fut));
     OK
 }
 
@@ -284,9 +284,9 @@ pub fn set_mix(handle: i32, unit_id: u64, value: f32) -> i32 {
     {
         return OK;
     }
-    let _ = rt.spawn(async move {
+    drop(rt.spawn(async move {
         flush_mix(session, mix).await;
-    });
+    }));
     OK
 }
 
