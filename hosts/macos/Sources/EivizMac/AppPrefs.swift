@@ -36,6 +36,7 @@ final class AppPrefs: ObservableObject {
     @Published var previewVideoTransport: String
     @Published var programVideoAddress: String
     @Published var programVideoTransport: String
+    @Published var remoteOmtUseGpu: Bool
     @Published var nativeApiEnabled: Bool
     @Published var nativeApiBind: String
     @Published var nativeApiPort: UInt32
@@ -79,6 +80,7 @@ final class AppPrefs: ObservableObject {
         previewVideoTransport = loaded.previewVideoTransport
         programVideoAddress = loaded.programVideoAddress
         programVideoTransport = loaded.programVideoTransport
+        remoteOmtUseGpu = loaded.remoteOmtUseGpu
         nativeApiEnabled = loaded.nativeApiEnabled
         nativeApiBind = loaded.nativeApiBind
         nativeApiPort = loaded.nativeApiPort
@@ -101,6 +103,7 @@ final class AppPrefs: ObservableObject {
         dto.previewVideoTransport = previewVideoTransport
         dto.programVideoAddress = programVideoAddress
         dto.programVideoTransport = programVideoTransport
+        dto.remoteOmtUseGpu = remoteOmtUseGpu
         dto.nativeApiEnabled = nativeApiEnabled
         dto.nativeApiBind = nativeApiBind
         dto.nativeApiPort = nativeApiPort
@@ -171,6 +174,7 @@ final class AppPrefs: ObservableObject {
         var previewVideoTransport: String = "OMT"
         var programVideoAddress: String = ""
         var programVideoTransport: String = "OMT"
+        var remoteOmtUseGpu: Bool = false
         var nativeApiEnabled: Bool = true
         var nativeApiBind: String = "127.0.0.1"
         var nativeApiPort: UInt32 = 9400
@@ -194,6 +198,7 @@ final class AppPrefs: ObservableObject {
             previewVideoTransport = try container.decodeIfPresent(String.self, forKey: .previewVideoTransport) ?? "OMT"
             programVideoAddress = try container.decodeIfPresent(String.self, forKey: .programVideoAddress) ?? ""
             programVideoTransport = try container.decodeIfPresent(String.self, forKey: .programVideoTransport) ?? "OMT"
+            remoteOmtUseGpu = try container.decodeIfPresent(Bool.self, forKey: .remoteOmtUseGpu) ?? false
             nativeApiEnabled = try container.decodeIfPresent(Bool.self, forKey: .nativeApiEnabled) ?? true
             nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"
             nativeApiPort = try container.decodeIfPresent(UInt32.self, forKey: .nativeApiPort) ?? 9400

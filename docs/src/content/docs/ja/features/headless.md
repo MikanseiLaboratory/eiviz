@@ -59,11 +59,11 @@ GUIの環境設定に相当する値は、ホスト固有です。セッショ�
 
 ## 対話型CLI
 
-`eivizctl`にサブコマンドを付けないとREPLです。プロンプトは`eiviz>`です。`exit`または`quit`で抜けます。接続先は`--url`で、既定は`ws://127.0.0.1:9400`です。クライアントのtokenは`--token`または`--token-file`です。REPLはWebSocketを1本維持し、コマンドごとに切断しません。
+既定はサブコマンドのCLIです。`--repl`を付けたときだけ対話型になります。プロンプトは`eiviz>`です。`exit`または`quit`で抜けます。接続先は`--url`で、既定は`ws://127.0.0.1:9400`です。クライアントのtokenは`--token`または`--token-file`です。REPLはWebSocketを1本維持し、コマンドごとに切断しません。
 
 ```bash
-eivizctl
-eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
+eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN cut --unit 1
+eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
 待ち受けの編集と、動いているMixerへの操作は別物です。

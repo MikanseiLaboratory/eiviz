@@ -50,7 +50,6 @@ CutでInputを指定した場合はPreviewを変えません。未指定ならPr
 ## eivizctl
 
 ```bash
-eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN status
 eivizctl cut --unit 1
 eivizctl snapshot
@@ -58,9 +57,10 @@ eivizctl shutdown
 eivizctl prefs
 eivizctl prefs get bind
 eivizctl prefs set bind 127.0.0.1:9400
+eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
-引数なしで起動するとREPLです。接続先は`--url`、tokenは`--token`または`--token-file`です。WebSocketはREPL中ずっと維持します。`prefs`、`prefs get`、`prefs set`、`mutate <json>`をそのまま打てます。
+既定はサブコマンドのCLIです。対話型は`--repl`のときだけです。接続先は`--url`、tokenは`--token`または`--token-file`です。REPL中はWebSocketを1本維持します。`prefs`、`prefs get`、`prefs set`、`mutate <json>`をそのまま打てます。
 
 `prefs`はheadlessの待ち受けファイルです。場所は`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`です。キーは`bind`、`token`、`mediaDirectory`、`maxRole`です。tokenの表示は`(set)`です。CLIの`--bind`と環境変数`EIVIZ_API_TOKEN`/`EIVIZ_MEDIA_DIRECTORY`がファイルより優先します。反映は次の`eiviz-headless run`です。
 

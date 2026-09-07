@@ -762,10 +762,7 @@ internal sealed class RemoteVideoPresenter
         {
             var id = MultiviewSourceBase | output.Id;
             keep.Add(id);
-            if (_connected.Contains(id))
-                continue;
-            if (Connect(id, new RemoteVideoChoice(output.Transport, output.Name)))
-                _connected.Add(id);
+            Connect(id, new RemoteVideoChoice(output.Transport, output.Name));
         }
         foreach (var id in _connected.ToArray())
         {
@@ -773,6 +770,7 @@ internal sealed class RemoteVideoPresenter
                 continue;
             MixerNative.DestroySource(id);
             _connected.Remove(id);
+            _boundKey.Remove(id);
         }
     }
 
@@ -786,7 +784,10 @@ internal sealed class RemoteVideoPresenter
 
     private bool Connect(ulong id, RemoteVideoChoice choice)
     {
-        var key = $"{choice.Transport}:{choice.Address}";
+        var useGpu = AppPrefs.Current.RemoteOmtUseGpu;
+        var key = choice.Transport == OutputTransport.Ndi
+            ? $"{choice.Transport}:{choice.Address}"
+            : $"{choice.Transport}:{choice.Address}:gpu={useGpu}";
         if (choice.IsEmpty)
         {
             if (_boundKey.ContainsKey(id) || _connected.Contains(id))
@@ -805,7 +806,7 @@ internal sealed class RemoteVideoPresenter
         var resolved = RemoteVideoCatalog.Resolve(choice);
         var code = resolved.Transport == OutputTransport.Ndi
             ? MixerNative.ConnectNdi(id, resolved.Address, 3, 0)
-            : MixerNative.ConnectOmt(id, resolved.Address, 1, 3, 0);
+            : MixerNative.ConnectOmt(id, resolved.Address, useGpu ? 1u : 0u, 3, 0);
         if (code != 0)
             return false;
         _connected.Add(id);
@@ -984,6 +985,8 @@ internal static class RemoteVideoCatalog
             {
                 var omt = Split(MixerNative.DiscoverText()).ToArray();
                 var ndi = Split(MixerNative.DiscoverNdiText()).ToArray();
+                Array.Sort(omt, StringComparer.Ordinal);
+                Array.Sort(ndi, StringComparer.Ordinal);
                 var changed = false;
                 lock (Gate)
                 {
@@ -994,12 +997,13 @@ internal static class RemoteVideoCatalog
                         changed = true;
                     }
                 }
-                if (!changed)
-                    continue;
-                var handler = Updated;
-                var dispatcher = Application.Current?.Dispatcher;
-                if (handler is not null && dispatcher is not null && !dispatcher.HasShutdownStarted)
-                    dispatcher.BeginInvoke(handler);
+                if (changed)
+                {
+                    var handler = Updated;
+                    var dispatcher = Application.Current?.Dispatcher;
+                    if (handler is not null && dispatcher is not null && !dispatcher.HasShutdownStarted)
+                        dispatcher.BeginInvoke(handler);
+                }
             }
             catch
             {

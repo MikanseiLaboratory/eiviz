@@ -176,7 +176,11 @@ public partial class MainWindow : Window
         _suppressVideoSource = false;
     }
 
-    private void OnRemoteVideoCatalogUpdated() => FillVideoSources();
+    private void OnRemoteVideoCatalogUpdated()
+    {
+        FillVideoSources();
+        BindPreviewProgram();
+    }
 
     private static List<RemoteVideoItem> WithChoice(List<RemoteVideoItem> items, RemoteVideoChoice choice)
     {
@@ -2403,8 +2407,16 @@ public partial class MainWindow : Window
     private void Preferences_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new PreferencesWindow { Owner = this };
-        if (dialog.ShowDialog() == true && dialog.RendererChanged)
-            ((App)Application.Current).ReloadSession(_session);
+        if (dialog.ShowDialog() != true)
+            return;
+        var app = (App)Application.Current;
+        if (dialog.RendererChanged)
+            app.ReloadSession(_session);
+        else if (HostRole.IsRemote && dialog.RemoteOmtDecodeChanged)
+        {
+            BindPreviewProgram();
+            app.Backend.SyncPublishedVideo();
+        }
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings(0);

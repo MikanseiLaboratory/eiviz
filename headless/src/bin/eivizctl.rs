@@ -6,7 +6,11 @@ use clap::{CommandFactory, Parser, Subcommand};
 use eiviz_api::client::{ControlClient, ControlSession};
 
 #[derive(Parser)]
-#[command(name = "eivizctl", about = "eiviz control client")]
+#[command(
+    name = "eivizctl",
+    about = "eiviz control client",
+    arg_required_else_help = true
+)]
 struct Cli {
     /// Control WebSocket URL
     #[arg(long, default_value = "ws://127.0.0.1:9400")]
@@ -20,6 +24,9 @@ struct Cli {
     /// Suppress the "ok" line on live ops
     #[arg(long)]
     json: bool,
+    /// Open an interactive prompt instead of running one command
+    #[arg(long)]
+    repl: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -94,10 +101,26 @@ async fn main() -> ExitCode {
         }
     };
     let client = ControlClient::websocket(cli.url, token);
-    let result = match cli.cmd {
-        Some(Cmd::Prefs { action }) => prefs_cmd(action),
-        Some(cmd) => run_once(&client, cmd, cli.json).await,
-        None => repl(&client, cli.json).await,
+    if cli.repl && cli.cmd.is_some() {
+        eprintln!("eivizctl error=--repl cannot be combined with a command");
+        return ExitCode::from(2);
+    }
+    let result = if cli.repl {
+        repl(&client, cli.json).await
+    } else {
+        match cli.cmd {
+            Some(Cmd::Prefs { action }) => prefs_cmd(action),
+            Some(cmd) => run_once(&client, cmd, cli.json).await,
+            None => {
+                let mut cmd = Cli::command();
+                if let Err(error) = cmd.print_help() {
+                    eprintln!("eivizctl error={error}");
+                } else {
+                    println!();
+                }
+                return ExitCode::from(2);
+            }
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

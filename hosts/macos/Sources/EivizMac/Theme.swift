@@ -196,6 +196,57 @@ func mixerUintField(_ value: Binding<UInt32>, minimum: UInt32 = 1) -> some View 
 }
 
 @MainActor
+func mixerTokenField(_ text: Binding<String>) -> some View {
+    TokenSecretField(text: text)
+}
+
+struct TokenSecretField: View {
+    @Binding var text: String
+    @State private var revealing = false
+    @State private var copied = false
+    @State private var copyReset: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if revealing {
+                    TextField("", text: $text)
+                } else {
+                    SecureField("", text: $text)
+                }
+            }
+            .frame(width: 320)
+            Button(L10n.t("token.reveal")) {}
+                .help(L10n.t("token.revealHint"))
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in revealing = true }
+                        .onEnded { _ in revealing = false }
+                )
+            Button(copied ? L10n.t("token.copied") : L10n.t("token.copy")) {
+                copyToken()
+            }
+        }
+        .onDisappear {
+            revealing = false
+            copyReset?.cancel()
+        }
+    }
+
+    private func copyToken() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        copyReset?.cancel()
+        copyReset = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            copied = false
+        }
+    }
+}
+
+@MainActor
 func mixerInt32Field(_ value: Binding<Int32>) -> some View {
     MixerInt32Field(value: value)
         .frame(height: mixerFieldLineHeight)

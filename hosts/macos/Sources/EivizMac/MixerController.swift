@@ -87,6 +87,7 @@ final class MixerController: ObservableObject {
     private var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
     private var remoteHandle: Int32 = 0
     private var remoteReceiveIds: [UInt64: UInt64] = [:]
+    private var remoteReceiveKeys: [UInt64: String] = [:]
     private var remoteEpoch = ""
     private var remotePulledDocumentRevision: UInt64 = 0
     private var remoteLiveSequence: UInt64 = 0
@@ -164,10 +165,22 @@ final class MixerController: ObservableObject {
     }
 
     private func applyDiscoveredVideo(omt: [String], ndi: [String]) {
-        guard omt != discoveredOmt || ndi != discoveredNdi else { return }
-        discoveredOmt = omt
-        discoveredNdi = ndi
-        remoteVideoCatalogEpoch &+= 1
+        let changed = omt != discoveredOmt || ndi != discoveredNdi
+        if changed {
+            discoveredOmt = omt
+            discoveredNdi = ndi
+            remoteVideoCatalogEpoch &+= 1
+        }
+        guard isRemote else { return }
+        if !remotePreviewLive {
+            remotePreviewKey = ""
+        }
+        if !remoteProgramLive {
+            remoteProgramKey = ""
+        }
+        if changed || !remotePreviewLive || !remoteProgramLive {
+            syncPublishedVideo()
+        }
     }
 
     private func bootRemote() {
@@ -239,6 +252,7 @@ final class MixerController: ObservableObject {
             _ = mixer_destroy_source(id)
         }
         remoteReceiveIds.removeAll()
+        remoteReceiveKeys.removeAll()
         _ = mixer_destroy_source(MixerRemote.previewSourceId)
         _ = mixer_destroy_source(MixerRemote.programSourceId)
         bumpSurfaceEpoch()
@@ -413,6 +427,7 @@ final class MixerController: ObservableObject {
         _ = mixer_destroy_source(MixerRemote.previewSourceId)
         _ = mixer_destroy_source(MixerRemote.programSourceId)
         remoteReceiveIds.removeAll()
+        remoteReceiveKeys.removeAll()
         guard booted else { return }
         mixer_destroy()
         booted = false
@@ -1530,6 +1545,21 @@ final class MixerController: ObservableObject {
         boot()
     }
 
+    func reconnectRemoteVideo() {
+        guard isRemote else { return }
+        remotePreviewKey = ""
+        remoteProgramKey = ""
+        remotePreviewLive = false
+        remoteProgramLive = false
+        for id in remoteReceiveIds.values {
+            _ = mixer_destroy_source(id)
+        }
+        remoteReceiveIds.removeAll()
+        remoteReceiveKeys.removeAll()
+        syncPublishedVideo()
+        bumpSurfaceEpoch()
+    }
+
     private func replaceSession(_ loaded: MixerSessionData) {
         closeAllInputPreviews()
         closeAllSwitchers()
@@ -2452,11 +2482,18 @@ final class MixerController: ObservableObject {
         bumpSurfaceEpoch()
     }
 
+    private func remoteVideoBindKey(_ item: RemoteVideoItem) -> String {
+        if item.transport == .ndi {
+            return "\(item.transport.rawValue):\(item.address)"
+        }
+        return "\(item.transport.rawValue):\(item.address):gpu=\(AppPrefs.shared.remoteOmtUseGpu)"
+    }
+
     private func syncPublishedVideo() {
         let preview = selectedRemoteVideo(preview: true)
         let program = selectedRemoteVideo(preview: false)
-        let previewKey = "\(preview.transport.rawValue):\(preview.address)"
-        let programKey = "\(program.transport.rawValue):\(program.address)"
+        let previewKey = remoteVideoBindKey(preview)
+        let programKey = remoteVideoBindKey(program)
         if previewKey != remotePreviewKey {
             remotePreviewKey = previewKey
             remotePreviewLive = connectRemoteChoice(MixerRemote.previewSourceId, preview)
@@ -2469,17 +2506,21 @@ final class MixerController: ObservableObject {
         var keep: [UInt64: UInt64] = [:]
         for output in outputs {
             let id = MixerRemote.sourceBase | output.id
+            let item = RemoteVideoItem(transport: output.transport, address: output.name, label: output.name)
+            let key = remoteVideoBindKey(item)
             keep[output.id] = id
-            if remoteReceiveIds[output.id] == id {
+            if remoteReceiveIds[output.id] == id, remoteReceiveKeys[output.id] == key {
                 continue
             }
-            if connectRemoteChoice(id, RemoteVideoItem(transport: output.transport, address: output.name, label: output.name)) {
+            if connectRemoteChoice(id, item) {
                 remoteReceiveIds[output.id] = id
+                remoteReceiveKeys[output.id] = key
             }
         }
         for (outputId, sourceId) in remoteReceiveIds where keep[outputId] == nil {
             _ = mixer_destroy_source(sourceId)
             remoteReceiveIds.removeValue(forKey: outputId)
+            remoteReceiveKeys.removeValue(forKey: outputId)
         }
         let unavailable = !remotePreviewLive || !remoteProgramLive
         if videoUnavailable != unavailable {
@@ -2497,7 +2538,9 @@ final class MixerController: ObservableObject {
         if resolved.transport == .ndi {
             code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 3, 0) }
         } else {
-            code = MixerFFI.withCString(resolved.address) { mixer_omt_connect(id, $0, 1, 3, 0) }
+            code = MixerFFI.withCString(resolved.address) {
+                mixer_omt_connect(id, $0, AppPrefs.shared.remoteOmtUseGpu ? 1 : 0, 3, 0)
+            }
         }
         return code == 0
     }

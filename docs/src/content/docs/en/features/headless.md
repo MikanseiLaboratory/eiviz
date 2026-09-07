@@ -59,11 +59,11 @@ The default media directory when unset is `%LOCALAPPDATA%\eiviz\media` on Window
 
 ## Interactive CLI
 
-`eivizctl` with no subcommand opens a REPL. The prompt is `eiviz>`. Type `exit` or `quit` to leave. The destination is `--url`, default `ws://127.0.0.1:9400`. Pass the client token with `--token` or `--token-file`. The REPL keeps one WebSocket open and does not disconnect after each command.
+The default is a one-shot CLI with a subcommand. Pass `--repl` for an interactive prompt. The prompt is `eiviz>`. Type `exit` or `quit` to leave. The destination is `--url`, default `ws://127.0.0.1:9400`. Pass the client token with `--token` or `--token-file`. The REPL keeps one WebSocket open and does not disconnect after each command.
 
 ```bash
-eivizctl
-eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
+eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN cut --unit 1
+eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
 Listen edits and live mixer ops are separate.

@@ -20,7 +20,7 @@ Multiple clients can stay connected; live state stays aligned through subscribe.
 
 ## Video
 
-Preview and Program use the same PRV/PGM frames. Pick the NDI or OMT source from each header menu. Add, tile-edit, and delete Multiview layouts from Settings.
+Preview and Program use the same PRV/PGM frames. Pick the NDI or OMT source from each header menu. CPU versus GPU OMT receive is a Preferences setting on `Eiviz.Remote.exe` (or `eiviz-remote.app`). The default is CPU. Add, tile-edit, and delete Multiview layouts from Settings.
 
 The scene list and switcher scene buttons show every Scene, collapsed. Preview/Program chrome still paints the collapsed tiles.
 
@@ -28,7 +28,7 @@ Adding Still/Video picks a file on the client, stores it in the destination medi
 
 ## Settings
 
-The Settings window sends display, performance, outputs, audio, and Web API fields to the destination session. Adding, editing tiles, and deleting Multiview layouts are also sent from Settings. Language and theme belong to `Eiviz.Remote.exe` Preferences.
+The Settings window sends display, performance, outputs, audio, and Web API fields to the destination session. Adding, editing tiles, and deleting Multiview layouts are also sent from Settings. Language, theme, and OMT receive belong to `Eiviz.Remote.exe` Preferences.
 
 Session edits use `MutateSession` with `expected_revision`. A mismatched revision is rejected; reload and try again.
 

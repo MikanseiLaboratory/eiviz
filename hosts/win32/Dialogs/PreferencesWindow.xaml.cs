@@ -11,6 +11,7 @@ public partial class PreferencesWindow : Window
     private readonly AppLanguage _originalLanguage = AppPrefs.Current.Language;
     private readonly AppThemeMode _originalTheme = AppPrefs.Current.Theme;
     private readonly GpuRenderer _originalRenderer = AppPrefs.Current.Renderer;
+    private readonly bool _originalRemoteOmtUseGpu = AppPrefs.Current.RemoteOmtUseGpu;
     private bool _accepted;
     private bool _suppress;
 
@@ -21,7 +22,9 @@ public partial class PreferencesWindow : Window
         SelectTag(LanguageBox, AppPrefs.Current.Language.ToString());
         SelectTag(ThemeBox, AppPrefs.Current.Theme.ToString());
         SelectTag(RendererBox, AppPrefs.Current.Renderer.ToString());
+        SelectTag(RemoteOmtDecodeBox, AppPrefs.Current.RemoteOmtUseGpu ? "Gpu" : "Cpu");
         RemoteFields.Visibility = Visibility.Collapsed;
+        RemoteOmtFields.Visibility = HostRole.IsRemote ? Visibility.Visible : Visibility.Collapsed;
         HostListenFields.Visibility = HostRole.IsRemote ? Visibility.Collapsed : Visibility.Visible;
         RemoteUrlBox.Text = AppPrefs.Current.RemoteUrl;
         RemoteTokenBox.Password = CredentialStore.Load(AppPrefs.Current.RemoteUrl);
@@ -41,6 +44,7 @@ public partial class PreferencesWindow : Window
     }
 
     public bool RendererChanged => AppPrefs.Current.Renderer != _originalRenderer;
+    public bool RemoteOmtDecodeChanged => AppPrefs.Current.RemoteOmtUseGpu != _originalRemoteOmtUseGpu;
     public bool ConnectionChanged => false;
 
     private void PrefsChanged(object sender, SelectionChangedEventArgs e)
@@ -54,6 +58,8 @@ public partial class PreferencesWindow : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         Apply(ReadLanguage(), ReadTheme(), ReadRenderer());
+        if (HostRole.IsRemote)
+            AppPrefs.Current.RemoteOmtUseGpu = ReadRemoteOmtUseGpu();
         if (!HostRole.IsRemote)
         {
             AppPrefs.Current.NativeApiBind = string.IsNullOrWhiteSpace(ApiBindBox.Text)
@@ -93,6 +99,13 @@ public partial class PreferencesWindow : Window
             && Enum.TryParse<GpuRenderer>(tag, out var renderer))
             return renderer;
         return AppPrefs.Current.Renderer;
+    }
+
+    private bool ReadRemoteOmtUseGpu()
+    {
+        if (RemoteOmtDecodeBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+            return tag == "Gpu";
+        return AppPrefs.Current.RemoteOmtUseGpu;
     }
 
     private static void Apply(AppLanguage language, AppThemeMode theme, GpuRenderer renderer)

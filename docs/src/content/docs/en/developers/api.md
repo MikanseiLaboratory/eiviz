@@ -50,7 +50,6 @@ Operator steps are in [Remote connection](/eiviz/en/features/remote/). Still/Vid
 ## eivizctl
 
 ```bash
-eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN status
 eivizctl cut --unit 1
 eivizctl snapshot
@@ -58,9 +57,10 @@ eivizctl shutdown
 eivizctl prefs
 eivizctl prefs get bind
 eivizctl prefs set bind 127.0.0.1:9400
+eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
-With no subcommand, eivizctl opens a REPL. Pass `--url` and `--token` or `--token-file`. The REPL keeps the WebSocket open. Type `prefs`, `prefs get`, `prefs set`, and `mutate <json>` on a line.
+The default is a one-shot CLI with a subcommand. Pass `--repl` for an interactive prompt, with `--url` and `--token` or `--token-file`. The REPL keeps the WebSocket open. Type `prefs`, `prefs get`, `prefs set`, and `mutate <json>` on a line.
 
 `prefs` edits the headless listen file: `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, and `maxRole`. Token display is `(set)`. CLI `--bind` and `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY` override the file. Values apply on the next `eiviz-headless run`.
 

@@ -564,8 +564,7 @@ struct ConnectView: View {
             Text(L10n.t("connect.port"))
             mixerUintField($port)
             Text(L10n.t("connect.token"))
-            SecureField("", text: $token)
-                .frame(width: 320)
+            mixerTokenField($token)
             HStack {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
@@ -577,7 +576,7 @@ struct ConnectView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 420)
+        .frame(minWidth: 520)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
     }
@@ -591,6 +590,8 @@ struct PreferencesView: View {
     @State private var originalTheme = AppPrefs.shared.theme
     @State private var originalRenderer = AppPrefs.shared.renderer
     @State private var renderer = AppPrefs.shared.renderer
+    @State private var originalRemoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
+    @State private var remoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
     @State private var listenToken = KeychainStore.load(account: "listen")
     @State private var reverting = false
 
@@ -618,14 +619,24 @@ struct PreferencesView: View {
             Text(L10n.t("prefs.rendererHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            if mixer.isRemote {
+                Text(L10n.t("prefs.remoteOmtDecode"))
+                Picker("", selection: $remoteOmtUseGpu) {
+                    Text(L10n.t("prefs.remoteOmtDecodeCpu")).tag(false)
+                    Text(L10n.t("prefs.remoteOmtDecodeGpu")).tag(true)
+                }
+                .frame(width: 220)
+                Text(L10n.t("prefs.remoteOmtDecodeHelp"))
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !mixer.isRemote {
                 Text(L10n.t("prefs.apiBind"))
                 mixerTextField($prefs.nativeApiBind, placeholder: "127.0.0.1")
                 Text(L10n.t("prefs.apiPort"))
                 mixerUintField($prefs.nativeApiPort)
                 Text(L10n.t("prefs.apiToken"))
-                SecureField("", text: $listenToken)
-                    .frame(width: 320)
+                mixerTokenField($listenToken)
                 Text(L10n.t("prefs.mediaDirectory"))
                 mixerTextField($prefs.mediaDirectory, placeholder: AppPrefs.defaultMediaDirectory)
             }
@@ -648,12 +659,15 @@ struct PreferencesView: View {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
                     prefs.renderer = renderer
+                    prefs.remoteOmtUseGpu = remoteOmtUseGpu
                     prefs.mediaDirectory = prefs.resolvedMediaDirectory
                     KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
                     if renderer != originalRenderer {
                         mixer.recreateMixer()
+                    } else if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
+                        mixer.reconnectRemoteVideo()
                     }
                     dismiss()
                 }
@@ -675,9 +689,9 @@ struct PreferencesView: View {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
             originalRenderer = prefs.renderer
-            originalRemoteUrl = prefs.remoteUrl
             renderer = prefs.renderer
-            remoteToken = KeychainStore.load(account: prefs.remoteUrl)
+            originalRemoteOmtUseGpu = prefs.remoteOmtUseGpu
+            remoteOmtUseGpu = prefs.remoteOmtUseGpu
             listenToken = KeychainStore.load(account: "listen")
         }
         .onChange(of: prefs.language) { _, _ in
