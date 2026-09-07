@@ -14,6 +14,8 @@ public partial class SceneTile : UserControl
         MouseLeftButtonUp += (_, _) => Select();
         MouseDoubleClick += (_, e) =>
         {
+            if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null)
+                return;
             Raise(SceneEditRequested);
             e.Handled = true;
         };
@@ -123,15 +125,6 @@ public partial class SceneTile : UserControl
             current = VisualTreeHelper.GetParent(current);
         }
         return null;
-    }
-
-    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ClickCount >= 2)
-        {
-            Raise(SceneEditRequested);
-            e.Handled = true;
-        }
     }
 
     private void Select()

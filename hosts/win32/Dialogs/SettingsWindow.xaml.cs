@@ -11,9 +11,13 @@ public partial class SettingsWindow : Window
     private Session _session => ((App)Application.Current).Session;
     private ulong _nextOutputId;
 
-    public SettingsWindow(Session session)
+    public SettingsWindow(Session session, int category = 0)
     {
         InitializeComponent();
+        if (category > 0 && category < CategoryList.Items.Count)
+            CategoryList.SelectedIndex = category;
+        if (App.IsRemote && OpenMvButton is not null)
+            OpenMvButton.Visibility = Visibility.Collapsed;
         _nextOutputId = session.NextOutputId;
         Settings = new SessionSettings
         {

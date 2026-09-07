@@ -454,6 +454,7 @@ impl MixerPort for NullMixer {
     fn live_state(&self) -> ControlResult<LiveState> {
         Ok(LiveState {
             units: self.units.clone(),
+            ..Default::default()
         })
     }
     fn video_set_playing(&mut self, _id: u64, _playing: bool) -> ControlResult<()> {

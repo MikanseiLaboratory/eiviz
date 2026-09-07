@@ -102,8 +102,10 @@ struct ContentView: View {
             }
             Spacer()
             Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
-                .disabled(mixer.isRemote && !mixer.remoteConnected)
-            Button(L10n.t("chrome.resources")) { mixer.showResources = true }
+                .disabled(mixer.isRemote)
+            if !mixer.isRemote {
+                Button(L10n.t("chrome.resources")) { mixer.showResources = true }
+            }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
@@ -539,11 +541,15 @@ struct ContentView: View {
                 .frame(minWidth: 80)
             }
             Menu {
-                ForEach(mixer.session.multiviews) { layout in
-                    Button(layout.name) { mixer.openMultiviewWindow(layout) }
+                if mixer.isRemote {
+                    Button(L10n.t("chrome.multiview")) { mixer.openMultiviewSettings() }
+                } else {
+                    ForEach(mixer.session.multiviews) { layout in
+                        Button(layout.name) { mixer.openMultiviewWindow(layout) }
+                    }
+                    Divider()
+                    Button(L10n.t("chrome.newMultiview")) { mixer.openNewMultiview() }
                 }
-                Divider()
-                Button(L10n.t("chrome.newMultiview")) { mixer.openNewMultiview() }
             } label: {
                 Text(L10n.t("chrome.multiview"))
             }
@@ -673,6 +679,7 @@ struct ContentView: View {
     }
 
     private func videoItems(preview: Bool) -> [RemoteVideoItem] {
+        _ = mixer.remoteVideoCatalogEpoch
         var items = mixer.remoteVideoItems()
         let selected = mixer.selectedRemoteVideo(preview: preview)
         if !items.contains(selected) {

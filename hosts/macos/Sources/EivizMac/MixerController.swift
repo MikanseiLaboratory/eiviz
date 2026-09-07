@@ -44,6 +44,7 @@ final class MixerController: ObservableObject {
     @Published var videoPlaying = false
     @Published var videoTitle = ""
     @Published var showSettings = false
+    @Published var settingsCategory = 0
     @Published var showPreferences = false
     @Published var showAddInput = false
     @Published var editingInput: InputEntry?
@@ -66,6 +67,7 @@ final class MixerController: ObservableObject {
     @Published private(set) var isRemote = false
     @Published private(set) var remoteConnected = false
     @Published private(set) var remoteRevision: UInt64 = 0
+    @Published private(set) var remoteVideoCatalogEpoch: UInt64 = 0
     @Published var videoUnavailable = false
 
     private var booted = false
@@ -94,6 +96,9 @@ final class MixerController: ObservableObject {
     private var remoteProgramKey = ""
     private var remotePreviewLive = false
     private var remoteProgramLive = false
+    private var discoveredOmt: [String] = []
+    private var discoveredNdi: [String] = []
+    private var remoteDiscoverTask: Task<Void, Never>?
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -144,6 +149,27 @@ final class MixerController: ObservableObject {
         }
     }
 
+    private func startRemoteDiscover() {
+        remoteDiscoverTask?.cancel()
+        remoteDiscoverTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                let omt = MixerFFI.discoverOmt()
+                let ndi = MixerFFI.discoverNdi()
+                await MainActor.run {
+                    self?.applyDiscoveredVideo(omt: omt, ndi: ndi)
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func applyDiscoveredVideo(omt: [String], ndi: [String]) {
+        guard omt != discoveredOmt || ndi != discoveredNdi else { return }
+        discoveredOmt = omt
+        discoveredNdi = ndi
+        remoteVideoCatalogEpoch &+= 1
+    }
+
     private func bootRemote() {
         guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, 60, 1), "Metal mixer initialization") else {
             return
@@ -151,6 +177,7 @@ final class MixerController: ObservableObject {
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
         FlipBudget.configure(0)
         GpuPresentStore.load()
+        startRemoteDiscover()
         startTimers()
         booted = true
         status = L10n.t("msg.remoteIdle")
@@ -360,6 +387,8 @@ final class MixerController: ObservableObject {
     }
 
     func shutdown() {
+        remoteDiscoverTask?.cancel()
+        remoteDiscoverTask = nil
         mixTimer?.invalidate()
         mixTimer = nil
         meterTimer?.invalidate()
@@ -496,6 +525,7 @@ final class MixerController: ObservableObject {
     }
 
     func pushAudio() {
+        if isRemote { return }
         var live: [UInt64] = []
         let n = mixer_audio_bus_count()
         if n > 0 {
@@ -884,7 +914,11 @@ final class MixerController: ObservableObject {
             guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { continue }
             session.inputs[index].mute = mute
             let input = session.inputs[index]
-            _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
+            if isRemote {
+                _ = mixer_remote_audio_set_input(remoteHandle, input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
+            } else {
+                _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
+            }
         }
         objectWillChange.send()
     }
@@ -941,6 +975,10 @@ final class MixerController: ObservableObject {
                 TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
             ]
         }
+        if isRemote {
+            _ = mutateRemote(MixerRemote.upsertUnit(entry))
+            return
+        }
         guard fail(mixer_create_unit(entry.id, entry.width, entry.height), "Create Mixing Unit") else { return }
         session.nextUnitId += 1
         fail(mixer_unit_configure(entry.id, entry.width, entry.height, entry.fpsNum, entry.fpsDen), "Configure Mixing Unit")
@@ -957,6 +995,10 @@ final class MixerController: ObservableObject {
     func deleteUnit() {
         guard session.units.count > 1 else { return }
         let id = selectedUnitId
+        if isRemote {
+            _ = mutateRemote(MixerRemote.deleteUnit(id))
+            return
+        }
         closeSwitcher(id)
         _ = mixer_destroy_unit(id)
         session.units.removeAll { $0.id == id }
@@ -967,10 +1009,14 @@ final class MixerController: ObservableObject {
         if let index = session.units.firstIndex(where: { $0.id == unit.id }) {
             session.units[index] = unit
         }
-        if !isRemote {
-            fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-            fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
+        if isRemote {
+            _ = mutateRemote(MixerRemote.upsertUnit(unit))
+            selectedUnitId = unit.id
+            updateStatus()
+            return
         }
+        fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
+        fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name
@@ -1062,12 +1108,16 @@ final class MixerController: ObservableObject {
         }
     }
 
+    func openMultiviewSettings() {
+        settingsCategory = 3
+        showSettings = true
+    }
+
     func openNewMultiview() {
-        guard FlipBudget.tryOpen(1) else { return }
-        let unitId = session.settings.defaultMultiviewUnitId == 0
-            ? selectedUnitId
-            : session.settings.defaultMultiviewUnitId
         if isRemote {
+            let unitId = session.settings.defaultMultiviewUnitId == 0
+                ? selectedUnitId
+                : session.settings.defaultMultiviewUnitId
             var layout = MultiviewLayout(
                 id: session.nextMultiviewId,
                 name: "Multiview \(session.nextMultiviewId)",
@@ -1079,19 +1129,23 @@ final class MixerController: ObservableObject {
             )
             layout.ensureTiles()
             layout.seedDefaultBuses(unitId)
-            if mutateRemote(MixerRemote.upsertMultiview(layout)),
-               let added = session.multiviews.first(where: { $0.id == layout.id })
-            {
-                openMultiviewWindow(added)
-            }
+            _ = mutateRemote(MixerRemote.upsertMultiview(layout))
             return
         }
+        guard FlipBudget.tryOpen(1) else { return }
+        let unitId = session.settings.defaultMultiviewUnitId == 0
+            ? selectedUnitId
+            : session.settings.defaultMultiviewUnitId
         let layout = session.addMultiview(unitId: unitId)
         pushMultiview(layout)
         openMultiviewWindow(layout)
     }
 
     func openMultiviewWindow(_ layout: MultiviewLayout) {
+        if isRemote {
+            openMultiviewSettings()
+            return
+        }
         pushMultiview(layout)
         openMultiview = layout
         if let existing = multiviewWindows[layout.id] {
@@ -1175,7 +1229,7 @@ final class MixerController: ObservableObject {
             editingScene = scene
             return
         }
-        guard FlipBudget.tryOpen(1) else { return }
+        if !isRemote, !FlipBudget.tryOpen(1) { return }
         editingScene = scene
         showSceneEditor = true
     }
@@ -1184,7 +1238,7 @@ final class MixerController: ObservableObject {
         if showOverlay {
             return
         }
-        guard FlipBudget.tryOpen(1) else { return }
+        if !isRemote, !FlipBudget.tryOpen(1) { return }
         showOverlay = true
     }
 
@@ -1377,6 +1431,7 @@ final class MixerController: ObservableObject {
     }
 
     func snapshotProgram() {
+        if isRemote { return }
         saveSnapshot(
             sourceId: selectedUnitId,
             kind: EIVIZ_OUTPUT_PROGRAM,
@@ -2147,30 +2202,47 @@ final class MixerController: ObservableObject {
     private func commitRemoteOverlays(unitId: UInt64) {
         guard let unit = session.units.first(where: { $0.id == unitId }) else { return }
         for (index, slot) in unit.overlays.enumerated() {
-            let code = MixerRemote.mutate(
-                remoteHandle,
+            _ = mutateRemote(
                 MixerRemote.setOverlaySlot(unitId: unitId, index: UInt32(index), slot: slot),
-                expected: remoteRevision
+                applyDocument: false
             )
-            if code != 0 {
-                presentError(remoteMutateError(), title: L10n.t("chrome.overlay"))
-                pollRemote(force: true)
-                return
-            }
-            remoteRevision += 1
         }
-        pollRemote(force: true)
     }
 
+    private let remoteMutateGate = RemoteMutateGate()
+
     @discardableResult
-    private func mutateRemote(_ json: String) -> Bool {
-        let code = MixerRemote.mutate(remoteHandle, json, expected: remoteRevision)
-        if code != 0 {
-            presentError(remoteMutateError(), title: L10n.t("chrome.settings"))
-            pollRemote(force: true)
-            return false
+    private func mutateRemote(_ json: String, applyDocument: Bool = true) -> Bool {
+        let handle = remoteHandle
+        let gate = remoteMutateGate
+        Task.detached { [weak self] in
+            gate.lock.lock()
+            let expected = gate.revision
+            let code = MixerRemote.mutate(handle, json, expected: expected)
+            let statusJson = MixerRemote.status(handle)
+            var nextRevision = expected
+            if let data = statusJson.data(using: .utf8),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            {
+                if let value = root["documentRevision"] as? NSNumber, value.uint64Value != 0 {
+                    nextRevision = value.uint64Value
+                } else if let value = root["revision"] as? NSNumber {
+                    nextRevision = value.uint64Value
+                }
+            }
+            gate.revision = nextRevision
+            gate.lock.unlock()
+            await MainActor.run {
+                guard let self else { return }
+                if self.remoteRevision < nextRevision {
+                    self.remoteRevision = nextRevision
+                }
+                self.pollRemote(force: applyDocument, applyDocument: applyDocument)
+                if code != 0 {
+                    self.presentError(self.remoteMutateError(), title: L10n.t("chrome.settings"))
+                }
+            }
         }
-        pollRemote(force: true)
         return true
     }
 
@@ -2191,7 +2263,7 @@ final class MixerController: ObservableObject {
         mutateRemote(MixerRemote.setSettings(session))
     }
 
-    private func pollRemote(force: Bool = false) {
+    private func pollRemote(force: Bool = false, applyDocument: Bool = true) {
         guard remoteHandle != 0 else {
             if remoteConnected { remoteConnected = false }
             refreshRemoteWarn()
@@ -2259,34 +2331,55 @@ final class MixerController: ObservableObject {
         }
         let docChanged = force || epoch != remoteEpoch || documentRevision != remotePulledDocumentRevision
         if connected, docChanged {
-            let json = MixerRemote.snapshot(remoteHandle)
-            if let data = json.data(using: .utf8), let loaded = try? SessionFile.decode(data) {
-                let keepUnit = selectedUnitId
-                let keepScene = selectedSceneId
-                let keepInput = selectedInputId
-                session = loaded
-                selectedUnitId = session.units.contains(where: { $0.id == keepUnit }) ? keepUnit : (session.units.first?.id ?? 1)
-                selectedSceneId = keepScene
-                selectedInputId = keepInput
+            if applyDocument {
+                if let data = MixerRemote.snapshot(remoteHandle).data(using: .utf8),
+                   let loaded = try? SessionFile.decode(data)
+                {
+                    let keepUnit = selectedUnitId
+                    let keepScene = selectedSceneId
+                    let keepInput = selectedInputId
+                    session = loaded
+                    selectedUnitId = session.units.contains(where: { $0.id == keepUnit }) ? keepUnit : (session.units.first?.id ?? 1)
+                    selectedSceneId = keepScene
+                    selectedInputId = keepInput
+                    remoteEpoch = epoch
+                    remotePulledDocumentRevision = documentRevision
+                    syncPublishedVideo()
+                }
+            } else {
                 remoteEpoch = epoch
                 remotePulledDocumentRevision = documentRevision
-                syncPublishedVideo()
-                bumpSurfaceEpoch()
             }
         }
+        remoteMutateGate.lock.lock()
+        if remoteRevision > remoteMutateGate.revision {
+            remoteMutateGate.revision = remoteRevision
+        }
+        remoteMutateGate.lock.unlock()
         refreshRemoteWarn()
     }
 
     private func applyRemoteLiveBuses(_ liveJson: String) {
         guard let data = liveJson.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let units = root["units"] as? [String: Any]
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
-        for unit in session.units {
-            guard let live = units[String(unit.id)] as? [String: Any] else { continue }
-            let preview = (live["previewSource"] as? NSNumber)?.uint64Value ?? 0
-            let program = (live["programSource"] as? NSNumber)?.uint64Value ?? 0
-            applyBusSources(unitId: unit.id, preview: preview, program: program)
+        if let units = root["units"] as? [String: Any] {
+            for unit in session.units {
+                guard let live = units[String(unit.id)] as? [String: Any] else { continue }
+                let preview = (live["previewSource"] as? NSNumber)?.uint64Value ?? 0
+                let program = (live["programSource"] as? NSNumber)?.uint64Value ?? 0
+                applyBusSources(unitId: unit.id, preview: preview, program: program)
+            }
+        }
+        if let list = root["peaks"] as? [[String: Any]] {
+            var next: [UInt64: (Float, Float)] = [:]
+            for peak in list {
+                let id = (peak["id"] as? NSNumber)?.uint64Value ?? 0
+                let left = (peak["left"] as? NSNumber)?.floatValue ?? 0
+                let right = (peak["right"] as? NSNumber)?.floatValue ?? 0
+                next[id] = (left, right)
+            }
+            peaks = next
         }
     }
 
@@ -2321,8 +2414,8 @@ final class MixerController: ObservableObject {
             let prefix = transport == .ndi ? "NDI" : "OMT"
             items.append(RemoteVideoItem(transport: transport, address: trimmed, label: "\(prefix)  \(trimmed)"))
         }
-        for line in MixerFFI.discover({ mixer_omt_discover($0, $1) }) { add(.omt, line) }
-        for line in MixerFFI.discover({ mixer_ndi_discover($0, $1) }) { add(.ndi, line) }
+        for line in discoveredOmt { add(.omt, line) }
+        for line in discoveredNdi { add(.ndi, line) }
         for output in session.outputs where output.enabled && (output.transport == .omt || output.transport == .ndi) {
             add(output.transport, output.name)
         }
@@ -2397,15 +2490,43 @@ final class MixerController: ObservableObject {
 
     @discardableResult
     private func connectRemoteChoice(_ id: UInt64, _ item: RemoteVideoItem) -> Bool {
+        let resolved = resolveRemoteVideo(item)
         _ = mixer_destroy_source(id)
-        guard !item.address.isEmpty else { return false }
+        guard !resolved.address.isEmpty else { return false }
         let code: Int32
-        if item.transport == .ndi {
-            code = MixerFFI.withCString(item.address) { mixer_ndi_connect(id, $0, 3, 0) }
+        if resolved.transport == .ndi {
+            code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 3, 0) }
         } else {
-            code = MixerFFI.withCString(item.address) { mixer_omt_connect(id, $0, 1, 3, 0) }
+            code = MixerFFI.withCString(resolved.address) { mixer_omt_connect(id, $0, 1, 3, 0) }
         }
         return code == 0
+    }
+
+    private func resolveRemoteVideo(_ item: RemoteVideoItem) -> RemoteVideoItem {
+        let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty, !looksDiscovered(address) else { return item }
+        let pool = item.transport == .ndi ? discoveredNdi : discoveredOmt
+        let matches = pool.filter { addressRefersTo($0, name: address) }
+        guard matches.count == 1, let found = matches.first else { return item }
+        let prefix = item.transport == .ndi ? "NDI" : "OMT"
+        return RemoteVideoItem(transport: item.transport, address: found, label: "\(prefix)  \(found)")
+    }
+
+    private func looksDiscovered(_ address: String) -> Bool {
+        address.contains("://") || address.contains("(")
+    }
+
+    private func addressRefersTo(_ discovered: String, name: String) -> Bool {
+        if discovered.compare(name, options: .caseInsensitive) == .orderedSame {
+            return true
+        }
+        if let slash = discovered.lastIndex(of: "/"), slash < discovered.index(before: discovered.endIndex) {
+            let tail = discovered[discovered.index(after: slash)...]
+            if tail.compare(name, options: .caseInsensitive) == .orderedSame {
+                return true
+            }
+        }
+        return discovered.range(of: "(\(name))", options: .caseInsensitive) != nil
     }
 
     @discardableResult
@@ -2439,6 +2560,11 @@ private final class InputPreviewCloser: NSObject, NSWindowDelegate {
         let contentH = contentW / max(0.1, window.contentAspect)
         return NSSize(width: contentW + extraW, height: contentH + extraH)
     }
+}
+
+private final class RemoteMutateGate: @unchecked Sendable {
+    let lock = NSLock()
+    var revision: UInt64 = 0
 }
 
 private final class SwitcherCloser: NSObject, NSWindowDelegate {

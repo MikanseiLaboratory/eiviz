@@ -33,6 +33,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _tbarTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
     private readonly ResourceMonitor _resources = new();
+    private bool _sceneEditorOpen;
+    private long _sceneEditorGuard;
     private bool _videoSeeking;
     private bool _videoSeekSuppress;
     private long _lastSeekSentMs;
@@ -75,6 +77,8 @@ public partial class MainWindow : Window
             _tbarTimer.Stop();
             _meterTimer.Stop();
             _resources.Dispose();
+            if (HostRole.IsRemote)
+                RemoteVideoCatalog.Updated -= OnRemoteVideoCatalogUpdated;
             if (!ReferenceEquals(Application.Current?.MainWindow, this))
                 return;
             CloseOwnedSurfaces();
@@ -90,10 +94,13 @@ public partial class MainWindow : Window
                 FillVideoSources();
                 BindPreviewProgram();
             }
-            AudioGraphSync.Push(_session);
+            if (!HostRole.IsRemote)
+                AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
                 SelectScene(_session.Scenes[0]);
         };
+        if (HostRole.IsRemote)
+            RemoteVideoCatalog.Updated += OnRemoteVideoCatalogUpdated;
     }
 
     internal void ReloadFromSession()
@@ -130,7 +137,8 @@ public partial class MainWindow : Window
         RebuildMeters();
         ApplyAspect();
         FillVideoSources();
-        BindPreviewProgram();
+        if (!HostRole.IsRemote)
+            BindPreviewProgram();
         _overlay?.Reload(SelectedUnit);
     }
 
@@ -148,6 +156,8 @@ public partial class MainWindow : Window
         PreviewSourceBox.Visibility = Visibility.Visible;
         ProgramSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
+        SnapshotButton.Visibility = Visibility.Collapsed;
+        ResourcesButton.Visibility = Visibility.Collapsed;
         RemoteIdleText.Text = Loc.T("msg.remoteIdle");
         ApplyRemoteLiveUi(false);
     }
@@ -165,6 +175,8 @@ public partial class MainWindow : Window
         SelectChoice(ProgramSourceBox, programChoice);
         _suppressVideoSource = false;
     }
+
+    private void OnRemoteVideoCatalogUpdated() => FillVideoSources();
 
     private static List<RemoteVideoItem> WithChoice(List<RemoteVideoItem> items, RemoteVideoChoice choice)
     {
@@ -698,11 +710,11 @@ public partial class MainWindow : Window
         foreach (var input in inputs)
         {
             input.Mute = mute;
-            MixerNative.AudioSetInput(
+            ((App)Application.Current).Backend.SetInputGain(
                 input.Id,
                 input.BusMask == 0 ? 1u : input.BusMask,
                 MixerNative.MixerGain(input.Gain),
-                mute ? 1u : 0u);
+                mute);
         }
         RebuildMeters();
         RefreshSceneTiles();
@@ -1187,7 +1199,7 @@ public partial class MainWindow : Window
             _overlay.Activate();
             return;
         }
-        if (!FlipBudget.TryOpen(1, this))
+        if (!HostRole.IsRemote && !FlipBudget.TryOpen(1, this))
             return;
         _overlay = new OverlayWindow(_session, unit) { Owner = this };
         _overlay.Closed += (_, _) =>
@@ -1204,6 +1216,11 @@ public partial class MainWindow : Window
 
     private void OpenMultiview_Click(object sender, RoutedEventArgs e)
     {
+        if (HostRole.IsRemote)
+        {
+            OpenSettings(3);
+            return;
+        }
         var menu = new ContextMenu();
         foreach (var layout in _session.Multiviews)
         {
@@ -1265,16 +1282,13 @@ public partial class MainWindow : Window
 
     internal void OpenNewMultiview(ulong unitId)
     {
-        if (!FlipBudget.TryOpen(1, this))
+        if (!HostRole.IsRemote && !FlipBudget.TryOpen(1, this))
             return;
         var unit = _session.Units.FirstOrDefault(item => item.Id == unitId) ?? SelectedUnit;
         if (App.IsRemote)
         {
             var draft = DraftMultiview(unit.Id);
-            if (!RemoteMutate(MutationJson.UpsertMultiview(draft), Loc.T("chrome.multiview")))
-                return;
-            var added = _session.Multiviews.FirstOrDefault(item => item.Id == draft.Id) ?? draft;
-            OpenMultiviewWindow(added);
+            RemoteMutate(MutationJson.UpsertMultiview(draft), Loc.T("chrome.multiview"));
             return;
         }
         var layout = _session.AddMultiview(unitId: unit.Id);
@@ -1302,6 +1316,11 @@ public partial class MainWindow : Window
 
     internal void OpenMultiviewWindow(MultiviewLayout layout)
     {
+        if (HostRole.IsRemote)
+        {
+            OpenSettings(3);
+            return;
+        }
         var existing = _multiviews.FirstOrDefault(item => item.LayoutId == layout.Id);
         if (existing is not null)
         {
@@ -1367,7 +1386,7 @@ public partial class MainWindow : Window
         {
             bus.Gain = gain;
             bus.Mute = mute;
-            MixerNative.AudioSetBusGain(bus.Id, gain, mute ? 1u : 0u);
+            ((App)Application.Current).Backend.SetBusGain(bus.Id, gain, mute);
         };
         _meters[MixerNative.AudioBusPeakBase | bus.Id] = strip;
         MeterPanel.Children.Add(strip);
@@ -1380,13 +1399,15 @@ public partial class MainWindow : Window
         strip.BusMaskChanged += (_, mask) =>
         {
             input.BusMask = mask;
-            MixerNative.AudioSetInput(input.Id, mask, MixerNative.MixerGain(input.Gain), input.Mute ? 1u : 0u);
+            ((App)Application.Current).Backend.SetInputGain(
+                input.Id, mask, MixerNative.MixerGain(input.Gain), input.Mute);
         };
         strip.FaderChanged += (_, gain, mute) =>
         {
             input.Gain = gain;
             input.Mute = mute;
-            MixerNative.AudioSetInput(input.Id, input.BusMask == 0 ? 1u : input.BusMask, gain, mute ? 1u : 0u);
+            ((App)Application.Current).Backend.SetInputGain(
+                input.Id, input.BusMask == 0 ? 1u : input.BusMask, gain, mute);
         };
         _meters[input.Id] = strip;
         MeterPanel.Children.Add(strip);
@@ -1397,14 +1418,22 @@ public partial class MainWindow : Window
         if (HandleMixerFatal())
             return;
         var peaks = new Dictionary<ulong, (float L, float R)>();
-        var buffer = new AudioPeak[64];
-        unsafe
+        if (Application.Current is App { Backend.IsRemote: true } meterApp)
         {
-            fixed (AudioPeak* ptr = buffer)
+            foreach (var pair in meterApp.Backend.Peaks)
+                peaks[pair.Key] = pair.Value;
+        }
+        else
+        {
+            var buffer = new AudioPeak[64];
+            unsafe
             {
-                var n = MixerNative.CopyAudioPeaks(ptr, (uint)buffer.Length);
-                for (var i = 0; i < n && i < buffer.Length; i++)
-                    peaks[buffer[i].SourceId] = (buffer[i].Left, buffer[i].Right);
+                fixed (AudioPeak* ptr = buffer)
+                {
+                    var n = MixerNative.CopyAudioPeaks(ptr, (uint)buffer.Length);
+                    for (var i = 0; i < n && i < buffer.Length; i++)
+                        peaks[buffer[i].SourceId] = (buffer[i].Left, buffer[i].Right);
+                }
             }
         }
         foreach (var (_, strip) in _meters)
@@ -1661,6 +1690,8 @@ public partial class MainWindow : Window
 
     private void SaveSnapshot(ulong sourceId, uint kind, string name)
     {
+        if (HostRole.IsRemote)
+            return;
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = Loc.T("filter.snapshot"),
@@ -1925,10 +1956,7 @@ public partial class MainWindow : Window
         input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;
         if (App.IsRemote)
         {
-            if (Application.Current is not App app)
-                throw new InvalidOperationException(Loc.T("msg.remoteConnectFailed"));
-            if (!app.Backend.Mutate(MutationJson.UpsertInput(input), app.Backend.Revision, out var error))
-                throw new InvalidOperationException(error);
+            RemoteMutate(MutationJson.UpsertInput(input), Loc.T("msg.addInput"));
             return;
         }
         if (keepLive)
@@ -2153,11 +2181,23 @@ public partial class MainWindow : Window
 
     private void OpenSceneEditor(SceneEntry scene)
     {
-        if (!FlipBudget.TryOpen(1, this))
+        var now = Environment.TickCount64;
+        if (_sceneEditorOpen || now - _sceneEditorGuard < 400)
             return;
-        var monitorId = _session.NextMonitorId++;
-        var dialog = new SceneEditorWindow(scene, _session, SceneWidth, SceneHeight, monitorId) { Owner = this };
-        dialog.ShowDialog();
+        if (!HostRole.IsRemote && !FlipBudget.TryOpen(1, this))
+            return;
+        _sceneEditorOpen = true;
+        try
+        {
+            var monitorId = _session.NextMonitorId++;
+            var dialog = new SceneEditorWindow(scene, _session, SceneWidth, SceneHeight, monitorId) { Owner = this };
+            dialog.ShowDialog();
+        }
+        finally
+        {
+            _sceneEditorOpen = false;
+            _sceneEditorGuard = Environment.TickCount64;
+        }
         if (Application.Current is not App appAfter || appAfter.Session is null || _fatalHandled)
             return;
         RefreshSceneList();
@@ -2176,7 +2216,8 @@ public partial class MainWindow : Window
         _tbarPresetIndex = 0;
         RebuildTransitions();
         RebuildOverlayToggles();
-        MixerNative.AudioSetHeadphoneCue(unit.Id);
+        if (!HostRole.IsRemote)
+            MixerNative.AudioSetHeadphoneCue(unit.Id);
         SyncSelectedSceneFromMixer();
         RefreshSceneTiles();
     }
@@ -2237,6 +2278,8 @@ public partial class MainWindow : Window
         unit.EnsureDefaultTransitions();
         unit.AudioBusId = dialog.Result.AudioBusId == 0 ? 1 : dialog.Result.AudioBusId;
         unit.AudioLink = dialog.Result.AudioLink;
+        if (TryRemoteMutate(MutationJson.UpsertUnit(unit), Loc.T("chrome.mixingUnit")))
+            return;
         MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
@@ -2263,6 +2306,8 @@ public partial class MainWindow : Window
         unit.FpsDen = dialog.Result.FpsDen;
         unit.AudioBusId = dialog.Result.AudioBusId;
         unit.AudioLink = dialog.Result.AudioLink;
+        if (TryRemoteMutate(MutationJson.UpsertUnit(unit), Loc.T("chrome.mixingUnit")))
+            return;
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
             "Configure Mixing Unit");
@@ -2285,6 +2330,8 @@ public partial class MainWindow : Window
             return;
         }
         var unit = SelectedUnit;
+        if (TryRemoteMutate(MutationJson.DeleteUnit(unit.Id), Loc.T("chrome.delete")))
+            return;
         foreach (var output in _session.Outputs.Where(item => item.UnitId == unit.Id).ToArray())
         {
             MixerApply.RemoveOutput(output.Id);
@@ -2360,9 +2407,11 @@ public partial class MainWindow : Window
             ((App)Application.Current).ReloadSession(_session);
     }
 
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings(0);
+
+    internal void OpenSettings(int category)
     {
-        var dialog = new SettingsWindow(_session) { Owner = this };
+        var dialog = new SettingsWindow(_session, category) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         if (App.IsRemote)
@@ -2475,16 +2524,26 @@ public partial class MainWindow : Window
         }
     }
 
-    internal bool RemoteMutate(string json, string title)
+    internal void RemoteMutate(string json, string title, bool reloadDocument = true)
     {
         if (!App.IsRemote || Application.Current is not App app)
-            return false;
-        if (!app.Backend.Mutate(json, app.Backend.Revision, out var error))
+            return;
+        var backend = app.Backend;
+        var dispatcher = Dispatcher;
+        Task.Run(() =>
         {
-            MessageBox.Show(this, error, title);
-            return false;
-        }
-        return true;
+            var revision = backend.Revision;
+            var ok = backend.Mutate(json, revision, out var error);
+            dispatcher.BeginInvoke(() =>
+            {
+                if (reloadDocument)
+                    backend.Poll();
+                else if (backend is RemoteEivizBackend remote)
+                    remote.AcknowledgeDocument();
+                if (!ok)
+                    MessageBox.Show(this, error, title);
+            });
+        });
     }
 
     private bool TryRemoteMutate(string json, string title)

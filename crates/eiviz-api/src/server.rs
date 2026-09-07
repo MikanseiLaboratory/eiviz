@@ -156,6 +156,7 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
     let mut last_activity = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_millis(16));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut meter_ticks = 0u8;
     loop {
         if last_activity.elapsed() > state.idle_timeout {
             return Err("idle timeout".into());
@@ -219,6 +220,10 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
             _ = tick.tick() => {
                 if !subscribed {
                     continue;
+                }
+                meter_ticks = meter_ticks.wrapping_add(1);
+                if meter_ticks % 3 == 0 {
+                    state.control.publish_meters();
                 }
                 last_activity = Instant::now();
                 let events = drain_events(&state, &mut last_seq);

@@ -20,15 +20,15 @@ Connectの▾から最近使った接続先を選べます。Disconnectで切断
 
 ## 映像
 
-PreviewとProgramはHostと同じPRV/PGMの枠です。ヘッダーのメニューから受信するNDIまたはOMTソースを選びます。Multiviewは、接続先でそのレイアウト向けに有効なNDIまたはOMT出力が1本のときにライブ映像が出ます。Input PreviewはHost向けです。
+PreviewとProgramはPRV/PGMの枠です。ヘッダーのメニューから受信するNDIまたはOMTソースを選びます。Multiviewの追加・タイル編集・削除は設定画面から行います。
 
-シーン一覧とスイッチャーのシーンボタンは、折り畳んだ状態ですべてのSceneを出します。折り畳んでいてもPreview/Programの縁は出ます。サムネイルはHost向けです。
+シーン一覧とスイッチャーのシーンボタンは、折り畳んだ状態ですべてのSceneを出します。折り畳んでいてもPreview/Programの縁は出ます。
 
 Still/Videoの追加は、クライアントでファイルを選び、接続先のメディア保存先へ保存したうえでInputを足します。
 
 ## 設定
 
-設定ウィンドウの表示、パフォーマンス、出力、音声、Web APIは接続先のセッションへ送ります。Multiviewの追加・開く・タイル編集・削除もクライアントから送ります。言語とテーマは`Eiviz.Remote.exe`自身の環境設定です。
+設定ウィンドウの表示、パフォーマンス、出力、音声、Web APIは接続先のセッションへ送ります。Multiviewの追加・タイル編集・削除も設定画面から送ります。言語とテーマは`Eiviz.Remote.exe`自身の環境設定です。
 
 セッションの変更は`MutateSession`と`expected_revision`です。revisionが一致しない変更は拒否され、最新を読み直してやり直します。
 

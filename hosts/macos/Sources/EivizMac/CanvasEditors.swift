@@ -121,9 +121,9 @@ struct SceneEditorView: View {
             VStack(alignment: .leading) {
                 Text("Live preview").fontWeight(.bold)
                 if mixer.isRemote {
-                    Text(L10n.t("msg.videoUnavailable"))
-                        .foregroundStyle(EivizTheme.dim)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Color.black
+                        .aspectRatio(projectAspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
                 } else if let scene = current, editorMonitor != 0 {
                     MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: scene.gpuId))
                         .id(editorMonitor)

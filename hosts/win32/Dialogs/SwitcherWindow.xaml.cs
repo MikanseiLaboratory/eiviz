@@ -301,6 +301,14 @@ public partial class SwitcherWindow : Window
                 e.Handled = true;
             }
         };
+        collapsed.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ClickCount < 2)
+                return;
+            if (Application.Current.MainWindow is MainWindow main)
+                main.EditSceneFromSwitcher(scene);
+            e.Handled = true;
+        };
         var thumb = new SceneThumb
         {
             SceneId = scene.Id,

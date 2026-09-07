@@ -123,6 +123,12 @@ impl ControlFacade for MixerFacade {
             .map(|svc| svc.epoch().to_string())
             .unwrap_or_default()
     }
+
+    fn publish_meters(&self) {
+        if let Ok(mut svc) = runtime::control().lock() {
+            svc.publish_meters();
+        }
+    }
 }
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -912,30 +918,72 @@ pub(crate) fn mixer_created() -> bool {
 }
 
 pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
-    use eiviz_control::live::{LiveState, UnitLiveState};
+    use eiviz_control::live::{LivePeak, LiveState, UnitLiveState};
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let mut units = HashMap::new();
-        for (id, unit) in &shared.units {
-            units.insert(
-                *id,
-                UnitLiveState {
-                    program_source: unit.state.program_source,
-                    preview_source: unit.state.preview_source,
-                    mix: unit.state.mix,
-                    transitioning: unit.auto.is_some() || unit.state.mix > 0.001,
-                    incoming_source: unit.state.incoming_source,
-                    overlay_sources: unit
-                        .state
-                        .overlays
-                        .iter()
-                        .take(unit.state.overlay_count as usize)
-                        .map(|overlay| overlay.source_id)
-                        .collect(),
-                },
-            );
+        let (units, master, buses, mix_peaks) = {
+            let shared = mixer.shared.lock().expect("shared");
+            let mut units = HashMap::new();
+            for (id, unit) in &shared.units {
+                units.insert(
+                    *id,
+                    UnitLiveState {
+                        program_source: unit.state.program_source,
+                        preview_source: unit.state.preview_source,
+                        mix: unit.state.mix,
+                        transitioning: unit.auto.is_some() || unit.state.mix > 0.001,
+                        incoming_source: unit.state.incoming_source,
+                        overlay_sources: unit
+                            .state
+                            .overlays
+                            .iter()
+                            .take(unit.state.overlay_count as usize)
+                            .map(|overlay| overlay.source_id)
+                            .collect(),
+                    },
+                );
+            }
+            (
+                units,
+                shared.audio.master_peak(),
+                shared.audio.bus_peaks(),
+                shared.audio.mix_input_peaks(),
+            )
+        };
+        let uploads = mixer.uploads.lock().expect("uploads");
+        let mut peaks = vec![LivePeak {
+            id: 0,
+            left: master.0,
+            right: master.1,
+        }];
+        for (id, left, right) in buses {
+            peaks.push(LivePeak {
+                id: crate::abi::AUDIO_BUS_PEAK_BASE | id,
+                left,
+                right,
+            });
         }
-        LiveState { units }
+        for id in uploads.ids() {
+            if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
+                continue;
+            }
+            let Some(ring) = uploads.get(id) else {
+                continue;
+            };
+            let (left, right) = ring.peak();
+            peaks.push(LivePeak {
+                id,
+                left,
+                right,
+            });
+        }
+        for (id, left, right) in mix_peaks {
+            peaks.push(LivePeak {
+                id,
+                left,
+                right,
+            });
+        }
+        LiveState { units, peaks }
     })
     .unwrap_or_default()
 }

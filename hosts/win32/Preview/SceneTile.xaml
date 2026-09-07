@@ -17,8 +17,7 @@
             PreviewMouseRightButtonDown="Chrome_RightClick">
         <Grid>
             <DockPanel x:Name="ExpandedBody">
-                <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3"
-                        MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3">
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
                         <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
@@ -38,8 +37,7 @@
                 </StackPanel>
                 <preview:ThumbView x:Name="Monitor" Height="90"/>
             </DockPanel>
-            <DockPanel x:Name="CollapsedBody" Visibility="Collapsed" Background="#333"
-                       MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <DockPanel x:Name="CollapsedBody" Visibility="Collapsed" Background="#333">
                 <Button DockPanel.Dock="Top" Style="{StaticResource TileBtn}" Content="X"
                         HorizontalAlignment="Center" Margin="0,4,0,2" Click="Close_Click"/>
                 <TextBlock x:Name="CollapsedNumber" DockPanel.Dock="Top" Text="1"

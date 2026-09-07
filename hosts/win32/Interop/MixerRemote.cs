@@ -52,6 +52,12 @@ internal static partial class MixerRemote
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_video_seek")]
     internal static partial int VideoSeek(int handle, ulong inputId, long positionHns);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_audio_set_input")]
+    internal static partial int AudioSetInput(int handle, ulong inputId, uint busMask, float gain, uint mute);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_audio_set_bus")]
+    internal static partial int AudioSetBus(int handle, ulong busId, float gain, uint mute);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_upload", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Upload(int handle, string path, string kind, string name, uint videoLoop, ulong expectedRevision);
 

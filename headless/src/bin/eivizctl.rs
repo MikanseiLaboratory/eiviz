@@ -1,19 +1,39 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use eiviz_api::client::ControlClient;
+use clap::{CommandFactory, Parser, Subcommand};
+use eiviz_api::client::{ControlClient, ControlSession};
 
 #[derive(Parser)]
 #[command(name = "eivizctl", about = "eiviz control client")]
 struct Cli {
-    #[arg(long, env = "EIVIZ_API_URL", default_value = "ws://127.0.0.1:9400")]
+    /// Control WebSocket URL
+    #[arg(long, default_value = "ws://127.0.0.1:9400")]
     url: String,
+    /// Auth token for the control WebSocket
+    #[arg(long, conflicts_with = "token_file")]
+    token: Option<String>,
+    /// Read the token from a file (trailing whitespace is trimmed)
+    #[arg(long)]
+    token_file: Option<PathBuf>,
+    /// Suppress the "ok" line on live ops
     #[arg(long)]
     json: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+#[derive(Parser)]
+#[command(
+    name = "eivizctl",
+    no_binary_name = true,
+    disable_version_flag = true,
+    subcommand_required = true
+)]
+struct ReplLine {
+    #[command(subcommand)]
+    cmd: Cmd,
 }
 
 #[derive(Subcommand)]
@@ -66,20 +86,17 @@ enum PrefsCmd {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    let token = std::env::var("EIVIZ_API_TOKEN")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("EIVIZ_API_TOKEN_FILE").ok().and_then(|path| {
-                std::fs::read_to_string(path)
-                    .ok()
-                    .map(|text| text.trim().to_string())
-            })
-        })
-        .unwrap_or_default();
-    let client = ControlClient::websocket(cli.url.clone(), token);
+    let token = match load_token(cli.token, cli.token_file) {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("eivizctl error={error}");
+            return ExitCode::from(6);
+        }
+    };
+    let client = ControlClient::websocket(cli.url, token);
     let result = match cli.cmd {
-        Some(cmd) => run_cmd(&client, cmd, cli.json).await,
+        Some(Cmd::Prefs { action }) => prefs_cmd(action),
+        Some(cmd) => run_once(&client, cmd, cli.json).await,
         None => repl(&client, cli.json).await,
     };
     match result {
@@ -91,14 +108,27 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), String> {
+fn load_token(token: Option<String>, token_file: Option<PathBuf>) -> Result<String, String> {
+    if let Some(path) = token_file {
+        return std::fs::read_to_string(path)
+            .map(|text| text.trim().to_string())
+            .map_err(|error| error.to_string());
+    }
+    Ok(token.unwrap_or_default())
+}
+
+async fn run_once(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), String> {
+    let session = client.connect().await.map_err(|e| e.to_string())?;
+    run_cmd(&session, cmd, json).await
+}
+
+async fn run_cmd(session: &ControlSession, cmd: Cmd, json: bool) -> Result<(), String> {
     match cmd {
         Cmd::Status | Cmd::Snapshot => {
-            let snap = client.snapshot_json().await.map_err(|e| e.to_string())?;
+            let snap = session.snapshot_json().await.map_err(|e| e.to_string())?;
             println!("{snap}");
         }
         Cmd::Watch => {
-            let session = client.connect().await.map_err(|e| e.to_string())?;
             session.subscribe(0).await.map_err(|e| e.to_string())?;
             loop {
                 for kind in session.take_events() {
@@ -112,7 +142,7 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
             }
         }
         Cmd::Preview { unit, scene } => {
-            client
+            session
                 .preview(unit, scene)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -121,13 +151,13 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
             }
         }
         Cmd::Cut { unit, swap } => {
-            client.cut(unit, swap).await.map_err(|e| e.to_string())?;
+            session.cut(unit, swap).await.map_err(|e| e.to_string())?;
             if !json {
                 println!("ok");
             }
         }
         Cmd::Auto { unit, duration_ms } => {
-            client
+            session
                 .auto(unit, duration_ms, true)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -136,11 +166,11 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
             }
         }
         Cmd::Replace {
-            session,
+            session: path,
             expected_revision,
         } => {
-            let bytes = std::fs::read(session).map_err(|e| e.to_string())?;
-            client
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            session
                 .replace_session(bytes, expected_revision)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -152,7 +182,7 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
             json: body,
             expected_revision,
         } => {
-            client
+            session
                 .mutate_session(body.into_bytes(), expected_revision)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -162,7 +192,7 @@ async fn run_cmd(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), Str
         }
         Cmd::Prefs { action } => prefs_cmd(action)?,
         Cmd::Shutdown => {
-            client.shutdown().await.map_err(|e| e.to_string())?;
+            session.shutdown().await.map_err(|e| e.to_string())?;
             if !json {
                 println!("ok");
             }
@@ -213,81 +243,133 @@ fn normalize_prefs_key(key: &str) -> String {
 }
 
 async fn repl(client: &ControlClient, json: bool) -> Result<(), String> {
-    let stdin = io::stdin();
     let mut stdout = io::stdout();
+    let mut session: Option<ControlSession> = None;
+    writeln!(
+        stdout,
+        "eivizctl {}  (exit/quit to leave, help for commands)",
+        client.endpoint
+    )
+    .map_err(|e| e.to_string())?;
     loop {
         write!(stdout, "eiviz> ").map_err(|e| e.to_string())?;
         stdout.flush().map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        if stdin
-            .lock()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?
-            == 0
-        {
+        let Some(line) = read_line().await? else {
             break;
-        }
+        };
         let line = line.trim();
-        if line.is_empty() || line == "exit" || line == "quit" {
-            if line == "exit" || line == "quit" {
-                break;
-            }
+        if line.is_empty() {
             continue;
         }
-        if line == "prefs" {
-            if let Err(error) = prefs_cmd(None) {
-                eprintln!("{error}");
+        match parse_repl_line(line) {
+            ReplAction::Exit => break,
+            ReplAction::Help => {
+                let mut cmd = ReplLine::command();
+                if let Err(error) = cmd.print_help() {
+                    eprintln!("{error}");
+                }
+                println!();
             }
-            continue;
-        }
-        if let Some(key) = line.strip_prefix("prefs get ") {
-            if let Err(error) = prefs_cmd(Some(PrefsCmd::Get {
-                key: key.trim().to_string(),
-            })) {
-                eprintln!("{error}");
-            }
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("prefs set ") {
-            let Some((key, value)) = rest.split_once(char::is_whitespace) else {
-                eprintln!("usage: prefs set <key> <value>");
-                continue;
-            };
-            if let Err(error) = prefs_cmd(Some(PrefsCmd::Set {
-                key: key.to_string(),
-                value: vec![value.to_string()],
-            })) {
-                eprintln!("{error}");
-            }
-            continue;
-        }
-        if let Some(body) = line.strip_prefix("mutate ") {
-            if let Err(error) = run_cmd(
-                client,
-                Cmd::Mutate {
-                    json: body.to_string(),
-                    expected_revision: 0,
-                },
-                json,
-            )
-            .await
-            {
-                eprintln!("{error}");
-            }
-            continue;
-        }
-        let mut args = vec!["eivizctl"];
-        args.extend(line.split_whitespace());
-        match Cli::try_parse_from(args) {
-            Ok(cli) => {
-                if let Some(cmd) = cli.cmd
-                    && let Err(error) = run_cmd(client, cmd, json || cli.json).await
-                {
+            ReplAction::Cmd(Cmd::Prefs { action }) => {
+                if let Err(error) = prefs_cmd(action) {
                     eprintln!("{error}");
                 }
             }
-            Err(error) => eprintln!("{error}"),
+            ReplAction::Cmd(cmd) => match ensure_session(client, &mut session).await {
+                Ok(session) => {
+                    if let Err(error) = run_cmd(session, cmd, json).await {
+                        eprintln!("{error}");
+                    }
+                }
+                Err(error) => eprintln!("{error}"),
+            },
+            ReplAction::Error(error) => eprintln!("{error}"),
         }
     }
     Ok(())
+}
+
+async fn ensure_session<'a>(
+    client: &ControlClient,
+    session: &'a mut Option<ControlSession>,
+) -> Result<&'a ControlSession, String> {
+    if session.is_none() {
+        let opened = client.connect().await.map_err(|e| e.to_string())?;
+        if let Err(error) = opened.subscribe(0).await {
+            eprintln!("subscribe warning={error}");
+        }
+        eprintln!("connected {}", client.endpoint);
+        *session = Some(opened);
+    }
+    Ok(session.as_ref().expect("session just inserted"))
+}
+
+async fn read_line() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        match io::stdin().read_line(&mut line) {
+            Ok(0) => Ok(None),
+            Ok(_) => Ok(Some(line)),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+enum ReplAction {
+    Exit,
+    Help,
+    Cmd(Cmd),
+    Error(String),
+}
+
+fn parse_repl_line(line: &str) -> ReplAction {
+    match line {
+        "exit" | "quit" => return ReplAction::Exit,
+        "help" | "?" => return ReplAction::Help,
+        _ => {}
+    }
+    if let Some(body) = line.strip_prefix("mutate ") {
+        let body = body.trim();
+        if body.starts_with('{') {
+            return ReplAction::Cmd(Cmd::Mutate {
+                json: body.to_string(),
+                expected_revision: 0,
+            });
+        }
+    }
+    let args = match split_repl_args(line) {
+        Ok(args) => args,
+        Err(error) => return ReplAction::Error(error),
+    };
+    match ReplLine::try_parse_from(args) {
+        Ok(parsed) => ReplAction::Cmd(parsed.cmd),
+        Err(error) => ReplAction::Error(error.to_string()),
+    }
+}
+
+fn split_repl_args(line: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut quote = None;
+    for c in line.chars() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, c) if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    args.push(std::mem::take(&mut cur));
+                }
+            }
+            (_, c) => cur.push(c),
+        }
+    }
+    if quote.is_some() {
+        return Err("unclosed quote".into());
+    }
+    if !cur.is_empty() {
+        args.push(cur);
+    }
+    Ok(args)
 }

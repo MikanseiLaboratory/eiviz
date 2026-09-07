@@ -35,7 +35,8 @@ public partial class OverlayWindow : Window
         WireCanvas.Width = unit.Width;
         WireCanvas.Height = unit.Height;
         WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
-        PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+        if (!App.IsRemote)
+            PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         Loaded += (_, _) =>
         {
             _unit.Overlays.Sort((a, b) => b.Z.CompareTo(a.Z));
@@ -58,7 +59,8 @@ public partial class OverlayWindow : Window
         WireCanvas.Width = unit.Width;
         WireCanvas.Height = unit.Height;
         WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
-        PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
+        if (!App.IsRemote)
+            PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         _selected = unit.Overlays.FirstOrDefault();
         RefreshList();
     }
@@ -127,13 +129,14 @@ public partial class OverlayWindow : Window
 
     private void Push()
     {
-        MixerApply.PatchAux(_unit.Id, _unit);
         if (Application.Current is App { Backend.IsRemote: true } app && _selected is not null)
         {
             var index = (uint)Math.Max(0, _unit.Overlays.IndexOf(_selected));
-            if (!app.Backend.Mutate(MutationJson.SetOverlaySlot(_unit.Id, index, _selected), app.Backend.Revision, out var error))
-                MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
+            if (Owner is MainWindow remote)
+                remote.RemoteMutate(MutationJson.SetOverlaySlot(_unit.Id, index, _selected), Loc.T("chrome.overlay"), reloadDocument: false);
         }
+        else
+            MixerApply.PatchAux(_unit.Id, _unit);
         if (Owner is MainWindow main)
             main.RebuildOverlayToggles();
     }

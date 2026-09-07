@@ -56,7 +56,11 @@ enum MixerFFI {
         code == EIVIZ_OK ? nil : L10n.error(action, code)
     }
 
-    static func discover(_ fn: (UnsafeMutablePointer<UInt8>?, Int) -> Int32) -> [String] {
+    nonisolated static func discoverOmt() -> [String] { discover(mixer_omt_discover) }
+
+    nonisolated static func discoverNdi() -> [String] { discover(mixer_ndi_discover) }
+
+    nonisolated static func discover(_ fn: (UnsafeMutablePointer<UInt8>?, Int) -> Int32) -> [String] {
         var buffer = [UInt8](repeating: 0, count: 8192)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             fn(ptr.baseAddress, ptr.count)

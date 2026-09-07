@@ -549,11 +549,7 @@ fn connect_receiver(address: &str, config: ReceiverConfig) -> Result<ReceiverSes
     let trimmed = address.trim();
     if let Ok(mut discovery) = Discovery::new()
         && discovery.refresh().is_ok()
-        && let Some(source) = discovery.sources().iter().find(|source| {
-            source.to_url() == trimmed
-                || source.to_string() == trimmed
-                || source.instance_name() == trimmed
-        })
+        && let Some(source) = pick_omt_source(discovery.sources(), trimmed)
     {
         return ReceiverSession::connect_from_address(source, config).map_err(|e| e.to_string());
     }
@@ -561,6 +557,38 @@ fn connect_receiver(address: &str, config: ReceiverConfig) -> Result<ReceiverSes
         return ReceiverSession::connect(trimmed, config).map_err(|e| e.to_string());
     }
     Err(format!("OMT source not found: {trimmed}"))
+}
+
+fn pick_omt_source<'a>(
+    sources: &'a [openmediatransport::OmtAddress],
+    query: &str,
+) -> Option<&'a openmediatransport::OmtAddress> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    sources
+        .iter()
+        .find(|source| omt_query_matches(query, &source.to_url(), &source.instance_name(), &source.name))
+        .or_else(|| {
+            let needle = query.to_ascii_lowercase();
+            let mut matches = sources.iter().filter(|source| {
+                source.to_url().to_ascii_lowercase().contains(&needle)
+                    || source.instance_name().to_ascii_lowercase().contains(&needle)
+                    || source.name.to_ascii_lowercase().contains(&needle)
+            });
+            match (matches.next(), matches.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
+        })
+}
+
+fn omt_query_matches(query: &str, url: &str, instance: &str, name: &str) -> bool {
+    url == query
+        || instance == query
+        || name.eq_ignore_ascii_case(query)
+        || url.rsplit('/').next().is_some_and(|tail| tail.eq_ignore_ascii_case(query))
 }
 
 fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame) -> GpuVideoFrame {
@@ -741,7 +769,7 @@ impl VmxEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{HELD_AUDIO_CAP, push_held_audio};
+    use super::{HELD_AUDIO_CAP, omt_query_matches, push_held_audio};
     use crate::upload::AudioPacket;
     use std::collections::VecDeque;
 
@@ -776,5 +804,27 @@ mod tests {
         assert_eq!(q.len(), HELD_AUDIO_CAP);
         assert_eq!(q.front().unwrap().timestamp, 1);
         assert_eq!(q.back().unwrap().timestamp, HELD_AUDIO_CAP as i64);
+    }
+
+    #[test]
+    fn omt_query_matches_output_name() {
+        assert!(omt_query_matches(
+            "eiviz-pgm",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
+        assert!(omt_query_matches(
+            "omt://studio/eiviz-pgm",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
+        assert!(!omt_query_matches(
+            "eiviz-prv",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
     }
 }

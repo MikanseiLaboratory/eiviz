@@ -68,6 +68,7 @@ struct SettingsView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
+        .onAppear { category = mixer.settingsCategory }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
     }
 
@@ -391,7 +392,9 @@ struct SettingsView: View {
             HStack {
                 Text("Multiviews").fontWeight(.bold)
                 Spacer()
-                Button("Open") { openSelectedMultiview() }
+                if !mixer.isRemote {
+                    Button("Open") { openSelectedMultiview() }
+                }
                 Button("Layout…") { editSelectedLayout() }
                 Button("Delete") {
                     if let id = selectedMultiviewId {

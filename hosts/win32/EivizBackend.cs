@@ -43,6 +43,9 @@ internal interface IEivizBackend
     bool UploadMedia(string path, string kind, string name, bool videoLoop, ulong expectedRevision, out string error);
     bool TryGetMix(ulong unitId, out float mix);
     void BusSources(ulong unitId, out ulong previewGpuId, out ulong programGpuId);
+    IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; }
+    void SetBusGain(ulong busId, float gain, bool mute);
+    void SetInputGain(ulong inputId, uint busMask, float gain, bool mute);
     IReadOnlyList<PublishedVideoOutput> PublishedOutputs();
     void BindPreviewProgram(SwapchainHost preview, SwapchainHost program, ulong unitId);
     void BindMultiview(SwapchainHost host, MultiviewLayout layout);
@@ -106,6 +109,12 @@ internal static class MutationJson
 
     public static string DeleteScene(ulong id) =>
         JsonSerializer.Serialize(new { kind = "deleteScene", id }, Json);
+
+    public static string UpsertUnit(MixingUnitEntry unit) =>
+        JsonSerializer.Serialize(new { kind = "upsertUnit", unit }, Json);
+
+    public static string DeleteUnit(ulong id) =>
+        JsonSerializer.Serialize(new { kind = "deleteUnit", id }, Json);
 
     public static string UpsertMultiview(MultiviewLayout layout)
     {
@@ -392,6 +401,15 @@ internal sealed class LocalEivizBackend : IEivizBackend
         programGpuId = 0;
     }
 
+    public IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; } =
+        new Dictionary<ulong, (float L, float R)>();
+
+    public void SetBusGain(ulong busId, float gain, bool mute) =>
+        MixerNative.AudioSetBusGain(busId, gain, mute ? 1u : 0u);
+
+    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) =>
+        MixerNative.AudioSetInput(inputId, busMask, gain, mute ? 1u : 0u);
+
     public IReadOnlyList<PublishedVideoOutput> PublishedOutputs() =>
         Application.Current is App app ? HostPresentation.From(app.Session) : [];
 
@@ -430,6 +448,8 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     private bool _connected;
     private readonly Dictionary<ulong, (ulong Preview, ulong Program)> _buses = [];
     private readonly Dictionary<ulong, float> _mix = [];
+    private readonly Dictionary<ulong, (float L, float R)> _peaks = [];
+    private readonly object _mutateLock = new();
     private byte[] _statusBuf = new byte[4096];
     private byte[] _liveBuf = new byte[1 << 16];
     private byte[] _snapBuf = new byte[1 << 20];
@@ -458,15 +478,15 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public void Poll() => Pull(force: false);
 
-    private void Pull(bool force)
+    private void ReadStatus(out bool connected, out bool lag, out string epoch, out ulong documentRevision, out ulong sequence, out string error)
     {
         var statusJson = MixerRemote.StatusText(_handle, ref _statusBuf);
-        var connected = false;
-        var lag = false;
-        var error = "";
-        var epoch = _epoch;
-        var documentRevision = Revision;
-        var sequence = _seenSequence;
+        connected = false;
+        lag = false;
+        error = "";
+        epoch = _epoch;
+        documentRevision = Revision;
+        sequence = _seenSequence;
         try
         {
             using var status = JsonDocument.Parse(string.IsNullOrEmpty(statusJson) ? "{}" : statusJson);
@@ -498,7 +518,11 @@ internal sealed class RemoteEivizBackend : IEivizBackend
             _status = I18n.Loc.T("msg.remoteResync");
         else
             _status = I18n.Loc.Format("msg.remoteConnected", Revision);
+    }
 
+    private void Pull(bool force)
+    {
+        ReadStatus(out _, out _, out var epoch, out var documentRevision, out var sequence, out _);
         if (force || sequence != _seenSequence)
         {
             PullLive();
@@ -556,15 +580,32 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public bool Mutate(string json, ulong expectedRevision, out string error)
     {
-        var code = MixerRemote.MutateCode(_handle, json, expectedRevision);
-        Pull(force: true);
-        if (code == 0)
+        lock (_mutateLock)
         {
-            error = "";
-            return true;
+            ReadStatus(out _, out _, out _, out var revision, out _, out _);
+            var expected = expectedRevision == 0 ? revision : Math.Max(expectedRevision, revision);
+            var code = MixerRemote.MutateCode(_handle, json, expected);
+            ReadStatus(out _, out _, out _, out _, out _, out _);
+            if (code == 0)
+            {
+                error = "";
+                return true;
+            }
+            error = MutateError(code);
+            return false;
         }
-        error = MutateError(code);
-        return false;
+    }
+
+    internal void AcknowledgeDocument()
+    {
+        ReadStatus(out _, out _, out var epoch, out var revision, out var sequence, out _);
+        _seenDocumentRevision = revision;
+        _epoch = epoch;
+        if (sequence != _seenSequence)
+        {
+            PullLive();
+            _seenSequence = sequence;
+        }
     }
 
     private string MutateError(int code)
@@ -604,6 +645,14 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         programGpuId = 0;
     }
 
+    public IReadOnlyDictionary<ulong, (float L, float R)> Peaks => _peaks;
+
+    public void SetBusGain(ulong busId, float gain, bool mute) =>
+        MixerRemote.AudioSetBus(_handle, busId, gain, mute ? 1u : 0u);
+
+    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) =>
+        MixerRemote.AudioSetInput(_handle, inputId, busMask, gain, mute ? 1u : 0u);
+
     private void PullLive()
     {
         try
@@ -612,21 +661,33 @@ internal sealed class RemoteEivizBackend : IEivizBackend
             if (string.IsNullOrEmpty(json))
                 return;
             using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("units", out var units))
-                return;
-            foreach (var unit in units.EnumerateObject())
+            if (doc.RootElement.TryGetProperty("units", out var units))
             {
-                if (!ulong.TryParse(unit.Name, out var id))
-                    continue;
-                var preview = unit.Value.TryGetProperty("previewSource", out var previewEl)
-                    ? previewEl.GetUInt64()
-                    : 0;
-                var program = unit.Value.TryGetProperty("programSource", out var programEl)
-                    ? programEl.GetUInt64()
-                    : 0;
-                _buses[id] = (preview, program);
-                if (unit.Value.TryGetProperty("mix", out var mixEl))
-                    _mix[id] = mixEl.GetSingle();
+                foreach (var unit in units.EnumerateObject())
+                {
+                    if (!ulong.TryParse(unit.Name, out var id))
+                        continue;
+                    var preview = unit.Value.TryGetProperty("previewSource", out var previewEl)
+                        ? previewEl.GetUInt64()
+                        : 0;
+                    var program = unit.Value.TryGetProperty("programSource", out var programEl)
+                        ? programEl.GetUInt64()
+                        : 0;
+                    _buses[id] = (preview, program);
+                    if (unit.Value.TryGetProperty("mix", out var mixEl))
+                        _mix[id] = mixEl.GetSingle();
+                }
+            }
+            if (doc.RootElement.TryGetProperty("peaks", out var peaks) && peaks.ValueKind == JsonValueKind.Array)
+            {
+                _peaks.Clear();
+                foreach (var peak in peaks.EnumerateArray())
+                {
+                    var id = peak.TryGetProperty("id", out var idEl) ? idEl.GetUInt64() : 0;
+                    var left = peak.TryGetProperty("left", out var leftEl) ? leftEl.GetSingle() : 0;
+                    var right = peak.TryGetProperty("right", out var rightEl) ? rightEl.GetSingle() : 0;
+                    _peaks[id] = (left, right);
+                }
             }
         }
         catch
@@ -674,6 +735,7 @@ internal sealed class RemoteVideoPresenter
     private const ulong MultiviewMonitor = 0x0006_0003;
     private const ulong MultiviewSourceBase = 0x0005_0100;
     private readonly HashSet<ulong> _connected = [];
+    private readonly Dictionary<ulong, string> _boundKey = [];
     public bool PreviewOk { get; private set; }
     public bool ProgramOk { get; private set; }
 
@@ -724,16 +786,30 @@ internal sealed class RemoteVideoPresenter
 
     private bool Connect(ulong id, RemoteVideoChoice choice)
     {
+        var key = $"{choice.Transport}:{choice.Address}";
+        if (choice.IsEmpty)
+        {
+            if (_boundKey.ContainsKey(id) || _connected.Contains(id))
+            {
+                MixerNative.DestroySource(id);
+                _connected.Remove(id);
+                _boundKey.Remove(id);
+            }
+            return false;
+        }
+        if (_boundKey.TryGetValue(id, out var prev) && prev == key && _connected.Contains(id))
+            return true;
         MixerNative.DestroySource(id);
         _connected.Remove(id);
-        if (choice.IsEmpty)
-            return false;
-        var code = choice.Transport == OutputTransport.Ndi
-            ? MixerNative.ConnectNdi(id, choice.Address, 3, 0)
-            : MixerNative.ConnectOmt(id, choice.Address, 1, 3, 0);
+        _boundKey.Remove(id);
+        var resolved = RemoteVideoCatalog.Resolve(choice);
+        var code = resolved.Transport == OutputTransport.Ndi
+            ? MixerNative.ConnectNdi(id, resolved.Address, 3, 0)
+            : MixerNative.ConnectOmt(id, resolved.Address, 1, 3, 0);
         if (code != 0)
             return false;
         _connected.Add(id);
+        _boundKey[id] = key;
         return true;
     }
 
@@ -755,6 +831,7 @@ internal sealed class RemoteVideoPresenter
         foreach (var id in _connected.ToArray())
             MixerNative.DestroySource(id);
         _connected.Clear();
+        _boundKey.Clear();
         MixerNative.DestroySource(PreviewSourceId);
         MixerNative.DestroySource(ProgramSourceId);
         PreviewOk = false;
@@ -776,6 +853,20 @@ internal sealed class RemoteVideoItem
 
 internal static class RemoteVideoCatalog
 {
+    private static readonly object Gate = new();
+    private static string[] _omt = [];
+    private static string[] _ndi = [];
+    private static int _started;
+
+    public static event Action? Updated;
+
+    public static void Start()
+    {
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+            return;
+        Task.Run(DiscoverLoop);
+    }
+
     public static List<RemoteVideoItem> List(Session session)
     {
         var items = new List<RemoteVideoItem>
@@ -797,9 +888,16 @@ internal static class RemoteVideoCatalog
                 Label = $"{prefix}  {address}"
             });
         }
-        foreach (var line in Split(MixerNative.DiscoverText()))
+        string[] omt;
+        string[] ndi;
+        lock (Gate)
+        {
+            omt = _omt;
+            ndi = _ndi;
+        }
+        foreach (var line in omt)
             Add(OutputTransport.Omt, line);
-        foreach (var line in Split(MixerNative.DiscoverNdiText()))
+        foreach (var line in ndi)
             Add(OutputTransport.Ndi, line);
         foreach (var output in session.Outputs.Where(item =>
                      item.Enabled && item.Transport is OutputTransport.Omt or OutputTransport.Ndi))
@@ -815,6 +913,19 @@ internal static class RemoteVideoCatalog
         if (!string.IsNullOrWhiteSpace(address))
             return new RemoteVideoChoice(transport, address);
         return UniqueOutput(preview ? OutputSourceKind.MuPreview : OutputSourceKind.MuProgram);
+    }
+
+    public static RemoteVideoChoice Resolve(RemoteVideoChoice choice)
+    {
+        if (choice.IsEmpty || LooksDiscovered(choice.Address))
+            return choice;
+        string[] pool;
+        lock (Gate)
+            pool = choice.Transport == OutputTransport.Ndi ? _ndi : _omt;
+        var matches = pool.Where(item => AddressRefersTo(item, choice.Address)).ToArray();
+        if (matches.Length == 1)
+            return choice with { Address = matches[0] };
+        return choice;
     }
 
     public static void Save(bool preview, RemoteVideoChoice choice)
@@ -848,6 +959,53 @@ internal static class RemoteVideoCatalog
         if (matches.Count != 1)
             return new RemoteVideoChoice(OutputTransport.Omt, "");
         return new RemoteVideoChoice(matches[0].Transport, matches[0].Name);
+    }
+
+    private static bool LooksDiscovered(string address) =>
+        address.Contains("://", StringComparison.Ordinal)
+        || address.Contains('(', StringComparison.Ordinal);
+
+    private static bool AddressRefersTo(string discovered, string name)
+    {
+        if (discovered.Equals(name, StringComparison.OrdinalIgnoreCase))
+            return true;
+        var slash = discovered.LastIndexOf('/');
+        if (slash >= 0 && slash < discovered.Length - 1
+            && discovered[(slash + 1)..].Equals(name, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return discovered.Contains($"({name})", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void DiscoverLoop()
+    {
+        for (;;)
+        {
+            try
+            {
+                var omt = Split(MixerNative.DiscoverText()).ToArray();
+                var ndi = Split(MixerNative.DiscoverNdiText()).ToArray();
+                var changed = false;
+                lock (Gate)
+                {
+                    if (!omt.SequenceEqual(_omt) || !ndi.SequenceEqual(_ndi))
+                    {
+                        _omt = omt;
+                        _ndi = ndi;
+                        changed = true;
+                    }
+                }
+                if (!changed)
+                    continue;
+                var handler = Updated;
+                var dispatcher = Application.Current?.Dispatcher;
+                if (handler is not null && dispatcher is not null && !dispatcher.HasShutdownStarted)
+                    dispatcher.BeginInvoke(handler);
+            }
+            catch
+            {
+            }
+            Thread.Sleep(2000);
+        }
     }
 
     private static IEnumerable<string> Split(string text) =>
@@ -893,6 +1051,10 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
         programGpuId = 0;
         _ = unitId;
     }
+    public IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; } =
+        new Dictionary<ulong, (float L, float R)>();
+    public void SetBusGain(ulong busId, float gain, bool mute) { _ = (busId, gain, mute); }
+    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) { _ = (inputId, busMask, gain, mute); }
     public IReadOnlyList<PublishedVideoOutput> PublishedOutputs() => [];
     public void BindPreviewProgram(SwapchainHost preview, SwapchainHost program, ulong unitId)
     {

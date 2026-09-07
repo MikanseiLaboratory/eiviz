@@ -32,10 +32,20 @@ pub struct ResourceStatus {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LivePeak {
+    pub id: u64,
+    pub left: f32,
+    pub right: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveState {
     pub units: HashMap<u64, UnitLiveState>,
+    #[serde(default)]
+    pub peaks: Vec<LivePeak>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -140,7 +140,6 @@ struct ScenePreviewTile: View, @MainActor Equatable {
         .padding(.vertical, 3)
         .background(EivizTheme.chrome)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onEdit)
         .onTapGesture(perform: onPreview)
     }
 

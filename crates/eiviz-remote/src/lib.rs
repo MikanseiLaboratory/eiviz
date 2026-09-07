@@ -58,7 +58,7 @@ pub unsafe fn open(url: *const c_char, token: *const c_char) -> i32 {
         .name("eiviz-remote".into())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+                .worker_threads(4)
                 .enable_all()
                 .thread_name("eiviz-remote-rt")
                 .build()
@@ -188,9 +188,16 @@ fn map_result(result: eiviz_control::ControlResult<()>) -> i32 {
     }
 }
 
-fn run<T>(handle: i32, fut: impl std::future::Future<Output = T>) -> Option<T> {
+fn run<T: Send + 'static>(
+    handle: i32,
+    fut: impl std::future::Future<Output = T> + Send + 'static,
+) -> Option<T> {
     let rt = with_slot(handle, |slot| slot.handle.clone())?;
-    Some(rt.block_on(fut))
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    rt.spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    rx.recv_timeout(Duration::from_secs(30)).ok()
 }
 
 fn spawn_live(handle: i32, fut: impl std::future::Future<Output = i32> + Send + 'static) -> i32 {
@@ -379,6 +386,28 @@ pub fn video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
     })
 }
 
+pub fn audio_set_input(handle: i32, input_id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
+        map_result(
+            session
+                .audio_set_input(input_id, bus_mask, gain, mute != 0)
+                .await,
+        )
+    })
+}
+
+pub fn audio_set_bus(handle: i32, bus_id: u64, gain: f32, mute: u32) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
+        map_result(session.audio_set_bus(bus_id, gain, mute != 0).await)
+    })
+}
+
 pub unsafe fn upload(
     handle: i32,
     path: *const c_char,
@@ -541,6 +570,22 @@ pub extern "C" fn mixer_remote_video_loop(handle: i32, input_id: u64, looping: u
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
     video_seek(handle, input_id, position_hns)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_audio_set_input(
+    handle: i32,
+    input_id: u64,
+    bus_mask: u32,
+    gain: f32,
+    mute: u32,
+) -> i32 {
+    audio_set_input(handle, input_id, bus_mask, gain, mute)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_audio_set_bus(handle: i32, bus_id: u64, gain: f32, mute: u32) -> i32 {
+    audio_set_bus(handle, bus_id, gain, mute)
 }
 
 #[unsafe(no_mangle)]

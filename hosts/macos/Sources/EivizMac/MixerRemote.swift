@@ -82,6 +82,18 @@ enum MixerRemote {
         encode(["kind": "upsertScene", "scene": encodeValue(scene)])
     }
 
+    static func upsertUnit(_ unit: MixingUnitEntry) -> String {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(unit),
+              let object = try? JSONSerialization.jsonObject(with: data)
+        else { return "{}" }
+        return encode(["kind": "upsertUnit", "unit": object])
+    }
+
+    static func deleteUnit(_ id: UInt64) -> String {
+        encode(["kind": "deleteUnit", "id": NSNumber(value: id)])
+    }
+
     static func upsertInput(_ input: InputEntry) -> String {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(input),

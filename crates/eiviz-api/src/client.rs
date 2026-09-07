@@ -250,6 +250,16 @@ impl ControlSession {
         Ok(response)
     }
 
+    pub async fn snapshot_json(&self) -> ControlResult<String> {
+        let response = self.snapshot().await?;
+        if let Some(response::Payload::Snapshot(snapshot)) = response.payload {
+            String::from_utf8(snapshot.document_json)
+                .map_err(|error| ControlError::internal(error.to_string()))
+        } else {
+            Err(ControlError::unavailable("snapshot missing"))
+        }
+    }
+
     pub async fn cut(&self, unit_id: u64, swap: bool) -> ControlResult<()> {
         let response = self.roundtrip(live_cut(unit_id, swap)).await?;
         apply_response(&self.view, &response);
@@ -260,6 +270,25 @@ impl ControlSession {
         let response = self.roundtrip(preview_req(unit_id, scene_id)).await?;
         apply_response(&self.view, &response);
         status_ok(&response)
+    }
+
+    pub async fn auto(&self, unit_id: u64, duration_ms: u32, swap: bool) -> ControlResult<()> {
+        self.auto_full(
+            unit_id,
+            0,
+            duration_ms,
+            swap,
+            true,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.02,
+            0.0,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -353,6 +382,18 @@ impl ControlSession {
         status_ok(&response)
     }
 
+    pub async fn shutdown(&self) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::Shutdown(crate::proto::Shutdown {})),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
     pub async fn video_play(&self, input_id: u64, playing: bool) -> ControlResult<()> {
         let response = self
             .roundtrip(Request {
@@ -391,6 +432,52 @@ impl ControlSession {
                 payload: Some(request::Payload::VideoSeek(crate::proto::VideoSeek {
                     input: Some(ref_input(input_id)),
                     position_hns,
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn audio_set_input(
+        &self,
+        input_id: u64,
+        bus_mask: u32,
+        gain: f32,
+        mute: bool,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::AudioSetInput(
+                    crate::proto::AudioSetInput {
+                        input: Some(ref_input(input_id)),
+                        bus_mask,
+                        gain,
+                        mute,
+                    },
+                )),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn audio_set_bus(&self, bus_id: u64, gain: f32, mute: bool) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::AudioSetBus(crate::proto::AudioSetBus {
+                    bus: Some(crate::proto::ResourceRef {
+                        kind: "bus".into(),
+                        id: bus_id,
+                        guid: String::new(),
+                        name: String::new(),
+                    }),
+                    gain,
+                    mute,
                 })),
             })
             .await?;

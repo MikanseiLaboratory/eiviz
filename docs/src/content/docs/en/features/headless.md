@@ -59,11 +59,11 @@ The default media directory when unset is `%LOCALAPPDATA%\eiviz\media` on Window
 
 ## Interactive CLI
 
-`eivizctl` with no subcommand opens a REPL. The prompt is `eiviz>`. Type `exit` or `quit` to leave. The destination is `--url` or `EIVIZ_API_URL`, default `ws://127.0.0.1:9400`. The client token is `EIVIZ_API_TOKEN` or `EIVIZ_API_TOKEN_FILE`.
+`eivizctl` with no subcommand opens a REPL. The prompt is `eiviz>`. Type `exit` or `quit` to leave. The destination is `--url`, default `ws://127.0.0.1:9400`. Pass the client token with `--token` or `--token-file`. The REPL keeps one WebSocket open and does not disconnect after each command.
 
 ```bash
 eivizctl
-eivizctl --url ws://127.0.0.1:9400
+eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
 Listen edits and live mixer ops are separate.
@@ -130,11 +130,10 @@ Preview and Program live video come from an NDI or OMT output on the destination
 
 | Variable | Use |
 | --- | --- |
-| `EIVIZ_API_TOKEN` | Token for the server and `eivizctl` |
-| `EIVIZ_API_TOKEN_FILE` | Read the token from a file |
+| `EIVIZ_API_TOKEN` | Token for the server |
+| `EIVIZ_API_TOKEN_FILE` | Read the server token from a file |
 | `EIVIZ_API_REQUIRE_AUTH` | Anything other than `0` requires auth. Unset means required when a token is set |
 | `EIVIZ_API_ROLE` | Server max role |
-| `EIVIZ_API_URL` | `eivizctl` destination. Default `ws://127.0.0.1:9400` |
 | `EIVIZ_MEDIA_DIRECTORY` | Upload root |
 
 To rotate a token, change the env var or `eivizctl prefs set token`, then restart `eiviz-headless`.

@@ -444,6 +444,15 @@ impl ControlService {
         let _ = self.after_live(name, request_id, None, false);
     }
 
+    pub fn publish_meters(&mut self) {
+        if self.lifecycle != Lifecycle::Ready && self.lifecycle != Lifecycle::Starting {
+            return;
+        }
+        let live = self.port.live_state().unwrap_or_default();
+        let meta = self.meta("");
+        self.hub.publish(Event::LiveChanged { meta, live });
+    }
+
     pub fn vmix_cut(
         &mut self,
         unit_id: u64,
@@ -622,6 +631,7 @@ pub trait ControlFacade: Send + Sync {
     fn epoch(&self) -> String {
         String::new()
     }
+    fn publish_meters(&self) {}
 }
 
 impl ControlFacade for std::sync::Mutex<ControlService> {
@@ -653,6 +663,12 @@ impl ControlFacade for std::sync::Mutex<ControlService> {
         self.lock()
             .map(|svc| svc.epoch().to_string())
             .unwrap_or_default()
+    }
+
+    fn publish_meters(&self) {
+        if let Ok(mut svc) = self.lock() {
+            svc.publish_meters();
+        }
     }
 }
 
@@ -889,6 +905,7 @@ mod tests {
                     .lock()
                     .map(|slot| slot.clone())
                     .unwrap_or_default(),
+                ..Default::default()
             })
         }
         fn video_set_playing(&mut self, id: u64, playing: bool) -> ControlResult<()> {

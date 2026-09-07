@@ -59,11 +59,11 @@ GUIの環境設定に相当する値は、ホスト固有です。セッショ�
 
 ## 対話型CLI
 
-`eivizctl`にサブコマンドを付けないとREPLです。プロンプトは`eiviz>`です。`exit`または`quit`で抜けます。接続先は`--url`または`EIVIZ_API_URL`で、既定は`ws://127.0.0.1:9400`です。クライアントのtokenは`EIVIZ_API_TOKEN`または`EIVIZ_API_TOKEN_FILE`です。
+`eivizctl`にサブコマンドを付けないとREPLです。プロンプトは`eiviz>`です。`exit`または`quit`で抜けます。接続先は`--url`で、既定は`ws://127.0.0.1:9400`です。クライアントのtokenは`--token`または`--token-file`です。REPLはWebSocketを1本維持し、コマンドごとに切断しません。
 
 ```bash
 eivizctl
-eivizctl --url ws://127.0.0.1:9400
+eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
 待ち受けの編集と、動いているMixerへの操作は別物です。
@@ -130,11 +130,10 @@ PreviewとProgramのライブ映像は、接続先のNDIまたはOMT出力をRem
 
 | 変数 | 用途 |
 | --- | --- |
-| `EIVIZ_API_TOKEN` | サーバーと`eivizctl`のtoken |
-| `EIVIZ_API_TOKEN_FILE` | tokenをファイルから読む |
+| `EIVIZ_API_TOKEN` | サーバーのtoken |
+| `EIVIZ_API_TOKEN_FILE` | サーバーのtokenをファイルから読む |
 | `EIVIZ_API_REQUIRE_AUTH` | `0`以外で認証必須。未設定時はtokenがあれば必須 |
 | `EIVIZ_API_ROLE` | サーバーの最大role |
-| `EIVIZ_API_URL` | `eivizctl`の接続先。既定`ws://127.0.0.1:9400` |
 | `EIVIZ_MEDIA_DIRECTORY` | アップロード保存先 |
 
 tokenを回すときは環境変数または`eivizctl prefs set token`を差し替え、`eiviz-headless`を再起動します。

@@ -412,7 +412,12 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private void PushGpu() => MixerApply.DefineScene(_scene, _width, _height);
+    private void PushGpu()
+    {
+        if (App.IsRemote)
+            return;
+        MixerApply.DefineScene(_scene, _width, _height);
+    }
 
     private void AddLayer_Click(object sender, RoutedEventArgs e)
     {
@@ -839,11 +844,26 @@ public partial class SceneEditorWindow : Window
             TagCatalog.Replace(_scene.Tags, tags.Selected);
         if (Application.Current is App { Backend.IsRemote: true } app)
         {
-            if (!app.Backend.Mutate(MutationJson.UpsertScene(_scene), app.Backend.Revision, out var error))
+            IsEnabled = false;
+            var json = MutationJson.UpsertScene(_scene);
+            var revision = app.Backend.Revision;
+            var backend = app.Backend;
+            Task.Run(() =>
             {
-                MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
-                return;
-            }
+                var ok = backend.Mutate(json, revision, out var error);
+                Dispatcher.BeginInvoke(() =>
+                {
+                    backend.Poll();
+                    if (!ok)
+                    {
+                        MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
+                        IsEnabled = true;
+                        return;
+                    }
+                    DialogResult = true;
+                });
+            });
+            return;
         }
         else
             PushGpu();

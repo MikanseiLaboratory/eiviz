@@ -131,6 +131,7 @@ public partial class App : Application
             "GPU mixer initialization");
         MixerNative.DefineGenerator(MixerNative.Black, MixerNative.GenSolid, 0, 0, 0, 1, 0);
         FlipBudget.Configure(0);
+        RemoteVideoCatalog.Start();
         Backend = new DisconnectedRemoteBackend();
     }
 

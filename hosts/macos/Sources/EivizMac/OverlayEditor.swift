@@ -151,7 +151,13 @@ struct OverlayView: View {
     }
 
     private var overlayLivePreview: some View {
-        MetalPreviewRepresentable(role: mixer.surfaceRole(kind: EIVIZ_OUTPUT_PROGRAM, unitId: unit.id))
+        Group {
+            if mixer.isRemote {
+                Color.black
+            } else {
+                MetalPreviewRepresentable(role: mixer.surfaceRole(kind: EIVIZ_OUTPUT_PROGRAM, unitId: unit.id))
+            }
+        }
             .aspectRatio(
                 CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
                 contentMode: .fit

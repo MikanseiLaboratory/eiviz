@@ -321,7 +321,6 @@ private struct SwitcherSceneThumb: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(EivizTheme.chrome)
-                .onTapGesture(count: 2, perform: onEdit)
                 .onTapGesture(perform: onPreview)
             if !collapsed {
                 ThumbRepresentable(

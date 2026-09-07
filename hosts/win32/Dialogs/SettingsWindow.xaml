@@ -114,7 +114,7 @@
                 <ListBox x:Name="MvList" Height="140" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                          DisplayMemberPath="Name"/>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,12">
-                    <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="88" Click="OpenMv_Click"/>
+                    <Button x:Name="OpenMvButton" Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="88" Click="OpenMv_Click"/>
                     <Button Content="{Binding [settings.layout], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="EditLayoutTiles_Click"/>
                     <Button Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="88" Margin="8,0,0,0" Click="DeleteMv_Click"/>
                 </StackPanel>
