@@ -90,7 +90,7 @@ public partial class MainWindow : Window
             ApplyAspect();
             RefreshStatusBar();
             FillVideoSources();
-            BindPreviewProgram();
+            BindMainVideo();
             if (!HostRole.IsRemote)
                 AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
@@ -136,10 +136,13 @@ public partial class MainWindow : Window
         FillVideoSources();
         if (!HostRole.IsRemote)
             BindPreviewProgram();
+        else
+            BindMainVideo();
         _overlay?.Reload(SelectedUnit);
     }
 
     private bool _suppressVideoSource;
+    private bool _suppressVideoLayout;
 
     private void ApplyRemoteChrome()
     {
@@ -150,13 +153,15 @@ public partial class MainWindow : Window
         LoadSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
         DisconnectButton.Visibility = Visibility.Visible;
-        PreviewHost.UnitId = RemoteVideoPresenter.LocalUnitId;
-        ProgramHost.UnitId = RemoteVideoPresenter.LocalUnitId;
+        VideoLayoutBox.Visibility = Visibility.Visible;
         PreviewSourceBox.Visibility = Visibility.Visible;
         ProgramSourceBox.Visibility = Visibility.Visible;
+        MultiviewSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
         SnapshotButton.Visibility = Visibility.Collapsed;
         RemoteIdleText.Text = Loc.T("msg.remoteIdle");
+        FillVideoLayoutBox();
+        ApplyVideoLayout();
         ApplyRemoteLiveUi(false);
     }
 
@@ -171,13 +176,30 @@ public partial class MainWindow : Window
         ProgramSourceBox.ItemsSource = WithChoice(RemoteVideoCatalog.List(_session), programChoice);
         SelectChoice(PreviewSourceBox, previewChoice);
         SelectChoice(ProgramSourceBox, programChoice);
+        var multiviewChoice = RemoteVideoCatalog.FromPrefsMultiview();
+        MultiviewSourceBox.ItemsSource = WithChoice(RemoteVideoCatalog.List(_session), multiviewChoice);
+        SelectChoice(MultiviewSourceBox, multiviewChoice);
         _suppressVideoSource = false;
+    }
+
+    private void FillVideoLayoutBox()
+    {
+        if (!HostRole.IsRemote)
+            return;
+        _suppressVideoLayout = true;
+        VideoLayoutBox.ItemsSource = new[]
+        {
+            new VideoLayoutItem(false, Loc.T("chrome.layoutPrvPgm")),
+            new VideoLayoutItem(true, Loc.T("chrome.layoutMultiview"))
+        };
+        VideoLayoutBox.SelectedIndex = RemoteVideoCatalog.IsMultiviewLayout() ? 1 : 0;
+        _suppressVideoLayout = false;
     }
 
     private void OnRemoteVideoCatalogUpdated()
     {
         FillVideoSources();
-        BindPreviewProgram();
+        BindMainVideo();
     }
 
     private static List<RemoteVideoItem> WithChoice(List<RemoteVideoItem> items, RemoteVideoChoice choice)
@@ -209,7 +231,7 @@ public partial class MainWindow : Window
         if (_suppressVideoSource || PreviewSourceBox.SelectedItem is not RemoteVideoItem item)
             return;
         RemoteVideoCatalog.Save(true, item.Choice);
-        BindPreviewProgram();
+        BindMainVideo();
     }
 
     private void ProgramSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -217,7 +239,24 @@ public partial class MainWindow : Window
         if (_suppressVideoSource || ProgramSourceBox.SelectedItem is not RemoteVideoItem item)
             return;
         RemoteVideoCatalog.Save(false, item.Choice);
-        BindPreviewProgram();
+        BindMainVideo();
+    }
+
+    private void MultiviewSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressVideoSource || MultiviewSourceBox.SelectedItem is not RemoteVideoItem item)
+            return;
+        RemoteVideoCatalog.SaveMultiview(item.Choice);
+        BindMainVideo();
+    }
+
+    private void VideoLayout_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressVideoLayout || VideoLayoutBox.SelectedItem is not VideoLayoutItem item)
+            return;
+        RemoteVideoCatalog.SaveLayout(item.Multiview);
+        ApplyVideoLayout();
+        BindMainVideo();
     }
 
     private void Connect_Click(object sender, RoutedEventArgs e)
@@ -238,6 +277,7 @@ public partial class MainWindow : Window
             window.Close();
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
+        MainMultiviewHost.ReleaseNative();
         app.DisconnectRemote();
         RefreshStatusBar();
     }
@@ -252,12 +292,39 @@ public partial class MainWindow : Window
             return;
         }
         FillVideoSources();
-        BindPreviewProgram();
+        BindMainVideo();
+        RefreshStatusBar();
+    }
+
+    private void ApplyVideoLayout()
+    {
+        var multiview = HostRole.IsRemote && RemoteVideoCatalog.IsMultiviewLayout();
+        PreviewAspect.Visibility = multiview ? Visibility.Collapsed : Visibility.Visible;
+        ProgramAspect.Visibility = multiview ? Visibility.Collapsed : Visibility.Visible;
+        ProgramSplitter.Visibility = multiview ? Visibility.Collapsed : Visibility.Visible;
+        MainMultiviewAspect.Visibility = multiview ? Visibility.Visible : Visibility.Collapsed;
+        VideoCol2.Width = multiview ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        VideoCol2.MinWidth = multiview ? 0 : 160;
+    }
+
+    private void BindMainVideo()
+    {
+        if (HostRole.IsRemote && RemoteVideoCatalog.IsMultiviewLayout())
+        {
+            PreviewHost.ReleaseNative();
+            ProgramHost.ReleaseNative();
+            if (Application.Current is App app)
+                app.Backend.BindMainMultiview(MainMultiviewHost);
+        }
+        else
+            BindPreviewProgram();
         RefreshStatusBar();
     }
 
     private void BindPreviewProgram()
     {
+        if (HostRole.IsRemote)
+            MainMultiviewHost.ReleaseNative();
         if (Application.Current is App app)
             app.Backend.BindPreviewProgram(PreviewHost, ProgramHost, SelectedUnit.Id);
         else
@@ -2210,7 +2277,7 @@ public partial class MainWindow : Window
         if (_suppressUnitChange || UnitBox.SelectedItem is not MixingUnitEntry unit)
             return;
         _session.SelectedUnitId = unit.Id;
-        BindPreviewProgram();
+        BindMainVideo();
         ApplyAspect();
         _overlay?.Reload(unit);
         _tbarPresetIndex = 0;
@@ -2396,6 +2463,7 @@ public partial class MainWindow : Window
             preview.Close();
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
+        MainMultiviewHost.ReleaseNative();
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
             tile.SetThumbWanted(false);
     }
@@ -2410,7 +2478,7 @@ public partial class MainWindow : Window
             app.ReloadSession(_session);
         else if (HostRole.IsRemote && dialog.RemoteOmtDecodeChanged)
         {
-            BindPreviewProgram();
+            BindMainVideo();
             app.Backend.SyncPublishedVideo();
         }
     }
@@ -2608,4 +2676,9 @@ public partial class MainWindow : Window
         && left.Enabled == right.Enabled
         && left.AudioBusId == right.AudioBusId
         && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
+}
+
+internal sealed record VideoLayoutItem(bool Multiview, string Label)
+{
+    public override string ToString() => Label;
 }

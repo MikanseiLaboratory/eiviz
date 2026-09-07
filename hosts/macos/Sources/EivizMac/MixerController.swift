@@ -95,8 +95,10 @@ final class MixerController: ObservableObject {
     private var remoteError = ""
     private var remotePreviewKey = ""
     private var remoteProgramKey = ""
+    private var remoteMultiviewKey = ""
     private var remotePreviewLive = false
     private var remoteProgramLive = false
+    private var remoteMultiviewLive = false
     private var discoveredOmt: [String] = []
     private var discoveredNdi: [String] = []
     private var remoteDiscoverTask: Task<Void, Never>?
@@ -172,6 +174,15 @@ final class MixerController: ObservableObject {
             remoteVideoCatalogEpoch &+= 1
         }
         guard isRemote else { return }
+        if AppPrefs.shared.remoteVideoLayout == .multiview {
+            if !remoteMultiviewLive {
+                remoteMultiviewKey = ""
+            }
+            if changed || !remoteMultiviewLive {
+                syncPublishedVideo()
+            }
+            return
+        }
         if !remotePreviewLive {
             remotePreviewKey = ""
         }
@@ -188,13 +199,6 @@ final class MixerController: ObservableObject {
             return
         }
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
-        guard fail(mixer_create_unit(MixerRemote.localUnitId, 1920, 1080), "Metal mixer initialization") else {
-            return
-        }
-        guard fail(mixer_unit_configure(MixerRemote.localUnitId, 1920, 1080, 60, 1), "Metal mixer initialization") else {
-            return
-        }
-        applyLocalRemoteBuses()
         FlipBudget.configure(0)
         GpuPresentStore.load()
         startRemoteDiscover()
@@ -214,8 +218,10 @@ final class MixerController: ObservableObject {
         remoteConnected = false
         remotePreviewKey = ""
         remoteProgramKey = ""
+        remoteMultiviewKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteMultiviewLive = false
         remoteEpoch = ""
         remotePulledDocumentRevision = 0
         remoteLiveSequence = 0
@@ -250,8 +256,10 @@ final class MixerController: ObservableObject {
         remoteConnected = false
         remotePreviewKey = ""
         remoteProgramKey = ""
+        remoteMultiviewKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteMultiviewLive = false
         remoteEpoch = ""
         remotePulledDocumentRevision = 0
         remoteLiveSequence = 0
@@ -262,7 +270,7 @@ final class MixerController: ObservableObject {
         remoteReceiveKeys.removeAll()
         _ = mixer_destroy_source(MixerRemote.previewSourceId)
         _ = mixer_destroy_source(MixerRemote.programSourceId)
-        applyLocalRemoteBuses()
+        _ = mixer_destroy_source(MixerRemote.mainMultiviewSourceId)
         bumpSurfaceEpoch()
         refreshRemoteWarn()
     }
@@ -424,8 +432,10 @@ final class MixerController: ObservableObject {
         remoteConnected = false
         remotePreviewKey = ""
         remoteProgramKey = ""
+        remoteMultiviewKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteMultiviewLive = false
         remoteEpoch = ""
         remotePulledDocumentRevision = 0
         remoteLiveSequence = 0
@@ -434,6 +444,7 @@ final class MixerController: ObservableObject {
         }
         _ = mixer_destroy_source(MixerRemote.previewSourceId)
         _ = mixer_destroy_source(MixerRemote.programSourceId)
+        _ = mixer_destroy_source(MixerRemote.mainMultiviewSourceId)
         remoteReceiveIds.removeAll()
         remoteReceiveKeys.removeAll()
         guard booted else { return }
@@ -1557,8 +1568,10 @@ final class MixerController: ObservableObject {
         guard isRemote else { return }
         remotePreviewKey = ""
         remoteProgramKey = ""
+        remoteMultiviewKey = ""
         remotePreviewLive = false
         remoteProgramLive = false
+        remoteMultiviewLive = false
         for id in remoteReceiveIds.values {
             _ = mixer_destroy_source(id)
         }
@@ -2060,11 +2073,18 @@ final class MixerController: ObservableObject {
     }
 
     private func remoteVideoReady() -> Bool {
-        MixerFFI.sourceStatus(MixerRemote.previewSourceId).hasVideo
+        if AppPrefs.shared.remoteVideoLayout == .multiview {
+            return MixerFFI.sourceStatus(MixerRemote.mainMultiviewSourceId).hasVideo
+        }
+        return MixerFFI.sourceStatus(MixerRemote.previewSourceId).hasVideo
             && MixerFFI.sourceStatus(MixerRemote.programSourceId).hasVideo
     }
 
     private func remoteVideoError() -> String? {
+        if AppPrefs.shared.remoteVideoLayout == .multiview {
+            let error = MixerFFI.sourceErrorText(MixerRemote.mainMultiviewSourceId)
+            return error.isEmpty ? nil : error
+        }
         let preview = MixerFFI.sourceErrorText(MixerRemote.previewSourceId)
         if !preview.isEmpty { return preview }
         let program = MixerFFI.sourceErrorText(MixerRemote.programSourceId)
@@ -2220,6 +2240,13 @@ final class MixerController: ObservableObject {
         var catalog = session.sceneTags
         TagCatalog.mergeInto(&catalog, tags)
         session.sceneTags = catalog
+    }
+
+    func surfaceRoleMainMultiview() -> SurfaceRole {
+        .monitor(
+            monitorId: MixerRemote.mainMultiviewMonitor,
+            sourceId: remoteMultiviewLive ? MixerRemote.mainMultiviewSourceId : EIVIZ_SRC_BLACK
+        )
     }
 
     func surfaceRole(kind: UInt32, unitId: UInt64? = nil) -> SurfaceRole {
@@ -2455,6 +2482,12 @@ final class MixerController: ObservableObject {
         return matches.first
     }
 
+    private func remotePublishedUnique(_ kind: OutputSourceKind) -> OutputEntry? {
+        let matches = publishedOutputs().filter { $0.sourceKind == kind }
+        guard matches.count == 1 else { return nil }
+        return matches.first
+    }
+
     private func remotePublishedMultiview(_ layoutGpuId: UInt64) -> UInt64? {
         let matches = publishedOutputs().filter { $0.sourceKind == .multiview && $0.sourceId == layoutGpuId }
         guard matches.count == 1, let output = matches.first else { return nil }
@@ -2500,6 +2533,38 @@ final class MixerController: ObservableObject {
         return RemoteVideoItem(transport: .omt, address: "", label: L10n.t("chrome.videoNone"))
     }
 
+    func selectedRemoteMultiview() -> RemoteVideoItem {
+        let prefs = AppPrefs.shared
+        let address = prefs.multiviewVideoAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transport: OutputTransport = prefs.multiviewVideoTransport.uppercased() == "NDI" ? .ndi : .omt
+        if !address.isEmpty {
+            return resolveRemoteVideo(RemoteVideoItem(
+                transport: transport,
+                address: address,
+                label: "\(transport == .ndi ? "NDI" : "OMT")  \(address)"
+            ))
+        }
+        if let output = remotePublishedUnique(.multiview) {
+            return resolveRemoteVideo(RemoteVideoItem(
+                transport: output.transport,
+                address: output.name,
+                label: "\(output.transport == .ndi ? "NDI" : "OMT")  \(output.name)"
+            ))
+        }
+        return RemoteVideoItem(transport: .omt, address: "", label: L10n.t("chrome.videoNone"))
+    }
+
+    func setRemoteVideoLayout(_ layout: RemoteVideoLayout) {
+        guard AppPrefs.shared.remoteVideoLayout != layout else { return }
+        AppPrefs.shared.remoteVideoLayout = layout
+        AppPrefs.shared.save()
+        remotePreviewKey = ""
+        remoteProgramKey = ""
+        remoteMultiviewKey = ""
+        syncPublishedVideo()
+        bumpSurfaceEpoch()
+    }
+
     func setRemoteVideo(preview: Bool, item: RemoteVideoItem) {
         if preview {
             AppPrefs.shared.previewVideoAddress = item.address
@@ -2513,6 +2578,14 @@ final class MixerController: ObservableObject {
         bumpSurfaceEpoch()
     }
 
+    func setRemoteMultiview(_ item: RemoteVideoItem) {
+        AppPrefs.shared.multiviewVideoAddress = item.address
+        AppPrefs.shared.multiviewVideoTransport = item.transport == .ndi ? "NDI" : "OMT"
+        AppPrefs.shared.save()
+        syncPublishedVideo()
+        bumpSurfaceEpoch()
+    }
+
     private func remoteVideoBindKey(_ item: RemoteVideoItem) -> String {
         if item.transport == .ndi {
             return "\(item.transport.rawValue):\(item.address)"
@@ -2521,17 +2594,42 @@ final class MixerController: ObservableObject {
     }
 
     private func syncPublishedVideo() {
-        let preview = selectedRemoteVideo(preview: true)
-        let program = selectedRemoteVideo(preview: false)
-        let previewKey = remoteVideoBindKey(preview)
-        let programKey = remoteVideoBindKey(program)
-        if previewKey != remotePreviewKey {
-            remotePreviewKey = previewKey
-            remotePreviewLive = connectRemoteChoice(MixerRemote.previewSourceId, preview)
-        }
-        if programKey != remoteProgramKey {
-            remoteProgramKey = programKey
-            remoteProgramLive = connectRemoteChoice(MixerRemote.programSourceId, program)
+        let layout = AppPrefs.shared.remoteVideoLayout
+        if layout == .multiview {
+            if remotePreviewLive {
+                _ = mixer_destroy_source(MixerRemote.previewSourceId)
+                remotePreviewLive = false
+                remotePreviewKey = ""
+            }
+            if remoteProgramLive {
+                _ = mixer_destroy_source(MixerRemote.programSourceId)
+                remoteProgramLive = false
+                remoteProgramKey = ""
+            }
+            let item = selectedRemoteMultiview()
+            let key = remoteVideoBindKey(item)
+            if key != remoteMultiviewKey {
+                remoteMultiviewKey = key
+                remoteMultiviewLive = connectRemoteChoice(MixerRemote.mainMultiviewSourceId, item)
+            }
+        } else {
+            if remoteMultiviewLive {
+                _ = mixer_destroy_source(MixerRemote.mainMultiviewSourceId)
+                remoteMultiviewLive = false
+                remoteMultiviewKey = ""
+            }
+            let preview = selectedRemoteVideo(preview: true)
+            let program = selectedRemoteVideo(preview: false)
+            let previewKey = remoteVideoBindKey(preview)
+            let programKey = remoteVideoBindKey(program)
+            if previewKey != remotePreviewKey {
+                remotePreviewKey = previewKey
+                remotePreviewLive = connectRemoteChoice(MixerRemote.previewSourceId, preview)
+            }
+            if programKey != remoteProgramKey {
+                remoteProgramKey = programKey
+                remoteProgramLive = connectRemoteChoice(MixerRemote.programSourceId, program)
+            }
         }
         let outputs = publishedOutputs().filter { $0.sourceKind == .multiview }
         var keep: [UInt64: UInt64] = [:]
@@ -2553,29 +2651,13 @@ final class MixerController: ObservableObject {
             remoteReceiveIds.removeValue(forKey: outputId)
             remoteReceiveKeys.removeValue(forKey: outputId)
         }
-        let unavailable = !remotePreviewLive || !remoteProgramLive
+        let unavailable = layout == .multiview
+            ? !remoteMultiviewLive
+            : !remotePreviewLive || !remoteProgramLive
         if videoUnavailable != unavailable {
             videoUnavailable = unavailable
         }
-        applyLocalRemoteBuses()
         refreshRemoteWarn()
-    }
-
-    private func applyLocalRemoteBuses() {
-        let unit = selectedUnit
-        let width = max(2, unit.width)
-        let height = max(2, unit.height)
-        let fpsNum = max(1, unit.fpsNum)
-        let fpsDen = max(1, unit.fpsDen)
-        if mixer_unit_configure(MixerRemote.localUnitId, width, height, fpsNum, fpsDen) != EIVIZ_OK {
-            _ = mixer_create_unit(MixerRemote.localUnitId, width, height)
-            _ = mixer_unit_configure(MixerRemote.localUnitId, width, height, fpsNum, fpsDen)
-        }
-        var state = MixerFFI.emptyState()
-        state.preview_source = remotePreviewLive ? MixerRemote.previewSourceId : EIVIZ_SRC_BLACK
-        state.program_source = remoteProgramLive ? MixerRemote.programSourceId : EIVIZ_SRC_BLACK
-        state.transition_kind = EIVIZ_TRANSITION_CUT
-        _ = mixer_unit_set_state(MixerRemote.localUnitId, &state)
     }
 
     @discardableResult

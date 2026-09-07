@@ -33,13 +33,14 @@ enum KeychainStore {
 }
 
 enum MixerRemote {
-    static let localUnitId: UInt64 = 0x0007_0001
     static let previewMonitor: UInt64 = 0x0006_0001
     static let programMonitor: UInt64 = 0x0006_0002
     static let multiviewMonitor: UInt64 = 0x0006_0003
-    static let sourceBase: UInt64 = 0x0005_0000
+    static let mainMultiviewMonitor: UInt64 = 0x0006_0004
+    static let sourceBase: UInt64 = 0x0005_0100
     static let previewSourceId: UInt64 = 0x0005_0001
     static let programSourceId: UInt64 = 0x0005_0002
+    static let mainMultiviewSourceId: UInt64 = 0x0005_0003
 
     static func copy(_ handle: Int32, _ fn: (UnsafeMutablePointer<UInt8>?, Int) -> Int32, cap: Int = 1 << 20) -> String {
         var size = cap

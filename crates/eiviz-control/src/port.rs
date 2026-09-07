@@ -102,6 +102,10 @@ pub trait MixerPort: Send {
     fn video_seek(&mut self, id: u64, position_hns: i64) -> ControlResult<()>;
 
     fn snapshot(&mut self, unit_id: u64, kind: u32, path: &str) -> ControlResult<()>;
+    fn publish_session(&mut self, document: &crate::session::Document) -> ControlResult<()> {
+        let _ = document;
+        Ok(())
+    }
     fn configure_vmix_api(
         &mut self,
         http_enabled: bool,

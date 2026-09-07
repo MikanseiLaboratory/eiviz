@@ -22,9 +22,7 @@ internal sealed partial class SwapchainHost : HwndHost
     public ulong UnitId
     {
         get => _unitId;
-        set => _unitId = HostRole.IsRemote && value == 1
-            ? RemoteVideoPresenter.LocalUnitId
-            : value;
+        set => _unitId = value;
     }
     public uint OutputKind { get; set; } = MixerNative.OutputProgram;
     public ulong MonitorId { get; set; }

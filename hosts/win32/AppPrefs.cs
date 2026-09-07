@@ -47,6 +47,9 @@ internal sealed class AppPrefs
     public string PreviewVideoTransport { get; set; } = "OMT";
     public string ProgramVideoAddress { get; set; } = "";
     public string ProgramVideoTransport { get; set; } = "OMT";
+    public string MultiviewVideoAddress { get; set; } = "";
+    public string MultiviewVideoTransport { get; set; } = "OMT";
+    public string RemoteVideoLayout { get; set; } = "previewProgram";
     public bool RemoteOmtUseGpu { get; set; }
 
     public static AppPrefs Current { get; private set; } = Load();

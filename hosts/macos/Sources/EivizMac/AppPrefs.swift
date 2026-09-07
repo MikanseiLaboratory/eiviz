@@ -20,6 +20,11 @@ enum HostConnectionMode: String, Codable {
     case remote
 }
 
+enum RemoteVideoLayout: String, Codable {
+    case previewProgram
+    case multiview
+}
+
 final class AppPrefs: ObservableObject {
     nonisolated(unsafe) static let shared = AppPrefs()
 
@@ -36,6 +41,9 @@ final class AppPrefs: ObservableObject {
     @Published var previewVideoTransport: String
     @Published var programVideoAddress: String
     @Published var programVideoTransport: String
+    @Published var multiviewVideoAddress: String
+    @Published var multiviewVideoTransport: String
+    @Published var remoteVideoLayout: RemoteVideoLayout
     @Published var remoteOmtUseGpu: Bool
     @Published var nativeApiEnabled: Bool
     @Published var nativeApiBind: String
@@ -80,6 +88,9 @@ final class AppPrefs: ObservableObject {
         previewVideoTransport = loaded.previewVideoTransport
         programVideoAddress = loaded.programVideoAddress
         programVideoTransport = loaded.programVideoTransport
+        multiviewVideoAddress = loaded.multiviewVideoAddress
+        multiviewVideoTransport = loaded.multiviewVideoTransport
+        remoteVideoLayout = loaded.remoteVideoLayout
         remoteOmtUseGpu = loaded.remoteOmtUseGpu
         nativeApiEnabled = loaded.nativeApiEnabled
         nativeApiBind = loaded.nativeApiBind
@@ -103,6 +114,9 @@ final class AppPrefs: ObservableObject {
         dto.previewVideoTransport = previewVideoTransport
         dto.programVideoAddress = programVideoAddress
         dto.programVideoTransport = programVideoTransport
+        dto.multiviewVideoAddress = multiviewVideoAddress
+        dto.multiviewVideoTransport = multiviewVideoTransport
+        dto.remoteVideoLayout = remoteVideoLayout
         dto.remoteOmtUseGpu = remoteOmtUseGpu
         dto.nativeApiEnabled = nativeApiEnabled
         dto.nativeApiBind = nativeApiBind
@@ -174,6 +188,9 @@ final class AppPrefs: ObservableObject {
         var previewVideoTransport: String = "OMT"
         var programVideoAddress: String = ""
         var programVideoTransport: String = "OMT"
+        var multiviewVideoAddress: String = ""
+        var multiviewVideoTransport: String = "OMT"
+        var remoteVideoLayout: RemoteVideoLayout = .previewProgram
         var remoteOmtUseGpu: Bool = false
         var nativeApiEnabled: Bool = true
         var nativeApiBind: String = "127.0.0.1"
@@ -198,6 +215,9 @@ final class AppPrefs: ObservableObject {
             previewVideoTransport = try container.decodeIfPresent(String.self, forKey: .previewVideoTransport) ?? "OMT"
             programVideoAddress = try container.decodeIfPresent(String.self, forKey: .programVideoAddress) ?? ""
             programVideoTransport = try container.decodeIfPresent(String.self, forKey: .programVideoTransport) ?? "OMT"
+            multiviewVideoAddress = try container.decodeIfPresent(String.self, forKey: .multiviewVideoAddress) ?? ""
+            multiviewVideoTransport = try container.decodeIfPresent(String.self, forKey: .multiviewVideoTransport) ?? "OMT"
+            remoteVideoLayout = try container.decodeIfPresent(RemoteVideoLayout.self, forKey: .remoteVideoLayout) ?? .previewProgram
             remoteOmtUseGpu = try container.decodeIfPresent(Bool.self, forKey: .remoteOmtUseGpu) ?? false
             nativeApiEnabled = try container.decodeIfPresent(Bool.self, forKey: .nativeApiEnabled) ?? true
             nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"

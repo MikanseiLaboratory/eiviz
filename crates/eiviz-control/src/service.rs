@@ -368,6 +368,7 @@ impl ControlService {
         for op in &repair_live(&committed, &live) {
             self.port.apply_reconcile(&committed, op, &mut statuses)?;
         }
+        self.port.publish_session(&committed)?;
         let meta = self.meta(request_id);
         self.hub.publish(Event::SessionChanged {
             meta: meta.clone(),

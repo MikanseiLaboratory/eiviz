@@ -20,6 +20,8 @@
                     <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                     <Button x:Name="DisconnectButton" Content="{Binding [chrome.disconnect], Source={x:Static i18n:Loc.Source}}" Width="104" Margin="8,0,0,0" Click="Disconnect_Click" Visibility="Collapsed" IsEnabled="False"/>
+                    <ComboBox x:Name="VideoLayoutBox" Width="148" Margin="8,0,0,0" Visibility="Collapsed"
+                              SelectionChanged="VideoLayout_SelectionChanged"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <Button x:Name="SnapshotButton" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Click="Snapshot_Click"/>
@@ -58,10 +60,11 @@
             </Grid.RowDefinitions>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="160"/>
+                    <ColumnDefinition x:Name="VideoCol0" Width="*" MinWidth="160"/>
                     <ColumnDefinition Width="260" MinWidth="220"/>
-                    <ColumnDefinition Width="*" MinWidth="160"/>
+                    <ColumnDefinition x:Name="VideoCol2" Width="*" MinWidth="160"/>
                 </Grid.ColumnDefinitions>
+                <Grid>
                 <preview:AspectBox x:Name="PreviewAspect" HeaderHeight="28"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Margin="0,0,8,0">
@@ -78,7 +81,24 @@
                         </DockPanel>
                     </Border>
                 </preview:AspectBox>
-                <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                <preview:AspectBox x:Name="MainMultiviewAspect" HeaderHeight="28"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" Visibility="Collapsed">
+                    <Border BorderBrush="{DynamicResource ButtonBorder}" BorderThickness="2" Background="{DynamicResource VideoSurface}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Background="{DynamicResource ChromeBackground}" Padding="8,4">
+                                <DockPanel>
+                                    <ComboBox x:Name="MultiviewSourceBox" DockPanel.Dock="Right" Width="220" Height="22"
+                                              Visibility="Collapsed" SelectionChanged="MultiviewSource_SelectionChanged"/>
+                                    <TextBlock Text="{Binding [chrome.multiview], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" Foreground="{DynamicResource TextForeground}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </Border>
+                            <preview:SwapchainHost x:Name="MainMultiviewHost" OutputKind="0"/>
+                        </DockPanel>
+                    </Border>
+                </preview:AspectBox>
+                </Grid>
+                <GridSplitter x:Name="PreviewSplitter" Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                               ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
                               Background="{DynamicResource ButtonBorder}"/>
                 <Grid Grid.Column="1" Margin="16,0">
@@ -102,7 +122,7 @@
                             PreviewMouseLeftButtonUp="TBar_MouseUp"
                             LostMouseCapture="TBar_LostMouseCapture"/>
                 </Grid>
-                <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                <GridSplitter x:Name="ProgramSplitter" Grid.Column="1" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                               ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"
                               Background="{DynamicResource ButtonBorder}"/>
                 <preview:AspectBox x:Name="ProgramAspect" Grid.Column="2" HeaderHeight="28"

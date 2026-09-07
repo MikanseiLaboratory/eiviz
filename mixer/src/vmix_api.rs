@@ -709,6 +709,46 @@ mod tests {
         crate::mixer_destroy();
     }
 
+    #[test]
+    fn snapshot_function_requires_published_session() {
+        clear_published();
+        crate::mixer_destroy();
+        let err = dispatch_function("Snapshot", &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, DispatchError::BadRequest(ref message) if message.contains("not published")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_function_writes_after_session_publish() {
+        crate::mixer_destroy();
+        assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
+        assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
+        thread::sleep(Duration::from_millis(350));
+        publish_cut_session();
+        let path = std::env::temp_dir().join("eiviz-vmix-http-snapshot.png");
+        let _ = std::fs::remove_file(&path);
+        let mut params = HashMap::new();
+        params.insert("Value".into(), path.to_string_lossy().into_owned());
+        let mut result = dispatch_function("Snapshot", &params);
+        if result.is_err() {
+            thread::sleep(Duration::from_millis(250));
+            result = dispatch_function("Snapshot", &params);
+        }
+        result.expect("snapshot");
+        let bytes = std::fs::read(&path).expect("png");
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+        let _ = std::fs::remove_file(&path);
+        crate::mixer_destroy();
+    }
+
+    fn clear_published() {
+        if let Ok(mut slot) = api_slot().lock() {
+            slot.document = None;
+        }
+    }
+
     fn publish_cut_session() {
         let json = br#"{
   "version": 2,

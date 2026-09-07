@@ -20,10 +20,16 @@ struct ContentView: View {
                 VSplitView {
                     VSplitView {
                         HSplitView {
-                            bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                            if mixer.isRemote && prefs.remoteVideoLayout == .multiview {
+                                mainMultiviewBus
+                            } else {
+                                bus(title: previewTitle, color: mixer.session.settings.previewColor, kind: EIVIZ_OUTPUT_PREVIEW)
+                            }
                             transitions
                                 .frame(minWidth: 220, idealWidth: 260)
-                            bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                            if !(mixer.isRemote && prefs.remoteVideoLayout == .multiview) {
+                                bus(title: programTitle, color: mixer.session.settings.programColor, kind: EIVIZ_OUTPUT_PROGRAM)
+                            }
                         }
                         lower
                     }
@@ -88,6 +94,15 @@ struct ContentView: View {
                 }
                 Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
                     .disabled(!mixer.remoteConnected)
+                Picker("", selection: Binding(
+                    get: { prefs.remoteVideoLayout },
+                    set: { mixer.setRemoteVideoLayout($0) }
+                )) {
+                    Text(L10n.t("chrome.layoutPrvPgm")).tag(RemoteVideoLayout.previewProgram)
+                    Text(L10n.t("chrome.layoutMultiview")).tag(RemoteVideoLayout.multiview)
+                }
+                .labelsHidden()
+                .frame(maxWidth: 160)
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
@@ -642,6 +657,38 @@ struct ContentView: View {
         .background(EivizTheme.statusBar)
     }
 
+    private var mainMultiviewBus: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(L10n.t("chrome.multiview"))
+                    .font(.system(size: 13, weight: .bold))
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { mixer.selectedRemoteMultiview() },
+                    set: { mixer.setRemoteMultiview($0) }
+                )) {
+                    ForEach(multiviewItems(), id: \.self) { item in
+                        Text(item.label).tag(item)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 220)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(EivizTheme.chrome)
+            MetalPreviewRepresentable(role: mixer.surfaceRoleMainMultiview())
+                .frame(minWidth: 320, minHeight: 180)
+        }
+        .aspectRatio(
+            CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+            contentMode: .fit
+        )
+        .background(Rectangle().stroke(EivizTheme.chrome, lineWidth: 2))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func bus(title: String, color: RgbColor, kind: UInt32) -> some View {
         let preview = kind == EIVIZ_OUTPUT_PREVIEW
         return VStack(spacing: 0) {
@@ -682,6 +729,16 @@ struct ContentView: View {
         _ = mixer.remoteVideoCatalogEpoch
         var items = mixer.remoteVideoItems()
         let selected = mixer.selectedRemoteVideo(preview: preview)
+        if !items.contains(selected) {
+            items.insert(selected, at: min(1, items.count))
+        }
+        return items
+    }
+
+    private func multiviewItems() -> [RemoteVideoItem] {
+        _ = mixer.remoteVideoCatalogEpoch
+        var items = mixer.remoteVideoItems()
+        let selected = mixer.selectedRemoteMultiview()
         if !items.contains(selected) {
             items.insert(selected, at: min(1, items.count))
         }
