@@ -2308,22 +2308,7 @@ final class MixerController: ObservableObject {
         let handle = remoteHandle
         let gate = remoteMutateGate
         Task.detached { [weak self] in
-            gate.lock.lock()
-            let expected = gate.revision
-            let code = MixerRemote.mutate(handle, json, expected: expected)
-            let statusJson = MixerRemote.status(handle)
-            var nextRevision = expected
-            if let data = statusJson.data(using: .utf8),
-               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            {
-                if let value = root["documentRevision"] as? NSNumber, value.uint64Value != 0 {
-                    nextRevision = value.uint64Value
-                } else if let value = root["revision"] as? NSNumber {
-                    nextRevision = value.uint64Value
-                }
-            }
-            gate.revision = nextRevision
-            gate.lock.unlock()
+            let (code, nextRevision) = gate.mutate(handle: handle, json: json)
             await MainActor.run {
                 guard let self else { return }
                 if self.remoteRevision < nextRevision {
@@ -2443,11 +2428,7 @@ final class MixerController: ObservableObject {
                 remotePulledDocumentRevision = documentRevision
             }
         }
-        remoteMutateGate.lock.lock()
-        if remoteRevision > remoteMutateGate.revision {
-            remoteMutateGate.revision = remoteRevision
-        }
-        remoteMutateGate.lock.unlock()
+        remoteMutateGate.note(remoteRevision)
         refreshRemoteWarn()
     }
 
@@ -2754,8 +2735,36 @@ private final class InputPreviewCloser: NSObject, NSWindowDelegate {
 }
 
 private final class RemoteMutateGate: @unchecked Sendable {
-    let lock = NSLock()
-    var revision: UInt64 = 0
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+
+    func mutate(handle: Int32, json: String) -> (code: Int32, revision: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        let expected = revision
+        let code = MixerRemote.mutate(handle, json, expected: expected)
+        let statusJson = MixerRemote.status(handle)
+        var nextRevision = expected
+        if let data = statusJson.data(using: .utf8),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            if let value = root["documentRevision"] as? NSNumber, value.uint64Value != 0 {
+                nextRevision = value.uint64Value
+            } else if let value = root["revision"] as? NSNumber {
+                nextRevision = value.uint64Value
+            }
+        }
+        revision = nextRevision
+        return (code, nextRevision)
+    }
+
+    func note(_ value: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if value > revision {
+            revision = value
+        }
+    }
 }
 
 private final class SwitcherCloser: NSObject, NSWindowDelegate {

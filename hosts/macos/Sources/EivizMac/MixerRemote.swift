@@ -197,7 +197,7 @@ enum MixerRemote {
         if let unit = layout.labelUnit {
             body["labelUnit"] = unit.rawValue
         }
-        encode(["kind": "upsertMultiview", "layout": body])
+        return encode(["kind": "upsertMultiview", "layout": body])
     }
 
     static func deleteMultiview(_ id: UInt64) -> String {
@@ -242,7 +242,7 @@ enum MixerRemote {
             "locked": slot.locked,
             "hidden": slot.hidden
         ]
-        encode([
+        return encode([
             "kind": "setOverlaySlot",
             "unitId": NSNumber(value: unitId),
             "index": index,

@@ -223,11 +223,9 @@ final class AppPrefs: ObservableObject {
             nativeApiBind = try container.decodeIfPresent(String.self, forKey: .nativeApiBind) ?? "127.0.0.1"
             nativeApiPort = try container.decodeIfPresent(UInt32.self, forKey: .nativeApiPort) ?? 9400
             nativeApiRole = try container.decodeIfPresent(String.self, forKey: .nativeApiRole) ?? "admin"
-            mediaDirectory = {
-                let value = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? AppPrefs.defaultMediaDirectory : trimmed
-            }()
+            let mediaDir = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
+            let trimmedMediaDir = mediaDir.trimmingCharacters(in: .whitespacesAndNewlines)
+            mediaDirectory = trimmedMediaDir.isEmpty ? AppPrefs.defaultMediaDirectory : trimmedMediaDir
         }
     }
 }
