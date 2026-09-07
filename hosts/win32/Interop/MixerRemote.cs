@@ -61,6 +61,9 @@ internal static partial class MixerRemote
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_upload", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Upload(int handle, string path, string kind, string name, uint videoLoop, ulong expectedRevision);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_discover", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int DiscoverRaw(int handle, string kind, string query, byte* buffer, nuint capacity);
+
     private unsafe delegate int Utf8Copy(byte* buffer, nuint cap);
 
     private static unsafe string CopyUtf8(Utf8Copy call, ref byte[] buffer)
@@ -93,6 +96,29 @@ internal static partial class MixerRemote
 
     internal static unsafe string StatusText(int handle, ref byte[] buffer) =>
         CopyUtf8((ptr, cap) => CopyStatus(handle, ptr, cap), ref buffer);
+
+    internal static string Discover(int handle, string kind, string query)
+    {
+        var buffer = new byte[8192];
+        unsafe
+        {
+            for (;;)
+            {
+                fixed (byte* ptr = buffer)
+                {
+                    var n = DiscoverRaw(handle, kind, query ?? "", ptr, (nuint)buffer.Length);
+                    if (n >= 0)
+                        return n == 0 ? string.Empty : Encoding.UTF8.GetString(buffer, 0, n);
+                    if (n == -1 && buffer.Length < 16 << 20)
+                    {
+                        buffer = new byte[buffer.Length * 2];
+                        continue;
+                    }
+                    return string.Empty;
+                }
+            }
+        }
+    }
 
     internal static int MutateCode(int handle, string json, ulong expectedRevision)
     {

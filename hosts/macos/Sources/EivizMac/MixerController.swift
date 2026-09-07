@@ -2296,6 +2296,13 @@ final class MixerController: ObservableObject {
 
     private let remoteMutateGate = RemoteMutateGate()
 
+    func discoverInput(kind: String, query: String = "") -> String {
+        guard isRemote, remoteHandle != 0 else {
+            return kind == "uvc" || kind == "uvcModes" ? "[]" : ""
+        }
+        return MixerRemote.discover(remoteHandle, kind: kind, query: query)
+    }
+
     @discardableResult
     private func mutateRemote(_ json: String, applyDocument: Bool = true) -> Bool {
         let handle = remoteHandle

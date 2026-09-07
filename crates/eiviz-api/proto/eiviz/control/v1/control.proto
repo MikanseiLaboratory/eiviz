@@ -68,6 +68,7 @@ message Response {
     Capabilities capabilities = 10;
     Snapshot snapshot = 11;
     UploadAccepted upload_accepted = 12;
+    DiscoverResult discover = 13;
   }
 }
 
@@ -180,6 +181,12 @@ message SnapshotCmd {
 
 message Discover {
   string kind = 1;
+  string query = 2;
+}
+
+message DiscoverResult {
+  string kind = 1;
+  string payload = 2;
 }
 
 message Shutdown {}

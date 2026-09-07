@@ -946,15 +946,27 @@ struct AddInputView: View {
     }
 
     private func refreshOmt() {
-        omtList = MixerFFI.discover { mixer_omt_discover($0, $1) }
+        if mixer.isRemote {
+            omtList = MixerRemote.lines(mixer.discoverInput(kind: "omt"))
+        } else {
+            omtList = MixerFFI.discover { mixer_omt_discover($0, $1) }
+        }
     }
 
     private func refreshNdi() {
-        ndiList = MixerFFI.discover { mixer_ndi_discover($0, $1) }
+        if mixer.isRemote {
+            ndiList = MixerRemote.lines(mixer.discoverInput(kind: "ndi"))
+        } else {
+            ndiList = MixerFFI.discover { mixer_ndi_discover($0, $1) }
+        }
     }
 
     private func refreshUvc() {
-        uvcList = MixerFFI.videoCaptures()
+        if mixer.isRemote {
+            uvcList = MixerRemote.captures(mixer.discoverInput(kind: "uvc"))
+        } else {
+            uvcList = MixerFFI.videoCaptures()
+        }
         refreshUvcModes()
     }
 
@@ -964,7 +976,11 @@ struct AddInputView: View {
             selectedMode = nil
             return
         }
-        uvcModes = MixerFFI.videoCaptureModes(deviceId: selectedUvc)
+        if mixer.isRemote {
+            uvcModes = MixerRemote.modes(mixer.discoverInput(kind: "uvcModes", query: selectedUvc))
+        } else {
+            uvcModes = MixerFFI.videoCaptureModes(deviceId: selectedUvc)
+        }
         if let current = selectedMode, uvcModes.contains(current) {
             return
         }

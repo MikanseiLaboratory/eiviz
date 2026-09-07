@@ -196,6 +196,12 @@ public partial class AddInputWindow : Window
     private static bool IsColour(InputKind kind) =>
         kind is InputKind.Color or InputKind.Bars or InputKind.Black;
 
+    private static IEivizBackend? CurrentBackend =>
+        Application.Current is App { Backend: { } backend } ? backend : null;
+
+    private static string DiscoverHost(string kind, string query = "") =>
+        CurrentBackend?.Discover(kind, query) ?? "";
+
     private void Colour_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (ColourPreview is null)
@@ -234,12 +240,12 @@ public partial class AddInputWindow : Window
 
     private void RefreshOmt_Click(object sender, RoutedEventArgs e) => RefreshOmt();
 
-    private void RefreshOmt()
+    private async void RefreshOmt()
     {
-        var text = MixerNative.DiscoverText();
-        OmtList.ItemsSource = string.IsNullOrWhiteSpace(text)
-            ? Array.Empty<string>()
-            : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var text = await Task.Run(() => DiscoverHost("omt"));
+        if (!Dispatcher.CheckAccess())
+            return;
+        OmtList.ItemsSource = InputHostDiscovery.Lines(text);
     }
 
     private void RefreshNdi_Click(object sender, RoutedEventArgs e) => RefreshNdi();
@@ -248,15 +254,15 @@ public partial class AddInputWindow : Window
     {
         if (NdiStatus is not null)
             NdiStatus.Text = "Discovering…";
-        var text = await Task.Run(MixerNative.DiscoverNdiText);
+        var text = await Task.Run(() => DiscoverHost("ndi"));
         if (!Dispatcher.CheckAccess())
             return;
-        NdiList.ItemsSource = string.IsNullOrWhiteSpace(text)
-            ? Array.Empty<string>()
-            : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        NdiList.ItemsSource = InputHostDiscovery.Lines(text);
         if (NdiStatus is null)
             return;
-        NdiStatus.Text = NdiList.Items.Count == 0 ? MixerNative.LastErrorText() : "";
+        NdiStatus.Text = NdiList.Items.Count == 0 && CurrentBackend is { IsRemote: false }
+            ? MixerNative.LastErrorText()
+            : "";
     }
 
     private void NdiList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -273,11 +279,14 @@ public partial class AddInputWindow : Window
 
     private void RefreshUvc_Click(object sender, RoutedEventArgs e) => RefreshUvc();
 
-    private void RefreshUvc()
+    private async void RefreshUvc()
     {
         try
         {
-            UvcList.ItemsSource = MixerNative.EnumVideoCaptures()
+            var payload = await Task.Run(() => DiscoverHost("uvc"));
+            if (!Dispatcher.CheckAccess())
+                return;
+            UvcList.ItemsSource = InputHostDiscovery.Captures(payload)
                 .Select(item => new CameraItem(item.Name, item.Id))
                 .ToArray();
             RefreshUvcModes();
@@ -290,12 +299,19 @@ public partial class AddInputWindow : Window
 
     private void UvcList_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshUvcModes();
 
-    private void RefreshUvcModes()
+    private async void RefreshUvcModes()
     {
         UvcModeBox.Items.Clear();
         if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
             return;
-        foreach (var mode in MixerNative.EnumVideoCaptureModes(camera.Link))
+        var link = camera.Link;
+        var payload = await Task.Run(() => DiscoverHost("uvcModes", link));
+        if (!Dispatcher.CheckAccess())
+            return;
+        if (UvcList.SelectedItem is not CameraItem selected || selected.Link != link)
+            return;
+        UvcModeBox.Items.Clear();
+        foreach (var mode in InputHostDiscovery.Modes(payload))
         {
             var fps = mode.FpsDen == 0 ? 0 : mode.FpsNum / (double)mode.FpsDen;
             UvcModeBox.Items.Add(new ComboBoxItem

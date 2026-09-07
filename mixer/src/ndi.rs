@@ -387,12 +387,24 @@ pub fn discover_sources() -> Result<Vec<String>, String> {
             .find_sources(Duration::from_secs(5))
             .map_err(|error| error.to_string())
     })?;
-    let names: Vec<String> = sources
+    Ok(names_of(sources))
+}
+
+/// Snapshot only. Control-plane discover must not block live ops for 5s.
+pub fn current_source_names() -> Result<Vec<String>, String> {
+    with_finder(|finder| {
+        finder
+            .current_sources()
+            .map_err(|error| error.to_string())
+            .map(names_of)
+    })
+}
+
+fn names_of(sources: Vec<Source>) -> Vec<String> {
+    sources
         .into_iter()
         .map(|source| source.to_string())
-        .collect();
-    eprintln!("eiviz ndi discover count={}", names.len());
-    Ok(names)
+        .collect()
 }
 
 fn resolve_source(query: &str) -> Result<Source, String> {

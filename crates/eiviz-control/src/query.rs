@@ -36,6 +36,7 @@ impl Default for Capabilities {
                 "GetSnapshot".into(),
                 "Subscribe".into(),
                 "BeginMediaUpload".into(),
+                "Discover".into(),
             ],
             presentation_abi: true,
             native_api: true,
@@ -66,5 +67,6 @@ mod tests {
         assert!(caps.platforms.iter().any(|p| p == "windows"));
         assert!(caps.platforms.iter().any(|p| p == "macos"));
         assert!(caps.platforms.iter().any(|p| p == "linux"));
+        assert!(caps.commands.iter().any(|c| c == "Discover"));
     }
 }

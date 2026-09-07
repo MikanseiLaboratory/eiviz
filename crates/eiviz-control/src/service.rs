@@ -24,10 +24,12 @@ pub struct RequestKey {
     pub request_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandOutcome {
     pub revision: u64,
     pub sequence: u64,
+    pub discover_kind: String,
+    pub discover_payload: String,
 }
 
 #[derive(Clone)]
@@ -168,7 +170,12 @@ impl ControlService {
             }
         }
         if self.lifecycle != Lifecycle::Ready && !matches!(command, Command::Shutdown) {
-            if !self.port.is_ready() && !matches!(command, Command::ReplaceSession { .. }) {
+            if !self.port.is_ready()
+                && !matches!(
+                    command,
+                    Command::ReplaceSession { .. } | Command::Discover { .. }
+                )
+            {
                 let err = ControlError::unavailable("mixer is not ready");
                 self.remember(&key, Err(err.clone()));
                 return Err(err);
@@ -288,24 +295,29 @@ impl ControlService {
                 self.port.snapshot(unit_id, abi_kind, &path)?;
                 self.after_live("Snapshot", request_id, None, false)
             }
-            Command::Discover { kind } => {
+            Command::Discover { kind, query } => {
                 let payload = match kind {
                     crate::command::DiscoverKind::Omt => self.port.discover_omt()?,
                     crate::command::DiscoverKind::Ndi => self.port.discover_ndi()?,
                     crate::command::DiscoverKind::Audio => String::new(),
+                    crate::command::DiscoverKind::Uvc => self.port.discover_uvc()?,
+                    crate::command::DiscoverKind::UvcModes => {
+                        self.port.discover_uvc_modes(&query)?
+                    }
                 };
-                let kind_name = match kind {
-                    crate::command::DiscoverKind::Omt => "omt",
-                    crate::command::DiscoverKind::Ndi => "ndi",
-                    crate::command::DiscoverKind::Audio => "audio",
-                };
+                let kind_name = kind.as_str();
                 let meta = self.meta(request_id);
                 self.hub.publish(Event::Discovered {
                     meta: meta.clone(),
                     kind: kind_name.into(),
-                    payload,
+                    payload: payload.clone(),
                 });
-                self.after_live("Discover", request_id, None, false)
+                Ok(CommandOutcome {
+                    revision: self.store.revision(),
+                    sequence: self.hub.next_sequence(),
+                    discover_kind: kind_name.into(),
+                    discover_payload: payload,
+                })
             }
             Command::OverlayAuto {
                 unit_id,
@@ -321,6 +333,7 @@ impl ControlService {
                 Ok(CommandOutcome {
                     revision: self.store.revision(),
                     sequence: self.hub.next_sequence(),
+                    ..Default::default()
                 })
             }
             Command::ReplaceSession { .. } | Command::MutateSession { .. } => {
@@ -387,6 +400,7 @@ impl ControlService {
         Ok(CommandOutcome {
             revision,
             sequence: self.hub.next_sequence(),
+            ..Default::default()
         })
     }
 
@@ -572,6 +586,7 @@ impl ControlService {
         Ok(CommandOutcome {
             revision: self.store.revision(),
             sequence: self.hub.next_sequence(),
+            ..Default::default()
         })
     }
 
@@ -1057,6 +1072,41 @@ mod tests {
                 .mutate_session(SessionMutation::DeleteInput { id: 2 }, Some(1), "stale")
                 .unwrap_err();
             assert!(matches!(err, ControlError::Conflict { .. }));
+        });
+    }
+
+    #[test]
+    fn discover_uvc_returns_host_payload() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            let outcome = svc
+                .execute(
+                    RequestKey {
+                        client_instance_id: "t".into(),
+                        request_id: "uvc".into(),
+                    },
+                    Command::Discover {
+                        kind: crate::command::DiscoverKind::Uvc,
+                        query: String::new(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(outcome.discover_kind, "uvc");
+            assert_eq!(outcome.discover_payload, "[]");
+            let modes = svc
+                .execute(
+                    RequestKey {
+                        client_instance_id: "t".into(),
+                        request_id: "modes".into(),
+                    },
+                    Command::Discover {
+                        kind: crate::command::DiscoverKind::UvcModes,
+                        query: "cam".into(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(modes.discover_kind, "uvcModes");
+            assert_eq!(modes.discover_payload, "[]");
         });
     }
 

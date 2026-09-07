@@ -78,6 +78,7 @@ pub enum Command {
     },
     Discover {
         kind: DiscoverKind,
+        query: String,
     },
     Shutdown,
 }
@@ -119,6 +120,31 @@ pub enum DiscoverKind {
     Omt,
     Ndi,
     Audio,
+    Uvc,
+    UvcModes,
+}
+
+impl DiscoverKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Omt => "omt",
+            Self::Ndi => "ndi",
+            Self::Audio => "audio",
+            Self::Uvc => "uvc",
+            Self::UvcModes => "uvcModes",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "omt" => Some(Self::Omt),
+            "ndi" => Some(Self::Ndi),
+            "audio" => Some(Self::Audio),
+            "uvc" => Some(Self::Uvc),
+            "uvcModes" | "uvc-modes" | "uvc_modes" => Some(Self::UvcModes),
+            _ => None,
+        }
+    }
 }
 
 impl Command {
@@ -245,7 +271,7 @@ impl SessionMutation {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionMutation;
+    use super::{DiscoverKind, SessionMutation};
     use crate::session::{OutputSourceKind, OutputTransport};
 
     #[test]
@@ -522,5 +548,22 @@ mod tests {
             crate::session::VideoTriggerWhen::OnDeactivated
         );
         assert_eq!(input.mix_source, crate::session::MixSource::MuPreview);
+    }
+
+    #[test]
+    fn discover_kind_parses_host_device_kinds() {
+        assert_eq!(DiscoverKind::parse("omt"), Some(DiscoverKind::Omt));
+        assert_eq!(DiscoverKind::parse("ndi"), Some(DiscoverKind::Ndi));
+        assert_eq!(DiscoverKind::parse("uvc"), Some(DiscoverKind::Uvc));
+        assert_eq!(
+            DiscoverKind::parse("uvcModes"),
+            Some(DiscoverKind::UvcModes)
+        );
+        assert_eq!(
+            DiscoverKind::parse("uvc-modes"),
+            Some(DiscoverKind::UvcModes)
+        );
+        assert_eq!(DiscoverKind::parse("audio"), Some(DiscoverKind::Audio));
+        assert_eq!(DiscoverKind::parse("unknown"), None);
     }
 }

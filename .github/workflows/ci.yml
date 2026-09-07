@@ -179,6 +179,7 @@ jobs:
           cargo test -p eiviz_mixer --locked --release --test pipeline rebar_info_and_toggle -- --test-threads=1 --exact
           cargo test -p eiviz_mixer --locked --release --test pipeline snapshot_writes_png -- --test-threads=1 --exact
           cargo test -p eiviz_mixer --locked --release --test pipeline scene_compose_overlay_after_mix_multiview_and_tbar_take -- --test-threads=1 --exact
+          cargo test -p eiviz_mixer --locked --release --test pipeline vulkan_backend_is_explicit -- --test-threads=1 --exact
 
       - name: Build headless
         run: cargo build -p eiviz-headless --locked --release --bins

@@ -80,8 +80,61 @@ enum MixerRemote {
         }
     }
 
+    static func discover(_ handle: Int32, kind: String, query: String) -> String {
+        kind.withCString { kindPtr in
+            query.withCString { queryPtr in
+                copy(handle, { mixer_remote_discover(handle, kindPtr, queryPtr, $0, $1) }, cap: 8192)
+            }
+        }
+    }
+
     static func upsertScene(_ scene: SceneEntry) -> String {
         encode(["kind": "upsertScene", "scene": encodeValue(scene)])
+    }
+
+    static func lines(_ payload: String) -> [String] {
+        payload
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    static func captures(_ payload: String) -> [VideoCaptureDevice] {
+        guard let data = payload.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String, !id.isEmpty,
+                  let name = row["name"] as? String, !name.isEmpty
+            else { return nil }
+            return VideoCaptureDevice(id: id, name: name)
+        }
+    }
+
+    static func modes(_ payload: String) -> [CaptureMode] {
+        guard let data = payload.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        return rows.compactMap { row in
+            let width = uint32(row["width"])
+            let height = uint32(row["height"])
+            let fpsNum = uint32(row["fpsNum"])
+            let fpsDen = uint32(row["fpsDen"])
+            guard width > 0, height > 0 else { return nil }
+            return CaptureMode(
+                width: width,
+                height: height,
+                fpsNum: fpsNum,
+                fpsDen: fpsDen,
+                format: uint32(row["format"])
+            )
+        }
+    }
+
+    private static func uint32(_ value: Any?) -> UInt32 {
+        if let number = value as? NSNumber { return number.uint32Value }
+        if let number = value as? Int { return UInt32(clamping: number) }
+        return 0
     }
 
     static func upsertUnit(_ unit: MixingUnitEntry) -> String {

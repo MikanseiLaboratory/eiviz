@@ -41,6 +41,7 @@ internal interface IEivizBackend
     bool VideoSeek(ulong inputId, long positionHns);
     bool Mutate(string json, ulong expectedRevision, out string error);
     bool UploadMedia(string path, string kind, string name, bool videoLoop, ulong expectedRevision, out string error);
+    string Discover(string kind, string query);
     bool TryGetMix(ulong unitId, out float mix);
     void BusSources(ulong unitId, out ulong previewGpuId, out ulong programGpuId);
     IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; }
@@ -371,6 +372,14 @@ internal sealed class LocalEivizBackend : IEivizBackend
         return File.Exists(path);
     }
 
+    public string Discover(string kind, string query) => kind switch
+    {
+        "ndi" => MixerNative.DiscoverNdiText(),
+        "uvc" => InputHostDiscovery.CapturesJson(MixerNative.EnumVideoCaptures()),
+        "uvcModes" => InputHostDiscovery.ModesJson(MixerNative.EnumVideoCaptureModes(query ?? "")),
+        _ => MixerNative.DiscoverText()
+    };
+
     public bool TryGetMix(ulong unitId, out float mix)
     {
         unsafe
@@ -637,6 +646,9 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         error = I18n.Loc.T("msg.uploadFailed");
         return false;
     }
+
+    public string Discover(string kind, string query) =>
+        MixerRemote.Discover(_handle, kind ?? "", query ?? "");
 
     public bool TryGetMix(ulong unitId, out float mix) =>
         _mix.TryGetValue(unitId, out mix);
@@ -1174,6 +1186,11 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
         _ = (path, kind, name, videoLoop, expectedRevision);
         return false;
     }
+    public string Discover(string kind, string query)
+    {
+        _ = (kind, query);
+        return kind is "uvc" or "uvcModes" ? "[]" : "";
+    }
     public bool TryGetMix(ulong unitId, out float mix) { mix = 0; _ = unitId; return false; }
     public void BusSources(ulong unitId, out ulong previewGpuId, out ulong programGpuId)
     {
@@ -1199,4 +1216,87 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     }
     public void SyncPublishedVideo() { }
     public void Dispose() { }
+}
+
+internal static class InputHostDiscovery
+{
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private sealed class CaptureDto
+    {
+        public string Name { get; set; } = "";
+        public string Id { get; set; } = "";
+    }
+
+    private sealed class ModeDto
+    {
+        public uint Width { get; set; }
+        public uint Height { get; set; }
+        public uint FpsNum { get; set; }
+        public uint FpsDen { get; set; }
+        public uint Format { get; set; }
+    }
+
+    public static string CapturesJson(IEnumerable<(string Name, string Id)> items) =>
+        JsonSerializer.Serialize(items.Select(item => new CaptureDto { Name = item.Name, Id = item.Id }), Json);
+
+    public static string ModesJson(IEnumerable<MixerVideoCaptureMode> modes) =>
+        JsonSerializer.Serialize(modes.Select(mode => new ModeDto
+        {
+            Width = mode.Width,
+            Height = mode.Height,
+            FpsNum = mode.FpsNum,
+            FpsDen = mode.FpsDen,
+            Format = mode.Format
+        }), Json);
+
+    public static string[] Lines(string payload) =>
+        string.IsNullOrWhiteSpace(payload)
+            ? []
+            : payload.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public static List<(string Name, string Id)> Captures(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload) || payload.Trim() == "[]")
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<CaptureDto>>(payload, Json)?
+                .Where(item => !string.IsNullOrWhiteSpace(item.Id) && !string.IsNullOrWhiteSpace(item.Name))
+                .Select(item => (item.Name, item.Id))
+                .ToList() ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    public static List<MixerVideoCaptureMode> Modes(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload) || payload.Trim() == "[]")
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<ModeDto>>(payload, Json)?
+                .Where(item => item.Width > 0 && item.Height > 0)
+                .Select(item => new MixerVideoCaptureMode
+                {
+                    Width = item.Width,
+                    Height = item.Height,
+                    FpsNum = item.FpsNum,
+                    FpsDen = item.FpsDen,
+                    Format = item.Format
+                })
+                .ToList() ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 }

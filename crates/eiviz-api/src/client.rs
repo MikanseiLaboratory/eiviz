@@ -48,6 +48,10 @@ impl ControlClient {
         }
     }
 
+    pub async fn discover(&self, kind: &str, query: &str) -> ControlResult<String> {
+        discover_payload(self.roundtrip(discover_req(kind, query)).await?)
+    }
+
     pub async fn cut(&self, unit_id: u64, swap: bool) -> ControlResult<()> {
         let response = self.roundtrip(live_cut(unit_id, swap)).await?;
         status_ok(&response)
@@ -496,6 +500,12 @@ impl ControlSession {
         status_ok(&response)
     }
 
+    pub async fn discover(&self, kind: &str, query: &str) -> ControlResult<String> {
+        let response = self.roundtrip(discover_req(kind, query)).await?;
+        apply_response(&self.view, &response);
+        discover_payload(response)
+    }
+
     pub async fn upload_file(
         &self,
         path: &Path,
@@ -916,6 +926,25 @@ fn mutate_req(mutation_json: Vec<u8>, expected_revision: u64) -> Request {
                 mutation_json,
             },
         )),
+    }
+}
+
+fn discover_req(kind: &str, query: &str) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::Discover(crate::proto::Discover {
+            kind: kind.into(),
+            query: query.into(),
+        })),
+    }
+}
+
+fn discover_payload(response: Response) -> ControlResult<String> {
+    status_ok(&response)?;
+    match response.payload {
+        Some(response::Payload::Discover(result)) => Ok(result.payload),
+        _ => Err(ControlError::unavailable("discover missing")),
     }
 }
 

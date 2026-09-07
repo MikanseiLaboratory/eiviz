@@ -421,18 +421,20 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                 path: snap.path,
             },
         ),
-        Some(request::Payload::Discover(discover)) => exec_cmd(
-            state,
-            instance,
-            &request_id,
-            Command::Discover {
-                kind: match discover.kind.as_str() {
-                    "ndi" => eiviz_control::command::DiscoverKind::Ndi,
-                    "audio" => eiviz_control::command::DiscoverKind::Audio,
-                    _ => eiviz_control::command::DiscoverKind::Omt,
-                },
-            },
-        ),
+        Some(request::Payload::Discover(discover)) => {
+            match eiviz_control::command::DiscoverKind::parse(&discover.kind) {
+                Some(kind) => exec_cmd(
+                    state,
+                    instance,
+                    &request_id,
+                    Command::Discover {
+                        kind,
+                        query: discover.query,
+                    },
+                ),
+                None => Err(ControlError::invalid("unknown discover kind")),
+            }
+        }
         Some(request::Payload::ReplaceSession(replace)) => {
             match eiviz_control::session::parse(&replace.document_json) {
                 Ok(document) => exec_cmd(
@@ -614,12 +616,32 @@ fn exec_cmd(
             },
             command,
         )
-        .and_then(|_| {
-            state
-                .control
-                .snapshot()
-                .map(|snap| proto_snapshot(snap, request_id.into()))
+        .and_then(|outcome| {
+            if !outcome.discover_kind.is_empty() {
+                Ok(discover_response(outcome, request_id.into()))
+            } else {
+                state
+                    .control
+                    .snapshot()
+                    .map(|snap| proto_snapshot(snap, request_id.into()))
+            }
         })
+}
+
+fn discover_response(outcome: eiviz_control::CommandOutcome, request_id: String) -> ProtoResponse {
+    ProtoResponse {
+        request_id,
+        status: Some(Status {
+            code: "OK".into(),
+            message: String::new(),
+        }),
+        revision: outcome.revision,
+        sequence: outcome.sequence,
+        payload: Some(response::Payload::Discover(crate::proto::DiscoverResult {
+            kind: outcome.discover_kind,
+            payload: outcome.discover_payload,
+        })),
+    }
 }
 
 fn proto_snapshot(snapshot: eiviz_control::Snapshot, request_id: String) -> ProtoResponse {
@@ -830,6 +852,30 @@ mod tests {
         let client = ControlClient::websocket(&url, "secret");
         assert!(client.snapshot_json().await.is_ok());
         assert!(client.cut(1, true).await.is_err());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_discover_returns_host_payload() {
+        let control = ready_control();
+        let (bind, task) = listen(
+            config(AuthConfig {
+                token: String::new(),
+                require_auth: false,
+                max_role: Role::Admin,
+            }),
+            control,
+        )
+        .await
+        .unwrap();
+        let url = format!("ws://{}", bind.ws_addr);
+        let client = ControlClient::websocket(&url, "");
+        let uvc = client.discover("uvc", "").await.unwrap();
+        assert_eq!(uvc, "[]");
+        let modes = client.discover("uvcModes", "cam").await.unwrap();
+        assert_eq!(modes, "[]");
+        let omt = client.discover("omt", "").await.unwrap();
+        assert_eq!(omt, "");
         task.abort();
     }
 

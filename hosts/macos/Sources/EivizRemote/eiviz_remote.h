@@ -25,6 +25,7 @@ int32_t mixer_remote_video_loop(int32_t handle, uint64_t input_id, uint32_t loop
 int32_t mixer_remote_video_seek(int32_t handle, uint64_t input_id, int64_t position_hns);
 int32_t mixer_remote_audio_set_input(int32_t handle, uint64_t input_id, uint32_t bus_mask, float gain, uint32_t mute);
 int32_t mixer_remote_audio_set_bus(int32_t handle, uint64_t bus_id, float gain, uint32_t mute);
+int32_t mixer_remote_discover(int32_t handle, const char *kind, const char *query, uint8_t *out, size_t cap);
 int32_t mixer_remote_upload(int32_t handle, const char *path, const char *kind, const char *name, uint32_t video_loop, uint64_t expected_revision);
 
 #ifdef __cplusplus

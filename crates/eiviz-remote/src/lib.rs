@@ -413,6 +413,39 @@ pub fn audio_set_bus(handle: i32, bus_id: u64, gain: f32, mute: u32) -> i32 {
     })
 }
 
+pub unsafe fn discover(
+    handle: i32,
+    kind: *const c_char,
+    query: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let kind = unsafe { read_cstr(kind) }.unwrap_or_default();
+    let query = unsafe { read_cstr(query) }.unwrap_or_default();
+    let Some(session) = session(handle) else {
+        return -ERR_NOT_CREATED;
+    };
+    let Some(payload) = run(handle, async move { session.discover(&kind, &query).await }) else {
+        return -ERR_NOT_CREATED;
+    };
+    match payload {
+        Ok(text) => {
+            let bytes = text.as_bytes();
+            if bytes.len() > cap {
+                return -1;
+            }
+            if !bytes.is_empty() {
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+            }
+            bytes.len() as i32
+        }
+        Err(error) => -error.to_abi(),
+    }
+}
+
 pub unsafe fn upload(
     handle: i32,
     path: *const c_char,
@@ -596,6 +629,17 @@ pub extern "C" fn mixer_remote_audio_set_bus(
     mute: u32,
 ) -> i32 {
     audio_set_bus(handle, bus_id, gain, mute)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_remote_discover(
+    handle: i32,
+    kind: *const c_char,
+    query: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    unsafe { discover(handle, kind, query, out, cap) }
 }
 
 #[unsafe(no_mangle)]

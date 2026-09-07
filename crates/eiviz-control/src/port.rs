@@ -121,6 +121,13 @@ pub trait MixerPort: Send {
     fn discover_ndi(&self) -> ControlResult<String> {
         Ok(String::new())
     }
+    fn discover_uvc(&self) -> ControlResult<String> {
+        Ok("[]".into())
+    }
+    fn discover_uvc_modes(&self, device_id: &str) -> ControlResult<String> {
+        let _ = device_id;
+        Ok("[]".into())
+    }
 
     /// Concrete impls forward to `reconcile::apply_one` so the large match is
     /// monomorphized per port type instead of taking `&mut dyn MixerPort`.

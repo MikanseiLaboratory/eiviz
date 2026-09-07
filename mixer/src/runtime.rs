@@ -13,7 +13,7 @@ use crate::{
     mixer_audio_set_headphone_copy_master, mixer_audio_set_input, mixer_audio_set_unit_link,
     mixer_bind_multiview, mixer_create_unit, mixer_define_generator, mixer_define_mix_input,
     mixer_define_scene, mixer_destroy_scene, mixer_destroy_source, mixer_destroy_unit,
-    mixer_load_still, mixer_ndi_connect, mixer_ndi_discover, mixer_omt_connect, mixer_omt_discover,
+    mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
     mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
     mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
@@ -519,21 +519,48 @@ impl MixerPort for ProcessMixer {
     }
 
     fn discover_omt(&self) -> ControlResult<String> {
-        let mut buf = vec![0u8; 4096];
-        let n = unsafe { mixer_omt_discover(buf.as_mut_ptr(), buf.len()) };
-        if n < 0 {
-            return Err(ControlError::from_abi(-n, last_error_text()));
+        let mut cap = 4096usize;
+        loop {
+            let mut buf = vec![0u8; cap];
+            let n = unsafe { mixer_omt_discover(buf.as_mut_ptr(), buf.len()) };
+            if n < 0 {
+                return Err(ControlError::from_abi(-n, last_error_text()));
+            }
+            let n = n as usize;
+            if n < cap || cap >= 1 << 20 {
+                return Ok(String::from_utf8_lossy(&buf[..n]).into_owned());
+            }
+            cap *= 2;
         }
-        Ok(String::from_utf8_lossy(&buf[..n as usize]).into_owned())
     }
 
     fn discover_ndi(&self) -> ControlResult<String> {
-        let mut buf = vec![0u8; 4096];
-        let n = unsafe { mixer_ndi_discover(buf.as_mut_ptr(), buf.len()) };
-        if n < 0 {
-            return Err(ControlError::from_abi(-n, last_error_text()));
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            match crate::ndi::current_source_names() {
+                Ok(names) => Ok(names.join("\n")),
+                Err(error) => Err(ControlError::io(error)),
+            }
         }
-        Ok(String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Ok(String::new())
+        }
+    }
+
+    fn discover_uvc(&self) -> ControlResult<String> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            encode_captures(crate::enumerate_video_captures())
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Ok("[]".into())
+        }
+    }
+
+    fn discover_uvc_modes(&self, device_id: &str) -> ControlResult<String> {
+        encode_capture_modes(device_id)
     }
 
     fn apply_reconcile(
@@ -544,6 +571,39 @@ impl MixerPort for ProcessMixer {
     ) -> ControlResult<()> {
         eiviz_control::session::reconcile::apply_one(self, next, op, statuses)
     }
+}
+
+fn encode_captures(devices: Vec<(String, String)>) -> ControlResult<String> {
+    let items: Vec<serde_json::Value> = devices
+        .into_iter()
+        .map(|(name, id)| serde_json::json!({ "name": name, "id": id }))
+        .collect();
+    serde_json::to_string(&items).map_err(|error| ControlError::internal(error.to_string()))
+}
+
+fn encode_capture_modes(device_id: &str) -> ControlResult<String> {
+    #[cfg(windows)]
+    let modes = crate::media::enumerate_capture_modes(device_id);
+    #[cfg(target_os = "macos")]
+    let modes = crate::media_macos::enumerate_capture_modes(device_id);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let modes: Vec<crate::abi::VideoCaptureMode> = {
+        let _ = device_id;
+        Vec::new()
+    };
+    let items: Vec<serde_json::Value> = modes
+        .into_iter()
+        .map(|mode| {
+            serde_json::json!({
+                "width": mode.width,
+                "height": mode.height,
+                "fpsNum": mode.fps_num,
+                "fpsDen": mode.fps_den,
+                "format": mode.format,
+            })
+        })
+        .collect();
+    serde_json::to_string(&items).map_err(|error| ControlError::internal(error.to_string()))
 }
 
 pub(crate) fn replace_session_bytes(bytes: &[u8], expected_revision: u64) -> i32 {
