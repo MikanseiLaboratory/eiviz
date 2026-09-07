@@ -29,6 +29,22 @@ enum MixerFFI {
         return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
     }
 
+    static func sourceStatus(_ id: UInt64) -> (connected: Bool, hasVideo: Bool) {
+        var status = EivizSourceStatus(connected: 0, has_video: 0)
+        let code = mixer_source_status(id, &status)
+        guard code == EIVIZ_OK else { return (false, false) }
+        return (status.connected != 0, status.has_video != 0)
+    }
+
+    static func sourceErrorText(_ id: UInt64) -> String {
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_source_copy_error(id, ptr.baseAddress, ptr.count)
+        }
+        guard n > 0 else { return "" }
+        return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
+    }
+
     static func lastErrorText() -> String {
         var buffer = [UInt8](repeating: 0, count: 1024)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

@@ -189,6 +189,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_register_source")]
     internal static partial int RegisterSource(ulong id, uint width, uint height, uint format);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_source_status")]
+    internal static unsafe partial int SourceStatus(ulong id, MixerSourceStatus* status);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_source_copy_error")]
+    internal static unsafe partial int SourceCopyError(ulong id, byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_destroy_source")]
     internal static partial int DestroySource(ulong id);
 
@@ -441,6 +447,30 @@ internal static partial class MixerNative
         }
     }
 
+    internal static bool TrySourceStatus(ulong id, out MixerSourceStatus status)
+    {
+        unsafe
+        {
+            var local = stackalloc MixerSourceStatus[1];
+            var code = SourceStatus(id, local);
+            status = local[0];
+            return code == 0;
+        }
+    }
+
+    internal static string SourceErrorText(ulong id)
+    {
+        var buffer = new byte[1024];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = SourceCopyError(id, ptr, (nuint)buffer.Length);
+                return n > 0 ? Encoding.UTF8.GetString(buffer, 0, n) : string.Empty;
+            }
+        }
+    }
+
     internal static string LastErrorText()
     {
         var buffer = new byte[1024];
@@ -656,6 +686,13 @@ internal struct MixerVideoInfo
     public uint IsFile;
     public long PositionHns;
     public long DurationHns;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerSourceStatus
+{
+    public uint Connected;
+    public uint HasVideo;
 }
 
 [StructLayout(LayoutKind.Sequential)]

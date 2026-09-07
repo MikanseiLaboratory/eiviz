@@ -11,12 +11,21 @@ internal sealed partial class SwapchainHost : HwndHost
     private nint _hwnd;
     private bool _attached;
     private bool _loggedAttachFailure;
+    private string _lastAttachError = "";
     private uint _sizedWidth;
     private uint _sizedHeight;
     private bool _syncing;
     private bool _applying;
 
-    public ulong UnitId { get; set; } = 1;
+    private ulong _unitId = 1;
+
+    public ulong UnitId
+    {
+        get => _unitId;
+        set => _unitId = HostRole.IsRemote && value == 1
+            ? RemoteVideoPresenter.LocalUnitId
+            : value;
+    }
     public uint OutputKind { get; set; } = MixerNative.OutputProgram;
     public ulong MonitorId { get; set; }
     public ulong SourceId { get; set; }
@@ -29,6 +38,7 @@ internal sealed partial class SwapchainHost : HwndHost
 
     public SwapchainHost()
     {
+        UnitId = _unitId;
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;
         SizeChanged += (_, _) => SyncNative();
@@ -101,13 +111,18 @@ internal sealed partial class SwapchainHost : HwndHost
 
     public void ReleaseNative() => DetachNative();
 
+    public bool HasUnit(ulong unitId, uint kind) =>
+        _attached && !IsMonitor && UnitId == unitId && OutputKind == kind;
+
     public void RetargetUnit(ulong unitId, uint kind)
     {
+        if (HasUnit(unitId, kind))
+            return;
         DetachNative();
         IsMonitor = false;
         UnitId = unitId;
         OutputKind = kind;
-        ApplySize();
+        ApplySize(forceAttach: true);
     }
 
     public bool HasMonitor(ulong monitorId, ulong sourceId) =>
@@ -193,15 +208,17 @@ internal sealed partial class SwapchainHost : HwndHost
                         "Attach preview surface");
                 _attached = true;
                 _loggedAttachFailure = false;
+                _lastAttachError = "";
                 _sizedWidth = width;
                 _sizedHeight = height;
             }
             catch (Exception ex)
             {
                 FlipBudget.Cancel(this);
-                if (!_loggedAttachFailure)
+                if (!_loggedAttachFailure || ex.Message != _lastAttachError)
                 {
                     _loggedAttachFailure = true;
+                    _lastAttachError = ex.Message;
                     HostLog.WriteException(ex);
                 }
             }

@@ -123,6 +123,11 @@ pub fn close(handle: i32) -> i32 {
     let Some(mut slot) = slots().lock().ok().and_then(|mut map| map.remove(&handle)) else {
         return ERR_NOT_CREATED;
     };
+    let session = Arc::clone(&slot.session);
+    let runtime = slot.handle.clone();
+    let _ = runtime.block_on(async move {
+        let _ = tokio::time::timeout(Duration::from_secs(2), session.close()).await;
+    });
     let _ = slot.stop.send(true);
     if let Some(join) = slot.join.take() {
         join_timeout(join, Duration::from_secs(2));

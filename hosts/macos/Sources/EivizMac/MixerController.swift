@@ -188,6 +188,13 @@ final class MixerController: ObservableObject {
             return
         }
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
+        guard fail(mixer_create_unit(MixerRemote.localUnitId, 1920, 1080), "Metal mixer initialization") else {
+            return
+        }
+        guard fail(mixer_unit_configure(MixerRemote.localUnitId, 1920, 1080, 60, 1), "Metal mixer initialization") else {
+            return
+        }
+        applyLocalRemoteBuses()
         FlipBudget.configure(0)
         GpuPresentStore.load()
         startRemoteDiscover()
@@ -255,6 +262,7 @@ final class MixerController: ObservableObject {
         remoteReceiveKeys.removeAll()
         _ = mixer_destroy_source(MixerRemote.previewSourceId)
         _ = mixer_destroy_source(MixerRemote.programSourceId)
+        applyLocalRemoteBuses()
         bumpSurfaceEpoch()
         refreshRemoteWarn()
     }
@@ -2039,12 +2047,29 @@ final class MixerController: ObservableObject {
             next = L10n.t("msg.remoteResync")
         } else if videoUnavailable {
             next = L10n.t("msg.videoUnavailable")
+        } else if let error = remoteVideoError() {
+            next = error
+        } else if !remoteVideoReady() {
+            next = L10n.t("msg.videoWaiting")
         } else {
             next = ""
         }
         if warnText != next {
             warnText = next
         }
+    }
+
+    private func remoteVideoReady() -> Bool {
+        MixerFFI.sourceStatus(MixerRemote.previewSourceId).hasVideo
+            && MixerFFI.sourceStatus(MixerRemote.programSourceId).hasVideo
+    }
+
+    private func remoteVideoError() -> String? {
+        let preview = MixerFFI.sourceErrorText(MixerRemote.previewSourceId)
+        if !preview.isEmpty { return preview }
+        let program = MixerFFI.sourceErrorText(MixerRemote.programSourceId)
+        if !program.isEmpty { return program }
+        return nil
     }
 
     private func handleMixerFatal() -> Bool {
@@ -2198,17 +2223,20 @@ final class MixerController: ObservableObject {
     }
 
     func surfaceRole(kind: UInt32, unitId: UInt64? = nil) -> SurfaceRole {
+        if isRemote {
+            if kind == EIVIZ_OUTPUT_PREVIEW {
+                return .monitor(
+                    monitorId: MixerRemote.previewMonitor,
+                    sourceId: remotePreviewLive ? MixerRemote.previewSourceId : EIVIZ_SRC_BLACK
+                )
+            }
+            return .monitor(
+                monitorId: MixerRemote.programMonitor,
+                sourceId: remoteProgramLive ? MixerRemote.programSourceId : EIVIZ_SRC_BLACK
+            )
+        }
         let unit = unitId ?? selectedUnitId
-        guard isRemote else {
-            return .unit(unitId: unit, kind: kind)
-        }
-        if kind == EIVIZ_OUTPUT_PREVIEW, !selectedRemoteVideo(preview: true).address.isEmpty {
-            return .monitor(monitorId: MixerRemote.previewMonitor ^ (unit << 8), sourceId: MixerRemote.previewSourceId)
-        }
-        if kind == EIVIZ_OUTPUT_PROGRAM, !selectedRemoteVideo(preview: false).address.isEmpty {
-            return .monitor(monitorId: MixerRemote.programMonitor ^ (unit << 8), sourceId: MixerRemote.programSourceId)
-        }
-        return .monitor(monitorId: 0, sourceId: 0)
+        return .unit(unitId: unit, kind: kind)
     }
 
     func surfaceRoleMultiview(_ layout: MultiviewLayout) -> SurfaceRole {
@@ -2446,9 +2474,6 @@ final class MixerController: ObservableObject {
         }
         for line in discoveredOmt { add(.omt, line) }
         for line in discoveredNdi { add(.ndi, line) }
-        for output in session.outputs where output.enabled && (output.transport == .omt || output.transport == .ndi) {
-            add(output.transport, output.name)
-        }
         return items
     }
 
@@ -2459,12 +2484,18 @@ final class MixerController: ObservableObject {
         let raw = preview ? prefs.previewVideoTransport : prefs.programVideoTransport
         let transport: OutputTransport = raw.uppercased() == "NDI" ? .ndi : .omt
         if !address.isEmpty {
-            let prefix = transport == .ndi ? "NDI" : "OMT"
-            return RemoteVideoItem(transport: transport, address: address, label: "\(prefix)  \(address)")
+            return resolveRemoteVideo(RemoteVideoItem(
+                transport: transport,
+                address: address,
+                label: "\(transport == .ndi ? "NDI" : "OMT")  \(address)"
+            ))
         }
         if let output = remotePublishedSource(preview ? .muPreview : .muProgram, unitId: selectedUnitId) {
-            let prefix = output.transport == .ndi ? "NDI" : "OMT"
-            return RemoteVideoItem(transport: output.transport, address: output.name, label: "\(prefix)  \(output.name)")
+            return resolveRemoteVideo(RemoteVideoItem(
+                transport: output.transport,
+                address: output.name,
+                label: "\(output.transport == .ndi ? "NDI" : "OMT")  \(output.name)"
+            ))
         }
         return RemoteVideoItem(transport: .omt, address: "", label: L10n.t("chrome.videoNone"))
     }
@@ -2486,7 +2517,7 @@ final class MixerController: ObservableObject {
         if item.transport == .ndi {
             return "\(item.transport.rawValue):\(item.address)"
         }
-        return "\(item.transport.rawValue):\(item.address):gpu=\(AppPrefs.shared.remoteOmtUseGpu)"
+        return "\(item.transport.rawValue):\(item.address)"
     }
 
     private func syncPublishedVideo() {
@@ -2526,37 +2557,65 @@ final class MixerController: ObservableObject {
         if videoUnavailable != unavailable {
             videoUnavailable = unavailable
         }
+        applyLocalRemoteBuses()
         refreshRemoteWarn()
+    }
+
+    private func applyLocalRemoteBuses() {
+        let unit = selectedUnit
+        let width = max(2, unit.width)
+        let height = max(2, unit.height)
+        let fpsNum = max(1, unit.fpsNum)
+        let fpsDen = max(1, unit.fpsDen)
+        if mixer_unit_configure(MixerRemote.localUnitId, width, height, fpsNum, fpsDen) != EIVIZ_OK {
+            _ = mixer_create_unit(MixerRemote.localUnitId, width, height)
+            _ = mixer_unit_configure(MixerRemote.localUnitId, width, height, fpsNum, fpsDen)
+        }
+        var state = MixerFFI.emptyState()
+        state.preview_source = remotePreviewLive ? MixerRemote.previewSourceId : EIVIZ_SRC_BLACK
+        state.program_source = remoteProgramLive ? MixerRemote.programSourceId : EIVIZ_SRC_BLACK
+        state.transition_kind = EIVIZ_TRANSITION_CUT
+        _ = mixer_unit_set_state(MixerRemote.localUnitId, &state)
     }
 
     @discardableResult
     private func connectRemoteChoice(_ id: UInt64, _ item: RemoteVideoItem) -> Bool {
         let resolved = resolveRemoteVideo(item)
         _ = mixer_destroy_source(id)
-        guard !resolved.address.isEmpty else { return false }
+        guard canConnectRemoteVideo(resolved) else { return false }
         let code: Int32
         if resolved.transport == .ndi {
-            code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 3, 0) }
+            code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 1, 0) }
         } else {
             code = MixerFFI.withCString(resolved.address) {
-                mixer_omt_connect(id, $0, AppPrefs.shared.remoteOmtUseGpu ? 1 : 0, 3, 0)
+                mixer_omt_connect(id, $0, 0, 1, 0)
             }
         }
         return code == 0
     }
 
-    private func resolveRemoteVideo(_ item: RemoteVideoItem) -> RemoteVideoItem {
+    private func canConnectRemoteVideo(_ item: RemoteVideoItem) -> Bool {
         let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !address.isEmpty, !looksDiscovered(address) else { return item }
-        let pool = item.transport == .ndi ? discoveredNdi : discoveredOmt
-        let matches = pool.filter { addressRefersTo($0, name: address) }
-        guard matches.count == 1, let found = matches.first else { return item }
-        let prefix = item.transport == .ndi ? "NDI" : "OMT"
-        return RemoteVideoItem(transport: item.transport, address: found, label: "\(prefix)  \(found)")
+        guard !address.isEmpty else { return false }
+        if item.transport == .ndi { return true }
+        return address.contains("://")
     }
 
-    private func looksDiscovered(_ address: String) -> Bool {
-        address.contains("://") || address.contains("(")
+    private func resolveRemoteVideo(_ item: RemoteVideoItem) -> RemoteVideoItem {
+        let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if address.isEmpty {
+            return item
+        }
+        if item.transport == .ndi || address.contains("://") {
+            return item
+        }
+        let pool = item.transport == .ndi ? discoveredNdi : discoveredOmt
+        let matches = pool.filter { addressRefersTo($0, name: address) }
+        guard matches.count == 1, let found = matches.first else {
+            return RemoteVideoItem(transport: item.transport, address: "", label: L10n.t("chrome.videoNone"))
+        }
+        let prefix = item.transport == .ndi ? "NDI" : "OMT"
+        return RemoteVideoItem(transport: item.transport, address: found, label: "\(prefix)  \(found)")
     }
 
     private func addressRefersTo(_ discovered: String, name: String) -> Bool {

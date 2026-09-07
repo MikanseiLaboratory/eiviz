@@ -33,6 +33,7 @@ enum KeychainStore {
 }
 
 enum MixerRemote {
+    static let localUnitId: UInt64 = 0x0007_0001
     static let previewMonitor: UInt64 = 0x0006_0001
     static let programMonitor: UInt64 = 0x0006_0002
     static let multiviewMonitor: UInt64 = 0x0006_0003

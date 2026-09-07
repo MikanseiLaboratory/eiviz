@@ -162,6 +162,11 @@ typedef struct EivizVideoInfo {
     int64_t duration_hns;
 } EivizVideoInfo;
 
+typedef struct EivizSourceStatus {
+    uint32_t connected;
+    uint32_t has_video;
+} EivizSourceStatus;
+
 typedef struct EivizVideoCaptureInfo {
     uint8_t id[512];
     uint8_t name[256];
@@ -267,6 +272,8 @@ int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
 int32_t mixer_video_set_loop(uint64_t id, uint32_t looping);
 int32_t mixer_video_seek(uint64_t id, int64_t hns);
 int32_t mixer_video_copy_info(uint64_t id, EivizVideoInfo *out);
+int32_t mixer_source_status(uint64_t id, EivizSourceStatus *out);
+int32_t mixer_source_copy_error(uint64_t id, uint8_t *out, size_t cap);
 int32_t mixer_omt_connect(uint64_t id, const char *address, uint32_t use_gpu, uint32_t frame_buffer_frames, uint32_t quality);
 int32_t mixer_ndi_connect(uint64_t id, const char *address, uint32_t frame_buffer_frames, uint32_t low_bandwidth);
 int32_t mixer_set_live_save(uint64_t id, uint32_t mode, uint32_t flags);

@@ -309,6 +309,7 @@ public static class Loc
         ["msg.uploadFailed"] = "The media upload failed.",
         ["msg.remoteNoInputPreview"] = "Input Preview is for a local mixer connection.",
         ["msg.videoUnavailable"] = "Select Preview/Program sources.",
+        ["msg.videoWaiting"] = "Waiting for OMT/NDI video.",
         ["action.Mutate session"] = "Mutate session",
     };
 
@@ -558,6 +559,7 @@ public static class Loc
         ["msg.uploadFailed"] = "メディアのアップロードに失敗しました。",
         ["msg.remoteNoInputPreview"] = "Input Previewはローカル接続向けです。",
         ["msg.videoUnavailable"] = "Preview/Programのソースを選んでください。",
+        ["msg.videoWaiting"] = "OMT/NDIの映像を待っています。",
         ["action.Mutate session"] = "セッションの変更",
     };
 }

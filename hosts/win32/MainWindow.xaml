@@ -18,12 +18,11 @@
                     <Button x:Name="SaveSessionButton" Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
                     <Button x:Name="LoadSessionButton" Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
                     <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
-                    <Button x:Name="DisconnectButton" Content="{Binding [chrome.disconnect], Source={x:Static i18n:Loc.Source}}" Width="104" Margin="8,0,0,0" Click="Disconnect_Click" Visibility="Collapsed" IsEnabled="False"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
+                    <Button x:Name="DisconnectButton" Content="{Binding [chrome.disconnect], Source={x:Static i18n:Loc.Source}}" Width="104" Margin="8,0,0,0" Click="Disconnect_Click" Visibility="Collapsed" IsEnabled="False"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <Button x:Name="SnapshotButton" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Click="Snapshot_Click"/>
-                    <Button x:Name="ResourcesButton" Content="{Binding [chrome.resources], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Resources_Click"/>
                     <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
                     <Button x:Name="SettingsButton" Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
                     <Button Content="{Binding [chrome.preferences], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Preferences_Click"/>

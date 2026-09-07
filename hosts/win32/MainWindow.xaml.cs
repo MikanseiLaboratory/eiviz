@@ -89,11 +89,8 @@ public partial class MainWindow : Window
             ApplyBusColors();
             ApplyAspect();
             RefreshStatusBar();
-            if (!HostRole.IsRemote || ((App)Application.Current).Backend.Connected)
-            {
-                FillVideoSources();
-                BindPreviewProgram();
-            }
+            FillVideoSources();
+            BindPreviewProgram();
             if (!HostRole.IsRemote)
                 AudioGraphSync.Push(_session);
             if (_session.Scenes.Count > 0)
@@ -153,11 +150,12 @@ public partial class MainWindow : Window
         LoadSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
         DisconnectButton.Visibility = Visibility.Visible;
+        PreviewHost.UnitId = RemoteVideoPresenter.LocalUnitId;
+        ProgramHost.UnitId = RemoteVideoPresenter.LocalUnitId;
         PreviewSourceBox.Visibility = Visibility.Visible;
         ProgramSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
         SnapshotButton.Visibility = Visibility.Collapsed;
-        ResourcesButton.Visibility = Visibility.Collapsed;
         RemoteIdleText.Text = Loc.T("msg.remoteIdle");
         ApplyRemoteLiveUi(false);
     }
@@ -184,7 +182,7 @@ public partial class MainWindow : Window
 
     private static List<RemoteVideoItem> WithChoice(List<RemoteVideoItem> items, RemoteVideoChoice choice)
     {
-        if (!choice.IsEmpty && items.All(item => item.Choice != choice))
+        if (RemoteVideoCatalog.CanConnect(choice) && items.All(item => item.Choice != choice))
         {
             var prefix = choice.Transport == OutputTransport.Ndi ? "NDI" : "OMT";
             items.Insert(1, new RemoteVideoItem { Choice = choice, Label = $"{prefix}  {choice.Address}" });
@@ -309,8 +307,8 @@ public partial class MainWindow : Window
             return _resources.Warning() ?? "";
         if (app.Backend is not RemoteEivizBackend remote || !remote.Connected)
             return app.Backend.StatusText;
-        if (!remote.RemotePreviewOk || !remote.RemoteProgramOk)
-            return Loc.T("msg.videoUnavailable");
+        if (!string.IsNullOrEmpty(remote.RemoteVideoWarn))
+            return remote.RemoteVideoWarn;
         return _resources.Warning() ?? "";
     }
 
@@ -1725,8 +1723,6 @@ public partial class MainWindow : Window
             cleaned = "eiviz";
         return cleaned + ".png";
     }
-
-    private void Resources_Click(object sender, RoutedEventArgs e) => OpenResources();
 
     private void Logs_Click(object sender, RoutedEventArgs e) => OpenLogs();
 

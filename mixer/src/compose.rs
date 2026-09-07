@@ -562,32 +562,33 @@ impl Composer {
             if let Some(frame) = snap.gpu.as_ref() {
                 let tex_w = frame.texture.size().width;
                 let tex_h = frame.texture.size().height;
-                let needs_new = self.sources.get(&id).is_none_or(|gpu| {
+                // GPU ingest already owns a current texture. Skipping on equal
+                // PTS kept the first (often empty) handle when senders stamp 0.
+                let layout_changed = self.sources.get(&id).is_none_or(|gpu| {
                     gpu.width != tex_w
                         || gpu.height != tex_h
                         || gpu.packed != frame.packed
                         || gpu.bgra != frame.bgra
-                        || gpu.uploaded_pts != frame.pts
                 });
-                if needs_new {
-                    self.blit_groups.remove(&id);
-                    self.uyvy_groups.remove(&id);
+                self.blit_groups.remove(&id);
+                self.uyvy_groups.remove(&id);
+                if layout_changed {
                     self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-                    self.sources.insert(
-                        id,
-                        SourceGpu {
-                            texture: frame.texture.clone(),
-                            view: frame.view.clone(),
-                            width: tex_w,
-                            height: tex_h,
-                            packed: frame.packed,
-                            bgra: frame.bgra,
-                            uploaded_pts: frame.pts,
-                            direct: false,
-                            owned: false,
-                        },
-                    );
                 }
+                self.sources.insert(
+                    id,
+                    SourceGpu {
+                        texture: frame.texture.clone(),
+                        view: frame.view.clone(),
+                        width: tex_w,
+                        height: tex_h,
+                        packed: frame.packed,
+                        bgra: frame.bgra,
+                        uploaded_pts: frame.pts,
+                        direct: false,
+                        owned: false,
+                    },
+                );
                 continue;
             }
             if snap.format == CpuFormat::GpuRgba {

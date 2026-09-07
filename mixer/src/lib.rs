@@ -52,13 +52,13 @@ pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
     ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS,
-    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo, MixerStats,
-    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT,
-    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW,
-    SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo,
+    MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
+    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
+    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -345,6 +345,18 @@ impl LiveReceiver {
             // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {}
+        }
+    }
+
+    fn source_status(&self) -> (bool, bool, String) {
+        match self {
+            Self::Omt(receiver) => (
+                receiver.session_live(),
+                receiver.has_video(),
+                receiver.last_error(),
+            ),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => (true, false, String::new()),
         }
     }
 }
@@ -970,18 +982,10 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                 continue;
             };
             let (left, right) = ring.peak();
-            peaks.push(LivePeak {
-                id,
-                left,
-                right,
-            });
+            peaks.push(LivePeak { id, left, right });
         }
         for (id, left, right) in mix_peaks {
-            peaks.push(LivePeak {
-                id,
-                left,
-                right,
-            });
+            peaks.push(LivePeak { id, left, right });
         }
         LiveState { units, peaks }
     })
@@ -1263,10 +1267,14 @@ pub extern "C" fn mixer_unit_attach_native(
     height: u32,
 ) -> i32 {
     if width == 0 || height == 0 {
-        return ERR_INVALID_ARGUMENT;
+        return attach_invalid(format!(
+            "attach surface unit={unit_id} kind={kind}: width/height must be non-zero ({width}x{height})"
+        ));
     }
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
-        return ERR_INVALID_ARGUMENT;
+        return attach_invalid(format!(
+            "attach surface unit={unit_id} kind={kind}: native kind={native_kind} handle={handle} is not valid on this OS"
+        ));
     };
     #[cfg(target_os = "macos")]
     let prepared = match prepare_surface_off_slot(surface, width, height) {
@@ -1283,6 +1291,10 @@ pub extern "C" fn mixer_unit_attach_native(
             .units
             .contains_key(&unit_id)
         {
+            set_error(
+                &mixer.telemetry,
+                format!("attach surface: mixing unit {unit_id:#x} is not created"),
+            );
             return ERR_INVALID_ARGUMENT;
         }
         if mixer
@@ -1302,6 +1314,11 @@ pub extern "C" fn mixer_unit_attach_native(
         }
         OK
     })
+}
+
+fn attach_invalid(message: impl Into<String>) -> i32 {
+    report_session_error(message);
+    ERR_INVALID_ARGUMENT
 }
 
 #[unsafe(no_mangle)]
@@ -2360,7 +2377,10 @@ pub unsafe extern "C" fn mixer_omt_connect(
         .unwrap_or_default()
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
-    crate::diag::info(&format!("omt_connect id={id}"));
+    crate::diag::info(&format!(
+        "omt_connect id={id} gpu={} addr={address}",
+        use_gpu != 0
+    ));
     let taken = match with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         #[cfg(any(windows, target_os = "macos"))]
@@ -2929,6 +2949,58 @@ pub unsafe extern "C" fn mixer_ws_configure_owned(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_ws_listen_owner(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::native_ws::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_source_status(id: u64, out: *mut MixerSourceStatus) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let (connected, has_video, uploads) = {
+            let shared = mixer.shared.lock().expect("shared");
+            let (connected, has_video) = shared
+                .receivers
+                .get(&id)
+                .map(LiveReceiver::source_status)
+                .map(|(connected, has_video, _)| (connected, has_video))
+                .unwrap_or((false, false));
+            (connected, has_video, Arc::clone(&shared.uploads))
+        };
+        let store = uploads.lock().expect("uploads");
+        unsafe {
+            *out = MixerSourceStatus {
+                connected: u32::from(connected),
+                has_video: u32::from(has_video || store.has_video_frame(id)),
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_source_copy_error(id: u64, out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let error = with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .receivers
+            .get(&id)
+            .map(LiveReceiver::source_status)
+            .map(|(_, _, error)| error)
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    let n = error.len().min(cap);
+    if n > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
+    }
+    n as i32
 }
 
 #[unsafe(no_mangle)]
@@ -4753,7 +4825,7 @@ fn collect_live_ids(
             }
             return;
         }
-        if crate::abi::is_scene(id) {
+        if crate::abi::is_scene(id) || crate::abi::is_multiview(id) {
             if !scenes.insert(id) {
                 return;
             }
@@ -5228,6 +5300,14 @@ mod tests {
     }
 
     #[test]
+    fn collect_live_ids_uploads_remote_omt_monitor() {
+        let remote_prv = 0x0005_0001;
+        assert!(!crate::abi::is_scene(remote_prv));
+        let (_, uploads) = collect_live_ids(&[], &[], &[remote_prv], &[], &HashMap::new());
+        assert!(uploads.contains(&remote_prv));
+    }
+
+    #[test]
     fn collect_live_ids_keeps_multiview_output() {
         let mv = MULTIVIEW_BASE | 1;
         let layers: std::sync::Arc<[crate::abi::OverlayDesc]> =
@@ -5370,6 +5450,92 @@ mod tests {
                 ERR_INVALID_ARGUMENT
             );
         }
+    }
+
+    fn last_error_text() -> String {
+        let mut buf = vec![0u8; 512];
+        let n = unsafe { mixer_last_error(buf.as_mut_ptr(), buf.len()) };
+        if n <= 0 {
+            return String::new();
+        }
+        String::from_utf8_lossy(&buf[..n as usize]).into_owned()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn attach_missing_remote_unit_reports_error() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60, 1), OK);
+        const REMOTE_UNIT: u64 = 0x0007_0001;
+        assert_eq!(
+            mixer_unit_attach_output(REMOTE_UNIT, 1, 1920, 1080, OUTPUT_PREVIEW),
+            ERR_INVALID_ARGUMENT
+        );
+        let error = last_error_text();
+        assert!(
+            error.contains("0x70001") || error.contains("not created"),
+            "{error}"
+        );
+        assert_eq!(mixer_create_unit(REMOTE_UNIT, 1920, 1080), OK);
+        assert_eq!(
+            mixer_unit_attach_native(
+                REMOTE_UNIT,
+                OUTPUT_PREVIEW,
+                NATIVE_WIN32_HWND,
+                0,
+                1920,
+                1080
+            ),
+            ERR_INVALID_ARGUMENT
+        );
+        let hwnd_error = last_error_text();
+        assert!(
+            hwnd_error.contains("handle") || hwnd_error.contains("not valid"),
+            "{hwnd_error}"
+        );
+        assert!(!hwnd_error.contains("not created"), "{hwnd_error}");
+        let preview = mixer_unit_attach_native(
+            REMOTE_UNIT,
+            OUTPUT_PREVIEW,
+            NATIVE_WIN32_HWND,
+            1,
+            1920,
+            1080,
+        );
+        let program = mixer_unit_attach_output(REMOTE_UNIT, 1, 1920, 1080, OUTPUT_PROGRAM);
+        assert_ne!(
+            preview, ERR_INVALID_ARGUMENT,
+            "unit exists; preview attach must not fail the unit-missing check"
+        );
+        assert_ne!(
+            program, ERR_INVALID_ARGUMENT,
+            "unit exists; program attach must not fail the unit-missing check"
+        );
+        mixer_destroy();
+    }
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn source_status_is_empty_without_receiver() {
+        mixer_destroy();
+        let mut status = MixerSourceStatus {
+            connected: 1,
+            has_video: 1,
+        };
+        assert_eq!(
+            unsafe { mixer_source_status(0x0005_0001, &mut status) },
+            ERR_NOT_CREATED
+        );
+        assert_eq!(mixer_create(0, 60, 1), OK);
+        assert_eq!(unsafe { mixer_source_status(0x0005_0001, &mut status) }, OK);
+        assert_eq!(status.connected, 0);
+        assert_eq!(status.has_video, 0);
+        let mut buf = vec![0u8; 64];
+        assert_eq!(
+            unsafe { mixer_source_copy_error(0x0005_0001, buf.as_mut_ptr(), buf.len()) },
+            0
+        );
+        mixer_destroy();
     }
 
     fn dummy_video() -> SendCmd {

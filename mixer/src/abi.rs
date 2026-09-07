@@ -157,6 +157,13 @@ pub struct MixerVideoInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerSourceStatus {
+    pub connected: u32,
+    pub has_video: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct VideoCaptureInfo {
     pub id: [u8; 512],
@@ -352,7 +359,7 @@ impl MixInputSpec {
 }
 
 pub fn is_scene(source_id: u64) -> bool {
-    source_id >= SCENE_BASE && source_id < MU_SOURCE_FLAG
+    source_id >= SCENE_BASE && source_id < MULTIVIEW_BASE
 }
 
 pub fn is_multiview(source_id: u64) -> bool {

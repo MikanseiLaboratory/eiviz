@@ -198,6 +198,9 @@ enum SessionOp {
         request: Request,
         reply: oneshot::Sender<ControlResult<Response>>,
     },
+    Close {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 impl ControlSession {
@@ -223,6 +226,14 @@ impl ControlSession {
 
     pub fn with_view<R>(&self, f: impl FnOnce(&SessionView) -> R) -> Option<R> {
         self.view.lock().ok().map(|slot| f(&slot))
+    }
+
+    pub async fn close(&self) {
+        let (reply, done) = oneshot::channel();
+        if self.tx.send(SessionOp::Close { reply }).await.is_err() {
+            return;
+        }
+        let _ = done.await;
     }
 
     pub async fn subscribe(&self, after_sequence: u64) -> ControlResult<Response> {
@@ -610,7 +621,19 @@ async fn session_supervisor(
                 if rx.is_closed() {
                     return;
                 }
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    op = rx.recv() => match op {
+                        None => return,
+                        Some(SessionOp::Close { reply }) => {
+                            let _ = reply.send(());
+                            return;
+                        }
+                        Some(SessionOp::Request { reply, .. }) => {
+                            let _ = reply.send(Err(ControlError::unavailable(error.clone())));
+                        }
+                    },
+                    _ = tokio::time::sleep(delay) => {}
+                }
                 delay = (delay * 2).min(Duration::from_secs(5));
             }
         }
@@ -674,14 +697,32 @@ async fn session_once(
     loop {
         tokio::select! {
             op = rx.recv() => {
-                let Some(SessionOp::Request { request, reply }) = op else { return Ok(()); };
-                pending.insert(request.request_id.clone(), reply);
-                let env = Envelope {
-                    kind: Some(envelope::Kind::Request(request)),
-                };
-                ws.send(Message::Binary(encode_envelope(&env).into()))
-                    .await
-                    .map_err(|error| error.to_string())?;
+                match op {
+                    None => {
+                        if let Ok(mut slot) = view.lock() {
+                            slot.connected = false;
+                        }
+                        let _ = ws.close(None).await;
+                        return Ok(());
+                    }
+                    Some(SessionOp::Close { reply }) => {
+                        if let Ok(mut slot) = view.lock() {
+                            slot.connected = false;
+                        }
+                        let _ = ws.close(None).await;
+                        let _ = reply.send(());
+                        return Ok(());
+                    }
+                    Some(SessionOp::Request { request, reply }) => {
+                        pending.insert(request.request_id.clone(), reply);
+                        let env = Envelope {
+                            kind: Some(envelope::Kind::Request(request)),
+                        };
+                        ws.send(Message::Binary(encode_envelope(&env).into()))
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
             }
             msg = ws.next() => {
                 let Some(msg) = msg else { return Err("disconnected".into()); };

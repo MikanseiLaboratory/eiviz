@@ -77,8 +77,6 @@ struct ContentView: View {
         HStack {
             if mixer.isRemote {
                 Button(L10n.t("chrome.connect")) { mixer.showConnect = true }
-                Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
-                    .disabled(!mixer.remoteConnected)
                 Menu {
                     ForEach(AppPrefs.shared.recentRemotes, id: \.self) { url in
                         Button(RemoteEndpoint.display(url)) {
@@ -88,6 +86,8 @@ struct ContentView: View {
                 } label: {
                     Text("▾")
                 }
+                Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
+                    .disabled(!mixer.remoteConnected)
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
@@ -103,9 +103,6 @@ struct ContentView: View {
             Spacer()
             Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
                 .disabled(mixer.isRemote)
-            if !mixer.isRemote {
-                Button(L10n.t("chrome.resources")) { mixer.showResources = true }
-            }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
@@ -633,6 +630,9 @@ struct ContentView: View {
             Text(mixer.resourceText)
                 .foregroundStyle(EivizTheme.hud)
                 .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture { mixer.showResources = true }
+                .help(L10n.t("chrome.resources"))
         }
         .font(.system(size: 12))
         .lineLimit(1)
