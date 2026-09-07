@@ -98,15 +98,15 @@ fn normalize_key(key: &str) -> String {
 }
 
 fn config_dir() -> PathBuf {
-    if let Ok(root) = std::env::var("LOCALAPPDATA") {
-        if !root.is_empty() {
-            return PathBuf::from(root).join("eiviz");
-        }
+    if let Ok(root) = std::env::var("LOCALAPPDATA")
+        && !root.is_empty()
+    {
+        return PathBuf::from(root).join("eiviz");
     }
-    if let Ok(root) = std::env::var("XDG_CONFIG_HOME") {
-        if !root.is_empty() {
-            return PathBuf::from(root).join("eiviz");
-        }
+    if let Ok(root) = std::env::var("XDG_CONFIG_HOME")
+        && !root.is_empty()
+    {
+        return PathBuf::from(root).join("eiviz");
     }
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home).join(".config").join("eiviz");
@@ -123,7 +123,10 @@ mod tests {
         let mut prefs = HeadlessPrefs::default();
         prefs.set("bind", "127.0.0.1:9400").unwrap();
         prefs.set("media-directory", "/tmp/eiviz-media").unwrap();
-        assert_eq!(prefs.get("bind").unwrap().as_deref(), Some("127.0.0.1:9400"));
+        assert_eq!(
+            prefs.get("bind").unwrap().as_deref(),
+            Some("127.0.0.1:9400")
+        );
         assert_eq!(
             prefs.get("mediaDirectory").unwrap().as_deref(),
             Some("/tmp/eiviz-media")

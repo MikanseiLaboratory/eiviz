@@ -104,7 +104,11 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
     Ok(())
 }
 
-fn run_daemon(session: PathBuf, bind: Option<String>, media_directory: Option<PathBuf>) -> Result<(), u8> {
+fn run_daemon(
+    session: PathBuf,
+    bind: Option<String>,
+    media_directory: Option<PathBuf>,
+) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
         let _ = (session, bind, media_directory);
@@ -127,12 +131,8 @@ fn run_daemon_runtime(
     let bind = bind
         .or(prefs.bind.clone())
         .unwrap_or_else(|| "127.0.0.1:9400".into());
-    let media_directory = media_directory.or_else(|| {
-        prefs
-            .media_directory
-            .as_ref()
-            .map(PathBuf::from)
-    });
+    let media_directory =
+        media_directory.or_else(|| prefs.media_directory.as_ref().map(PathBuf::from));
     let document = load_valid(&session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
