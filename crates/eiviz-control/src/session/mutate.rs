@@ -319,6 +319,33 @@ mod tests {
     }
 
     #[test]
+    fn upsert_unit_from_remote_camel_case_json() {
+        let mut doc = bars();
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{
+                "kind": "upsertUnit",
+                "unit": {
+                    "id": 2,
+                    "name": "Mixing Unit 2",
+                    "audioLink": "follow",
+                    "switcherSceneFilter": "exclude",
+                    "switcherSceneIds": [1]
+                }
+            }"#,
+        )
+        .expect("Remote upsertUnit");
+        apply(&mut doc, mutation).unwrap();
+        let added = doc.units.iter().find(|item| item.id == 2).unwrap();
+        assert_eq!(added.audio_link, crate::session::AudioLinkMode::Follow);
+        assert_eq!(
+            added.switcher_scene_filter,
+            crate::session::SwitcherSceneFilter::Exclude
+        );
+        assert_eq!(added.switcher_scene_ids, vec![1]);
+        assert_eq!(doc.next_unit_id, 3);
+    }
+
+    #[test]
     fn delete_missing_input_is_not_found() {
         let mut doc = bars();
         let err = apply(&mut doc, SessionMutation::DeleteInput { id: 99 }).unwrap_err();

@@ -5,7 +5,10 @@ pub mod migration;
 pub mod mutate;
 pub mod reconcile;
 pub mod store;
+mod string_enum;
 pub mod validate;
+
+use string_enum::session_string_enum;
 
 pub use validate::{ValidationError, validate, validate_for_apply};
 
@@ -202,18 +205,22 @@ fn mv_label_size() -> f32 {
     18.0
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MvLabelUnit {
-    #[default]
-    Px,
-    Percent,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum MvLabelUnit {
+        #[default]
+        Px,
+        Percent,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MvLabelAnchor {
-    Top,
-    #[default]
-    Bottom,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum MvLabelAnchor {
+        Top,
+        #[default]
+        Bottom,
+    }
 }
 
 fn fps_num() -> u32 {
@@ -260,13 +267,15 @@ pub(crate) fn clamp_size(size: f32) -> f32 {
     size.clamp(1.0, 200.0)
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Renderer {
-    #[default]
-    Auto,
-    Dx12,
-    Vulkan,
-    Metal,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum Renderer {
+        #[default]
+        Auto,
+        Dx12,
+        Vulkan,
+        Metal,
+    }
 }
 
 impl Renderer {
@@ -303,112 +312,125 @@ impl Renderer {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum InternalColorFormat {
-    #[default]
-    Uyvy,
-    Bgra,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum InternalColorFormat {
+        #[default]
+        Uyvy,
+        Bgra,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum InputKind {
-    Color,
-    Bars,
-    Black,
-    Still,
-    Video,
-    #[serde(rename = "OMT", alias = "Omt")]
-    OMT,
-    #[serde(rename = "NDI", alias = "Ndi")]
-    NDI,
-    #[serde(rename = "UVC", alias = "Uvc")]
-    UVC,
-    Mix,
+session_string_enum! {
+    pub enum InputKind {
+        Color,
+        Bars,
+        Black,
+        Still,
+        Video,
+        OMT,
+        NDI,
+        UVC,
+        Mix,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MixSource {
-    MuPreview,
-    #[default]
-    MuProgram,
-    SessionMultiview,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum MixSource {
+        MuPreview,
+        #[default]
+        MuProgram,
+        SessionMultiview,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum BandwidthSave {
-    AlwaysLow,
-    NotOnProgram,
-    #[default]
-    NotOnPreviewOrProgram,
-    AlwaysFull,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum BandwidthSave {
+        AlwaysLow,
+        NotOnProgram,
+        #[default]
+        NotOnPreviewOrProgram,
+        AlwaysFull,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum OmtQuality {
-    #[default]
-    Default,
-    Low,
-    Medium,
-    High,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum OmtQuality {
+        #[default]
+        Default,
+        Low,
+        Medium,
+        High,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum NdiBandwidth {
-    #[default]
-    Highest,
-    Lowest,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum NdiBandwidth {
+        #[default]
+        Highest,
+        Lowest,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum OutputTransport {
-    #[default]
-    #[serde(alias = "OMT", alias = "omt")]
-    Omt,
-    #[serde(alias = "NDI", alias = "ndi")]
-    Ndi,
-    #[serde(alias = "deckLink")]
-    DeckLink,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum OutputTransport {
+        #[default]
+        Omt,
+        Ndi,
+        DeckLink,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum OutputSourceKind {
-    Scene,
-    MuPreview,
-    #[default]
-    MuProgram,
-    Multiview,
-    Input,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum OutputSourceKind {
+        Scene,
+        MuPreview,
+        #[default]
+        MuProgram,
+        Multiview,
+        Input,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MvSlotKind {
-    #[default]
-    None,
-    Input,
-    Scene,
-    MuPreview,
-    MuProgram,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum MvSlotKind {
+        #[default]
+        None,
+        Input,
+        Scene,
+        MuPreview,
+        MuProgram,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MultiviewTemplate {
-    #[default]
-    PreviewProgram8,
-    PreviewProgram8Bottom,
-    PreviewProgram8Left,
-    PreviewProgram8Right,
-    PreviewProgram2,
-    Quad4TopLeft,
-    Quad4TopRight,
-    Quad4BottomLeft,
-    Quad4BottomRight,
-    Large5TopLeft,
-    Large5TopRight,
-    Large5BottomLeft,
-    Large5BottomRight,
-    Grid2x2,
-    Grid3x3,
-    Grid4x4,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum MultiviewTemplate {
+        #[default]
+        PreviewProgram8,
+        PreviewProgram8Bottom,
+        PreviewProgram8Left,
+        PreviewProgram8Right,
+        PreviewProgram2,
+        Quad4TopLeft,
+        Quad4TopRight,
+        Quad4BottomLeft,
+        Quad4BottomRight,
+        Large5TopLeft,
+        Large5TopRight,
+        Large5BottomLeft,
+        Large5BottomRight,
+        Grid2x2,
+        Grid3x3,
+        Grid4x4,
+    }
 }
 
 impl MultiviewTemplate {
@@ -430,28 +452,34 @@ impl MultiviewTemplate {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AudioBusRole {
-    #[default]
-    Master,
-    Headphone,
-    Aux,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AudioBusRole {
+        #[default]
+        Master,
+        Headphone,
+        Aux,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AudioDeviceKind {
-    #[default]
-    None,
-    Wasapi,
-    Asio,
-    CoreAudio,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AudioDeviceKind {
+        #[default]
+        None,
+        Wasapi,
+        Asio,
+        CoreAudio,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum AudioLinkMode {
-    #[default]
-    Follow,
-    Independent,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AudioLinkMode {
+        #[default]
+        Follow,
+        Independent,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,22 +548,26 @@ pub struct InputDto {
     pub mix_audio_bus_id: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum VideoPlayWhen {
-    #[default]
-    Never,
-    OnActive,
-    OnPreview,
-    Always,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum VideoPlayWhen {
+        #[default]
+        Never,
+        OnActive,
+        OnPreview,
+        Always,
+    }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum VideoTriggerWhen {
-    #[default]
-    Never,
-    OnActive,
-    OnDeactivated,
-    OnPreview,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum VideoTriggerWhen {
+        #[default]
+        Never,
+        OnActive,
+        OnDeactivated,
+        OnPreview,
+    }
 }
 
 fn one_u32() -> u32 {
@@ -847,12 +879,14 @@ pub struct UnitDto {
     pub switcher_scene_ids: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SwitcherSceneFilter {
-    #[default]
-    All,
-    Include,
-    Exclude,
+session_string_enum! {
+    #[derive(Default)]
+    pub enum SwitcherSceneFilter {
+        #[default]
+        All,
+        Include,
+        Exclude,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

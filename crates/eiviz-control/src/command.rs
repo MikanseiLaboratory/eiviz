@@ -366,4 +366,161 @@ mod tests {
         assert_eq!(unit_id, 1);
         assert_eq!(index, 0);
     }
+
+    #[test]
+    fn remote_upsert_unit_accepts_camel_case_enums() {
+        let json = r#"{
+            "kind": "upsertUnit",
+            "unit": {
+                "id": 2,
+                "name": "Mixing Unit 2",
+                "width": 1920,
+                "height": 1080,
+                "fpsNum": 60000,
+                "fpsDen": 1001,
+                "audioBusId": 1,
+                "audioLink": "follow",
+                "switcherSceneFilter": "all",
+                "switcherSceneIds": []
+            }
+        }"#;
+        let parsed: SessionMutation = serde_json::from_str(json).expect("Remote upsertUnit JSON");
+        let SessionMutation::UpsertUnit { unit } = parsed else {
+            panic!("expected upsertUnit");
+        };
+        assert_eq!(unit.id, 2);
+        assert_eq!(unit.audio_link, crate::session::AudioLinkMode::Follow);
+        assert_eq!(
+            unit.switcher_scene_filter,
+            crate::session::SwitcherSceneFilter::All
+        );
+    }
+
+    #[test]
+    fn remote_upsert_unit_accepts_independent_and_include() {
+        let json = r#"{
+            "kind": "upsertUnit",
+            "unit": {
+                "id": 3,
+                "name": "Mixing Unit 3",
+                "audioLink": "independent",
+                "switcherSceneFilter": "include",
+                "switcherSceneIds": [1, 4]
+            }
+        }"#;
+        let parsed: SessionMutation =
+            serde_json::from_str(json).expect("Remote independent unit JSON");
+        let SessionMutation::UpsertUnit { unit } = parsed else {
+            panic!("expected upsertUnit");
+        };
+        assert_eq!(unit.audio_link, crate::session::AudioLinkMode::Independent);
+        assert_eq!(
+            unit.switcher_scene_filter,
+            crate::session::SwitcherSceneFilter::Include
+        );
+        assert_eq!(unit.switcher_scene_ids, vec![1, 4]);
+    }
+
+    #[test]
+    fn remote_set_settings_accepts_camel_case_enums() {
+        let json = r#"{
+            "kind": "setSettings",
+            "settings": {
+                "renderer": "dx12",
+                "internalColorFormat": "bgra",
+                "multiviewLabelUnit": "percent",
+                "multiviewLabelAnchor": "top"
+            },
+            "outputs": [{
+                "id": 100,
+                "name": "eiviz-pgm",
+                "transport": "omt",
+                "sourceKind": "muProgram",
+                "useGpu": true,
+                "enabled": true
+            }],
+            "buses": [{
+                "id": 1,
+                "name": "Master",
+                "role": "master",
+                "deviceKind": "wasapi"
+            }]
+        }"#;
+        let parsed: SessionMutation = serde_json::from_str(json).expect("Remote setSettings JSON");
+        let SessionMutation::SetSettings {
+            settings,
+            outputs,
+            buses,
+            ..
+        } = parsed
+        else {
+            panic!("expected setSettings");
+        };
+        assert_eq!(settings.renderer, crate::session::Renderer::Dx12);
+        assert_eq!(
+            settings.internal_color_format,
+            crate::session::InternalColorFormat::Bgra
+        );
+        assert_eq!(
+            settings.multiview_label_unit,
+            crate::session::MvLabelUnit::Percent
+        );
+        assert_eq!(
+            settings.multiview_label_anchor,
+            crate::session::MvLabelAnchor::Top
+        );
+        assert_eq!(outputs[0].transport, crate::session::OutputTransport::Omt);
+        assert_eq!(
+            outputs[0].source_kind,
+            crate::session::OutputSourceKind::MuProgram
+        );
+        assert_eq!(buses[0].role, crate::session::AudioBusRole::Master);
+        assert_eq!(
+            buses[0].device_kind,
+            crate::session::AudioDeviceKind::Wasapi
+        );
+    }
+
+    #[test]
+    fn remote_upsert_input_accepts_camel_case_enums() {
+        let json = r#"{
+            "kind": "upsertInput",
+            "input": {
+                "id": 12,
+                "name": "Cam",
+                "kind": "ndi",
+                "bandwidthSave": "notOnPreviewOrProgram",
+                "omtQuality": "high",
+                "ndiBandwidth": "lowest",
+                "videoPlayWhen": "onActive",
+                "videoRestartWhen": "onPreview",
+                "videoPauseWhen": "onDeactivated",
+                "mixSource": "muPreview"
+            }
+        }"#;
+        let parsed: SessionMutation = serde_json::from_str(json).expect("Remote upsertInput JSON");
+        let SessionMutation::UpsertInput { input } = parsed else {
+            panic!("expected upsertInput");
+        };
+        assert_eq!(input.kind, crate::session::InputKind::NDI);
+        assert_eq!(
+            input.bandwidth_save,
+            crate::session::BandwidthSave::NotOnPreviewOrProgram
+        );
+        assert_eq!(input.omt_quality, crate::session::OmtQuality::High);
+        assert_eq!(input.ndi_bandwidth, crate::session::NdiBandwidth::Lowest);
+        assert_eq!(
+            input.video_play_when,
+            crate::session::VideoPlayWhen::OnActive
+        );
+        assert_eq!(
+            input.video_restart_when,
+            crate::session::VideoTriggerWhen::OnPreview
+        );
+        assert_eq!(
+            input.video_pause_when,
+            crate::session::VideoTriggerWhen::OnDeactivated
+        );
+        assert_eq!(input.mix_source, crate::session::MixSource::MuPreview);
+    }
 }
