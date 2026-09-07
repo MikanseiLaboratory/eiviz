@@ -12,7 +12,7 @@ Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator 
 3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`)
 4. Click Connect in the top left, enter the IP, port, and token, then OK. The operator UI opens after the connection succeeds.
 
-The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
+The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in the session file. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
 
 The Connect ▾ menu lists recent destinations. Disconnect closes the connection.
 

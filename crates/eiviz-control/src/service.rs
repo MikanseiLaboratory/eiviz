@@ -1168,16 +1168,7 @@ mod tests {
                 y: 0.1,
                 width: 0.3,
                 height: 0.3,
-                opacity: 1.0,
-                z: 0,
-                enabled: true,
-                transition_kind: 1,
-                duration_value: 15,
-                duration_unit: 0,
-                audio_follow: true,
-                source_kind: 0,
-                locked: false,
-                hidden: false,
+                ..crate::session::OverlaySlot::default()
             });
             svc.replace_session(doc, None, "boot").unwrap();
             svc.execute(

@@ -83,7 +83,7 @@ fn load_valid(path: &PathBuf) -> Result<eiviz_control::Document, u8> {
         eprintln!("eiviz-headless error=read {error}");
         EXIT_ARGS
     })?;
-    let doc = session::parse(&bytes).map_err(|error| {
+    let doc = session::decode_file(&bytes).map_err(|error| {
         eprintln!("eiviz-headless error=session {error}");
         EXIT_SESSION
     })?;

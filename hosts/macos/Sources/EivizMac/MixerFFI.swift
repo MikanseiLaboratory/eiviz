@@ -87,8 +87,26 @@ enum MixerFFI {
         return text.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
     }
 
-    static func withCString<T>(_ string: String, _ body: (UnsafePointer<CChar>) -> T) -> T {
-        string.withCString(body)
+    static func copyUtf8(
+        startCap: Int = 1 << 20,
+        maxCap: Int = 16 << 20,
+        _ body: (UnsafeMutablePointer<UInt8>?, Int) -> Int32
+    ) -> (Int32, [UInt8]) {
+        var cap = startCap
+        while true {
+            var buffer = [UInt8](repeating: 0, count: cap)
+            let n = buffer.withUnsafeMutableBufferPointer { ptr in
+                body(ptr.baseAddress, ptr.count)
+            }
+            if n >= 0 {
+                return (n, Array(buffer.prefix(Int(n))))
+            }
+            if n == -1 && cap < maxCap {
+                cap *= 2
+                continue
+            }
+            return (n, [])
+        }
     }
 
     static func emptyState() -> EivizUnitState { zeroed() }

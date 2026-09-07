@@ -12,7 +12,7 @@ Windowsは`Eiviz.Host.exe`（Mixer）と`Eiviz.Remote.exe`（操作クライア�
 3. `Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）を起動する
 4. 左上のConnectでIP、ポート、tokenを入れてOKする。接続すると操作画面が開きます
 
-接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションJSONには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。接続先が`eiviz-headless`のときは、待ち受けとtokenは[headless](/eiviz/ja/features/headless/)です。
+接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションファイルには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。接続先が`eiviz-headless`のときは、待ち受けとtokenは[headless](/eiviz/ja/features/headless/)です。
 
 Connectの▾から最近使った接続先を選べます。Disconnectで切断します。
 

@@ -497,20 +497,8 @@ internal static partial class MixerNative
         }
     }
 
-    internal static string SessionLoadText(string path)
-    {
-        var buffer = new byte[1 << 20];
-        unsafe
-        {
-            fixed (byte* ptr = buffer)
-            {
-                var n = SessionLoad(path, ptr, (nuint)buffer.Length);
-                if (n <= 0)
-                    ThrowIfFailed(n == 0 ? 5 : n, "Load session");
-                return Encoding.UTF8.GetString(buffer, 0, n);
-            }
-        }
-    }
+    internal static unsafe string SessionLoadText(string path) =>
+        CopyUtf8((ptr, cap) => SessionLoad(path, ptr, cap));
 
     internal static void SessionSaveText(string path, string json)
     {

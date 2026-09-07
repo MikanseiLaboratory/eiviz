@@ -25,6 +25,14 @@ struct EivizMacApp: App {
                 .onAppear {
                     EivizTheme.applyAppAppearance()
                     mixer.boot()
+                    if let path = CommandLine.arguments.dropFirst().first(where: {
+                        $0.lowercased().hasSuffix(".eivz")
+                    }) {
+                        mixer.openSessionFromSystem(path: path)
+                    }
+                }
+                .onOpenURL { url in
+                    mixer.openSessionFromSystem(path: url.path)
                 }
                 .onDisappear { mixer.shutdown() }
         }

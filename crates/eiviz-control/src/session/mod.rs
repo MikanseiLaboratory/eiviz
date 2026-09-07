@@ -1,6 +1,8 @@
-//! Canonical session JSON shared by every host.
-//! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
+//! Canonical session document shared by every host.
+//! JSON shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
+//! On-disk files use the `eivz` Protobuf envelope in `file`.
 
+pub mod file;
 pub mod migration;
 pub mod mutate;
 pub mod reconcile;
@@ -10,6 +12,10 @@ pub mod validate;
 
 use string_enum::session_string_enum;
 
+pub use file::{
+    CONTAINER_VERSION, FORMAT_VERSION, MAGIC, decode_file, encode_file, read_document,
+    write_document,
+};
 pub use validate::{ValidationError, validate, validate_for_apply};
 
 use serde::{Deserialize, Serialize};
@@ -819,6 +825,43 @@ pub struct OverlaySlot {
     pub locked: bool,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default = "true_bool")]
+    pub size_linked: bool,
+    #[serde(default)]
+    pub crop_x: f32,
+    #[serde(default)]
+    pub crop_y: f32,
+    #[serde(default = "one_f32")]
+    pub crop_width: f32,
+    #[serde(default = "one_f32")]
+    pub crop_height: f32,
+}
+
+impl Default for OverlaySlot {
+    fn default() -> Self {
+        Self {
+            scene_gpu_id: 0,
+            x: overlay_x(),
+            y: overlay_y(),
+            width: overlay_w(),
+            height: overlay_h(),
+            opacity: 1.0,
+            z: 0,
+            enabled: true,
+            transition_kind: fade(),
+            duration_value: fifteen(),
+            duration_unit: 0,
+            audio_follow: true,
+            source_kind: 0,
+            locked: false,
+            hidden: false,
+            size_linked: true,
+            crop_x: 0.0,
+            crop_y: 0.0,
+            crop_width: 1.0,
+            crop_height: 1.0,
+        }
+    }
 }
 
 fn fifteen() -> u32 {
@@ -877,6 +920,8 @@ pub struct UnitDto {
     pub switcher_scene_filter: SwitcherSceneFilter,
     #[serde(default)]
     pub switcher_scene_ids: Vec<u64>,
+    #[serde(default = "true_bool")]
+    pub always_on_top: bool,
 }
 
 session_string_enum! {
@@ -1028,6 +1073,16 @@ impl Document {
                 input.mix_audio_bus_id = 0;
             }
         }
+        for scene in &mut doc.scenes {
+            for layer in &mut scene.layers {
+                if layer.crop_width <= 0.0 {
+                    layer.crop_width = 1.0;
+                }
+                if layer.crop_height <= 0.0 {
+                    layer.crop_height = 1.0;
+                }
+            }
+        }
         for unit in &mut doc.units {
             if unit.width == 0 {
                 unit.width = width_1080();
@@ -1043,6 +1098,14 @@ impl Document {
             }
             if unit.audio_bus_id == 0 {
                 unit.audio_bus_id = 1;
+            }
+            for overlay in &mut unit.overlays {
+                if overlay.crop_width <= 0.0 {
+                    overlay.crop_width = 1.0;
+                }
+                if overlay.crop_height <= 0.0 {
+                    overlay.crop_height = 1.0;
+                }
             }
             if unit.transitions.is_empty() {
                 unit.transitions = vec![
@@ -1177,13 +1240,7 @@ pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    let canonical = canonicalize_bytes(bytes)?;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-    }
-    std::fs::write(path, canonical).map_err(|error| error.to_string())
+    write_document(path, &parse(bytes)?)
 }
 
 #[cfg(test)]
@@ -1239,6 +1296,7 @@ mod tests {
         assert!(!doc.scenes[0].preview_collapsed);
         assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
         assert!(doc.units[0].switcher_scene_ids.is_empty());
+        assert!(doc.units[0].always_on_top);
     }
 
     #[test]

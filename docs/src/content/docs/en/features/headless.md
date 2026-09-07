@@ -3,7 +3,7 @@ title: Headless
 description: Run the mixer without a GUI, then operate it from eivizctl or Remote
 ---
 
-`eiviz-headless` is the mixer daemon with no host UI. It loads a session JSON, runs compose, and opens a Protobuf WebSocket. The default is loopback port 9400.
+`eiviz-headless` is the mixer daemon with no host UI. It loads a session file (`.eivz`), runs compose, and opens a Protobuf WebSocket. The default is loopback port 9400.
 
 Linux ships in this form today. Windows and macOS releases include the same binaries. Operate it with `eivizctl` on the same machine, or with `Eiviz.Remote.exe` / `eiviz-remote.app` on another PC. Protocol details are in [eiviz API](/eiviz/en/developers/api/). Remote UI steps are in [Remote connection](/eiviz/en/features/remote/).
 
@@ -23,12 +23,12 @@ Use the `eiviz-headless` and `eivizctl` binaries from a release, or build them i
 cargo build -p eiviz-headless --locked --release --bins
 ```
 
-The binaries land at `target/release/eiviz-headless` and `target/release/eivizctl`. An example session is `headless/tests/fixtures/bars.eiviz.json`.
+The binaries land at `target/release/eiviz-headless` and `target/release/eivizctl`. An example session is `headless/tests/fixtures/bars.eivz`.
 
 ```bash
-eiviz-headless validate --session show.eiviz.json
-eiviz-headless canonicalize --session show.eiviz.json
-eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
+eiviz-headless validate --session show.eivz
+eiviz-headless canonicalize --session show.eivz
+eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
 `validate` and `canonicalize` do not initialize the GPU. `run` validates the session, creates the runtime at that FPS, then waits on the WebSocket accept. When ready it prints `eiviz-headless ready ws=` on stderr. Stop with Ctrl+C (and SIGTERM on Unix).
@@ -37,7 +37,7 @@ When `--bind` is omitted, the `eivizctl prefs` bind is used, then `127.0.0.1:940
 
 ## Listen
 
-Values that match GUI Preferences are host-owned. They are not stored in session JSON.
+Values that match GUI Preferences are host-owned. They are not stored in the session file.
 
 | Key | Meaning |
 | --- | --- |
@@ -97,7 +97,7 @@ eiviz> snapshot
 eiviz> preview --unit 1 --scene 2
 eiviz> cut --unit 1
 eiviz> auto --unit 1 --duration-ms 1000
-eiviz> replace --session show.eiviz.json
+eiviz> replace --session show.eivz
 eiviz> shutdown
 ```
 
@@ -114,11 +114,11 @@ Settings-window fields use `"kind":"setSettings"`. That payload needs `settings`
 The WebSocket `eiviz-headless` opens is the same `eiviz.control.v1` as the GUI host. The subprotocol is `eiviz.protobuf.v1`.
 
 1. Set a token on the destination. For LAN access, set `bind` to an address clients can reach, such as `0.0.0.0:9400`
-2. Start `eiviz-headless run --session show.eiviz.json` and wait for `ready ws=`
+2. Start `eiviz-headless run --session show.eivz` and wait for `ready ws=`
 3. On the operator PC, launch `Eiviz.Remote.exe` (or `eiviz-remote.app`)
 4. Click Connect in the top left, enter the headless IP, port (default 9400), and the same token, then OK
 
-Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. The Connect ▾ menu lists recent destinations.
+Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in the session file. The Connect ▾ menu lists recent destinations.
 
 Multiple clients can stay connected. `eivizctl` and Remote can share the same daemon. Live state stays aligned through subscribe.
 
@@ -126,7 +126,7 @@ Preview and Program live video come from an NDI or OMT output on the destination
 
 ## Environment
 
-`headless/eiviz-headless.example.env` is the template. Do not put tokens on the command line or in session JSON.
+`headless/eiviz-headless.example.env` is the template. Do not put tokens on the command line or in the session file.
 
 | Variable | Use |
 | --- | --- |
@@ -148,4 +148,4 @@ To rotate a token, change the env var or `eivizctl prefs set token`, then restar
 | 5 | Bind |
 | 6 | Other runtime failure |
 
-Logs are on stderr. Canonical session JSON for backups comes from `eiviz-headless canonicalize`.
+Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`.

@@ -192,9 +192,11 @@ async fn run_cmd(session: &ControlSession, cmd: Cmd, json: bool) -> Result<(), S
             session: path,
             expected_revision,
         } => {
-            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            let document = eiviz_control::session::decode_file(&bytes)?;
+            let document_json = eiviz_control::session::to_vec(&document)?;
             session
-                .replace_session(bytes, expected_revision)
+                .replace_session(document_json, expected_revision)
                 .await
                 .map_err(|e| e.to_string())?;
             if !json {

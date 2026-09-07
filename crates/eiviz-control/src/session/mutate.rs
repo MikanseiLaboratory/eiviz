@@ -66,20 +66,8 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                     index + 1,
                     crate::session::OverlaySlot {
                         scene_gpu_id: 0,
-                        x: 0.62,
-                        y: 0.08,
-                        width: 0.32,
-                        height: 0.32,
-                        opacity: 1.0,
-                        z: 0,
                         enabled: true,
-                        transition_kind: 1,
-                        duration_value: 15,
-                        duration_unit: 0,
-                        audio_follow: true,
-                        source_kind: 0,
-                        locked: false,
-                        hidden: false,
+                        ..crate::session::OverlaySlot::default()
                     },
                 );
             }

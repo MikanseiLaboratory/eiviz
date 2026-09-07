@@ -2775,13 +2775,15 @@ pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, c
         return -ERR_INVALID_ARGUMENT;
     }
     match std::fs::read(read_cstr(path)) {
-        Ok(bytes) => match session::canonicalize_bytes(&bytes) {
-            Ok(canonical) => copy_bytes(&canonical, out, cap),
-            Err(error) => {
-                report_session_error(error);
-                -ERR_INVALID_ARGUMENT
+        Ok(bytes) => {
+            match session::decode_file(&bytes).and_then(|document| session::to_vec(&document)) {
+                Ok(canonical) => copy_bytes(&canonical, out, cap),
+                Err(error) => {
+                    report_session_error(error);
+                    -ERR_INVALID_ARGUMENT
+                }
             }
-        },
+        }
         Err(error) => {
             report_session_error(error.to_string());
             -ERR_IO
@@ -5655,5 +5657,43 @@ mod tests {
             pack_copy_key(SRC_KIND_INPUT, 40, 1),
             pack_copy_key(SRC_KIND_INPUT, 41, 1)
         );
+    }
+
+    #[test]
+    fn session_file_codec_keeps_json_abi() {
+        use std::ffi::CString;
+        let eivz = include_bytes!("../../headless/tests/fixtures/bars.eivz");
+        let dir = std::env::temp_dir().join(format!("eiviz-session-abi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src_path = dir.join("bars.eivz");
+        let saved_path = dir.join("saved.eivz");
+        let json_path = dir.join("legacy.json");
+        std::fs::write(&src_path, eivz).unwrap();
+        std::fs::write(&json_path, br#"{"version":2}"#).unwrap();
+        let src_c = CString::new(src_path.to_string_lossy().as_bytes()).unwrap();
+        let saved_c = CString::new(saved_path.to_string_lossy().as_bytes()).unwrap();
+        let json_c = CString::new(json_path.to_string_lossy().as_bytes()).unwrap();
+        let mut buf = vec![0u8; 1 << 20];
+        let rejected = unsafe { mixer_session_load(json_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
+        assert!(rejected < 0, "legacy json must be rejected {rejected}");
+        let n = unsafe { mixer_session_load(src_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
+        assert!(n > 0, "load eivz {n}");
+        let loaded = buf[..n as usize].to_vec();
+        assert_eq!(loaded.first().copied(), Some(b'{'));
+        let save = unsafe { mixer_session_save(saved_c.as_ptr(), loaded.as_ptr(), loaded.len()) };
+        assert_eq!(save, OK);
+        let saved_bytes = std::fs::read(&saved_path).unwrap();
+        assert_eq!(&saved_bytes[..4], b"EIVZ");
+        let n2 = unsafe { mixer_session_load(saved_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(n2, n);
+        assert_eq!(&buf[..n2 as usize], loaded.as_slice());
+        let n3 = unsafe {
+            mixer_session_canonicalize(loaded.as_ptr(), loaded.len(), buf.as_mut_ptr(), buf.len())
+        };
+        assert_eq!(n3, n);
+        assert_eq!(&buf[..n3 as usize], loaded.as_slice());
+        let too_small = unsafe { mixer_session_load(saved_c.as_ptr(), buf.as_mut_ptr(), 16) };
+        assert_eq!(too_small, -1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

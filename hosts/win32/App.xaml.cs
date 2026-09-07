@@ -36,6 +36,11 @@ public partial class App : Application
                 BootRemoteMixer();
             else
             {
+                if (!TryLoadStartupSession(e.Args))
+                {
+                    Shutdown();
+                    return;
+                }
                 Backend = new LocalEivizBackend();
                 BootMixer();
             }
@@ -44,6 +49,27 @@ public partial class App : Application
         {
             HostLog.WriteCrash(ex);
             throw;
+        }
+    }
+
+    private bool TryLoadStartupSession(string[] args)
+    {
+        var path = args.Select(item => item.Trim('"'))
+            .FirstOrDefault(item =>
+                item.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(path))
+            return true;
+        try
+        {
+            Session = SessionStore.Load(path);
+            AppPrefs.Current.RememberSession(path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+            MessageBox.Show(ex.Message, Loc.T("msg.loadSession"));
+            return false;
         }
     }
 

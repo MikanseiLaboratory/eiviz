@@ -44,6 +44,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+ChangesAssociations=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion={#MyAppBase}
 
@@ -62,6 +63,12 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; Tasks: desktopicon
+
+[Registry]
+Root: HKCR; Subkey: ".eivz"; ValueType: string; ValueName: ""; ValueData: "eiviz.session"; Flags: uninsdeletevalue
+Root: HKCR; Subkey: "eiviz.session"; ValueType: string; ValueName: ""; ValueData: "eiviz Session"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "eiviz.session\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKCR; Subkey: "eiviz.session\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

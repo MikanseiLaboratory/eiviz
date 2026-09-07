@@ -1,0 +1,407 @@
+syntax = "proto3";
+
+package eiviz.session.v1;
+
+// On-disk session contract. Field numbers that have been published must never
+// be reused. Delete by reserving the number and name. The wire file is
+// magic "EIVZ" + little-endian u16 container version + this message.
+
+message SessionFile {
+  uint32 format_version = 1;
+  Document document = 2;
+}
+
+message Document {
+  int32 version = 1;
+  repeated SceneLayoutPreset scene_presets = 2;
+  repeated string input_tags = 3;
+  repeated string scene_tags = 4;
+  SessionSettings settings = 5;
+  repeated Input inputs = 6;
+  repeated Scene scenes = 7;
+  repeated MixingUnit units = 8;
+  repeated Output outputs = 9;
+  repeated Multiview multiviews = 10;
+  repeated Bus buses = 11;
+  uint64 next_input_id = 12;
+  uint64 next_scene_id = 13;
+  uint64 next_unit_id = 14;
+  uint64 next_output_id = 15;
+  uint64 next_multiview_id = 16;
+  uint64 next_bus_id = 17;
+  uint64 selected_unit_id = 18;
+  bool headphone_copy_master = 19;
+}
+
+message SessionSettings {
+  uint32 master_fps_num = 1;
+  uint32 master_fps_den = 2;
+  uint32 default_width = 3;
+  uint32 default_height = 4;
+  string theme = 5;
+  uint64 default_multiview_unit_id = 6;
+  uint32 frame_buffer_frames = 7;
+  uint32 default_present_interval = 8;
+  uint32 flip_swapchain_limit = 9;
+  InternalColorFormat internal_color_format = 10;
+  bool rebar_optimization = 11;
+  bool rebar_direct_sample = 12;
+  bool ndi_gpu_upload = 13;
+  RgbColor preview_color = 14;
+  RgbColor program_color = 15;
+  RgbColor inactive_color = 16;
+  float multiview_label_size = 17;
+  MvLabelUnit multiview_label_unit = 18;
+  MvLabelAnchor multiview_label_anchor = 19;
+  bool vmix_api_enabled = 20;
+  uint32 vmix_api_port = 21;
+  string vmix_api_user = 22;
+  string vmix_api_password = 23;
+  bool vmix_tcp_enabled = 24;
+  bool native_api_enabled = 25;
+  uint32 native_api_port = 26;
+}
+
+message RgbColor {
+  uint32 r = 1;
+  uint32 g = 2;
+  uint32 b = 3;
+}
+
+message Input {
+  uint64 id = 1;
+  string guid = 2;
+  string name = 3;
+  InputKind kind = 4;
+  optional string path_or_address = 5;
+  float color_r = 6;
+  float color_g = 7;
+  float color_b = 8;
+  bool scroll = 9;
+  float tone_hz = 10;
+  float tone_level_dbfs = 11;
+  uint32 bus_mask = 12;
+  float gain = 13;
+  bool mute = 14;
+  bool use_gpu = 15;
+  uint32 frame_buffer_frames = 16;
+  BandwidthSave bandwidth_save = 17;
+  bool keep_full_on_multiview = 18;
+  OmtQuality omt_quality = 19;
+  NdiBandwidth ndi_bandwidth = 20;
+  bool video_loop = 21;
+  VideoPlayWhen video_play_when = 22;
+  VideoTriggerWhen video_restart_when = 23;
+  VideoTriggerWhen video_pause_when = 24;
+  uint32 capture_width = 25;
+  uint32 capture_height = 26;
+  uint32 capture_fps_num = 27;
+  uint32 capture_fps_den = 28;
+  repeated string tags = 29;
+  MixSource mix_source = 30;
+  uint64 mix_target_id = 31;
+  uint64 mix_audio_bus_id = 32;
+}
+
+message SceneLayer {
+  uint64 input_id = 1;
+  float x = 2;
+  float y = 3;
+  float width = 4;
+  float height = 5;
+  float opacity = 6;
+  int32 z = 7;
+  bool audio_follow = 8;
+  bool locked = 9;
+  bool size_linked = 10;
+  float crop_x = 11;
+  float crop_y = 12;
+  float crop_width = 13;
+  float crop_height = 14;
+  bool hidden = 15;
+}
+
+message Scene {
+  uint64 id = 1;
+  string guid = 2;
+  string name = 3;
+  repeated SceneLayer layers = 4;
+  repeated string tags = 5;
+  bool preview_collapsed = 6;
+}
+
+message SceneLayoutPreset {
+  string name = 1;
+  repeated SceneLayerGeom layers = 2;
+}
+
+message SceneLayerGeom {
+  float x = 1;
+  float y = 2;
+  float width = 3;
+  float height = 4;
+  float opacity = 5;
+  int32 z = 6;
+  float crop_x = 7;
+  float crop_y = 8;
+  float crop_width = 9;
+  float crop_height = 10;
+}
+
+message TransitionPreset {
+  uint32 kind = 1;
+  uint32 duration_value = 2;
+  uint32 duration_unit = 3;
+  bool swap = 4;
+  bool keep_preview = 5;
+  uint32 easing = 6;
+  uint32 direction = 7;
+  float dip_r = 8;
+  float dip_g = 9;
+  float dip_b = 10;
+  float dip_a = 11;
+  float softness = 12;
+  float param = 13;
+  optional string custom_wgsl = 14;
+  optional string label = 15;
+}
+
+message OverlaySlot {
+  uint64 scene_gpu_id = 1;
+  float x = 2;
+  float y = 3;
+  float width = 4;
+  float height = 5;
+  float opacity = 6;
+  int32 z = 7;
+  bool enabled = 8;
+  uint32 transition_kind = 9;
+  uint32 duration_value = 10;
+  uint32 duration_unit = 11;
+  bool audio_follow = 12;
+  uint32 source_kind = 13;
+  bool locked = 14;
+  bool hidden = 15;
+  bool size_linked = 16;
+  float crop_x = 17;
+  float crop_y = 18;
+  float crop_width = 19;
+  float crop_height = 20;
+}
+
+message MixingUnit {
+  uint64 id = 1;
+  string name = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 fps_num = 5;
+  uint32 fps_den = 6;
+  repeated TransitionPreset transitions = 7;
+  repeated OverlaySlot overlays = 8;
+  uint64 audio_bus_id = 9;
+  AudioLinkMode audio_link = 10;
+  SwitcherSceneFilter switcher_scene_filter = 11;
+  repeated uint64 switcher_scene_ids = 12;
+  bool always_on_top = 13;
+}
+
+message Output {
+  uint64 id = 1;
+  string name = 2;
+  OutputTransport transport = 3;
+  OutputSourceKind source_kind = 4;
+  uint64 source_id = 5;
+  uint64 unit_id = 6;
+  bool use_gpu = 7;
+  bool enabled = 8;
+  uint64 audio_bus_id = 9;
+  bool skip_encode_when_no_receivers = 10;
+}
+
+message MvSlot {
+  MvSlotKind kind = 1;
+  uint64 source_id = 2;
+  bool label_follow = 3;
+  string label = 4;
+}
+
+message Multiview {
+  uint64 id = 1;
+  string name = 2;
+  uint64 preview_unit_id = 3;
+  uint64 program_unit_id = 4;
+  uint32 present_interval = 5;
+  repeated MvSlot tiles = 6;
+  MultiviewTemplate template = 7;
+  bool preview_label_follow = 8;
+  string preview_label = 9;
+  bool program_label_follow = 10;
+  string program_label = 11;
+  optional MvLabelAnchor label_anchor = 12;
+  optional float label_size = 13;
+  optional MvLabelUnit label_unit = 14;
+  bool always_on_top = 15;
+}
+
+message Bus {
+  uint64 id = 1;
+  string name = 2;
+  AudioBusRole role = 3;
+  AudioDeviceKind device_kind = 4;
+  string device_id = 5;
+  int32 map_left = 6;
+  int32 map_right = 7;
+  bool exclusive = 8;
+  uint32 bit = 9;
+  float gain = 10;
+  bool mute = 11;
+}
+
+enum InternalColorFormat {
+  INTERNAL_COLOR_FORMAT_UNSPECIFIED = 0;
+  INTERNAL_COLOR_FORMAT_UYVY = 1;
+  INTERNAL_COLOR_FORMAT_BGRA = 2;
+}
+
+enum MvLabelUnit {
+  MV_LABEL_UNIT_UNSPECIFIED = 0;
+  MV_LABEL_UNIT_PX = 1;
+  MV_LABEL_UNIT_PERCENT = 2;
+}
+
+enum MvLabelAnchor {
+  MV_LABEL_ANCHOR_UNSPECIFIED = 0;
+  MV_LABEL_ANCHOR_TOP = 1;
+  MV_LABEL_ANCHOR_BOTTOM = 2;
+}
+
+enum InputKind {
+  INPUT_KIND_UNSPECIFIED = 0;
+  INPUT_KIND_COLOR = 1;
+  INPUT_KIND_BARS = 2;
+  INPUT_KIND_BLACK = 3;
+  INPUT_KIND_STILL = 4;
+  INPUT_KIND_VIDEO = 5;
+  INPUT_KIND_OMT = 6;
+  INPUT_KIND_NDI = 7;
+  INPUT_KIND_UVC = 8;
+  INPUT_KIND_MIX = 9;
+}
+
+enum MixSource {
+  MIX_SOURCE_UNSPECIFIED = 0;
+  MIX_SOURCE_MU_PREVIEW = 1;
+  MIX_SOURCE_MU_PROGRAM = 2;
+  MIX_SOURCE_SESSION_MULTIVIEW = 3;
+}
+
+enum BandwidthSave {
+  BANDWIDTH_SAVE_UNSPECIFIED = 0;
+  BANDWIDTH_SAVE_ALWAYS_LOW = 1;
+  BANDWIDTH_SAVE_NOT_ON_PROGRAM = 2;
+  BANDWIDTH_SAVE_NOT_ON_PREVIEW_OR_PROGRAM = 3;
+  BANDWIDTH_SAVE_ALWAYS_FULL = 4;
+}
+
+enum OmtQuality {
+  OMT_QUALITY_UNSPECIFIED = 0;
+  OMT_QUALITY_DEFAULT = 1;
+  OMT_QUALITY_LOW = 2;
+  OMT_QUALITY_MEDIUM = 3;
+  OMT_QUALITY_HIGH = 4;
+}
+
+enum NdiBandwidth {
+  NDI_BANDWIDTH_UNSPECIFIED = 0;
+  NDI_BANDWIDTH_HIGHEST = 1;
+  NDI_BANDWIDTH_LOWEST = 2;
+}
+
+enum VideoPlayWhen {
+  VIDEO_PLAY_WHEN_UNSPECIFIED = 0;
+  VIDEO_PLAY_WHEN_NEVER = 1;
+  VIDEO_PLAY_WHEN_ON_ACTIVE = 2;
+  VIDEO_PLAY_WHEN_ON_PREVIEW = 3;
+  VIDEO_PLAY_WHEN_ALWAYS = 4;
+}
+
+enum VideoTriggerWhen {
+  VIDEO_TRIGGER_WHEN_UNSPECIFIED = 0;
+  VIDEO_TRIGGER_WHEN_NEVER = 1;
+  VIDEO_TRIGGER_WHEN_ON_ACTIVE = 2;
+  VIDEO_TRIGGER_WHEN_ON_DEACTIVATED = 3;
+  VIDEO_TRIGGER_WHEN_ON_PREVIEW = 4;
+}
+
+enum OutputTransport {
+  OUTPUT_TRANSPORT_UNSPECIFIED = 0;
+  OUTPUT_TRANSPORT_OMT = 1;
+  OUTPUT_TRANSPORT_NDI = 2;
+  OUTPUT_TRANSPORT_DECK_LINK = 3;
+}
+
+enum OutputSourceKind {
+  OUTPUT_SOURCE_KIND_UNSPECIFIED = 0;
+  OUTPUT_SOURCE_KIND_SCENE = 1;
+  OUTPUT_SOURCE_KIND_MU_PREVIEW = 2;
+  OUTPUT_SOURCE_KIND_MU_PROGRAM = 3;
+  OUTPUT_SOURCE_KIND_MULTIVIEW = 4;
+  OUTPUT_SOURCE_KIND_INPUT = 5;
+}
+
+enum MvSlotKind {
+  MV_SLOT_KIND_UNSPECIFIED = 0;
+  MV_SLOT_KIND_NONE = 1;
+  MV_SLOT_KIND_INPUT = 2;
+  MV_SLOT_KIND_SCENE = 3;
+  MV_SLOT_KIND_MU_PREVIEW = 4;
+  MV_SLOT_KIND_MU_PROGRAM = 5;
+}
+
+enum MultiviewTemplate {
+  MULTIVIEW_TEMPLATE_UNSPECIFIED = 0;
+  MULTIVIEW_TEMPLATE_PREVIEW_PROGRAM8 = 1;
+  MULTIVIEW_TEMPLATE_PREVIEW_PROGRAM8_BOTTOM = 2;
+  MULTIVIEW_TEMPLATE_PREVIEW_PROGRAM8_LEFT = 3;
+  MULTIVIEW_TEMPLATE_PREVIEW_PROGRAM8_RIGHT = 4;
+  MULTIVIEW_TEMPLATE_PREVIEW_PROGRAM2 = 5;
+  MULTIVIEW_TEMPLATE_QUAD4_TOP_LEFT = 6;
+  MULTIVIEW_TEMPLATE_QUAD4_TOP_RIGHT = 7;
+  MULTIVIEW_TEMPLATE_QUAD4_BOTTOM_LEFT = 8;
+  MULTIVIEW_TEMPLATE_QUAD4_BOTTOM_RIGHT = 9;
+  MULTIVIEW_TEMPLATE_LARGE5_TOP_LEFT = 10;
+  MULTIVIEW_TEMPLATE_LARGE5_TOP_RIGHT = 11;
+  MULTIVIEW_TEMPLATE_LARGE5_BOTTOM_LEFT = 12;
+  MULTIVIEW_TEMPLATE_LARGE5_BOTTOM_RIGHT = 13;
+  MULTIVIEW_TEMPLATE_GRID2X2 = 14;
+  MULTIVIEW_TEMPLATE_GRID3X3 = 15;
+  MULTIVIEW_TEMPLATE_GRID4X4 = 16;
+}
+
+enum AudioBusRole {
+  AUDIO_BUS_ROLE_UNSPECIFIED = 0;
+  AUDIO_BUS_ROLE_MASTER = 1;
+  AUDIO_BUS_ROLE_HEADPHONE = 2;
+  AUDIO_BUS_ROLE_AUX = 3;
+}
+
+enum AudioDeviceKind {
+  AUDIO_DEVICE_KIND_UNSPECIFIED = 0;
+  AUDIO_DEVICE_KIND_NONE = 1;
+  AUDIO_DEVICE_KIND_WASAPI = 2;
+  AUDIO_DEVICE_KIND_ASIO = 3;
+  AUDIO_DEVICE_KIND_CORE_AUDIO = 4;
+}
+
+enum AudioLinkMode {
+  AUDIO_LINK_MODE_UNSPECIFIED = 0;
+  AUDIO_LINK_MODE_FOLLOW = 1;
+  AUDIO_LINK_MODE_INDEPENDENT = 2;
+}
+
+enum SwitcherSceneFilter {
+  SWITCHER_SCENE_FILTER_UNSPECIFIED = 0;
+  SWITCHER_SCENE_FILTER_ALL = 1;
+  SWITCHER_SCENE_FILTER_INCLUDE = 2;
+  SWITCHER_SCENE_FILTER_EXCLUDE = 3;
+}

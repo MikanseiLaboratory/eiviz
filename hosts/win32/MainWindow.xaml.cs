@@ -1544,7 +1544,7 @@ public partial class MainWindow : Window
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "eiviz");
             Directory.CreateDirectory(dir);
-            SessionStore.Save(_session, Path.Combine(dir, "recovered-session.eiviz.json"));
+            SessionStore.Save(_session, Path.Combine(dir, "recovered-session.eivz"));
         }
         catch (Exception ex)
         {
@@ -2417,7 +2417,7 @@ public partial class MainWindow : Window
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = Loc.T("filter.sessionSave"),
-            FileName = string.IsNullOrEmpty(last) ? "session.eiviz.json" : System.IO.Path.GetFileName(last)
+            FileName = string.IsNullOrEmpty(last) ? "session.eivz" : System.IO.Path.GetFileName(last)
         };
         if (dialog.ShowDialog(this) != true)
             return;

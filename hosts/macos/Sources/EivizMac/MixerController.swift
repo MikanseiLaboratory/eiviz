@@ -8,6 +8,10 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+extension UTType {
+    static let eivizSession = UTType(exportedAs: "jp.mikanseilaboratory.eiviz.session")
+}
+
 struct RemoteVideoItem: Hashable {
     var transport: OutputTransport
     var address: String
@@ -71,6 +75,7 @@ final class MixerController: ObservableObject {
     @Published var videoUnavailable = false
 
     private var booted = false
+    private var pendingOpenPath: String?
     private var fatalHandled = false
     private var tbarLatching = false
     private var meterTimer: Timer?
@@ -134,6 +139,7 @@ final class MixerController: ObservableObject {
         applyVmixApi()
         publishSession()
         updateStatus()
+        openPendingSession()
     }
 
     private func startTimers() {
@@ -1503,8 +1509,9 @@ final class MixerController: ObservableObject {
 
     func saveSession() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "eiviz.json"
+        panel.allowedContentTypes = [UTType.eivizSession]
+        panel.allowsOtherFileTypes = false
+        panel.nameFieldStringValue = "session.eivz"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         session.selectedUnitId = selectedUnitId
         session.settings.lastSessionPath = nil
@@ -1536,27 +1543,40 @@ final class MixerController: ObservableObject {
             url = URL(fileURLWithPath: path)
         } else {
             let panel = NSOpenPanel()
-            panel.allowedContentTypes = [.json]
+            panel.allowedContentTypes = [UTType.eivizSession]
+            panel.allowsOtherFileTypes = false
             panel.allowsMultipleSelection = false
             guard panel.runModal() == .OK, let picked = panel.url else { return }
             url = picked
         }
-        var buffer = [UInt8](repeating: 0, count: 1 << 20)
-        let n = MixerFFI.withCString(url.path) { path in
-            buffer.withUnsafeMutableBufferPointer { ptr in
-                mixer_session_load(path, ptr.baseAddress, ptr.count)
-            }
+        let (n, bytes) = MixerFFI.withCString(url.path) { path in
+            MixerFFI.copyUtf8 { mixer_session_load(path, $0, $1) }
         }
         guard n > 0 else {
             fail(n == 0 ? 5 : n, "Load session")
             return
         }
         do {
-            replaceSession(try SessionFile.decode(Data(buffer.prefix(Int(n)))))
+            replaceSession(try SessionFile.decode(Data(bytes)))
             AppPrefs.shared.rememberSession(url.path)
         } catch {
             presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
         }
+    }
+
+    func openSessionFromSystem(path: String) {
+        if isRemote { return }
+        if !booted {
+            pendingOpenPath = path
+            return
+        }
+        loadSession(path: path)
+    }
+
+    private func openPendingSession() {
+        guard let path = pendingOpenPath else { return }
+        pendingOpenPath = nil
+        loadSession(path: path)
     }
 
     func recreateMixer() {
@@ -2113,7 +2133,7 @@ final class MixerController: ObservableObject {
             .appendingPathComponent("Library/Application Support/eiviz", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let url = dir.appendingPathComponent("recovered-session.eiviz.json")
+            let url = dir.appendingPathComponent("recovered-session.eivz")
             session.selectedUnitId = selectedUnitId
             session.settings.lastSessionPath = nil
             let json = try SessionFile.encode(session)
