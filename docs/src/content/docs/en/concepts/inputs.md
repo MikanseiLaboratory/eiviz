@@ -55,7 +55,7 @@ Tabs sit above the Inputs list. Pick one to show matching Inputs.
 
 - **All** — every Input
 - **Each tag** — Inputs with that tag
-- **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
+- **Kind** — Colours / Still / Video / OMT / NDI® / UVC / Mix
 
 ### Manage tags
 

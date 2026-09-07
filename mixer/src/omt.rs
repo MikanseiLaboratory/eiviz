@@ -42,6 +42,9 @@ pub struct OmtReceiver {
     on_program: Arc<AtomicBool>,
     on_preview: Arc<AtomicBool>,
     quality: Arc<AtomicU32>,
+    session_live: Arc<AtomicBool>,
+    has_video: Arc<AtomicBool>,
+    last_error: Arc<Mutex<String>>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -69,105 +72,165 @@ impl OmtReceiver {
         let on_program = Arc::new(AtomicBool::new(false));
         let on_preview = Arc::new(AtomicBool::new(false));
         let quality_atom = Arc::new(AtomicU32::new(quality_to_abi(quality)));
+        let session_live = Arc::new(AtomicBool::new(false));
+        let has_video = Arc::new(AtomicBool::new(false));
+        let last_error = Arc::new(Mutex::new(String::new()));
         let stop_thread = Arc::clone(&stop);
         let want_full_thread = Arc::clone(&want_full);
         let on_program_thread = Arc::clone(&on_program);
         let on_preview_thread = Arc::clone(&on_preview);
         let quality_thread = Arc::clone(&quality_atom);
+        let session_live_thread = Arc::clone(&session_live);
+        let has_video_thread = Arc::clone(&has_video);
+        let last_error_thread = Arc::clone(&last_error);
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
-                let session = match connect_receiver(&address, config) {
-                    Ok(session) => session,
-                    Err(error) => {
-                        crate::diag::error(&format!("omt_connect id={source_id}: {error}"));
+                let format = if use_gpu {
+                    CpuFormat::GpuRgba
+                } else {
+                    CpuFormat::from_abi(FMT_BGRA).expect("BGRA")
+                };
+                loop {
+                    if stop_thread.load(Ordering::Relaxed) || crate::diag::is_fatal() {
                         return;
                     }
-                };
-                if stop_thread.load(Ordering::Relaxed) {
-                    session.disconnect();
-                    return;
-                }
-                {
-                    let mut store = uploads.lock().expect("uploads lock");
-                    let format = if use_gpu {
-                        CpuFormat::GpuRgba
-                    } else {
-                        CpuFormat::from_abi(FMT_BGRA).expect("BGRA")
+                    let session = match connect_receiver(&address, config.clone()) {
+                        Ok(session) => {
+                            session_live_thread.store(true, Ordering::Relaxed);
+                            if let Ok(mut slot) = last_error_thread.lock() {
+                                slot.clear();
+                            }
+                            session
+                        }
+                        Err(error) => {
+                            session_live_thread.store(false, Ordering::Relaxed);
+                            let message = format!("omt_connect id={source_id}: {error}");
+                            crate::diag::error(&message);
+                            if let Ok(mut slot) = last_error_thread.lock() {
+                                *slot = message;
+                            }
+                            wait_stop(&stop_thread, Duration::from_secs(1));
+                            continue;
+                        }
                     };
-                    store.ensure_playout(source_id, 16, 16, format, depth);
-                }
-                let mut sent: Option<(bool, bool, bool, u32)> = None;
-                let mut drop_full_at: Option<Instant> = None;
-                let run = panic::catch_unwind(AssertUnwindSafe(|| {
-                    while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
-                        let full = debounce_want_full(
-                            want_full_thread.load(Ordering::Relaxed),
-                            &mut drop_full_at,
-                        );
-                        apply_omt_save(
-                            &session,
-                            full,
-                            on_program_thread.load(Ordering::Relaxed),
-                            on_preview_thread.load(Ordering::Relaxed),
-                            quality_from_abi(quality_thread.load(Ordering::Relaxed)),
-                            &mut sent,
-                        );
-                        if use_gpu {
-                            if let Some(frame) =
-                                session.recv_video_gpu_timeout(Duration::from_millis(4))
-                            {
-                                let width = frame.width.max(2);
-                                let height = frame.height.max(2);
-                                let gpu_frame = if depth > 1 {
-                                    if let Some(ctx) = gpu.as_ref() {
-                                        copy_gpu_frame(
-                                            ctx,
-                                            &frame.texture,
-                                            width,
-                                            height,
-                                            frame.timestamp,
-                                        )
+                    if stop_thread.load(Ordering::Relaxed) {
+                        session.disconnect();
+                        return;
+                    }
+                    {
+                        let mut store = uploads.lock().expect("uploads lock");
+                        store.ensure_playout(source_id, 16, 16, format, depth);
+                    }
+                    let mut sent: Option<(bool, bool, bool, u32)> = None;
+                    let mut drop_full_at: Option<Instant> = None;
+                    let mut pts_seq = 0i64;
+                    let live_since = Instant::now();
+                    let mut missing_video_logged = false;
+                    let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                        while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
+                            let full = debounce_want_full(
+                                want_full_thread.load(Ordering::Relaxed),
+                                &mut drop_full_at,
+                            );
+                            apply_omt_save(
+                                &session,
+                                full,
+                                on_program_thread.load(Ordering::Relaxed),
+                                on_preview_thread.load(Ordering::Relaxed),
+                                quality_from_abi(quality_thread.load(Ordering::Relaxed)),
+                                &mut sent,
+                            );
+                            if let Some(error) = session.last_error() {
+                                store_omt_error(&last_error_thread, source_id, error);
+                            }
+                            if use_gpu {
+                                if let Some(frame) =
+                                    session.recv_video_gpu_timeout(Duration::from_millis(4))
+                                {
+                                    let width = frame.width.max(2);
+                                    let height = frame.height.max(2);
+                                    let pts = next_pts(&mut pts_seq, frame.timestamp);
+                                    let gpu_frame = if depth > 1 {
+                                        if let Some(ctx) = gpu.as_ref() {
+                                            copy_gpu_frame(ctx, &frame.texture, width, height, pts)
+                                        } else {
+                                            gpu_frame_from_omt(frame, pts)
+                                        }
                                     } else {
-                                        gpu_frame_from_omt(frame)
+                                        gpu_frame_from_omt(frame, pts)
+                                    };
+                                    let mut store = uploads.lock().expect("uploads lock");
+                                    store.ensure_playout(
+                                        source_id,
+                                        gpu_frame.width,
+                                        gpu_frame.height,
+                                        CpuFormat::GpuRgba,
+                                        depth,
+                                    );
+                                    match store.push_playout_gpu(source_id, gpu_frame) {
+                                        Ok(()) => has_video_thread.store(true, Ordering::Relaxed),
+                                        Err(error) => {
+                                            let message =
+                                                format!("omt_push_gpu id={source_id}: {error}");
+                                            crate::diag::error(&message);
+                                            if let Ok(mut slot) = last_error_thread.lock() {
+                                                *slot = message;
+                                            }
+                                        }
                                     }
-                                } else {
-                                    gpu_frame_from_omt(frame)
-                                };
+                                }
+                            } else if let Some(frame) =
+                                session.recv_video_timeout(Duration::from_millis(4))
+                            {
                                 let mut store = uploads.lock().expect("uploads lock");
                                 store.ensure_playout(
                                     source_id,
-                                    gpu_frame.width,
-                                    gpu_frame.height,
-                                    CpuFormat::GpuRgba,
+                                    frame.width.max(2),
+                                    frame.height.max(2),
+                                    CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
                                     depth,
                                 );
-                                store.push_playout_gpu(source_id, gpu_frame).ok();
+                                let stride = frame.stride.max(frame.width * 4) as usize;
+                                let pts = next_pts(&mut pts_seq, frame.timestamp);
+                                store
+                                    .push_playout_cpu(source_id, &frame.pixels, stride, pts)
+                                    .map(|()| has_video_thread.store(true, Ordering::Relaxed))
+                                    .unwrap_or_else(|error| {
+                                        let message =
+                                            format!("omt_push_cpu id={source_id}: {error}");
+                                        crate::diag::error(&message);
+                                        if let Ok(mut slot) = last_error_thread.lock() {
+                                            *slot = message;
+                                        }
+                                    });
                             }
-                        } else if let Some(frame) =
-                            session.recv_video_timeout(Duration::from_millis(4))
-                        {
-                            let mut store = uploads.lock().expect("uploads lock");
-                            store.ensure_playout(
-                                source_id,
-                                frame.width.max(2),
-                                frame.height.max(2),
-                                CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                                depth,
-                            );
-                            let stride = frame.stride.max(frame.width * 4) as usize;
-                            store
-                                .push_playout_cpu(source_id, &frame.pixels, stride, frame.timestamp)
-                                .ok();
+                            if !missing_video_logged
+                                && !has_video_thread.load(Ordering::Relaxed)
+                                && live_since.elapsed() >= Duration::from_secs(2)
+                            {
+                                missing_video_logged = true;
+                                let kind = if use_gpu { "GPU" } else { "CPU" };
+                                let detail = session.last_error().unwrap_or_else(|| {
+                                    format!("connected, no {kind} video frames")
+                                });
+                                store_omt_error(&last_error_thread, source_id, detail);
+                            }
+                            while let Some(audio) = session.try_recv_audio() {
+                                ingest_audio_throttled(&uploads, source_id, to_audio(audio));
+                            }
                         }
-                        while let Some(audio) = session.try_recv_audio() {
-                            ingest_audio_throttled(&uploads, source_id, to_audio(audio));
-                        }
+                        session.disconnect();
+                        session_live_thread.store(false, Ordering::Relaxed);
+                    }));
+                    if run.is_err() {
+                        crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
+                        return;
                     }
-                    session.disconnect();
-                }));
-                if run.is_err() {
-                    crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
+                    if stop_thread.load(Ordering::Relaxed) || crate::diag::is_fatal() {
+                        return;
+                    }
+                    wait_stop(&stop_thread, Duration::from_millis(500));
                 }
             })
             .map_err(|error| error.to_string())?;
@@ -177,6 +240,9 @@ impl OmtReceiver {
             on_program,
             on_preview,
             quality: quality_atom,
+            session_live,
+            has_video,
+            last_error,
             join: Some(join),
         })
     }
@@ -190,6 +256,21 @@ impl OmtReceiver {
     pub fn set_quality(&self, quality: u32) {
         self.quality
             .store(quality_to_abi(quality_from_abi(quality)), Ordering::Relaxed);
+    }
+
+    pub fn session_live(&self) -> bool {
+        self.session_live.load(Ordering::Relaxed)
+    }
+
+    pub fn has_video(&self) -> bool {
+        self.has_video.load(Ordering::Relaxed)
+    }
+
+    pub fn last_error(&self) -> String {
+        self.last_error
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -549,27 +630,117 @@ fn connect_receiver(address: &str, config: ReceiverConfig) -> Result<ReceiverSes
     let trimmed = address.trim();
     if let Ok(mut discovery) = Discovery::new()
         && discovery.refresh().is_ok()
-        && let Some(source) = discovery.sources().iter().find(|source| {
-            source.to_url() == trimmed
-                || source.to_string() == trimmed
-                || source.instance_name() == trimmed
-        })
+        && let Some(source) = pick_omt_source(discovery.sources(), trimmed)
     {
         return ReceiverSession::connect_from_address(source, config).map_err(|e| e.to_string());
     }
-    if trimmed.starts_with("omt://") {
+    if trimmed.starts_with("omt://") || trimmed.contains("://") {
         return ReceiverSession::connect(trimmed, config).map_err(|e| e.to_string());
     }
     Err(format!("OMT source not found: {trimmed}"))
 }
 
-fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame) -> GpuVideoFrame {
+fn pick_omt_source<'a>(
+    sources: &'a [openmediatransport::OmtAddress],
+    query: &str,
+) -> Option<&'a openmediatransport::OmtAddress> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    sources
+        .iter()
+        .find(|source| {
+            omt_query_matches(
+                query,
+                &source.to_url(),
+                &source.instance_name(),
+                &source.name,
+            )
+        })
+        .or_else(|| {
+            let needle = query.to_ascii_lowercase();
+            let mut matches = sources.iter().filter(|source| {
+                source.to_url().to_ascii_lowercase().contains(&needle)
+                    || source
+                        .instance_name()
+                        .to_ascii_lowercase()
+                        .contains(&needle)
+                    || source.name.to_ascii_lowercase().contains(&needle)
+            });
+            match (matches.next(), matches.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
+        })
+}
+
+fn omt_path_name(value: &str) -> &str {
+    value
+        .rsplit('/')
+        .next()
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or(value)
+}
+
+fn omt_query_matches(query: &str, url: &str, instance: &str, name: &str) -> bool {
+    let query = query.trim();
+    url.eq_ignore_ascii_case(query)
+        || instance.eq_ignore_ascii_case(query)
+        || name.eq_ignore_ascii_case(query)
+        || name.eq_ignore_ascii_case(omt_path_name(query))
+        || omt_path_name(url).eq_ignore_ascii_case(omt_path_name(query))
+}
+
+fn wait_stop(stop: &AtomicBool, dur: Duration) {
+    let deadline = Instant::now() + dur;
+    while Instant::now() < deadline {
+        if stop.load(Ordering::Relaxed) || crate::diag::is_fatal() {
+            return;
+        }
+        let remain = deadline.saturating_duration_since(Instant::now());
+        thread::sleep(remain.min(Duration::from_millis(50)));
+    }
+}
+
+fn next_pts(seq: &mut i64, timestamp: i64) -> i64 {
+    let pts = if timestamp > *seq {
+        timestamp
+    } else {
+        seq.saturating_add(1)
+    };
+    *seq = pts;
+    pts
+}
+
+fn store_omt_error(slot: &Mutex<String>, source_id: u64, error: String) {
+    if error.is_empty() {
+        return;
+    }
+    let message = if error.contains("omt ") || error.starts_with("omt_") {
+        error
+    } else {
+        format!("omt id={source_id}: {error}")
+    };
+    if let Ok(mut guard) = slot.lock() {
+        if *guard == message {
+            return;
+        }
+        *guard = message.clone();
+    }
+    crate::diag::error(&message);
+}
+
+fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame, pts: i64) -> GpuVideoFrame {
     GpuVideoFrame {
-        pts: frame.timestamp,
+        pts,
         width: frame.width.max(2),
         height: frame.height.max(2),
         packed: false,
-        bgra: false,
+        bgra: matches!(
+            frame.texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ),
         view: frame.texture.create_view(&Default::default()),
         texture: frame.texture,
     }
@@ -621,7 +792,10 @@ fn copy_gpu_frame(
         width,
         height,
         packed: false,
-        bgra: false,
+        bgra: matches!(
+            texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ),
         view: texture.create_view(&Default::default()),
         texture,
     }
@@ -741,7 +915,7 @@ impl VmxEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{HELD_AUDIO_CAP, push_held_audio};
+    use super::{HELD_AUDIO_CAP, omt_query_matches, push_held_audio};
     use crate::upload::AudioPacket;
     use std::collections::VecDeque;
 
@@ -776,5 +950,33 @@ mod tests {
         assert_eq!(q.len(), HELD_AUDIO_CAP);
         assert_eq!(q.front().unwrap().timestamp, 1);
         assert_eq!(q.back().unwrap().timestamp, HELD_AUDIO_CAP as i64);
+    }
+
+    #[test]
+    fn omt_query_matches_output_name() {
+        assert!(omt_query_matches(
+            "eiviz-pgm",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
+        assert!(omt_query_matches(
+            "omt://studio/eiviz-pgm",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
+        assert!(!omt_query_matches(
+            "eiviz-prv",
+            "omt://studio/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
+        assert!(omt_query_matches(
+            "omt://studio/eiviz-pgm",
+            "omt://192.168.1.10/eiviz-pgm",
+            "STUDIO (eiviz-pgm)",
+            "eiviz-pgm"
+        ));
     }
 }

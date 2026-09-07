@@ -37,6 +37,8 @@ WindowsとmacOSに対応しています。Linuxは実験的です。
 - [Decklink](/eiviz/ja/features/outputs/decklink/) — Decklinkへの出力
 - [音声、ASIOなど](/eiviz/ja/features/outputs/audio/) — 音声出力とASIO
 - [Vision Mixing](/eiviz/ja/features/vision-mixing/) — Mixing Unitを使った多段M/E
+- [リモート接続](/eiviz/ja/features/remote/) — 別のeivizをGUIから操作する
+- [headless](/eiviz/ja/features/headless/) — GUIなしのMixerをeivizctlとRemoteから操作する
 
 ## 開発者向け情報
 

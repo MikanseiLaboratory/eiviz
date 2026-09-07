@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package eiviz.control.v1;
+
+// Wire contract for the native control API. Field numbers that have been
+// published must never be reused. Delete by reserving the number and name.
+
+message Envelope {
+  oneof kind {
+    ClientHello hello = 1;
+    Request request = 2;
+    Response response = 3;
+    Event event = 4;
+  }
+}
+
+message ClientHello {
+  string protocol = 1;
+  string client_name = 2;
+  string client_instance_id = 3;
+  string token = 4;
+  Role role = 5;
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_READ = 1;
+  ROLE_OPERATE = 2;
+  ROLE_CONFIGURE = 3;
+  ROLE_ADMIN = 4;
+}
+
+message Request {
+  string request_id = 1;
+  uint64 expected_revision = 2;
+  oneof payload {
+    GetCapabilities get_capabilities = 10;
+    GetSnapshot get_snapshot = 11;
+    Subscribe subscribe = 12;
+    Preview preview = 20;
+    Cut cut = 21;
+    Auto auto = 22;
+    SetMix set_mix = 23;
+    VideoPlay video_play = 24;
+    VideoLoop video_loop = 25;
+    VideoSeek video_seek = 26;
+    AudioSetInput audio_set_input = 27;
+    AudioSetBus audio_set_bus = 28;
+    SnapshotCmd snapshot_cmd = 29;
+    ReplaceSession replace_session = 30;
+    Discover discover = 31;
+    OverlayAuto overlay_auto = 32;
+    MutateSession mutate_session = 33;
+    BeginMediaUpload begin_media_upload = 34;
+    UploadMediaChunk upload_media_chunk = 35;
+    CommitMediaUpload commit_media_upload = 36;
+    AbortMediaUpload abort_media_upload = 37;
+    Shutdown shutdown = 40;
+  }
+}
+
+message Response {
+  string request_id = 1;
+  Status status = 2;
+  uint64 revision = 3;
+  uint64 sequence = 4;
+  oneof payload {
+    Capabilities capabilities = 10;
+    Snapshot snapshot = 11;
+    UploadAccepted upload_accepted = 12;
+    DiscoverResult discover = 13;
+  }
+}
+
+message Event {
+  uint64 sequence = 1;
+  uint64 session_revision = 2;
+  uint64 unix_ms = 3;
+  string request_id = 4;
+  string kind = 5;
+  Status status = 6;
+  Snapshot snapshot = 7;
+  bytes live_json = 8;
+  bytes document_json = 9;
+  string epoch = 10;
+  string discover_kind = 11;
+  string discover_payload = 12;
+}
+
+message Status {
+  string code = 1;
+  string message = 2;
+}
+
+message ResourceRef {
+  string kind = 1;
+  uint64 id = 2;
+  string guid = 3;
+  string name = 4;
+}
+
+message GetCapabilities {}
+
+message GetSnapshot {}
+
+message Subscribe {
+  uint64 after_sequence = 1;
+}
+
+message Preview {
+  ResourceRef unit = 1;
+  ResourceRef scene = 2;
+}
+
+message Cut {
+  ResourceRef unit = 1;
+  ResourceRef input = 2;
+  bool swap = 3;
+}
+
+message Auto {
+  ResourceRef unit = 1;
+  ResourceRef input = 2;
+  uint32 kind = 3;
+  uint32 duration_ms = 4;
+  bool swap = 5;
+  bool keep_preview = 6;
+  uint32 easing = 7;
+  uint32 direction = 8;
+  float dip_r = 9;
+  float dip_g = 10;
+  float dip_b = 11;
+  float dip_a = 12;
+  float softness = 13;
+  float param = 14;
+}
+
+message SetMix {
+  ResourceRef unit = 1;
+  float value = 2;
+}
+
+message ReplaceSession {
+  bytes document_json = 1;
+  uint64 expected_revision = 2;
+}
+
+message VideoPlay {
+  ResourceRef input = 1;
+  bool playing = 2;
+}
+
+message VideoLoop {
+  ResourceRef input = 1;
+  bool looping = 2;
+}
+
+message VideoSeek {
+  ResourceRef input = 1;
+  int64 position_hns = 2;
+}
+
+message AudioSetInput {
+  ResourceRef input = 1;
+  uint32 bus_mask = 2;
+  float gain = 3;
+  bool mute = 4;
+}
+
+message AudioSetBus {
+  ResourceRef bus = 1;
+  float gain = 2;
+  bool mute = 3;
+}
+
+message SnapshotCmd {
+  ResourceRef unit = 1;
+  uint32 kind = 2;
+  string path = 3;
+}
+
+message Discover {
+  string kind = 1;
+  string query = 2;
+}
+
+message DiscoverResult {
+  string kind = 1;
+  string payload = 2;
+}
+
+message Shutdown {}
+
+message Capabilities {
+  string protocol_version = 1;
+  string mixer_version = 2;
+  repeated string platforms = 3;
+  repeated string commands = 4;
+  bool presentation_abi = 5;
+  bool native_api = 6;
+  bool vmix_http = 7;
+}
+
+message Snapshot {
+  uint64 revision = 1;
+  uint64 sequence = 2;
+  bytes document_json = 3;
+  string lifecycle = 4;
+  bytes live_json = 5;
+  bytes resources_json = 6;
+  string epoch = 7;
+  Capabilities capabilities = 8;
+}
+
+message OverlayAuto {
+  ResourceRef unit = 1;
+  uint32 index = 2;
+  uint32 duration_ms = 3;
+  bool to_on = 4;
+}
+
+message MutateSession {
+  uint64 expected_revision = 1;
+  bytes mutation_json = 2;
+}
+
+message BeginMediaUpload {
+  string file_name = 1;
+  string media_kind = 2;
+  uint64 size_bytes = 3;
+  string sha256_hex = 4;
+  string input_name = 5;
+  bool video_loop = 6;
+}
+
+message UploadMediaChunk {
+  string upload_id = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message CommitMediaUpload {
+  string upload_id = 1;
+  uint64 expected_revision = 2;
+}
+
+message AbortMediaUpload {
+  string upload_id = 1;
+}
+
+message UploadAccepted {
+  string upload_id = 1;
+  uint32 chunk_size = 2;
+}

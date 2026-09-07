@@ -3,7 +3,7 @@ title: 設定
 description: セッションに保存される設定ウィンドウの項目
 ---
 
-メインウィンドウの「設定」から開きます。
+メインウィンドウの「設定」から開きます。Remoteからも同じウィンドウで接続先のセッションを編集できます。
 
 ## 表示
 
@@ -13,7 +13,7 @@ GUI上の表示を調整します。
 
 ### 色設定
 
-Preview色、Program色、非アクティブ色は、ボタンやシーンタイルの縁に使います。既定は緑、赤、灰色です。
+Preview色、Program色、非アクティブ色は、ボタンやシーンタイルの縁に使います。折り畳んだシーンタイルとスイッチャーのシーンボタンも同じ色で面を塗ります。既定は緑、赤、灰色です。
 
 ### マスターフレームレート
 
@@ -74,7 +74,7 @@ Multiviewを映像ソースに選択した場合、音声の送出は出来ま�
 OMTはエンコード方式を選択可能です。GPU encodeはフレームをGPUに載せたままVMXコーデックに変換し送信します。CPU encodeを選択した場合、UYVY形式で読み出し、CPU上の送出専用スレッドでVMXコーデックへの変換・送信を行います。  
 NDIは常にCPU encodeです。
 
-各出力毎に1スレッド割り当てられます。詳細は[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)です。
+各出力毎に1スレッド割り当てられます。[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご確認ください。
 
 Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適用可能です。
 
@@ -82,7 +82,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 
 <img src="/eiviz/images/ja/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-マルチビューの設定と追加制御です。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)をご参照ください。
+マルチビューの設定と追加制御です。[Multiviews](/eiviz/ja/concepts/multiviews/)をご確認ください。
 
 ### 新規Multiviewの既定Mixing Unit
 
@@ -98,7 +98,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 <img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="音声AUX設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 内部ミックスは48 kHzステレオです。A〜HのAudio AUXを最大8本足せます。  
-詳細は[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご参照ください。
+[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。
 
 Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。
 
@@ -106,13 +106,14 @@ Enabledを選択時は、出力デバイスを設定せずに内部でのミッ�
 
 ## Web API
 
-vMix互換HTTP APIの待ち受けです。セッションファイルに保存されます。
+vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。HTTPとTCPはセッションファイルに保存されます。WebSocketのbindアドレス、token、最大role、メディア保存先はホストの環境設定（またはheadlessのCLI/環境変数）です。設定の有効/ポートもホスト待ち受けに使います。プロトコルは[eiviz API](/eiviz/ja/developers/api/)をご確認ください。
 
-- 有効: Mixer起動時にHTTPサーバーを開く。既定はオン
-- ポート: 既定は8088
-- ユーザー名/パスワード: どちらか入っていればBasicAuth。両方空なら認証なし
+- HTTP: Mixer起動時にHTTPサーバーを開く。既定はオン。ポートの既定は8088
+- TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html)をポート8099で開く。既定はオン。ポートは固定
+- WebSocket: Protobuf制御API。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`。既定bindはloopbackです。loopback以外はtoken必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません
+- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのtokenは環境設定の待ち受けtoken、headlessでは`EIVIZ_API_TOKEN`です
 
-ポートを他のアプリが使っているときはHTTPサーバーを開かず、セッションはオフ扱いにして警告を出します。
+HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。WebSocketの待ち受け失敗も同じで、その面だけオフにして警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
 
 エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
 
@@ -139,6 +140,18 @@ Preview/Program/Multiviewをリアルタイムに表示するのに使います�
 ### テーマ
 
 ダーク、ライト、OS設定を選択可能です。
+
+### 接続
+
+このコンピューターのMixerは`Eiviz.Host.exe`、別のeivizを操作するクライアントは`Eiviz.Remote.exe`です。Remoteは左上のConnectから接続します。手順と映像の扱いは[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
+
+### API待ち受け（ホスト）
+
+bindアドレス、待ち受けtoken、アップロード保存先です。loopback以外はtoken必須です。未指定の保存先は`%LOCALAPPDATA%\eiviz\media`（Windows）または各OSの同等パスです。リモートクライアントから追加したStill/Videoはこのディレクトリへ保存されます。
+
+### headless
+
+GUIのない運用は[headless](/eiviz/ja/features/headless/)です。待ち受けは`eivizctl prefs`で編集します。
 
 ### ヘルプ
 

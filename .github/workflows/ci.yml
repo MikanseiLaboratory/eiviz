@@ -44,7 +44,7 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
@@ -52,9 +52,14 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        working-directory: mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
+
+      - name: Validate sample session
+        run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eiviz.json
 
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
@@ -78,14 +83,134 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Test mixer
-        working-directory: mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
+
+      - name: Validate sample session
+        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
 
       - name: Build Mac host
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
+
+  control-api:
+    name: Control and API (Ubuntu, no GPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Format control API
+        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -- --check
+
+      - name: Clippy control API
+        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features -- -D warnings
+
+      - name: Test control and API
+        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features
+
+      - name: Build eivizctl and headless without GPU
+        run: cargo build -p eiviz-headless --locked --bins --no-default-features
+
+      - name: Validate sample session
+        run: ./target/debug/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
+
+  linux-vulkan:
+    name: Headless Vulkan (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Mesa Vulkan (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1
+          if [ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]; then
+            echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          elif [ -f /usr/share/vulkan/icd.d/lvp_icd.json ]; then
+            echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
+          else
+            echo "Lavapipe ICD not found" >&2
+            ls -l /usr/share/vulkan/icd.d || true
+            exit 1
+          fi
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Confirm Vulkan adapter
+        run: vulkaninfo --summary
+
+      - name: Test mixer backend and headless compose
+        # mixer_create is process-global, so GPU tests cannot share the process.
+        run: |
+          cargo test -p eiviz_mixer --locked --release --lib selected_backend -- --test-threads=1
+          cargo test -p eiviz_mixer --locked --release --test pipeline ping_and_invalid_clock -- --test-threads=1 --exact
+          cargo test -p eiviz_mixer --locked --release --test pipeline rebar_info_and_toggle -- --test-threads=1 --exact
+          cargo test -p eiviz_mixer --locked --release --test pipeline snapshot_writes_png -- --test-threads=1 --exact
+          cargo test -p eiviz_mixer --locked --release --test pipeline scene_compose_overlay_after_mix_multiview_and_tbar_take -- --test-threads=1 --exact
+          cargo test -p eiviz_mixer --locked --release --test pipeline vulkan_backend_is_explicit -- --test-threads=1 --exact
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
+
+      - name: Validate sample session
+        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
+
+      - name: Run headless Bars session on Vulkan
+        run: |
+          set -euo pipefail
+          ./target/release/eiviz-headless run \
+            --session headless/tests/fixtures/bars.eiviz.json \
+            --bind 127.0.0.1:0 > /tmp/eiviz-headless.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 40); do
+            if grep -q "eiviz-headless ready ws=" /tmp/eiviz-headless.log; then
+              kill -TERM "$pid" || true
+              wait "$pid" || true
+              cat /tmp/eiviz-headless.log
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              wait "$pid" || status=$?
+              echo "headless exited before ready (status=${status:-0})"
+              cat /tmp/eiviz-headless.log
+              exit "${status:-1}"
+            fi
+            sleep 1
+          done
+          echo "headless did not become ready"
+          kill -TERM "$pid" || true
+          wait "$pid" || true
+          cat /tmp/eiviz-headless.log
+          exit 1

@@ -22,6 +22,7 @@ mod media_macos;
 pub use media_macos::enumerate_video_captures;
 #[cfg(target_os = "macos")]
 mod main_thread;
+mod native_ws;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
@@ -29,6 +30,7 @@ mod pool;
 mod present;
 mod readback;
 mod rebar;
+mod runtime;
 mod save;
 mod session;
 pub mod simd;
@@ -36,14 +38,22 @@ mod snapshot;
 mod tcp_listen_owner;
 mod thumb;
 mod upload;
+#[cfg(any(windows, target_os = "linux"))]
+mod vk_upload;
+#[cfg(any(windows, target_os = "linux"))]
+mod vk_video;
 mod vmix_api;
+mod vmix_tcp;
 mod vmix_xml;
 
+pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
+
 pub use abi::{
-    AudioPeak, DURATION_FRAMES, DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
-    EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
-    MixerRebarInfo, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
+    DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
+    ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS,
+    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo,
+    MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
     OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
     Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
@@ -61,7 +71,65 @@ pub use abi::{
     TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
     TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
-pub use audio::{AudioBusInfo, AudioDeviceInfo};
+pub use eiviz_control::{ControlFacade, ControlService, RequestKey};
+pub use runtime::ProcessMixer;
+
+pub fn runtime_port() -> ProcessMixer {
+    ProcessMixer
+}
+
+pub fn control_service() -> &'static std::sync::Mutex<ControlService> {
+    runtime::control()
+}
+
+pub struct MixerFacade;
+
+impl ControlFacade for MixerFacade {
+    fn execute(
+        &self,
+        key: RequestKey,
+        command: eiviz_control::Command,
+    ) -> eiviz_control::ControlResult<eiviz_control::CommandOutcome> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .execute(key, command)
+    }
+
+    fn snapshot(&self) -> eiviz_control::ControlResult<eiviz_control::Snapshot> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .snapshot()
+    }
+
+    fn events_after(&self, after: u64) -> Vec<eiviz_control::Event> {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.events_after(after))
+            .unwrap_or_default()
+    }
+
+    fn lifecycle(&self) -> eiviz_control::Lifecycle {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.lifecycle())
+            .unwrap_or(eiviz_control::Lifecycle::Failed)
+    }
+
+    fn epoch(&self) -> String {
+        runtime::control()
+            .lock()
+            .map(|svc| svc.epoch().to_string())
+            .unwrap_or_default()
+    }
+
+    fn publish_meters(&self) {
+        if let Ok(mut svc) = runtime::control().lock() {
+            svc.publish_meters();
+        }
+    }
+}
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, c_char};
@@ -229,6 +297,8 @@ struct Shared {
     gpu_ingest: GpuIngest,
     #[cfg(windows)]
     gpu_video: Option<GpuVideoContext>,
+    #[cfg(any(windows, target_os = "linux"))]
+    vulkan_decode: Option<crate::vk_video::VulkanDecode>,
     omt_gpu: OmtGpu,
     receivers: HashMap<u64, LiveReceiver>,
     #[cfg(any(windows, target_os = "macos"))]
@@ -275,6 +345,18 @@ impl LiveReceiver {
             // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {}
+        }
+    }
+
+    fn source_status(&self) -> (bool, bool, String) {
+        match self {
+            Self::Omt(receiver) => (
+                receiver.session_live(),
+                receiver.has_video(),
+                receiver.last_error(),
+            ),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => (true, false, String::new()),
         }
     }
 }
@@ -480,6 +562,7 @@ struct Mixer {
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+    backend: u32,
     #[cfg(target_os = "macos")]
     surface_gpu: present::SurfaceGpu,
 }
@@ -675,23 +758,46 @@ fn prepare_surface_off_slot(
     })
 }
 
-/// Creates the OS-fixed wgpu device (DX12 on Windows, Metal on macOS).
+/// Creates the OS-default wgpu device (DX12 on Windows, Metal on macOS, Vulkan on Linux).
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+pub extern "C" fn mixer_create(adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+    mixer_create_with_backend(crate::abi::BACKEND_AUTO, adapter_luid, fps_num, fps_den)
+}
+
+/// Creates a mixer with an explicit GPU backend (`0=auto`, `1=dx12`, `2=vulkan`, `3=metal`).
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_create_with_backend(
+    backend: u32,
+    _adapter_luid: u64,
+    fps_num: u32,
+    fps_den: u32,
+) -> i32 {
     crate::diag::init();
-    crate::diag::info("mixer_create");
+    crate::diag::reset_generation();
+    reset_frame_caches();
+    crate::diag::info(&format!("mixer_create backend={backend}"));
     let _ = crate::diag::profile_send();
     if fps_num == 0 || fps_den == 0 {
         return ERR_INVALID_ARGUMENT;
     }
+    let Some(request) = crate::device::BackendRequest::from_abi(backend) else {
+        report_session_error(format!("unknown GPU backend {backend}"));
+        return ERR_INVALID_ARGUMENT;
+    };
     let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
     if slot.is_some() {
         return ERR_ALREADY_CREATED;
     }
-    let device = match GpuDevice::new() {
+    let device = match GpuDevice::with_backend(request) {
         Ok(device) => device,
-        Err(_) => return ERR_DEVICE,
+        Err(error) => {
+            let message = format!("gpu device: {error}");
+            crate::diag::error(&message);
+            report_session_error(message);
+            return ERR_DEVICE;
+        }
     };
+    let backend = crate::device::abi_of_backend(device.adapter.get_info().backend);
     #[cfg(target_os = "macos")]
     let surface_gpu = present::SurfaceGpu {
         instance: device.instance.clone(),
@@ -699,13 +805,19 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         device: device.device.clone(),
     };
     #[cfg(windows)]
-    let gpu_video = match GpuVideoContext::new(&device) {
-        Ok(ctx) => Some(ctx),
-        Err(error) => {
-            eprintln!("eiviz dxgi video: {error}");
-            return ERR_DEVICE;
+    let gpu_video = if device.adapter.get_info().backend == wgpu::Backend::Dx12 {
+        match GpuVideoContext::new(&device) {
+            Ok(ctx) => Some(ctx),
+            Err(error) => {
+                eprintln!("eiviz dxgi video: {error}");
+                return ERR_DEVICE;
+            }
         }
+    } else {
+        None
     };
+    #[cfg(any(windows, target_os = "linux"))]
+    let vulkan_decode = device.vulkan.clone();
     let omt_recv_gpu = omt_gpu_from_device(&device);
     let omt_send_gpu = omt_gpu_for_send(&device);
     let rebar = crate::rebar::probe(&device);
@@ -740,6 +852,8 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         gpu_ingest,
         #[cfg(windows)]
         gpu_video,
+        #[cfg(any(windows, target_os = "linux"))]
+        vulkan_decode,
         omt_gpu: omt_recv_gpu,
         receivers: HashMap::new(),
         #[cfg(any(windows, target_os = "macos"))]
@@ -792,6 +906,7 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
         thumb_pixels,
         render: Some(render),
         stop,
+        backend,
         #[cfg(target_os = "macos")]
         surface_gpu,
     });
@@ -803,7 +918,89 @@ pub extern "C" fn mixer_create(_adapter_luid: u64, fps_num: u32, fps_den: u32) -
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_backend() -> u32 {
+    with_mixer(|mixer| mixer.backend).unwrap_or(crate::abi::BACKEND_AUTO)
+}
+
+pub(crate) fn mixer_created() -> bool {
+    mixer_slot()
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+}
+
+pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
+    use eiviz_control::live::{LivePeak, LiveState, UnitLiveState};
+    with_mixer(|mixer| {
+        let (units, master, buses, mix_peaks) = {
+            let shared = mixer.shared.lock().expect("shared");
+            let mut units = HashMap::new();
+            for (id, unit) in &shared.units {
+                units.insert(
+                    *id,
+                    UnitLiveState {
+                        program_source: unit.state.program_source,
+                        preview_source: unit.state.preview_source,
+                        mix: unit.state.mix,
+                        transitioning: unit.auto.is_some() || unit.state.mix > 0.001,
+                        incoming_source: unit.state.incoming_source,
+                        overlay_sources: unit
+                            .state
+                            .overlays
+                            .iter()
+                            .take(unit.state.overlay_count as usize)
+                            .map(|overlay| overlay.source_id)
+                            .collect(),
+                    },
+                );
+            }
+            (
+                units,
+                shared.audio.master_peak(),
+                shared.audio.bus_peaks(),
+                shared.audio.mix_input_peaks(),
+            )
+        };
+        let uploads = mixer.uploads.lock().expect("uploads");
+        let mut peaks = vec![LivePeak {
+            id: 0,
+            left: master.0,
+            right: master.1,
+        }];
+        for (id, left, right) in buses {
+            peaks.push(LivePeak {
+                id: crate::abi::AUDIO_BUS_PEAK_BASE | id,
+                left,
+                right,
+            });
+        }
+        for id in uploads.ids() {
+            if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
+                continue;
+            }
+            let Some(ring) = uploads.get(id) else {
+                continue;
+            };
+            let (left, right) = ring.peak();
+            peaks.push(LivePeak { id, left, right });
+        }
+        for (id, left, right) in mix_peaks {
+            peaks.push(LivePeak { id, left, right });
+        }
+        LiveState { units, peaks }
+    })
+    .unwrap_or_default()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
+    if let Ok(mut svc) = crate::runtime::control().try_lock() {
+        svc.abandon();
+    }
+    mixer_destroy_inner();
+}
+
+pub(crate) fn mixer_destroy_inner() {
     crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
     let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
@@ -831,6 +1028,8 @@ pub extern "C" fn mixer_destroy() {
         shutdown_output_worker(worker);
     }
     crate::diag::info("mixer_destroy end");
+    crate::diag::reset_generation();
+    reset_frame_caches();
 }
 
 #[unsafe(no_mangle)]
@@ -1068,10 +1267,14 @@ pub extern "C" fn mixer_unit_attach_native(
     height: u32,
 ) -> i32 {
     if width == 0 || height == 0 {
-        return ERR_INVALID_ARGUMENT;
+        return attach_invalid(format!(
+            "attach surface unit={unit_id} kind={kind}: width/height must be non-zero ({width}x{height})"
+        ));
     }
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
-        return ERR_INVALID_ARGUMENT;
+        return attach_invalid(format!(
+            "attach surface unit={unit_id} kind={kind}: native kind={native_kind} handle={handle} is not valid on this OS"
+        ));
     };
     #[cfg(target_os = "macos")]
     let prepared = match prepare_surface_off_slot(surface, width, height) {
@@ -1088,6 +1291,10 @@ pub extern "C" fn mixer_unit_attach_native(
             .units
             .contains_key(&unit_id)
         {
+            set_error(
+                &mixer.telemetry,
+                format!("attach surface: mixing unit {unit_id:#x} is not created"),
+            );
             return ERR_INVALID_ARGUMENT;
         }
         if mixer
@@ -1109,19 +1316,32 @@ pub extern "C" fn mixer_unit_attach_native(
     })
 }
 
+fn attach_invalid(message: impl Into<String>) -> i32 {
+    report_session_error(message);
+    ERR_INVALID_ARGUMENT
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitState) -> i32 {
     if state.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    // SAFETY: caller keeps UnitState valid for this call.
     let state = unsafe { *state };
+    let code = unit_set_state_inner(unit_id, &state);
+    if code == OK {
+        crate::runtime::note_live("SetUnitState");
+    }
+    code
+}
+
+pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
     if state.overlay_count > state.overlays.len() as u32
         || state.mv_slot_count > state.mv_slots.len() as u32
         || !(0.0..=1.0).contains(&state.mix)
     {
         return ERR_INVALID_ARGUMENT;
     }
+    let state = *state;
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
@@ -1301,8 +1521,8 @@ fn take_cut_to(unit: &mut LiveUnit, swap: bool, incoming: u64) {
     unit.frozen_preview = None;
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
+/// GPU CUT. ControlService calls this; the C ABI entry goes through ControlService.
+pub(crate) fn unit_cut_inner(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -1325,7 +1545,12 @@ pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_auto(
+pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
+    crate::runtime::c_cut(unit_id, swap, incoming_source)
+}
+
+/// GPU AUTO. ControlService calls this; the C ABI entry goes through ControlService.
+pub(crate) fn unit_auto_inner(
     unit_id: u64,
     kind: u32,
     duration_ms: u32,
@@ -1391,6 +1616,41 @@ pub extern "C" fn mixer_unit_auto(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_unit_auto(
+    unit_id: u64,
+    kind: u32,
+    duration_ms: u32,
+    swap: u32,
+    keep_preview: u32,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    incoming_source: u64,
+    softness: f32,
+    param: f32,
+) -> i32 {
+    crate::runtime::c_auto(
+        unit_id,
+        kind,
+        duration_ms,
+        swap,
+        keep_preview,
+        easing,
+        direction,
+        dip_r,
+        dip_g,
+        dip_b,
+        dip_a,
+        incoming_source,
+        softness,
+        param,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_overlay_auto(
     unit_id: u64,
     target_enabled: u32,
@@ -1401,6 +1661,19 @@ pub unsafe extern "C" fn mixer_unit_overlay_auto(
         return ERR_INVALID_ARGUMENT;
     }
     let desc = unsafe { *desc };
+    let code = overlay_auto_inner(unit_id, target_enabled, duration_ms, desc);
+    if code == OK {
+        crate::runtime::note_live("OverlayAuto");
+    }
+    code
+}
+
+pub(crate) fn overlay_auto_inner(
+    unit_id: u64,
+    target_enabled: u32,
+    duration_ms: u32,
+    desc: OverlayDesc,
+) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -1896,28 +2169,36 @@ pub unsafe extern "C" fn mixer_video_start(
     }
     #[cfg(windows)]
     {
-        let (uploads, gpu, depth, previous_video, previous_recv) = match with_mixer(|mixer| {
-            let mut shared = mixer.shared.lock().expect("shared");
-            let previous_video = shared.videos.remove(&id);
-            let previous_recv = shared.receivers.remove(&id);
-            let uploads = shared.uploads.clone();
-            let gpu = shared.gpu_video.clone();
-            let session = shared.frame_buffer_frames.clamp(1, 8);
-            let depth = if frame_buffer_frames == 0 {
-                session
-            } else {
-                frame_buffer_frames.clamp(1, 8)
+        let (uploads, gpu, ingest, vulkan, depth, previous_video, previous_recv) =
+            match with_mixer(|mixer| {
+                let mut shared = mixer.shared.lock().expect("shared");
+                let previous_video = shared.videos.remove(&id);
+                let previous_recv = shared.receivers.remove(&id);
+                let uploads = shared.uploads.clone();
+                let gpu = shared.gpu_video.clone();
+                let ingest = shared.gpu_ingest.clone();
+                let vulkan = shared.vulkan_decode.clone();
+                let session = shared.frame_buffer_frames.clamp(1, 8);
+                let depth = if frame_buffer_frames == 0 {
+                    session
+                } else {
+                    frame_buffer_frames.clamp(1, 8)
+                };
+                (
+                    uploads,
+                    gpu,
+                    ingest,
+                    vulkan,
+                    depth,
+                    previous_video,
+                    previous_recv,
+                )
+            }) {
+                Ok(value) => value,
+                Err(code) => return code,
             };
-            (uploads, gpu, depth, previous_video, previous_recv)
-        }) {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
         drop(previous_recv);
         drop(previous_video);
-        let Some(gpu) = gpu else {
-            return ERR_DEVICE;
-        };
         return match VideoPump::start(
             id,
             path,
@@ -1929,6 +2210,8 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_den,
             uploads,
             gpu,
+            ingest,
+            vulkan,
             depth,
         ) {
             Ok(pump) => insert_video(id, pump),
@@ -2094,7 +2377,10 @@ pub unsafe extern "C" fn mixer_omt_connect(
         .unwrap_or_default()
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
-    crate::diag::info(&format!("omt_connect id={id}"));
+    crate::diag::info(&format!(
+        "omt_connect id={id} gpu={} addr={address}",
+        use_gpu != 0
+    ));
     let taken = match with_mixer(|mixer| {
         let mut shared = mixer.shared.lock().expect("shared");
         #[cfg(any(windows, target_os = "macos"))]
@@ -2548,6 +2834,37 @@ pub unsafe extern "C" fn mixer_session_publish(json: *const u8, len: usize) -> i
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_replace(
+    json: *const u8,
+    len: usize,
+    expected_revision: u64,
+) -> i32 {
+    if json.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    crate::runtime::replace_session_bytes(bytes, expected_revision)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, cap) };
+    crate::runtime::poll_event(after, buf)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_snapshot(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(out, cap) };
+    crate::runtime::copy_snapshot_bytes(buf)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_configure(
     enabled: u32,
     port: u32,
@@ -2560,6 +2877,130 @@ pub unsafe extern "C" fn mixer_api_configure(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_listen_owner(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::vmix_api::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_tcp_configure(enabled: u32) -> i32 {
+    crate::vmix_tcp::configure(enabled != 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_tcp_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    unsafe { crate::vmix_tcp::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_ws_configure(enabled: u32, port: u32) -> i32 {
+    crate::native_ws::configure(enabled != 0, port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_configure_bind(
+    enabled: u32,
+    host: *const c_char,
+    port: u32,
+) -> i32 {
+    let host = if host.is_null() {
+        "127.0.0.1"
+    } else {
+        unsafe { CStr::from_ptr(host) }
+            .to_str()
+            .unwrap_or("127.0.0.1")
+    };
+    crate::native_ws::configure_bind(enabled != 0, host, port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_configure_owned(
+    enabled: u32,
+    host: *const c_char,
+    port: u32,
+    token: *const c_char,
+    max_role: *const c_char,
+    media_directory: *const c_char,
+) -> i32 {
+    let host = if host.is_null() {
+        "127.0.0.1"
+    } else {
+        unsafe { CStr::from_ptr(host) }
+            .to_str()
+            .unwrap_or("127.0.0.1")
+    };
+    let token = if token.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(token) }.to_str().unwrap_or("")
+    };
+    let max_role = if max_role.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(max_role) }.to_str().unwrap_or("")
+    };
+    let media = if media_directory.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(media_directory) }
+            .to_str()
+            .unwrap_or("")
+    };
+    crate::native_ws::configure_owned(enabled != 0, host, port, token, max_role, media)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_ws_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    unsafe { crate::native_ws::listen_owner_c(out, cap) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_source_status(id: u64, out: *mut MixerSourceStatus) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let (connected, has_video, uploads) = {
+            let shared = mixer.shared.lock().expect("shared");
+            let (connected, has_video) = shared
+                .receivers
+                .get(&id)
+                .map(LiveReceiver::source_status)
+                .map(|(connected, has_video, _)| (connected, has_video))
+                .unwrap_or((false, false));
+            (connected, has_video, Arc::clone(&shared.uploads))
+        };
+        let store = uploads.lock().expect("uploads");
+        unsafe {
+            *out = MixerSourceStatus {
+                connected: u32::from(connected),
+                has_video: u32::from(has_video || store.has_video_frame(id)),
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_source_copy_error(id: u64, out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let error = with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .receivers
+            .get(&id)
+            .map(LiveReceiver::source_status)
+            .map(|(_, _, error)| error)
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    let n = error.len().min(cap);
+    if n > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
+    }
+    n as i32
 }
 
 #[unsafe(no_mangle)]
@@ -3244,6 +3685,15 @@ fn acquired() -> &'static Mutex<HashMap<u64, Acquired>> {
     ACQUIRED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+pub(crate) fn reset_frame_caches() {
+    if let Ok(mut slot) = last_frames().lock() {
+        slot.clear();
+    }
+    if let Ok(mut slot) = acquired().lock() {
+        slot.clear();
+    }
+}
+
 fn render_loop(
     device: GpuDevice,
     fps_num: u32,
@@ -3297,15 +3747,21 @@ fn render_loop(
                     prepared,
                     reply,
                 } => {
-                    let code = match presenters
-                        .attach(&device, unit_id, kind, surface, width, height, prepared)
-                    {
-                        Ok(()) => {
+                    let code = match panic::catch_unwind(AssertUnwindSafe(|| {
+                        presenters.attach(&device, unit_id, kind, surface, width, height, prepared)
+                    })) {
+                        Ok(Ok(())) => {
                             shared.lock().expect("shared").compose_dirty = true;
                             OK
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
+                            crate::diag::error(&format!("attach surface: {error}"));
                             set_error(&telemetry, error);
+                            ERR_DEVICE
+                        }
+                        Err(_) => {
+                            crate::diag::error("attach surface panicked");
+                            set_error(&telemetry, "attach surface panicked");
                             ERR_DEVICE
                         }
                     };
@@ -3333,12 +3789,20 @@ fn render_loop(
                     prepared,
                     reply,
                 } => {
-                    let code = match presenters.attach_monitor(
-                        &device, monitor_id, source_id, surface, width, height, prepared,
-                    ) {
-                        Ok(()) => OK,
-                        Err(error) => {
+                    let code = match panic::catch_unwind(AssertUnwindSafe(|| {
+                        presenters.attach_monitor(
+                            &device, monitor_id, source_id, surface, width, height, prepared,
+                        )
+                    })) {
+                        Ok(Ok(())) => OK,
+                        Ok(Err(error)) => {
+                            crate::diag::error(&format!("attach monitor: {error}"));
                             set_error(&telemetry, error);
+                            ERR_DEVICE
+                        }
+                        Err(_) => {
+                            crate::diag::error("attach monitor panicked");
+                            set_error(&telemetry, "attach monitor panicked");
                             ERR_DEVICE
                         }
                     };
@@ -4361,7 +4825,7 @@ fn collect_live_ids(
             }
             return;
         }
-        if crate::abi::is_scene(id) {
+        if crate::abi::is_scene(id) || crate::abi::is_multiview(id) {
             if !scenes.insert(id) {
                 return;
             }
@@ -4836,6 +5300,14 @@ mod tests {
     }
 
     #[test]
+    fn collect_live_ids_uploads_remote_omt_monitor() {
+        let remote_prv = 0x0005_0001;
+        assert!(!crate::abi::is_scene(remote_prv));
+        let (_, uploads) = collect_live_ids(&[], &[], &[remote_prv], &[], &HashMap::new());
+        assert!(uploads.contains(&remote_prv));
+    }
+
+    #[test]
     fn collect_live_ids_keeps_multiview_output() {
         let mv = MULTIVIEW_BASE | 1;
         let layers: std::sync::Arc<[crate::abi::OverlayDesc]> =
@@ -4980,6 +5452,92 @@ mod tests {
         }
     }
 
+    fn last_error_text() -> String {
+        let mut buf = vec![0u8; 512];
+        let n = unsafe { mixer_last_error(buf.as_mut_ptr(), buf.len()) };
+        if n <= 0 {
+            return String::new();
+        }
+        String::from_utf8_lossy(&buf[..n as usize]).into_owned()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn attach_missing_remote_unit_reports_error() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60, 1), OK);
+        const REMOTE_UNIT: u64 = 0x0007_0001;
+        assert_eq!(
+            mixer_unit_attach_output(REMOTE_UNIT, 1, 1920, 1080, OUTPUT_PREVIEW),
+            ERR_INVALID_ARGUMENT
+        );
+        let error = last_error_text();
+        assert!(
+            error.contains("0x70001") || error.contains("not created"),
+            "{error}"
+        );
+        assert_eq!(mixer_create_unit(REMOTE_UNIT, 1920, 1080), OK);
+        assert_eq!(
+            mixer_unit_attach_native(
+                REMOTE_UNIT,
+                OUTPUT_PREVIEW,
+                NATIVE_WIN32_HWND,
+                0,
+                1920,
+                1080
+            ),
+            ERR_INVALID_ARGUMENT
+        );
+        let hwnd_error = last_error_text();
+        assert!(
+            hwnd_error.contains("handle") || hwnd_error.contains("not valid"),
+            "{hwnd_error}"
+        );
+        assert!(!hwnd_error.contains("not created"), "{hwnd_error}");
+        let preview = mixer_unit_attach_native(
+            REMOTE_UNIT,
+            OUTPUT_PREVIEW,
+            NATIVE_WIN32_HWND,
+            1,
+            1920,
+            1080,
+        );
+        let program = mixer_unit_attach_output(REMOTE_UNIT, 1, 1920, 1080, OUTPUT_PROGRAM);
+        assert_ne!(
+            preview, ERR_INVALID_ARGUMENT,
+            "unit exists; preview attach must not fail the unit-missing check"
+        );
+        assert_ne!(
+            program, ERR_INVALID_ARGUMENT,
+            "unit exists; program attach must not fail the unit-missing check"
+        );
+        mixer_destroy();
+    }
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn source_status_is_empty_without_receiver() {
+        mixer_destroy();
+        let mut status = MixerSourceStatus {
+            connected: 1,
+            has_video: 1,
+        };
+        assert_eq!(
+            unsafe { mixer_source_status(0x0005_0001, &mut status) },
+            ERR_NOT_CREATED
+        );
+        assert_eq!(mixer_create(0, 60, 1), OK);
+        assert_eq!(unsafe { mixer_source_status(0x0005_0001, &mut status) }, OK);
+        assert_eq!(status.connected, 0);
+        assert_eq!(status.has_video, 0);
+        let mut buf = vec![0u8; 64];
+        assert_eq!(
+            unsafe { mixer_source_copy_error(0x0005_0001, buf.as_mut_ptr(), buf.len()) },
+            0
+        );
+        mixer_destroy();
+    }
+
     fn dummy_video() -> SendCmd {
         SendCmd::Video {
             width: 2,
@@ -5055,7 +5613,7 @@ mod tests {
 
     #[test]
     fn coalesce_latest_video_releases_stale_gpu_busy() {
-        let device = GpuDevice::new().expect("gpu");
+        let device = GpuDevice::with_backend(crate::device::BackendRequest::Auto).expect("gpu");
         let stale = Arc::new(AtomicBool::new(true));
         let latest = Arc::new(AtomicBool::new(true));
         let out = coalesce_latest_video(vec![

@@ -3,7 +3,7 @@ title: Settings
 description: Session-backed Settings dialog, item by item
 ---
 
-Open it from Settings in the main window.
+Open it from Settings in the main window. Remote uses the same window to edit the destination session.
 
 ## Display
 
@@ -13,7 +13,7 @@ Adjusts what you see in the GUI.
 
 ### Colours
 
-Preview, Program, and Inactive colours paint button and scene-tile chrome. Defaults are green, red, and grey.
+Preview, Program, and Inactive colours paint button and scene-tile chrome. Collapsed scene tiles and switcher scene buttons use the same colours for fill. Defaults are green, red, and grey.
 
 ### Master frame rate
 
@@ -105,13 +105,14 @@ Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it 
 
 ## Web API
 
-vMix-compatible HTTP listen settings. These are stored in the session file.
+vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen. See [eiviz API](/eiviz/en/developers/api/) for the protocol.
 
-- Enabled: start the HTTP server when the mixer starts. Default on
-- Port: default 8088
-- Username / password: BasicAuth if either is set. Both empty means no auth
+- HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
+- TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
+- WebSocket: Protobuf control API. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`. Default bind is loopback. Non-loopback bind requires a token. This release is authenticated `ws://` on a trusted LAN or VPN; TLS is not included
+- Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens are the listen token in Preferences, or `EIVIZ_API_TOKEN` for headless
 
-If the port is already in use, eiviz starts with the HTTP server off, treats the session as HTTP-off, and shows a warning.
+If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is the same: that surface turns off and warns. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
 Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
 
@@ -138,6 +139,18 @@ English / 日本語.
 ### Theme
 
 Dark, Light, or Follow OS.
+
+### Connection
+
+`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Remote connects from the Connect button in the top left. Steps and video handling are in [Remote connection](/eiviz/en/features/remote/).
+
+### API listen (host)
+
+Bind address, listen token, and uploaded media directory. Non-loopback bind requires the token. When unset, the directory is `%LOCALAPPDATA%\eiviz\media` on Windows, or the equivalent OS path. Still/Video added from a remote client land in this directory.
+
+### Headless
+
+Running without a GUI is [Headless](/eiviz/en/features/headless/). Edit listen values with `eivizctl prefs`.
 
 ### Help
 

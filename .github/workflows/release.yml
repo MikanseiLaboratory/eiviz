@@ -95,7 +95,7 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
@@ -103,12 +103,14 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        working-directory: mixer
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Publish host (win-x64)
         run: |
-          dotnet publish host\Eiviz.Host.csproj `
+          dotnet publish hosts\win32\Eiviz.Host.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
@@ -118,12 +120,37 @@ jobs:
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Host.exe")) {
             throw "Published output is missing Eiviz.Host.exe"
           }
+          dotnet publish hosts\win32\Eiviz.Remote.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o "${{ github.workspace }}\publish\win-x64-remote" `
+            -p:Version=${{ needs.meta.outputs.base }} `
+            -p:InformationalVersion=${{ needs.meta.outputs.version }}
+          foreach ($name in @("Eiviz.Remote.exe", "Eiviz.Remote.dll", "Eiviz.Remote.deps.json", "Eiviz.Remote.runtimeconfig.json")) {
+            $src = Join-Path "${{ github.workspace }}\publish\win-x64-remote" $name
+            if (-not (Test-Path $src)) {
+              throw "Published Remote output is missing $name"
+            }
+            Copy-Item $src "${{ github.workspace }}\publish\win-x64\"
+          }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Eiviz.Remote.exe")) {
+            throw "Published output is missing Eiviz.Remote.exe"
+          }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_mixer.dll")) {
             throw "Published output is missing eiviz_mixer.dll"
+          }
+          if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\eiviz_remote.dll")) {
+            throw "Published output is missing eiviz_remote.dll"
           }
           if (-not (Test-Path "${{ github.workspace }}\publish\win-x64\Processing.NDI.Lib.x64.dll")) {
             throw "Published output is missing Processing.NDI.Lib.x64.dll"
           }
+          Copy-Item "${{ github.workspace }}\target\release\eiviz-headless.exe" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\target\release\eivizctl.exe" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\headless\eiviz-headless.example.env" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\LICENSE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
+          Copy-Item "${{ github.workspace }}\NOTICE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -151,23 +178,11 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content -Encoding ascii "$setup.sha256"
 
-      - name: Package zip
-        shell: bash
-        run: |
-          TAG="${{ needs.meta.outputs.tag }}"
-          STAGING="eiviz-${TAG}-win-x64"
-          mkdir -p "$STAGING"
-          cp -a publish/win-x64/. "$STAGING/"
-          7z a -tzip "${STAGING}.zip" "$STAGING"
-          sha256sum "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: win-x64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
             eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
 
@@ -194,35 +209,44 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
 
       - name: Test mixer
-        working-directory: mixer
-        run: cargo test --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+
+      - name: Build headless
+        run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Build Mac host
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
 
-      - name: Package zip
+      - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-arm64"
-          BIN="$(cd mac && swift build -c release --show-bin-path)"
+          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
+          cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
+          cp target/release/eiviz-headless "$STAGING/"
+          cp target/release/eivizctl "$STAGING/"
+          cp headless/eiviz-headless.example.env "$STAGING/"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
           if [ -f "$BIN/libndi.6.dylib" ]; then
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh mac/package-app.sh
-          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
+          chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi
@@ -230,26 +254,11 @@ jobs:
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
+          codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
-          cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
-          Apple Silicon (arm64) Metal preview host.
-
-          Unzip, then in Terminal:
-            cd eiviz-*-macos-arm64
-            xattr -cr .
-            open eiviz-mac.app
-
-          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
-          The loose ./eiviz-mac binary still works for local preview.
-
-          Optional still image on Scene 2:
-            ./eiviz-mac /path/to/image.png
-
-          If macOS blocks the binary: System Settings → Privacy & Security → Open Anyway.
-          CUT, AUTO, T-bar, and OMT Program send (name eiviz-mac) are available.
-          EOF
-          zip -r "${STAGING}.zip" "$STAGING"
-          shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
@@ -260,8 +269,6 @@ jobs:
         with:
           name: macos-arm64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
             eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
 
@@ -288,36 +295,46 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mixer
+          workspaces: .
           key: macos-x64
+
+      - name: Build headless (x86_64)
+        run: cargo build -p eiviz-headless --locked --release --bins --target x86_64-apple-darwin
 
       - name: Build Mac host (x86_64)
         env:
           EIVIZ_MAC_ARCH: x86_64-apple-darwin
         run: |
-          chmod +x mac/build.sh
-          mac/build.sh
-          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
+          BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
 
-      - name: Package zip
+      - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-x64"
-          BIN="$(cd mac && swift build -c release --arch x86_64 --show-bin-path)"
+          BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
+          cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
+          cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
+          cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
+          cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
+          cp headless/eiviz-headless.example.env "$STAGING/"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
           if [ -f "$BIN/libndi.6.dylib" ]; then
             cp "$BIN/libndi.6.dylib" "$STAGING/"
           fi
-          chmod +x mac/relocate-dylib.sh mac/package-app.sh
-          mac/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" mac/package-app.sh "$STAGING"
+          chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
+          codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.dylib"
           fi
@@ -325,26 +342,11 @@ jobs:
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
+          codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
+          codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
           codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
-          cat > "$STAGING/HOW_TO_RUN.txt" <<'EOF'
-          Intel (x86_64 / amd64) Metal preview host.
-
-          Unzip, then in Terminal:
-            cd eiviz-*-macos-x64
-            xattr -cr .
-            open eiviz-mac.app
-
-          The .app bundle is required for NDI® discovery/send (local network + Bonjour).
-          The loose ./eiviz-mac binary still works for local preview.
-
-          Optional still image on Scene 2:
-            ./eiviz-mac /path/to/image.png
-
-          If macOS blocks the binary: System Settings → Privacy & Security → Open Anyway.
-          CUT, AUTO, T-bar, and OMT Program send (name eiviz-mac) are available.
-          EOF
-          zip -r "${STAGING}.zip" "$STAGING"
-          shasum -a 256 "${STAGING}.zip" | tee "${STAGING}.zip.sha256"
+          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
@@ -355,8 +357,6 @@ jobs:
         with:
           name: macos-x64
           path: |
-            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
-            eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
             eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256
 
@@ -381,15 +381,9 @@ jobs:
           make_latest: ${{ needs.meta.outputs.prerelease != 'true' }}
           generate_release_notes: true
           files: |
-            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe
             dist/eiviz-${{ needs.meta.outputs.tag }}-win-x64-setup.exe.sha256
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-arm64.pkg.sha256
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip
-            dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.zip.sha256
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg
             dist/eiviz-${{ needs.meta.outputs.tag }}-macos-x64.pkg.sha256

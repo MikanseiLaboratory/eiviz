@@ -1,0 +1,14 @@
+# eiviz.control.v1
+
+`package eiviz.control.v1` is the published native control contract.
+
+## Compatibility
+
+- Field numbers that have shipped must never change meaning or be reused.
+- When a field is removed, add both the number and the name to `reserved`.
+- Clients and servers are not updated in lockstep. Unknown protobuf fields must be ignored.
+- Wire transports share the same Envelope meaning. WebSocket must not diverge Command semantics.
+
+## Transports
+
+- WebSocket: one binary frame is one Envelope. Subprotocol `eiviz.protobuf.v1`. Non-binary frames are rejected.

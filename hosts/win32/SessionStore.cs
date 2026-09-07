@@ -1,0 +1,501 @@
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Windows;
+using Eiviz.Host.I18n;
+using Eiviz.Host.Interop;
+
+namespace Eiviz.Host;
+
+internal static class SessionStore
+{
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new InputKindJsonConverter(), new JsonStringEnumConverter() }
+    };
+
+    public static void Save(Session session, string path)
+    {
+        session.Settings.LastSessionPath = null;
+        var dto = Document.From(session);
+        MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
+    }
+
+    public static Session FromJson(string json)
+    {
+        var dto = JsonSerializer.Deserialize<Document>(json, Json)
+            ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
+        return dto.ToSession();
+    }
+
+    public static string ToJson(Session session) => JsonSerializer.Serialize(Document.From(session), Json);
+
+    public static void Publish(Session session)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        MixerNative.SessionReplaceText(ToJson(session));
+    }
+
+    public static void ReplaceRuntime(Session session) => Publish(session);
+
+    public static Session Load(string path)
+    {
+        try
+        {
+            var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
+                ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
+            return dto.ToSession();
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(Loc.Error("Load session", 3));
+        }
+    }
+
+    private sealed class Document
+    {
+        public int Version { get; set; } = 2;
+        public SessionSettings Settings { get; set; } = new();
+        public List<InputDto> Inputs { get; set; } = [];
+        public List<SceneDto> Scenes { get; set; } = [];
+        public List<UnitDto> Units { get; set; } = [];
+        public List<OutputEntry> Outputs { get; set; } = [];
+        public List<MultiviewDto> Multiviews { get; set; } = [];
+        public List<AudioBusEntry> Buses { get; set; } = [];
+        public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
+        public List<string> InputTags { get; set; } = [];
+        public List<string> SceneTags { get; set; } = [];
+        public ulong NextInputId { get; set; }
+        public ulong NextSceneId { get; set; }
+        public ulong NextUnitId { get; set; }
+        public ulong NextOutputId { get; set; }
+        public ulong NextMultiviewId { get; set; }
+        public ulong NextBusId { get; set; }
+        public ulong SelectedUnitId { get; set; }
+        public bool HeadphoneCopyMaster { get; set; }
+
+        public static Document From(Session session) => new()
+        {
+            Version = 2,
+            Settings = session.Settings,
+            Inputs = session.Inputs.Select(InputDto.From).ToList(),
+            Scenes = session.Scenes.Select(SceneDto.From).ToList(),
+            Units = session.Units.Select(UnitDto.From).ToList(),
+            Outputs = session.Outputs.Select(output => new OutputEntry
+            {
+                Id = output.Id,
+                Name = output.Name,
+                Transport = output.Transport,
+                SourceKind = output.SourceKind,
+                SourceId = output.SourceId,
+                UnitId = output.UnitId,
+                UseGpu = output.UseGpu,
+                Enabled = output.Enabled,
+                AudioBusId = output.AudioBusId,
+                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers
+            }).ToList(),
+            Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
+            Buses = session.Buses.Select(CloneBus).ToList(),
+            ScenePresets = session.ScenePresets.Select(preset => new SceneLayoutPreset
+            {
+                Name = preset.Name,
+                Layers = [.. preset.Layers]
+            }).ToList(),
+            InputTags = [.. session.InputTags],
+            SceneTags = [.. session.SceneTags],
+            NextInputId = session.NextInputId,
+            NextSceneId = session.NextSceneId,
+            NextUnitId = session.NextUnitId,
+            NextOutputId = session.NextOutputId,
+            NextMultiviewId = session.NextMultiviewId,
+            NextBusId = session.NextBusId,
+            SelectedUnitId = session.SelectedUnitId,
+            HeadphoneCopyMaster = session.HeadphoneCopyMaster
+        };
+
+        public Session ToSession()
+        {
+            var session = new Session { SelectedUnitId = SelectedUnitId, HeadphoneCopyMaster = HeadphoneCopyMaster };
+            session.Settings.MasterFpsNum = Settings.MasterFpsNum;
+            session.Settings.MasterFpsDen = Settings.MasterFpsDen;
+            session.Settings.DefaultWidth = Settings.DefaultWidth;
+            session.Settings.DefaultHeight = Settings.DefaultHeight;
+            session.Settings.Theme = Settings.Theme;
+            session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
+            session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
+            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 3 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
+            session.Settings.FlipSwapchainLimit = Settings.FlipSwapchainLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16
+                ? Settings.FlipSwapchainLimit
+                : 0;
+            session.Settings.InternalColorFormat = Settings.InternalColorFormat;
+            session.Settings.RebarOptimization = Settings.RebarOptimization != false;
+            session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
+            session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
+            session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
+            session.Settings.InactiveColor = RgbColor.FromOrDefault(Settings.InactiveColor, RgbColor.InactiveDefault);
+            session.Settings.MultiviewLabelSize = Settings.MultiviewLabelSize <= 0 ? 18 : Math.Clamp(Settings.MultiviewLabelSize, 1f, 200f);
+            session.Settings.MultiviewLabelUnit = Settings.MultiviewLabelUnit;
+            session.Settings.MultiviewLabelAnchor = Settings.MultiviewLabelAnchor;
+            session.Settings.VmixApiEnabled = Settings.VmixApiEnabledValue;
+            session.Settings.VmixApiPort = Settings.VmixApiPort == 0 ? 8088 : Settings.VmixApiPort;
+            session.Settings.VmixApiUser = Settings.VmixApiUser ?? "";
+            session.Settings.VmixApiPassword = Settings.VmixApiPassword ?? "";
+            session.Settings.VmixTcpEnabled = Settings.VmixTcpEnabledValue;
+            session.Settings.NativeApiEnabled = Settings.NativeApiEnabledValue;
+            session.Settings.NativeApiPort = Settings.NativeApiPort == 0 ? 9400 : Settings.NativeApiPort;
+            foreach (var input in Inputs)
+                session.Inputs.Add(input.ToEntry());
+            foreach (var scene in Scenes)
+                session.Scenes.Add(scene.ToEntry(session));
+            foreach (var unit in Units)
+                session.Units.Add(unit.ToEntry());
+            foreach (var output in Outputs)
+                session.Outputs.Add(output);
+            foreach (var layout in Multiviews)
+                session.Multiviews.Add(layout.ToEntry(session));
+            foreach (var bus in Buses)
+                session.Buses.Add(CloneBus(bus));
+            foreach (var preset in ScenePresets)
+                session.ScenePresets.Add(preset);
+            session.InputTags.AddRange(TagCatalog.NormalizeList(InputTags));
+            session.SceneTags.AddRange(TagCatalog.NormalizeList(SceneTags));
+            session.EnsureDefaultBuses();
+            session.MergeTagCatalogs();
+            session.NextInputId = Math.Max(NextInputId, session.Inputs.Count == 0 ? 10 : session.Inputs.Max(item => item.Id) + 1);
+            session.NextSceneId = Math.Max(NextSceneId, session.Scenes.Count == 0 ? 1 : session.Scenes.Max(item => item.Id) + 1);
+            session.NextUnitId = Math.Max(NextUnitId, session.Units.Count == 0 ? 1 : session.Units.Max(item => item.Id) + 1);
+            session.NextOutputId = Math.Max(NextOutputId, session.Outputs.Count == 0 ? 100 : session.Outputs.Max(item => item.Id) + 1);
+            session.NextMultiviewId = Math.Max(NextMultiviewId, session.Multiviews.Count == 0 ? 1 : session.Multiviews.Max(item => item.Id) + 1);
+            session.NextBusId = Math.Max(NextBusId, session.Buses.Count == 0 ? 3 : session.Buses.Max(item => item.Id) + 1);
+            if (session.Units.Count == 0)
+            {
+                var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1" };
+                unit.EnsureDefaultTransitions();
+                session.Units.Add(unit);
+                session.NextUnitId = 2;
+            }
+            if (session.Scenes.Count == 0)
+                session.AddScene("Scene 1", MixerNative.Bars);
+            return session;
+        }
+    }
+
+    private sealed class InputDto
+    {
+        public ulong Id { get; set; }
+        public string Guid { get; set; } = "";
+        public string Name { get; set; } = "";
+        public InputKind Kind { get; set; }
+        public string? PathOrAddress { get; set; }
+        public float ColorR { get; set; }
+        public float ColorG { get; set; }
+        public float ColorB { get; set; }
+        public bool Scroll { get; set; }
+        public float ToneHz { get; set; }
+        public float ToneLevelDbfs { get; set; } = -20;
+        public uint BusMask { get; set; } = 1;
+        public float Gain { get; set; } = 1;
+        public bool Mute { get; set; }
+        public bool UseGpu { get; set; }
+        public uint FrameBufferFrames { get; set; } = 1;
+        public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
+        public bool KeepFullOnMultiview { get; set; }
+        public OmtQuality OmtQuality { get; set; } = OmtQuality.Default;
+        public NdiBandwidth NdiBandwidth { get; set; } = NdiBandwidth.Highest;
+        public bool VideoLoop { get; set; } = true;
+        public VideoPlayWhen VideoPlayWhen { get; set; } = VideoPlayWhen.Never;
+        public VideoTriggerWhen VideoRestartWhen { get; set; } = VideoTriggerWhen.Never;
+        public VideoTriggerWhen VideoPauseWhen { get; set; } = VideoTriggerWhen.Never;
+        public uint CaptureWidth { get; set; }
+        public uint CaptureHeight { get; set; }
+        public uint CaptureFpsNum { get; set; }
+        public uint CaptureFpsDen { get; set; }
+        public List<string> Tags { get; set; } = [];
+        public MixSource MixSource { get; set; } = MixSource.MuProgram;
+        public ulong MixTargetId { get; set; }
+        public ulong MixAudioBusId { get; set; }
+
+        public static InputDto From(InputEntry input) => new()
+        {
+            Id = input.Id,
+            Guid = input.Guid,
+            Name = input.Name,
+            Kind = input.Kind,
+            PathOrAddress = input.PathOrAddress,
+            ColorR = input.ColorR,
+            ColorG = input.ColorG,
+            ColorB = input.ColorB,
+            Scroll = input.Scroll,
+            ToneHz = input.ToneHz,
+            ToneLevelDbfs = input.ToneLevelDbfs,
+            BusMask = input.Kind == InputKind.Mix ? 0u : (input.BusMask == 0 ? 1u : input.BusMask),
+            Gain = input.Gain,
+            Mute = input.Mute,
+            UseGpu = input.UseGpu,
+            FrameBufferFrames = input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
+            BandwidthSave = input.BandwidthSave,
+            KeepFullOnMultiview = input.KeepFullOnMultiview,
+            OmtQuality = input.OmtQuality,
+            NdiBandwidth = input.NdiBandwidth,
+            VideoLoop = input.VideoLoop,
+            VideoPlayWhen = input.VideoPlayWhen,
+            VideoRestartWhen = input.VideoRestartWhen,
+            VideoPauseWhen = input.VideoPauseWhen,
+            CaptureWidth = input.CaptureWidth,
+            CaptureHeight = input.CaptureHeight,
+            CaptureFpsNum = input.CaptureFpsNum,
+            CaptureFpsDen = input.CaptureFpsDen,
+            Tags = [.. input.Tags],
+            MixSource = input.Kind == InputKind.Mix ? input.MixSource : MixSource.MuProgram,
+            MixTargetId = input.Kind == InputKind.Mix ? input.MixTargetId : 0,
+            MixAudioBusId = input.Kind == InputKind.Mix ? input.MixAudioBusId : 0
+        };
+
+        public InputEntry ToEntry() => new()
+        {
+            Id = Id,
+            Guid = string.IsNullOrWhiteSpace(Guid) ? System.Guid.NewGuid().ToString() : Guid,
+            Name = Name,
+            Kind = Kind,
+            PathOrAddress = PathOrAddress,
+            ColorR = ColorR,
+            ColorG = ColorG,
+            ColorB = ColorB,
+            Scroll = Scroll,
+            ToneHz = ToneHz,
+            ToneLevelDbfs = ToneLevelDbfs,
+            BusMask = Kind == InputKind.Mix ? 0u : (BusMask == 0 ? 1u : BusMask),
+            Gain = MixerNative.MixerGain(Gain),
+            Mute = Mute,
+            UseGpu = UseGpu,
+            FrameBufferFrames = FrameBufferFrames == 0 ? 1 : Math.Clamp(FrameBufferFrames, 1u, 8u),
+            BandwidthSave = BandwidthSave,
+            KeepFullOnMultiview = KeepFullOnMultiview,
+            OmtQuality = OmtQuality,
+            NdiBandwidth = NdiBandwidth,
+            VideoLoop = VideoLoop,
+            VideoPlayWhen = VideoPlayWhen,
+            VideoRestartWhen = VideoRestartWhen,
+            VideoPauseWhen = VideoPauseWhen,
+            CaptureWidth = CaptureWidth,
+            CaptureHeight = CaptureHeight,
+            CaptureFpsNum = CaptureFpsNum,
+            CaptureFpsDen = CaptureFpsDen,
+            Tags = TagCatalog.NormalizeList(Tags),
+            MixSource = Kind == InputKind.Mix ? MixSource : MixSource.MuProgram,
+            MixTargetId = Kind == InputKind.Mix ? MixTargetId : 0,
+            MixAudioBusId = Kind == InputKind.Mix ? MixAudioBusId : 0
+        };
+    }
+
+    private sealed class SceneDto
+    {
+        public ulong Id { get; set; }
+        public string Guid { get; set; } = "";
+        public string Name { get; set; } = "";
+        public List<SceneLayer> Layers { get; set; } = [];
+        public List<string> Tags { get; set; } = [];
+        public bool PreviewCollapsed { get; set; }
+
+        public static SceneDto From(SceneEntry scene) => new()
+        {
+            Id = scene.Id,
+            Guid = scene.Guid,
+            Name = scene.Name,
+            Layers = [.. scene.Layers],
+            Tags = [.. scene.Tags],
+            PreviewCollapsed = scene.PreviewCollapsed
+        };
+
+        public SceneEntry ToEntry(Session session)
+        {
+            var scene = new SceneEntry
+            {
+                Id = Id,
+                Guid = string.IsNullOrWhiteSpace(Guid) ? System.Guid.NewGuid().ToString() : Guid,
+                Name = Name,
+                MonitorId = session.NextMonitorId++,
+                Tags = TagCatalog.NormalizeList(Tags),
+                PreviewCollapsed = PreviewCollapsed
+            };
+            foreach (var layer in Layers)
+                scene.Layers.Add(layer);
+            return scene;
+        }
+    }
+
+    private sealed class UnitDto
+    {
+        public ulong Id { get; set; }
+        public string Name { get; set; } = "";
+        public uint Width { get; set; }
+        public uint Height { get; set; }
+        public uint FpsNum { get; set; }
+        public uint FpsDen { get; set; }
+        public List<TransitionPreset> Transitions { get; set; } = [];
+        public List<OverlaySlot> Overlays { get; set; } = [];
+        public ulong AudioBusId { get; set; } = 1;
+        public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
+        public bool? AlwaysOnTop { get; set; }
+        public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
+        public List<ulong> SwitcherSceneIds { get; set; } = [];
+
+        public static UnitDto From(MixingUnitEntry unit) => new()
+        {
+            Id = unit.Id,
+            Name = unit.Name,
+            Width = unit.Width,
+            Height = unit.Height,
+            FpsNum = unit.FpsNum,
+            FpsDen = unit.FpsDen,
+            Transitions = [.. unit.Transitions],
+            Overlays = [.. unit.Overlays],
+            AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
+            AudioLink = unit.AudioLink,
+            AlwaysOnTop = unit.AlwaysOnTop,
+            SwitcherSceneFilter = unit.SwitcherSceneFilter,
+            SwitcherSceneIds = [.. unit.SwitcherSceneIds]
+        };
+
+        public MixingUnitEntry ToEntry()
+        {
+            var unit = new MixingUnitEntry
+            {
+                Id = Id,
+                Name = Name,
+                Width = Width == 0 ? 1920 : Width,
+                Height = Height == 0 ? 1080 : Height,
+                FpsNum = FpsNum == 0 ? 60_000 : FpsNum,
+                FpsDen = FpsDen == 0 ? 1_001 : FpsDen,
+                AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
+                AudioLink = AudioLink,
+                AlwaysOnTop = AlwaysOnTop ?? true,
+                SwitcherSceneFilter = SwitcherSceneFilter
+            };
+            foreach (var preset in Transitions)
+                unit.Transitions.Add(preset);
+            foreach (var overlay in Overlays)
+                unit.Overlays.Add(overlay);
+            foreach (var id in SwitcherSceneIds)
+                unit.SwitcherSceneIds.Add(id);
+            unit.EnsureDefaultTransitions();
+            return unit;
+        }
+    }
+
+    private sealed class MultiviewDto
+    {
+        public ulong Id { get; set; }
+        public string Name { get; set; } = "";
+        public ulong PreviewUnitId { get; set; }
+        public ulong ProgramUnitId { get; set; }
+        public uint PresentInterval { get; set; }
+        public MultiviewTemplate Template { get; set; } = MultiviewTemplate.PreviewProgram8;
+        public List<MvSlot> Tiles { get; set; } = [];
+        public bool PreviewLabelFollow { get; set; } = true;
+        public string PreviewLabel { get; set; } = "";
+        public bool ProgramLabelFollow { get; set; } = true;
+        public string ProgramLabel { get; set; } = "";
+        public MvLabelAnchor? LabelAnchor { get; set; }
+        public float? LabelSize { get; set; }
+        public MvLabelUnit? LabelUnit { get; set; }
+        public bool? AlwaysOnTop { get; set; }
+
+        public static MultiviewDto From(MultiviewLayout layout) => new()
+        {
+            Id = layout.Id,
+            Name = layout.Name,
+            PreviewUnitId = layout.PreviewUnitId,
+            ProgramUnitId = layout.ProgramUnitId,
+            PresentInterval = layout.PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(layout.PresentInterval),
+            Template = layout.Template,
+            Tiles = [.. layout.Tiles],
+            PreviewLabelFollow = layout.PreviewLabelFollow,
+            PreviewLabel = layout.PreviewLabel ?? "",
+            ProgramLabelFollow = layout.ProgramLabelFollow,
+            ProgramLabel = layout.ProgramLabel ?? "",
+            LabelAnchor = layout.LabelAnchor,
+            LabelSize = layout.LabelSize,
+            LabelUnit = layout.LabelUnit,
+            AlwaysOnTop = layout.AlwaysOnTop
+        };
+
+        public MultiviewLayout ToEntry(Session session)
+        {
+            var layout = new MultiviewLayout
+            {
+                Id = Id,
+                Name = string.IsNullOrWhiteSpace(Name) ? $"Multiview {Id}" : Name,
+                MonitorId = session.NextMonitorId++,
+                PreviewUnitId = PreviewUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : PreviewUnitId,
+                ProgramUnitId = ProgramUnitId == 0 ? session.Settings.DefaultMultiviewUnitId : ProgramUnitId,
+                PresentInterval = PresentInterval == 0 ? 0 : MultiviewLayout.ClampPresentInterval(PresentInterval),
+                Template = Template,
+                PreviewLabelFollow = PreviewLabelFollow,
+                PreviewLabel = PreviewLabel ?? "",
+                ProgramLabelFollow = ProgramLabelFollow,
+                ProgramLabel = ProgramLabel ?? "",
+                LabelAnchor = LabelAnchor ?? session.Settings.MultiviewLabelAnchor,
+                LabelSize = LabelSize ?? session.Settings.MultiviewLabelSize,
+                LabelUnit = LabelUnit ?? session.Settings.MultiviewLabelUnit,
+                AlwaysOnTop = AlwaysOnTop ?? true
+            };
+            foreach (var tile in Tiles)
+                layout.Tiles.Add(tile);
+            layout.EnsureTiles();
+            return layout;
+        }
+    }
+
+    private static AudioBusEntry CloneBus(AudioBusEntry bus) => new()
+    {
+        Id = bus.Id,
+        Name = bus.Name,
+        Role = bus.Role,
+        DeviceKind = bus.DeviceKind,
+        DeviceId = bus.DeviceId,
+        MapLeft = bus.MapLeft,
+        MapRight = bus.MapRight,
+        Exclusive = bus.Exclusive,
+        Bit = bus.Bit,
+        Gain = MixerNative.MixerGain(bus.Gain),
+        Mute = bus.Mute
+    };
+}
+
+internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
+{
+    public override InputKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.GetString();
+        return text switch
+        {
+            "OMT" or "Omt" or "omt" => InputKind.OMT,
+            "NDI" or "Ndi" or "ndi" => InputKind.NDI,
+            "UVC" or "Uvc" or "uvc" => InputKind.UVC,
+            "Color" or "color" => InputKind.Color,
+            "Bars" or "bars" => InputKind.Bars,
+            "Black" or "black" => InputKind.Black,
+            "Still" or "still" => InputKind.Still,
+            "Video" or "video" => InputKind.Video,
+            "Mix" or "mix" => InputKind.Mix,
+            _ => throw new JsonException($"Unknown InputKind '{text}'.")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, InputKind value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            InputKind.OMT => "OMT",
+            InputKind.NDI => "NDI",
+            InputKind.UVC => "UVC",
+            _ => value.ToString()
+        });
+}

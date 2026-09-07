@@ -2,6 +2,8 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use eiviz_mixer::{BACKEND_VULKAN, mixer_backend, mixer_create_with_backend};
 use eiviz_mixer::{
     EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
     MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OUTPUT_SOURCE,
@@ -89,7 +91,7 @@ fn vmx_roundtrip_is_available() {
 
 /// Headless contract: compose + OMT + cut/auto without attach / HWND.
 #[test]
-fn dx12_compose_omt_and_program_out() {
+fn compose_omt_and_program_out() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert!(mixer_audio_bus_count() >= 2);
@@ -424,7 +426,7 @@ fn omt_program_sends_master_audio() {
 }
 
 #[test]
-fn dx12_omt_gpu_in_and_out() {
+fn omt_gpu_in_and_out() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
@@ -1386,5 +1388,21 @@ fn snapshot_writes_png() {
     let input_bytes = std::fs::read(&input_path).expect("input png");
     assert!(input_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let _ = std::fs::remove_file(&input_path);
+    mixer_destroy();
+}
+
+/// Windows CI adapters can enumerate Vulkan and then hang inside mixer create.
+/// Linux Vulkan is covered by the dedicated CI job.
+#[cfg(target_os = "linux")]
+#[test]
+fn vulkan_backend_is_explicit() {
+    mixer_destroy();
+    let code = mixer_create_with_backend(BACKEND_VULKAN, 0, 60_000, 1_001);
+    if code != OK {
+        mixer_destroy();
+        return;
+    }
+    assert_eq!(mixer_backend(), BACKEND_VULKAN);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
     mixer_destroy();
 }

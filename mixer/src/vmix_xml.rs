@@ -10,7 +10,7 @@ use vmix_core::{
 use crate::abi::{DURATION_FRAMES, DURATION_MS, SCENE_BASE, TRANSITION_FADE};
 use crate::session::{Document, InputKind, TransitionPreset, UnitDto};
 
-const VERSION: &str = "0.2.0";
+pub(crate) const VERSION: &str = "0.2.1-beta.1";
 const EDITION: &str = "eiviz";
 
 #[derive(Debug, Clone)]
@@ -405,9 +405,9 @@ fn input_type(kind: InputKind) -> String {
         InputKind::Bars => "Colour",
         InputKind::Still => "Image",
         InputKind::Video => "Video",
-        InputKind::Omt => "OMT",
-        InputKind::Ndi => "NDI",
-        InputKind::Uvc => "Capture",
+        InputKind::OMT => "OMT",
+        InputKind::NDI => "NDI",
+        InputKind::UVC => "Capture",
         InputKind::Mix => "Mix",
     }
     .into()

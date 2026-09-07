@@ -37,6 +37,8 @@ This site covers how to use eiviz, why it exists, and how it is meant to be run 
 - [Decklink](/eiviz/en/features/outputs/decklink/) — output to DeckLink
 - [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/) — audio output and ASIO
 - [Vision Mixing](/eiviz/en/features/vision-mixing/) — multi M/E switching with Mixing Units
+- [Remote connection](/eiviz/en/features/remote/) — operate another eiviz from the GUI
+- [Headless](/eiviz/en/features/headless/) — run the mixer without a GUI, then operate it from eivizctl or Remote
 
 ## Developers
 

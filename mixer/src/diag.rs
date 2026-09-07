@@ -164,8 +164,8 @@ fn timestamp() -> u64 {
 }
 
 fn write_http(level: &str, message: &str) {
+    write(level, message);
     let line = format!("{} {level} {message}\n", timestamp());
-    eprint!("HTTP {line}");
     let Ok(mut slot) = HTTP_LOG.lock() else {
         return;
     };
@@ -283,6 +283,14 @@ pub fn mark_fatal(message: impl Into<String>) {
 
 pub fn is_fatal() -> bool {
     FATAL.load(Ordering::Acquire)
+}
+
+pub fn reset_generation() {
+    FATAL.store(false, Ordering::Release);
+    FATAL_TAKEN.store(false, Ordering::Release);
+    if let Ok(mut slot) = FATAL_MSG.lock() {
+        slot.clear();
+    }
 }
 
 /// First caller receives the message. Later callers get `None` so the host

@@ -39,24 +39,49 @@ pub enum DeviceError {
     #[error("no GPU adapter is available")]
     NoAdapter,
     #[error("this platform has no supported GPU backend")]
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     UnsupportedPlatform,
+    #[error("GPU adapter backend {actual:?} is not the required {expected:?} backend")]
+    WrongBackend {
+        expected: wgpu::Backend,
+        actual: wgpu::Backend,
+    },
+    #[error("GPU backend {requested:?} is not supported on this OS (default is {os_default:?})")]
+    UnsupportedBackend {
+        requested: wgpu::Backend,
+        os_default: wgpu::Backend,
+    },
     #[error("failed to create the GPU device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
 }
 
-/// Single GPU device shared by all mixing units. Backend is fixed per OS.
+/// Single GPU device shared by all mixing units. Backend is chosen at create time.
 pub struct GpuDevice {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    #[cfg(any(windows, target_os = "linux"))]
+    pub vulkan: Option<crate::vk_video::VulkanDecode>,
+}
+
+pub(crate) fn on_uncaptured_gpu_error(error: wgpu::Error) {
+    if SURFACE_CONFIGURE.get() {
+        SURFACE_CONFIGURE_FAILED.set(true);
+        return;
+    }
+    let text = format!("{error}");
+    if is_surface_local_error(&text) {
+        crate::diag::error(&format!("wgpu surface: {text}"));
+        return;
+    }
+    crate::diag::mark_fatal(format!("GPU device error: {text}"));
 }
 
 impl GpuDevice {
-    pub fn new() -> Result<Self, DeviceError> {
-        let backends = Self::backends()?;
-        let instance = wgpu::Instance::new(instance_descriptor(backends));
+    pub fn with_backend(request: BackendRequest) -> Result<Self, DeviceError> {
+        let expected = request.resolve()?;
+        let instance = wgpu::Instance::new(instance_descriptor(wgpu::Backends::from(expected)));
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
@@ -64,27 +89,33 @@ impl GpuDevice {
             ..Default::default()
         }))
         .map_err(|_| DeviceError::NoAdapter)?;
+        let info = adapter.get_info();
+        if info.backend != expected {
+            return Err(DeviceError::WrongBackend {
+                expected,
+                actual: info.backend,
+            });
+        }
+        #[cfg(any(windows, target_os = "linux"))]
+        if expected == wgpu::Backend::Vulkan {
+            return crate::vk_video::create_vulkan_gpu_device(instance, adapter);
+        }
+        crate::diag::info(&format!(
+            "gpu adapter backend={:?} type={:?} name={} driver={}",
+            info.backend, info.device_type, info.name, info.driver
+        ));
 
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
-        device.on_uncaptured_error(Arc::new(|error| {
-            if SURFACE_CONFIGURE.get() {
-                SURFACE_CONFIGURE_FAILED.set(true);
-                return;
-            }
-            let text = format!("{error}");
-            if is_surface_local_error(&text) {
-                crate::diag::error(&format!("wgpu surface: {text}"));
-                return;
-            }
-            crate::diag::mark_fatal(format!("GPU device error: {text}"));
-        }));
+        device.on_uncaptured_error(Arc::new(on_uncaptured_gpu_error));
 
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
+            #[cfg(any(windows, target_os = "linux"))]
+            vulkan: None,
         })
     }
 
@@ -95,20 +126,90 @@ impl GpuDevice {
         let _guard = lock_gpu_queue();
         self.queue.submit(command_buffers)
     }
+}
 
-    fn backends() -> Result<wgpu::Backends, DeviceError> {
-        #[cfg(windows)]
-        {
-            Ok(wgpu::Backends::DX12)
+/// Requested wgpu backend. Auto selects the OS default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackendRequest {
+    Auto,
+    Dx12,
+    Vulkan,
+    Metal,
+}
+
+impl BackendRequest {
+    pub fn from_abi(value: u32) -> Option<Self> {
+        match value {
+            crate::abi::BACKEND_AUTO => Some(Self::Auto),
+            crate::abi::BACKEND_DX12 => Some(Self::Dx12),
+            crate::abi::BACKEND_VULKAN => Some(Self::Vulkan),
+            crate::abi::BACKEND_METAL => Some(Self::Metal),
+            _ => None,
         }
-        #[cfg(target_os = "macos")]
-        {
-            Ok(wgpu::Backends::METAL)
+    }
+
+    pub fn resolve(self) -> Result<wgpu::Backend, DeviceError> {
+        let requested = match self {
+            Self::Auto => return os_default_backend(),
+            Self::Dx12 => wgpu::Backend::Dx12,
+            Self::Vulkan => wgpu::Backend::Vulkan,
+            Self::Metal => wgpu::Backend::Metal,
+        };
+        let default = os_default_backend()?;
+        if !os_allowed_backends()?.contains(requested.into()) {
+            return Err(DeviceError::UnsupportedBackend {
+                requested,
+                os_default: default,
+            });
         }
-        #[cfg(not(any(windows, target_os = "macos")))]
-        {
-            Err(DeviceError::UnsupportedPlatform)
-        }
+        Ok(requested)
+    }
+}
+
+fn os_default_backend() -> Result<wgpu::Backend, DeviceError> {
+    #[cfg(windows)]
+    {
+        Ok(wgpu::Backend::Dx12)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(wgpu::Backend::Metal)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(wgpu::Backend::Vulkan)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        Err(DeviceError::UnsupportedPlatform)
+    }
+}
+
+fn os_allowed_backends() -> Result<wgpu::Backends, DeviceError> {
+    #[cfg(windows)]
+    {
+        Ok(wgpu::Backends::DX12 | wgpu::Backends::VULKAN)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(wgpu::Backends::METAL)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(wgpu::Backends::VULKAN)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        Err(DeviceError::UnsupportedPlatform)
+    }
+}
+
+pub fn abi_of_backend(backend: wgpu::Backend) -> u32 {
+    match backend {
+        wgpu::Backend::Dx12 => crate::abi::BACKEND_DX12,
+        wgpu::Backend::Vulkan => crate::abi::BACKEND_VULKAN,
+        wgpu::Backend::Metal => crate::abi::BACKEND_METAL,
+        _ => crate::abi::BACKEND_AUTO,
     }
 }
 
@@ -216,6 +317,35 @@ mod tests {
                 );
             }
             other => panic!("expected DynamicDxc, got {other:?}"),
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn selected_backend_matches_policy() {
+        let device = GpuDevice::with_backend(BackendRequest::Auto).expect("gpu");
+        assert_eq!(
+            device.adapter.get_info().backend,
+            os_default_backend().expect("os default"),
+            "Auto must select the OS default wgpu backend"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vulkan_backend_can_be_requested() {
+        match GpuDevice::with_backend(BackendRequest::Vulkan) {
+            Ok(device) => {
+                assert_eq!(device.adapter.get_info().backend, wgpu::Backend::Vulkan);
+                let _ = crate::rebar::probe(&device);
+                let _ = crate::rebar::FrameUploader::new(&device);
+            }
+            Err(
+                DeviceError::NoAdapter
+                | DeviceError::UnsupportedBackend { .. }
+                | DeviceError::RequestDevice(_),
+            ) => {}
+            Err(error) => panic!("{error}"),
         }
     }
 }

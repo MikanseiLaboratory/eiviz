@@ -5,6 +5,11 @@ pub const ERR_INVALID_ARGUMENT: i32 = 3;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
 
+pub const BACKEND_AUTO: u32 = 0;
+pub const BACKEND_DX12: u32 = 1;
+pub const BACKEND_VULKAN: u32 = 2;
+pub const BACKEND_METAL: u32 = 3;
+
 pub const SRC_COLOR: u64 = 1;
 pub const SRC_BARS: u64 = 2;
 pub const SRC_BLACK: u64 = 3;
@@ -149,6 +154,13 @@ pub struct MixerVideoInfo {
     pub is_file: u32,
     pub position_hns: i64,
     pub duration_hns: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerSourceStatus {
+    pub connected: u32,
+    pub has_video: u32,
 }
 
 #[repr(C)]
@@ -347,7 +359,7 @@ impl MixInputSpec {
 }
 
 pub fn is_scene(source_id: u64) -> bool {
-    source_id >= SCENE_BASE && source_id < MU_SOURCE_FLAG
+    source_id >= SCENE_BASE && source_id < MULTIVIEW_BASE
 }
 
 pub fn is_multiview(source_id: u64) -> bool {

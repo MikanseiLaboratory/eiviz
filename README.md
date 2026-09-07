@@ -22,26 +22,21 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 
 ### Windows x64
 
-Run `eiviz-*-win-x64-setup.exe`.  
-Or unzip the zip and run `Eiviz.Host.exe`.
+Run `eiviz-*-win-x64-setup.exe`.
 
 ### macOS Apple Silicon (`macos-arm64`)
 
-Run `eiviz-*-macos-arm64.pkg` to install into `/Applications`.
-
-Or unzip the zip, then:
-
-```bash
-cd eiviz-*-macos-arm64
-xattr -cr .
-open eiviz-mac.app
-```
+Run `eiviz-*-macos-arm64.pkg` to install into `/Applications`. The mixer is `eiviz.app`; the operator client is `eiviz-remote.app`. `eivizctl` and `eiviz-headless` install to `/usr/local/bin`.
 
 The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
 
 ### macOS Intel (`macos-x64`)
 
-Same steps, with the `macos-x64` pkg or zip.
+Same steps, with the `macos-x64` pkg.
+
+### Linux
+
+Linux currently ships as CLI (headless) only. Build from source and run `eiviz-headless`. See [Headless](https://mikanseilaboratory.github.io/eiviz/en/features/headless/). A Release build is strongly recommended for performance.
 
 ## What it is
 

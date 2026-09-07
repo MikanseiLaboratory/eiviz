@@ -1,15 +1,23 @@
 [package]
 name = "eiviz_mixer"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
-authors = ["Shugo Kawamura", "Mikansei Laboratory"]
-license = "PolyForm-Shield-1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+    crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Always compiled. Kept so older `cargo build --features control-api` still works.
+control-api = []
 
 [dependencies]
+eiviz-control.workspace = true
+eiviz-api.workspace = true
+tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -17,9 +25,9 @@ openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatra
 pollster = "0.4"
 raw-window-handle = "0.6"
 base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
 vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "e6cccd45bf6bb0fb6b0617ccc55c74ea4a03c657" }
@@ -27,8 +35,10 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
 [target.'cfg(windows)'.dependencies]
+ash = "0.38"
 grafton-ndi = { version = "1.0", default-features = false }
-wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12"] }
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D11on12", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Devices_FunctionDiscovery", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -37,6 +47,11 @@ grafton-ndi = { version = "1.0", default-features = false }
 objc2 = "0.6.4"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "vulkan"] }
 
 [build-dependencies]
 cc = "1"

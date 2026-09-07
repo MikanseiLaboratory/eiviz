@@ -214,10 +214,7 @@ pub struct Composer {
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
     scene_gpu_pct: HashMap<u64, f32>,
-    #[cfg(windows)]
-    rebar: Option<crate::rebar::RebarUploader>,
-    #[cfg(target_os = "macos")]
-    uma: Option<crate::rebar::UmaUploader>,
+    uploader: Option<crate::rebar::FrameUploader>,
 }
 
 impl Composer {
@@ -439,10 +436,7 @@ impl Composer {
             color_group,
             gpu_epoch: 1,
             scene_gpu_pct: HashMap::new(),
-            #[cfg(windows)]
-            rebar: crate::rebar::RebarUploader::new(device),
-            #[cfg(target_os = "macos")]
-            uma: crate::rebar::UmaUploader::new(device),
+            uploader: crate::rebar::FrameUploader::new(device),
         })
     }
 
@@ -554,18 +548,9 @@ impl Composer {
         use_rebar: bool,
         direct_sample: bool,
     ) {
-        #[cfg(not(windows))]
-        let _ = use_rebar;
         let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
-        #[cfg(windows)]
-        let _ = needed;
-        #[cfg(target_os = "macos")]
-        if let Some(uma) = self.uma.as_mut() {
-            if direct_sample {
-                uma.retain(&needed);
-            } else {
-                uma.clear();
-            }
+        if let Some(uploader) = self.uploader.as_mut() {
+            uploader.retain_direct(&needed, direct_sample);
         }
         for snap in snaps {
             let id = snap.id;
@@ -577,32 +562,33 @@ impl Composer {
             if let Some(frame) = snap.gpu.as_ref() {
                 let tex_w = frame.texture.size().width;
                 let tex_h = frame.texture.size().height;
-                let needs_new = self.sources.get(&id).is_none_or(|gpu| {
+                // GPU ingest already owns a current texture. Skipping on equal
+                // PTS kept the first (often empty) handle when senders stamp 0.
+                let layout_changed = self.sources.get(&id).is_none_or(|gpu| {
                     gpu.width != tex_w
                         || gpu.height != tex_h
                         || gpu.packed != frame.packed
                         || gpu.bgra != frame.bgra
-                        || gpu.uploaded_pts != frame.pts
                 });
-                if needs_new {
-                    self.blit_groups.remove(&id);
-                    self.uyvy_groups.remove(&id);
+                self.blit_groups.remove(&id);
+                self.uyvy_groups.remove(&id);
+                if layout_changed {
                     self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
-                    self.sources.insert(
-                        id,
-                        SourceGpu {
-                            texture: frame.texture.clone(),
-                            view: frame.view.clone(),
-                            width: tex_w,
-                            height: tex_h,
-                            packed: frame.packed,
-                            bgra: frame.bgra,
-                            uploaded_pts: frame.pts,
-                            direct: false,
-                            owned: false,
-                        },
-                    );
                 }
+                self.sources.insert(
+                    id,
+                    SourceGpu {
+                        texture: frame.texture.clone(),
+                        view: frame.view.clone(),
+                        width: tex_w,
+                        height: tex_h,
+                        packed: frame.packed,
+                        bgra: frame.bgra,
+                        uploaded_pts: frame.pts,
+                        direct: false,
+                        owned: false,
+                    },
+                );
                 continue;
             }
             if snap.format == CpuFormat::GpuRgba {
@@ -632,10 +618,9 @@ impl Composer {
                 wgpu::TextureFormat::Rgba8Unorm
             };
             let pixels = snap.pixels.as_slice();
-            #[cfg(target_os = "macos")]
             if direct_sample {
-                if let Some(uploader) = self.uma.as_mut() {
-                    if let Ok((texture, view)) = uploader.upload_direct(
+                if let Some(uploader) = self.uploader.as_mut() {
+                    if let Some(Ok((texture, view))) = uploader.upload_direct(
                         device,
                         id,
                         pixels,
@@ -718,16 +703,14 @@ impl Composer {
                 snap.height,
                 tex_w,
                 format,
-                #[cfg(windows)]
-                self.rebar.as_mut().filter(|_| use_rebar),
+                self.uploader.as_mut().filter(|_| use_rebar),
             );
             if let Some(gpu) = self.sources.get_mut(&id) {
                 gpu.uploaded_pts = snap.last_pts;
             }
         }
-        #[cfg(windows)]
-        if let Some(rebar) = self.rebar.as_mut() {
-            rebar.flush(device);
+        if let Some(uploader) = self.uploader.as_mut() {
+            uploader.flush(device);
         }
     }
 
@@ -1021,8 +1004,7 @@ impl Composer {
             raster.height,
             raster.width,
             wgpu::TextureFormat::Rgba8Unorm,
-            #[cfg(windows)]
-            self.rebar.as_mut(),
+            self.uploader.as_mut(),
         );
         let view = texture.create_view(&Default::default());
         self.blit_groups.remove(&label_cache_key(&key));
@@ -2899,10 +2881,9 @@ fn write_aligned_texture(
     height: u32,
     tex_width: u32,
     format: wgpu::TextureFormat,
-    #[cfg(windows)] rebar: Option<&mut crate::rebar::RebarUploader>,
+    uploader: Option<&mut crate::rebar::FrameUploader>,
 ) {
-    #[cfg(windows)]
-    if let Some(uploader) = rebar {
+    if let Some(uploader) = uploader {
         if uploader
             .upload(device, texture, data, row_bytes, height, tex_width, format)
             .is_ok()
@@ -2910,8 +2891,6 @@ fn write_aligned_texture(
             return;
         }
     }
-    #[cfg(not(windows))]
-    let _ = format;
     let aligned = row_bytes.div_ceil(256) * 256;
     let (bytes, pitch) = if aligned == row_bytes {
         (Cow::Borrowed(data), row_bytes)

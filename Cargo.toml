@@ -1,0 +1,33 @@
+[workspace]
+members = ["mixer", "crates/eiviz-control", "crates/eiviz-api", "crates/eiviz-remote", "headless"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+authors = ["Shugo Kawamura", "Mikansei Laboratory"]
+license = "PolyForm-Shield-1.0.0"
+
+[workspace.dependencies]
+eiviz-control = { path = "crates/eiviz-control" }
+eiviz-api = { path = "crates/eiviz-api" }
+eiviz_remote = { path = "crates/eiviz-remote" }
+eiviz_mixer = { path = "mixer" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+subtle = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util"] }
+tokio-tungstenite = "0.26"
+prost = "0.13"
+prost-types = "0.13"
+clap = { version = "4", features = ["derive", "env"] }
+tiny_http = "0.12"
+
+[profile.dev.package.eiviz-control]
+opt-level = 1
+
+[profile.test.package.eiviz-control]
+opt-level = 1

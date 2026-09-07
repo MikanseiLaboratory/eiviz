@@ -1,0 +1,160 @@
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Eiviz.Host;
+
+internal enum AppLanguage
+{
+    En,
+    Ja
+}
+
+internal enum AppThemeMode
+{
+    Dark,
+    Light,
+    System
+}
+
+internal sealed class AppPrefs
+{
+    private const int RecentCap = 12;
+    private const int InputCap = 24;
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+
+    public HostConnectionMode ConnectionMode { get; set; } = HostConnectionMode.Local;
+    public string RemoteUrl { get; set; } = "ws://127.0.0.1:9400";
+    public bool NativeApiEnabled { get; set; } = true;
+    public string NativeApiBind { get; set; } = "127.0.0.1";
+    public uint NativeApiPort { get; set; } = 9400;
+    public string NativeApiRole { get; set; } = "admin";
+    public string MediaDirectory { get; set; } = DefaultMediaDirectory;
+    public AppLanguage Language { get; set; } = DefaultLanguage();
+    public AppThemeMode Theme { get; set; } = AppThemeMode.Dark;
+    public GpuRenderer Renderer { get; set; } = GpuRenderer.Auto;
+    public List<string> RecentSessions { get; set; } = [];
+    public List<string> RecentRemotes { get; set; } = [];
+    public List<string> RecentStills { get; set; } = [];
+    public List<string> RecentVideos { get; set; } = [];
+    public string PreviewVideoAddress { get; set; } = "";
+    public string PreviewVideoTransport { get; set; } = "OMT";
+    public string ProgramVideoAddress { get; set; } = "";
+    public string ProgramVideoTransport { get; set; } = "OMT";
+    public string MultiviewVideoAddress { get; set; } = "";
+    public string MultiviewVideoTransport { get; set; } = "OMT";
+    public string RemoteVideoLayout { get; set; } = "previewProgram";
+    public bool RemoteOmtUseGpu { get; set; }
+
+    public static AppPrefs Current { get; private set; } = Load();
+
+    public static string StorePath =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "eiviz",
+            HostRole.IsRemote ? "remote-prefs.json" : "prefs.json");
+
+    public static string DefaultMediaDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "eiviz", "media");
+
+    [JsonIgnore]
+    public string ResolvedMediaDirectory =>
+        string.IsNullOrWhiteSpace(MediaDirectory) ? DefaultMediaDirectory : MediaDirectory.Trim();
+
+    public static AppPrefs Load()
+    {
+        try
+        {
+            if (File.Exists(StorePath))
+            {
+                var loaded = JsonSerializer.Deserialize<AppPrefs>(File.ReadAllText(StorePath), Json);
+                if (loaded is not null)
+                {
+                    loaded.RecentSessions = Clean(loaded.RecentSessions, RecentCap);
+                    loaded.RecentRemotes = Clean(loaded.RecentRemotes, RecentCap);
+                    loaded.RecentStills = Clean(loaded.RecentStills, InputCap);
+                    loaded.RecentVideos = Clean(loaded.RecentVideos, InputCap);
+                    if (string.IsNullOrWhiteSpace(loaded.MediaDirectory))
+                        loaded.MediaDirectory = DefaultMediaDirectory;
+                    return loaded;
+                }
+            }
+        }
+        catch
+        {
+            // Keep defaults when the prefs file is missing or unreadable.
+        }
+        return new AppPrefs();
+    }
+
+    [JsonIgnore]
+    public uint CreateAbi => Renderer.CreateAbi();
+
+    public void Save()
+    {
+        var dir = Path.GetDirectoryName(StorePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(StorePath, JsonSerializer.Serialize(this, Json));
+    }
+
+    public void RememberSession(string path)
+    {
+        Remember(RecentSessions, path, RecentCap);
+        Save();
+    }
+
+    public void RememberRemote(string url)
+    {
+        Remember(RecentRemotes, url, RecentCap);
+        Save();
+    }
+
+    public void RememberStill(string path)
+    {
+        Remember(RecentStills, path, InputCap);
+        Save();
+    }
+
+    public void RememberVideo(string path)
+    {
+        Remember(RecentVideos, path, InputCap);
+        Save();
+    }
+
+    public IEnumerable<string> ExistingSessions()
+    {
+        var keep = RecentSessions.Where(File.Exists).ToList();
+        if (keep.Count != RecentSessions.Count)
+        {
+            RecentSessions = keep;
+            Save();
+        }
+        return keep;
+    }
+
+    private static void Remember(List<string> list, string path, int cap)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+        list.Remove(path);
+        list.Insert(0, path);
+        if (list.Count > cap)
+            list.RemoveRange(cap, list.Count - cap);
+    }
+
+    private static List<string> Clean(List<string>? list, int cap) =>
+        (list ?? []).Where(item => !string.IsNullOrWhiteSpace(item)).Distinct().Take(cap).ToList();
+
+    private static AppLanguage DefaultLanguage()
+    {
+        var name = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        return name == "ja" ? AppLanguage.Ja : AppLanguage.En;
+    }
+}

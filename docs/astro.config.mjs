@@ -187,6 +187,8 @@ export default defineConfig({
 							],
 						},
 						'features/vision-mixing',
+						'features/remote',
+						'features/headless',
 					],
 				},
 				{

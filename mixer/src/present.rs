@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -34,6 +33,7 @@ pub struct Presenter {
     pending: Option<(u32, u32)>,
     ready: bool,
     occluded_streak: u32,
+    native: NativeSurface,
 }
 
 #[derive(Default)]
@@ -56,7 +56,7 @@ impl Presenters {
         prepared: Option<PreparedSurface>,
     ) -> Result<(), String> {
         let presenter = match prepared {
-            Some(prepared) => presenter_from_prepared(device, prepared)?,
+            Some(prepared) => presenter_from_prepared(device, prepared, surface)?,
             None => create_presenter(device, surface, width, height)?,
         };
         self.by_key.insert((unit_id, kind, surface), presenter);
@@ -99,7 +99,7 @@ impl Presenters {
         prepared: Option<PreparedSurface>,
     ) -> Result<(), String> {
         let presenter = match prepared {
-            Some(prepared) => presenter_from_prepared(device, prepared)?,
+            Some(prepared) => presenter_from_prepared(device, prepared, surface)?,
             None => create_presenter(device, surface, width, height)?,
         };
         self.monitors.insert(monitor_id, presenter);
@@ -170,28 +170,7 @@ impl Presenters {
                 (unit_id, kind, surface, cache_key, view_for(unit_id, kind))
             })
             .collect();
-        let mut encoder = device
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("eiviz present"),
-            });
-        let mut acquired = Vec::new();
-        for (unit_id, kind, surface, cache_key, view) in planned {
-            let Some(presenter) = self.by_key.get_mut(&(unit_id, kind, surface)) else {
-                continue;
-            };
-            if let Some(item) = draw_presenter(
-                device,
-                presenter,
-                cache_key,
-                view.as_ref(),
-                false,
-                &mut encoder,
-            ) {
-                acquired.push(item);
-            }
-        }
-        submit_presents(device, encoder, acquired)
+        present_pass(self, device, &planned)
     }
 
     pub fn present_monitors(
@@ -237,18 +216,37 @@ fn reconfigure_pending_inner(device: &GpuDevice, presenters: &mut Presenters) {
     }
 }
 
+#[cfg(windows)]
+fn win32_hinstance(hwnd: std::num::NonZeroIsize) -> Option<std::num::NonZeroIsize> {
+    const GWLP_HINSTANCE: i32 = -6;
+    unsafe extern "system" {
+        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+        fn GetModuleHandleW(name: *const u16) -> isize;
+    }
+    let from_window = unsafe { GetWindowLongPtrW(hwnd.get(), GWLP_HINSTANCE) };
+    std::num::NonZeroIsize::new(from_window)
+        .or_else(|| std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) }))
+}
+
+#[cfg(windows)]
+fn win32_window_handle(hwnd: std::num::NonZeroIsize) -> raw_window_handle::Win32WindowHandle {
+    let mut handle = raw_window_handle::Win32WindowHandle::new(hwnd);
+    handle.hinstance = win32_hinstance(hwnd);
+    handle
+}
+
 fn raw_handles(surface: NativeSurface) -> Result<(RawDisplayHandle, RawWindowHandle), String> {
     match surface.kind {
         #[cfg(windows)]
         crate::abi::NATIVE_WIN32_HWND => {
             use std::num::NonZeroIsize;
 
-            use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+            use raw_window_handle::WindowsDisplayHandle;
 
             let hwnd = NonZeroIsize::new(surface.handle).ok_or("HWND cannot be null")?;
             Ok((
                 RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
-                RawWindowHandle::Win32(Win32WindowHandle::new(hwnd)),
+                RawWindowHandle::Win32(win32_window_handle(hwnd)),
             ))
         }
         #[cfg(target_os = "macos")]
@@ -282,7 +280,7 @@ fn create_presenter(
         width,
         height,
     )?;
-    presenter_from_prepared(device, prepared)
+    presenter_from_prepared(device, prepared, surface)
 }
 
 pub(crate) fn prepare_surface(
@@ -301,7 +299,7 @@ pub(crate) fn prepare_surface(
                 raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
             })
-            .map_err(|error| error.to_string())?
+            .map_err(|error| format!("create_surface: {error}"))?
     };
     let mut config = surface
         .get_default_config(adapter, width.max(2), height.max(2))
@@ -318,6 +316,7 @@ pub(crate) fn prepare_surface(
 fn presenter_from_prepared(
     device: &GpuDevice,
     prepared: PreparedSurface,
+    native: NativeSurface,
 ) -> Result<Presenter, String> {
     let (layout, present, uyvy, sampler) = present_pipelines(device, prepared.config.format)?;
     let params = device.device.create_buffer(&wgpu::BufferDescriptor {
@@ -339,6 +338,7 @@ fn presenter_from_prepared(
         pending: None,
         ready: true,
         occluded_streak: 0,
+        native,
     })
 }
 
@@ -380,22 +380,36 @@ fn present_monitor_group(
             Some((monitor_id, source_id ^ epoch.rotate_left(8), view, packed))
         })
         .collect();
+    present_monitor_pass(presenters, device, &planned)
+}
+
+fn present_pass(
+    presenters: &mut Presenters,
+    device: &GpuDevice,
+    planned: &[(
+        u64,
+        u32,
+        crate::abi::NativeSurface,
+        u64,
+        Option<wgpu::TextureView>,
+    )],
+) -> Result<(), String> {
     let mut encoder = device
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("eiviz present"),
         });
     let mut acquired = Vec::new();
-    for (monitor_id, cache_key, view, packed) in planned {
-        let Some(presenter) = presenters.monitors.get_mut(&monitor_id) else {
+    for (unit_id, kind, surface, cache_key, view) in planned {
+        let Some(presenter) = presenters.by_key.get_mut(&(*unit_id, *kind, *surface)) else {
             continue;
         };
         if let Some(item) = draw_presenter(
             device,
             presenter,
-            cache_key,
+            *cache_key,
             view.as_ref(),
-            packed,
+            false,
             &mut encoder,
         ) {
             acquired.push(item);
@@ -404,10 +418,46 @@ fn present_monitor_group(
     submit_presents(device, encoder, acquired)
 }
 
+fn present_monitor_pass(
+    presenters: &mut Presenters,
+    device: &GpuDevice,
+    planned: &[(u64, u64, Option<wgpu::TextureView>, bool)],
+) -> Result<(), String> {
+    let mut encoder = device
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("eiviz present"),
+        });
+    let mut acquired = Vec::new();
+    for (monitor_id, cache_key, view, packed) in planned {
+        let Some(presenter) = presenters.monitors.get_mut(monitor_id) else {
+            continue;
+        };
+        if let Some(item) = draw_presenter(
+            device,
+            presenter,
+            *cache_key,
+            view.as_ref(),
+            *packed,
+            &mut encoder,
+        ) {
+            acquired.push(item);
+        }
+    }
+    submit_presents(device, encoder, acquired)
+}
+
+fn live_extent(presenter: &Presenter) -> (u32, u32) {
+    native_client_size(presenter.native)
+        .or(presenter.pending)
+        .unwrap_or((
+            presenter.config.width.max(2),
+            presenter.config.height.max(2),
+        ))
+}
+
 fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
-    let Some((width, height)) = presenter.pending else {
-        return;
-    };
+    let (width, height) = live_extent(presenter);
     if presenter.ready && presenter.config.width == width && presenter.config.height == height {
         presenter.pending = None;
         return;
@@ -424,28 +474,19 @@ fn apply_pending_size(device: &GpuDevice, presenter: &mut Presenter) {
     }
 }
 
-fn wait_gpu_idle(device: &wgpu::Device) {
-    for _ in 0..8 {
-        match device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_millis(50)),
-        }) {
-            Ok(wgpu::PollStatus::QueueEmpty) => return,
-            Ok(_) => continue,
-            Err(_) => return,
-        }
-    }
-}
-
 fn configure_surface(
     device: &wgpu::Device,
     surface: &wgpu::Surface,
     config: &wgpu::SurfaceConfiguration,
 ) -> Result<(), String> {
-    for _ in 0..8 {
+    // Do not wait for the whole mix queue to drain. GridSplitter drags resize the
+    // HWND every layout tick; a 50ms+ idle wait guarantees the next acquire is
+    // already Outdated. wgpu's configure waits on this swapchain's in-flight
+    // presents. lock_gpu_queue still serializes against Queue::submit.
+    for _ in 0..4 {
         {
             let _guard = device::lock_gpu_queue();
-            wait_gpu_idle(device);
+            let _ = device.poll(wgpu::PollType::Poll);
             let (_, failed) = device::with_surface_configure(|| {
                 surface.configure(device, config);
             });
@@ -493,55 +534,123 @@ fn pick_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMo
         .unwrap_or(wgpu::CompositeAlphaMode::Auto)
 }
 
-fn acquire_surface_texture(presenter: &mut Presenter) -> Option<wgpu::SurfaceTexture> {
-    if !presenter.ready {
+fn mark_rebuild(presenter: &mut Presenter) {
+    presenter.ready = false;
+    presenter.pending = Some(native_client_size(presenter.native).unwrap_or((
+        presenter.config.width.max(2),
+        presenter.config.height.max(2),
+    )));
+}
+
+#[cfg(windows)]
+fn native_client_size(surface: NativeSurface) -> Option<(u32, u32)> {
+    if surface.kind != crate::abi::NATIVE_WIN32_HWND {
         return None;
     }
-    // wgpu 30 panics in Surface::get_current_texture when the HAL surface was
-    // never configured (error_sink is None). Device error scopes do not catch that.
-    let acquired = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        presenter.surface.get_current_texture()
-    })) {
-        Ok(acquired) => acquired,
-        Err(_) => {
-            crate::diag::error("surface get_current_texture panicked");
-            presenter.ready = false;
-            presenter.pending = None;
+    #[repr(C)]
+    struct WinRect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    unsafe extern "system" {
+        fn GetClientRect(hwnd: isize, rect: *mut WinRect) -> i32;
+    }
+    let mut rect = WinRect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetClientRect(surface.handle, &mut rect) } == 0 {
+        return None;
+    }
+    let width = rect.right.saturating_sub(rect.left).max(0) as u32;
+    let height = rect.bottom.saturating_sub(rect.top).max(0) as u32;
+    (width >= 8 && height >= 8).then_some((width, height))
+}
+
+#[cfg(not(windows))]
+fn native_client_size(_surface: NativeSurface) -> Option<(u32, u32)> {
+    None
+}
+
+fn sync_presenter_extent(device: &GpuDevice, presenter: &mut Presenter) {
+    let extent = live_extent(presenter);
+    if presenter.ready
+        && presenter.pending.is_none()
+        && presenter.config.width == extent.0
+        && presenter.config.height == extent.1
+    {
+        return;
+    }
+    presenter.pending = Some(extent);
+    apply_pending_size(device, presenter);
+}
+
+fn acquire_surface_texture(
+    device: &GpuDevice,
+    presenter: &mut Presenter,
+) -> Option<wgpu::SurfaceTexture> {
+    // While a GridSplitter is dragged the HWND extent changes every layout
+    // tick, so Vulkan WSI returns Outdated. Rebuild from GetClientRect and
+    // retry in this call; skipping the frame leaves Preview/Program frozen
+    // for the whole drag.
+    for _ in 0..8 {
+        sync_presenter_extent(device, presenter);
+        if !presenter.ready {
             return None;
         }
-    };
-    match acquired {
-        wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-            presenter.occluded_streak = 0;
-            Some(texture)
-        }
-        wgpu::CurrentSurfaceTexture::Lost => {
-            crate::diag::note_surface_lost();
-            presenter.ready = false;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-            None
-        }
-        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Validation => {
-            presenter.ready = false;
-            presenter.pending = Some((presenter.config.width, presenter.config.height));
-            None
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => None,
-        wgpu::CurrentSurfaceTexture::Occluded => {
-            // Scene tiles live in a WPF ScrollViewer. DXGI reports Occluded when
-            // the child HWND is clipped; tearing the surface down after a short
-            // streak leaves the last frame stuck even after the tile is visible.
-            presenter.occluded_streak = presenter.occluded_streak.saturating_add(1);
-            if presenter.occluded_streak == 8 || presenter.occluded_streak.is_multiple_of(120) {
-                crate::diag::warn(&format!(
-                    "present occluded streak={}",
-                    presenter.occluded_streak
-                ));
+        // wgpu 30 panics in Surface::get_current_texture when the HAL surface was
+        // never configured (error_sink is None). Device error scopes do not catch that.
+        let acquired = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            presenter.surface.get_current_texture()
+        })) {
+            Ok(acquired) => acquired,
+            Err(_) => {
+                crate::diag::error("surface get_current_texture panicked");
+                presenter.ready = false;
+                presenter.pending = None;
+                return None;
             }
-            None
+        };
+        match acquired {
+            wgpu::CurrentSurfaceTexture::Success(texture) => {
+                // HWND can still move between configure and acquire. Presenting
+                // a texture whose extent no longer matches the window makes
+                // Vulkan WSI scale the image (the "broken" look on resize).
+                if native_client_size(presenter.native)
+                    .is_some_and(|size| size != (presenter.config.width, presenter.config.height))
+                {
+                    drop(texture);
+                    mark_rebuild(presenter);
+                    continue;
+                }
+                presenter.occluded_streak = 0;
+                return Some(texture);
+            }
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                // Must drop before configure: wgpu panics if a SurfaceTexture
+                // for this surface is still alive. Suboptimal on Win32 Vulkan
+                // is a resize; presenting it stretches the frame to the HWND.
+                drop(texture);
+                mark_rebuild(presenter);
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                crate::diag::note_surface_lost();
+                mark_rebuild(presenter);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Validation => {
+                mark_rebuild(presenter);
+            }
+            wgpu::CurrentSurfaceTexture::Timeout => return None,
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                mark_rebuild(presenter);
+            }
         }
     }
+    None
 }
 
 fn draw_presenter(
@@ -552,7 +661,7 @@ fn draw_presenter(
     packed: bool,
     encoder: &mut wgpu::CommandEncoder,
 ) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
-    let texture = acquire_surface_texture(presenter)?;
+    let texture = acquire_surface_texture(device, presenter)?;
     let dest = texture.texture.create_view(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -780,5 +889,16 @@ mod tests {
             wgpu::PresentMode::Immediate,
         ];
         assert_eq!(pick_present_mode(&modes), wgpu::PresentMode::Mailbox);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win32_surface_handle_sets_hinstance() {
+        let hwnd = std::num::NonZeroIsize::new(1).expect("hwnd");
+        let handle = super::win32_window_handle(hwnd);
+        assert!(
+            handle.hinstance.is_some(),
+            "Vulkan WSI requires Win32 hinstance"
+        );
     }
 }

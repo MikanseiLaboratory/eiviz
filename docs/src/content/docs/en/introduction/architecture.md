@@ -7,15 +7,19 @@ eiviz system architecture. The shape is largely the same across platforms.
 
 ## Shape
 
-eiviz runs as one process.  
-The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over a C ABI. Windows is WPF; macOS is SwiftUI. There is no Linux host yet.
+eiviz compositing runs as one mixer process.  
+The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over an internal C ABI. Host code lives in `hosts/win32` (WPF), `hosts/macos` (SwiftUI), and `hosts/linux` (in development).
 
 The host owns windows, interaction, and preview surfaces.  
 Compose, audio, I/O, and session data live in the mixer. Keeping that work off the UI is how the stack stays fast and portable.
 
+External control is handled by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API. API listen (bind, token, media directory) is host-owned; it is not stored in session JSON.
+
+Windows and macOS also ship a [remote connection](/eiviz/en/features/remote/) client (`Eiviz.Remote.exe` / `eiviz-remote.app`). The client loads a receive mixer and `eiviz_remote`, and sends ops to the destination `ControlService`. See [eiviz API](/eiviz/en/developers/api/) for the protocol. The mixer without a host UI is [Headless](/eiviz/en/features/headless/).
+
 ```mermaid
 flowchart TB
-  subgraph proc["One process"]
+  subgraph proc["Mixer process"]
     host["Host UI"]
     abi["C ABI"]
     subgraph mixer["Mixer"]
@@ -34,6 +38,24 @@ flowchart TB
   clock --> host
 ```
 
+```mermaid
+flowchart LR
+  subgraph client["Remote GUI process"]
+    rui["Host UI"]
+    recv["Receive mixer"]
+  end
+  subgraph server["Host or headless"]
+    ctrl2["ControlService"]
+    gpu["Mixer GPU"]
+    ndi["NDI / OMT"]
+  end
+  rui -->|Protobuf ws| ctrl2
+  ctrl2 --> gpu
+  gpu --> ndi
+  ndi --> recv
+  recv --> rui
+```
+
 ## Who owns what
 
 | | Mixer | Host |
@@ -44,6 +66,8 @@ flowchart TB
 | Scene tiles and similar | Reads back from the GPU | Shows the thumbnail |
 
 There is one mixer per process. The host never receives GPU pointers except live preview surfaces. Inputs, scenes, and Mixing Units are integer ids.
+
+The remote-connection process shape is in the diagram above. Operator steps are in [Remote connection](/eiviz/en/features/remote/).
 
 ## Concurrency
 
@@ -212,9 +236,9 @@ Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI /
 
 ## Hosts
 
-Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
+Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
 
-Scene tiles, switcher scene thumbs, and input previews are GPU readback thumbnails. Adding scenes or Mix Inputs does not add swapchains. A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
+On a remote connection those live surfaces sample NDI/OMT receivers. Operator steps are in [Remote connection](/eiviz/en/features/remote/). A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 
 Windows cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open. They are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process.
 

@@ -53,7 +53,7 @@ Inputs一覧の上にタブが並んでいます。どれか1つを選ぶと、�
 
 - **すべて** — 全部
 - **各タグ** — そのタグが付いたもの
-- **Kind** — Colours / Still / Video / OMT / NDI® / Video Capture / Mix
+- **Kind** — Colours / Still / Video / OMT / NDI® / UVC / Mix
 
 ### タグの管理
 
@@ -62,4 +62,4 @@ Inputs一覧の上にタブが並んでいます。どれか1つを選ぶと、�
 - 改名すると、付いているInputも新しい名前に追従します
 - 削除すると、各Inputから外れます。表示中のタブを消した場合は「すべて」に戻ります
 
-詳細は[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご参照ください。
+[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご確認ください。

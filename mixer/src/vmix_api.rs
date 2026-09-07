@@ -9,9 +9,11 @@ use std::time::Duration;
 
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+#[cfg(test)]
+use crate::abi::UnitState;
 use crate::abi::{
     ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
-    TRANSITION_FADE, UnitState,
+    TRANSITION_FADE,
 };
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
@@ -92,7 +94,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
     slot.config = config.clone();
     if !enabled {
         slot.server = None;
-        crate::diag::http_info("disabled");
+        crate::diag::http_info("http disabled");
         return OK;
     }
     slot.listen_owner = None;
@@ -106,16 +108,16 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         let addr = format!("0.0.0.0:{}", config.port);
         match Server::http(&addr) {
             Ok(server) => {
-                crate::diag::http_info(&format!("listen {addr}"));
+                crate::diag::http_info(&format!("http listen {addr}"));
                 slot.server = Some(Arc::new(server));
             }
             Err(error) => {
                 let owner = crate::tcp_listen_owner::name(config.port);
                 match owner.as_deref() {
                     Some(name) => {
-                        crate::diag::http_error(&format!("listen {addr}: {error} ({name})"))
+                        crate::diag::http_error(&format!("http listen {addr}: {error} ({name})"))
                     }
-                    None => crate::diag::http_error(&format!("listen {addr}: {error}")),
+                    None => crate::diag::http_error(&format!("http listen {addr}: {error}")),
                 }
                 slot.listen_owner = owner;
                 slot.config.enabled = false;
@@ -124,7 +126,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
             }
         }
     } else {
-        crate::diag::http_info(&format!("restart 0.0.0.0:{}", config.port));
+        crate::diag::http_info(&format!("http restart 0.0.0.0:{}", config.port));
     }
     let server = slot.server.clone().expect("http listener");
     match spawn_worker(server, Arc::clone(&slot.stop), config) {
@@ -143,11 +145,15 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
 
 pub fn suspend() {
     stop_worker();
+    crate::vmix_tcp::configure(false);
+    crate::native_ws::configure(false, 0);
 }
 
 #[cfg(test)]
 pub fn shutdown() {
     stop_worker();
+    crate::vmix_tcp::configure(false);
+    crate::native_ws::configure(false, 0);
     if let Ok(mut slot) = api_slot().lock() {
         slot.server = None;
     }
@@ -186,7 +192,7 @@ fn spawn_worker(
                     }
                 }
             }
-            crate::diag::http_info("stopped");
+            crate::diag::http_info("http stopped");
         })
         .map_err(|error| error.to_string())
 }
@@ -263,13 +269,16 @@ fn handle_request(request: Request, config: &ApiConfig) {
 }
 
 #[derive(Debug)]
-enum DispatchError {
+pub(crate) enum DispatchError {
     Unknown(String),
     BadRequest(String),
     Failed(String),
 }
 
-fn dispatch_function(name: &str, params: &HashMap<String, String>) -> Result<(), DispatchError> {
+pub(crate) fn dispatch_function(
+    name: &str,
+    params: &HashMap<String, String>,
+) -> Result<(), DispatchError> {
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
         | "SnapshotInput" => {}
@@ -403,54 +412,66 @@ fn resolve_incoming(flat: &FlatMap, raw: &str, live: &UnitLive) -> Result<u64, D
 }
 
 fn cut(unit_id: u64, swap: bool, incoming: u64) -> Result<(), DispatchError> {
-    let code = crate::mixer_unit_cut(unit_id, u32::from(swap), incoming);
-    if code == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("cut failed ({code})")))
-    }
+    execute_live(eiviz_control::Command::Cut {
+        unit_id,
+        swap,
+        incoming: if swap {
+            eiviz_control::Incoming::Preview
+        } else {
+            eiviz_control::Incoming::from_u64(incoming)
+        },
+    })
 }
 
 fn fade(unit_id: u64, duration_ms: u32, swap: bool, incoming: u64) -> Result<(), DispatchError> {
-    let code = crate::mixer_unit_auto(
+    execute_live(eiviz_control::Command::Auto {
         unit_id,
-        TRANSITION_FADE,
-        duration_ms.max(1),
-        u32::from(swap),
-        1,
-        0,
-        0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        incoming,
-        0.02,
-        0.0,
-    );
-    if code == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("fade failed ({code})")))
-    }
+        kind: TRANSITION_FADE,
+        duration_ms: duration_ms.max(1),
+        swap,
+        keep_preview: true,
+        easing: 0,
+        direction: 0,
+        dip_r: 0.0,
+        dip_g: 0.0,
+        dip_b: 0.0,
+        dip_a: 1.0,
+        incoming: if swap {
+            eiviz_control::Incoming::Preview
+        } else {
+            eiviz_control::Incoming::from_u64(incoming)
+        },
+        softness: 0.02,
+        param: 0.0,
+    })
 }
 
 fn set_preview(unit_id: u64, source_id: u64) -> Result<(), DispatchError> {
-    let mut state = UnitState::default();
-    let get = unsafe { crate::mixer_unit_get_state(unit_id, &mut state) };
-    if get != OK {
-        return Err(DispatchError::Failed(format!("get state failed ({get})")));
-    }
-    state.preview_source = source_id;
-    let set = unsafe { crate::mixer_unit_set_state(unit_id, &state) };
-    if set == OK {
-        Ok(())
-    } else {
-        Err(DispatchError::Failed(format!("set preview failed ({set})")))
+    let scene_id = source_id & !crate::SCENE_BASE;
+    execute_live(eiviz_control::Command::Preview { unit_id, scene_id })
+}
+
+fn execute_live(command: eiviz_control::Command) -> Result<(), DispatchError> {
+    match crate::runtime::control().lock() {
+        Ok(mut svc) => svc
+            .execute(
+                eiviz_control::RequestKey {
+                    client_instance_id: "vmix".into(),
+                    request_id: String::new(),
+                },
+                command,
+            )
+            .map(|_| ())
+            .map_err(|error| DispatchError::Failed(error.to_string())),
+        Err(_) => Err(DispatchError::Failed("control lock".into())),
     }
 }
 
-fn current_xml() -> Result<String, String> {
+pub(crate) fn published_document() -> Option<Document> {
+    api_slot().lock().ok()?.document.clone()
+}
+
+pub(crate) fn current_xml() -> Result<String, String> {
     let doc = {
         let slot = api_slot().lock().map_err(|_| "api lock".to_string())?;
         slot.document.clone().unwrap_or_else(empty_document)
@@ -512,7 +533,7 @@ fn split_url(url: &str) -> (&str, &str) {
     }
 }
 
-fn parse_query(query: &str) -> HashMap<String, String> {
+pub(crate) fn parse_query(query: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for pair in query.split('&') {
         if pair.is_empty() {
@@ -686,6 +707,46 @@ mod tests {
         assert_eq!(out.preview_source, preview);
         assert_eq!(out.mix, 0.0);
         crate::mixer_destroy();
+    }
+
+    #[test]
+    fn snapshot_function_requires_published_session() {
+        clear_published();
+        crate::mixer_destroy();
+        let err = dispatch_function("Snapshot", &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(err, DispatchError::BadRequest(ref message) if message.contains("not published")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_function_writes_after_session_publish() {
+        crate::mixer_destroy();
+        assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
+        assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
+        thread::sleep(Duration::from_millis(350));
+        publish_cut_session();
+        let path = std::env::temp_dir().join("eiviz-vmix-http-snapshot.png");
+        let _ = std::fs::remove_file(&path);
+        let mut params = HashMap::new();
+        params.insert("Value".into(), path.to_string_lossy().into_owned());
+        let mut result = dispatch_function("Snapshot", &params);
+        if result.is_err() {
+            thread::sleep(Duration::from_millis(250));
+            result = dispatch_function("Snapshot", &params);
+        }
+        result.expect("snapshot");
+        let bytes = std::fs::read(&path).expect("png");
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+        let _ = std::fs::remove_file(&path);
+        crate::mixer_destroy();
+    }
+
+    fn clear_published() {
+        if let Ok(mut slot) = api_slot().lock() {
+            slot.document = None;
+        }
     }
 
     fn publish_cut_session() {
