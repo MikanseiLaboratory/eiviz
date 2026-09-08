@@ -165,6 +165,13 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             }
             Ok(())
         }
+        SessionMutation::RelinkMedia { directories } => {
+            if directories.iter().all(|dir| dir.trim().is_empty()) {
+                return Err(ControlError::invalid("search directory required"));
+            }
+            crate::session::relink_missing_media(document, &directories);
+            Ok(())
+        }
     }
 }
 
@@ -462,5 +469,36 @@ mod tests {
         )
         .unwrap();
         assert!(doc.headphone_copy_master);
+    }
+
+    #[test]
+    fn relink_media_updates_unique_filename() {
+        let root = std::env::temp_dir().join(format!("eiviz-mutate-relink-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("card.png");
+        std::fs::write(&file, b"png").unwrap();
+        let missing = root.join("gone").join("card.png");
+        let json = format!(
+            r#"{{
+          "version": 2,
+          "inputs": [{{ "id": 2, "name": "Card", "kind": "Still", "pathOrAddress": {} }}],
+          "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 2, "width": 1, "height": 1 }}] }}],
+          "units": [{{ "id": 1, "name": "MU 1" }}]
+        }}"#,
+            serde_json::to_string(&missing.to_string_lossy().into_owned()).unwrap()
+        );
+        let mut doc = parse(json.as_bytes()).unwrap();
+        apply(
+            &mut doc,
+            SessionMutation::RelinkMedia {
+                directories: vec![root.to_string_lossy().into_owned()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            doc.inputs[0].path_or_address.as_deref(),
+            Some(file.to_string_lossy().as_ref())
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -34,7 +34,7 @@ Session edits use `MutateSession` with `expected_revision`. A mismatched revisio
 
 ## Save
 
-The Save button writes the host's current session file. Remote does not send a path or filename. The host must already have a file (GUI Save, or `eiviz-headless run --session`). If the host has never saved, the request fails. Success shows the saved path and how many in-file history entries remain. The previous document is kept inside the `.eivz` (up to 20). Export files (`.eivzx`) do not include that history.
+The Save button writes the host current session file. Headless `run` always has that file (`--session`, or a dated default under the OS `eiviz/sessions` directory). GUI New has no current file until the first Save; that request returns `UNAVAILABLE`. Success shows the saved path and how many in-file history entries remain. A `.eivz` keeps up to 20 previous documents. A `.eivzx` export embeds Still/Video and has empty history.
 
 `eivizctl save` is the same command.
 

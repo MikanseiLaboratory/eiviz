@@ -12,7 +12,7 @@ eivizの制御面はMixer内の`ControlService`が担当しています。vMix�
 - 既定の待ち受けはloopbackのポート9400です。bindアドレス、ポート、token、最大role、メディア保存先はホスト固有です（GUIの環境設定、`eivizctl prefs`、または`eiviz-headless --bind`/`EIVIZ_API_TOKEN`/`EIVIZ_MEDIA_DIRECTORY`）。セッションファイルには保存しません
 - このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSは提供しません
 - 公開済みfield numberは変更・再利用しません。削除時は`reserved`へ入れます
-- `SaveSession`にフィールドはありません。ホストが保持している現在ファイルへ書き込みます。現在ファイルが無い場合は`UNAVAILABLE`です
+- `SaveSession`はホストの現在セッションファイルへ書き込みます。リクエストは空です。現在ファイルが無い場合は`UNAVAILABLE`です
 
 映像/音声フレーム、GPU texture、HWND/NSViewなどの描画・データ面はネットワーク公開対象外です。
 
@@ -20,7 +20,7 @@ eivizの制御面はMixer内の`ControlService`が担当しています。vMix�
 
 既定bindはloopbackです。headlessのtokenは`EIVIZ_API_TOKEN`または`EIVIZ_API_TOKEN_FILE`から読みます。GUIの待ち受けとリモートクライアントのtokenはWindows Credential Manager/macOS Keychainに置きます。セッションファイルには保存しません。比較はconstant-timeです。
 
-権限は`read`/`operate`/`configure`/`admin`です。サーバーが付与roleをホストの最大roleで打ち止めにし、クライアント自己申告では昇格できません。任意パスのload/save/shutdownはadmin限定です。ホストの現在ファイルへの`SaveSession`はconfigureです。セッション本体はpathではなくbytesで送受信します。loopback以外へのbindは認証必須です。
+権限は`read`/`operate`/`configure`/`admin`です。サーバーが付与roleをホストの最大roleで打ち止めにし、クライアント自己申告では昇格できません。任意パスのload/save/shutdownはadmin限定です。ホストの現在ファイルへの`SaveSession`はconfigureです。セッション本体はbytesで送受信します。loopback以外へのbindは認証必須です。
 
 ## Command
 
@@ -33,7 +33,7 @@ eivizの制御面はMixer内の`ControlService`が担当しています。vMix�
 | `SnapshotCmd`/`Discover` | operate | スクリーンショットと発見 |
 | `ReplaceSession` | configure | 接続先Documentの置換（`expected_revision`でlost updateを拒否） |
 | `MutateSession` | configure | 型付きDocument変更（`expected_revision`が一致しない変更は拒否。クライアントは最新を読み直す） |
-| `SaveSession` | configure | ホストの現在セッションファイルへ保存。リクエストは空で、パスはホストから出ない |
+| `SaveSession` | configure | ホストの現在セッションファイルへ保存 |
 | `BeginUpload`/`WriteChunk`/`CommitUpload`/`AbortUpload` | configure | ホスト保存先へのメディアupload。commit時だけStill/Video Inputを原子的に追加 |
 | `Shutdown` | admin | graceful停止 |
 
@@ -80,9 +80,10 @@ eiviz-headless export --session show.eivz --output show-portable.eivzx
 eiviz-headless history --session show.eivz
 eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
+eiviz-headless run --bind 127.0.0.1:9400
 ```
 
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。`--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。GUIのMixerも、環境設定（bind/token/メディア保存先）または設定（有効/ポート）で待ち受けを有効にすると同じWebSocketを開きます。
+`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定ファイルを作ります。`--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。Ctrl+C/SIGTERMでは受付停止→worker→Input/Output→renderの順に期限付きで停止します。GUIのMixerも、環境設定（bind/token/メディア保存先）または設定（有効/ポート）で待ち受けを有効にすると同じWebSocketを開きます。
 
 終了コードは引数/読込が2、セッション検証が3、GPU/runtimeが4、bindが5、その他runtime失敗が6です。
 

@@ -70,6 +70,14 @@ pub fn default_media_directory() -> PathBuf {
     PathBuf::from("eiviz-media")
 }
 
+/// Default host directory for session files created by headless `run`.
+pub fn default_sessions_directory() -> PathBuf {
+    match default_media_directory().parent() {
+        Some(parent) => parent.join("sessions"),
+        None => PathBuf::from("eiviz-sessions"),
+    }
+}
+
 /// Resolve an explicit path, then `EIVIZ_MEDIA_DIRECTORY`, then the OS default.
 pub fn resolve_media_directory(explicit: &str) -> PathBuf {
     let trimmed = explicit.trim();
@@ -404,6 +412,16 @@ mod tests {
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some("media")
+        );
+        assert!(path.components().any(|part| part.as_os_str() == "eiviz"));
+    }
+
+    #[test]
+    fn default_sessions_directory_uses_eiviz_sessions() {
+        let path = super::default_sessions_directory();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("sessions")
         );
         assert!(path.components().any(|part| part.as_os_str() == "eiviz"));
     }

@@ -18,6 +18,7 @@
                     <Button x:Name="SaveSessionButton" Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
                     <Button x:Name="ExportSessionButton" Content="{Binding [chrome.export], Source={x:Static i18n:Loc.Source}}" Width="80" Margin="8,0,0,0" Click="ExportSession_Click"/>
                     <Button x:Name="LoadSessionButton" Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
+                    <Button x:Name="LoadLastSessionButton" Content="{Binding [chrome.loadLast], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadLastSession_Click"/>
                     <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>
                     <Button x:Name="DisconnectButton" Content="{Binding [chrome.disconnect], Source={x:Static i18n:Loc.Source}}" Width="104" Margin="8,0,0,0" Click="Disconnect_Click" Visibility="Collapsed" IsEnabled="False"/>
@@ -196,7 +197,13 @@
                         </Grid>
                         <ListBox x:Name="InputList" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                                  SelectionChanged="InputList_SelectionChanged"
-                                 MouseDoubleClick="InputList_DoubleClick"/>
+                                 MouseDoubleClick="InputList_DoubleClick">
+                            <ListBox.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="{Binding [input.relink], Source={x:Static i18n:Loc.Source}}" Click="RelinkMedia_Click"/>
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
+                        </ListBox>
                     </DockPanel>
                     <GridSplitter Grid.Column="0" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
                                   ResizeDirection="Columns" ResizeBehavior="CurrentAndNext"

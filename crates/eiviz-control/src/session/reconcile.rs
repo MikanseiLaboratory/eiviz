@@ -40,6 +40,10 @@ pub enum ReconcileOp {
     DestroySource {
         id: u64,
     },
+    FailInput {
+        id: u64,
+        message: String,
+    },
     DefineScene(SceneApply),
     DestroyScene {
         id: u64,
@@ -151,7 +155,9 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             if input_desired_equal(prev, input) {
                 continue;
             }
-            ops.push(ReconcileOp::DestroySource { id: input.id });
+            if !crate::session::media_file_missing(prev) {
+                ops.push(ReconcileOp::DestroySource { id: input.id });
+            }
         }
         ops.extend(input_ops(input));
     }
@@ -391,7 +397,8 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         | ReconcileOp::StartVideo(_)
         | ReconcileOp::ConnectOmt(_)
         | ReconcileOp::ConnectNdi(_)
-        | ReconcileOp::DestroySource { .. } => apply_inputs(port, op, statuses),
+        | ReconcileOp::DestroySource { .. }
+        | ReconcileOp::FailInput { .. } => apply_inputs(port, op, statuses),
         ReconcileOp::DefineScene(_)
         | ReconcileOp::DestroyScene { .. }
         | ReconcileOp::DefineMultiview { .. } => apply_scenes(port, next, op),
@@ -463,6 +470,10 @@ fn apply_inputs<P: crate::port::MixerPort + ?Sized>(
             spec.id,
         ),
         ReconcileOp::DestroySource { id } => port.destroy_source(*id),
+        ReconcileOp::FailInput { id, message } => {
+            statuses.push(failed(crate::ids::ResourceKind::Input, *id, message));
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -618,6 +629,15 @@ fn retrying(kind: crate::ids::ResourceKind, id: u64, message: &str) -> crate::li
     }
 }
 
+fn failed(kind: crate::ids::ResourceKind, id: u64, message: &str) -> crate::live::ResourceStatus {
+    crate::live::ResourceStatus {
+        kind,
+        id,
+        phase: crate::live::ResourcePhase::Failed,
+        message: message.to_string(),
+    }
+}
+
 fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
     match input.kind {
         InputKind::Color | InputKind::Bars | InputKind::Black => {
@@ -632,19 +652,42 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 tone_level_dbfs: input.tone_level_dbfs,
             })]
         }
-        InputKind::Still => input
-            .path_or_address
-            .as_ref()
-            .map(|path| ReconcileOp::LoadStill {
+        InputKind::Still => vec![match crate::session::missing_media_message(input) {
+            Some(message) => ReconcileOp::FailInput {
                 id: input.id,
-                path: path.clone(),
-            })
-            .into_iter()
-            .collect(),
-        InputKind::Video | InputKind::UVC => vec![ReconcileOp::StartVideo(VideoStartApply {
+                message,
+            },
+            None => ReconcileOp::LoadStill {
+                id: input.id,
+                path: input.path_or_address.clone().unwrap_or_default(),
+            },
+        }],
+        InputKind::Video => vec![match crate::session::missing_media_message(input) {
+            Some(message) => ReconcileOp::FailInput {
+                id: input.id,
+                message,
+            },
+            None => ReconcileOp::StartVideo(VideoStartApply {
+                id: input.id,
+                path: input.path_or_address.clone().unwrap_or_default(),
+                capture: false,
+                loop_playback: input.video_loop,
+                playing: matches!(
+                    input.video_play_when,
+                    VideoPlayWhen::Never | VideoPlayWhen::Always
+                ),
+                width: input.capture_width,
+                height: input.capture_height,
+                fps_num: input.capture_fps_num,
+                fps_den: input.capture_fps_den,
+                frame_buffer_frames: input.frame_buffer_frames,
+                position_hns: 0,
+            }),
+        }],
+        InputKind::UVC => vec![ReconcileOp::StartVideo(VideoStartApply {
             id: input.id,
             path: input.path_or_address.clone().unwrap_or_default(),
-            capture: input.kind == InputKind::UVC,
+            capture: true,
             loop_playback: input.video_loop,
             playing: matches!(
                 input.video_play_when,
@@ -1034,6 +1077,26 @@ mod tests {
         assert!(
             ops.iter()
                 .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. }))
+        );
+    }
+
+    #[test]
+    fn missing_still_is_failed_not_loaded() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Card", "kind": "Still", "pathOrAddress": "/no/such/card.png" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailInput { id: 2, .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::LoadStill { .. }))
         );
     }
 

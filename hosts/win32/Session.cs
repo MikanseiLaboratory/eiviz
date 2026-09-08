@@ -1,3 +1,5 @@
+using System.IO;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host;
@@ -337,8 +339,18 @@ public sealed class InputEntry
     public ulong MixAudioBusId { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
+
+    internal bool IsMissingMedia() =>
+        Kind is InputKind.Still or InputKind.Video
+        && (string.IsNullOrWhiteSpace(PathOrAddress) || !File.Exists(PathOrAddress));
+
+    public override string ToString()
+    {
+        if (!HostRole.IsRemote && IsMissingMedia())
+            return $"{Name} ({Loc.T("input.invalid")})";
+        return Name;
+    }
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
-    public override string ToString() => Name;
 }
 
 internal static class InputKindNames

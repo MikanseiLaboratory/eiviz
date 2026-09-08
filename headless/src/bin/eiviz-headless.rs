@@ -66,7 +66,7 @@ enum Cmd {
     /// Apply a session, host the control API, and wait until shutdown.
     Run {
         #[arg(long)]
-        session: PathBuf,
+        session: Option<PathBuf>,
         #[arg(long)]
         bind: Option<String>,
         #[arg(
@@ -131,6 +131,25 @@ fn load_valid(path: &PathBuf) -> Result<eiviz_control::Document, u8> {
     Ok(doc)
 }
 
+#[cfg(feature = "runtime")]
+fn resolve_run_session(session: Option<PathBuf>) -> Result<(PathBuf, eiviz_control::Document), u8> {
+    if let Some(path) = session {
+        return Ok((path.clone(), load_valid(&path)?));
+    }
+    let dir = eiviz_api::default_sessions_directory();
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    let path = dir.join(session::dated_session_filename_now());
+    let document = session::default_document();
+    session::write_document(&path, &document).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    Ok((path, document))
+}
+
 fn canonicalize(path: &PathBuf) -> Result<(), u8> {
     let doc = load_valid(path)?;
     let bytes = session::to_vec(&doc).map_err(|error| {
@@ -182,7 +201,7 @@ fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
 }
 
 fn run_daemon(
-    session: PathBuf,
+    session: Option<PathBuf>,
     bind: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
@@ -200,7 +219,7 @@ fn run_daemon(
 
 #[cfg(feature = "runtime")]
 fn run_daemon_runtime(
-    session: PathBuf,
+    session: Option<PathBuf>,
     bind: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
@@ -210,7 +229,7 @@ fn run_daemon_runtime(
         .unwrap_or_else(|| "127.0.0.1:9400".into());
     let media_directory =
         media_directory.or_else(|| prefs.media_directory.as_ref().map(PathBuf::from));
-    let document = load_valid(&session)?;
+    let (session, document) = resolve_run_session(session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
         EXIT_BIND
@@ -261,7 +280,8 @@ fn run_daemon_runtime(
                 code
             })?;
             let path = session.canonicalize().unwrap_or(session);
-            svc.set_session_path(Some(path));
+            svc.set_session_path(Some(path.clone()));
+            eprintln!("eiviz-headless session={}", path.display());
         }
         let media_path = media_directory.unwrap_or_else(|| eiviz_api::resolve_media_directory(""));
         let media =

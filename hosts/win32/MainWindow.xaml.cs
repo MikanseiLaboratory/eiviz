@@ -154,6 +154,7 @@ public partial class MainWindow : Window
         SaveSessionButton.IsEnabled = false;
         ExportSessionButton.Visibility = Visibility.Collapsed;
         LoadSessionButton.Visibility = Visibility.Collapsed;
+        LoadLastSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
         DisconnectButton.Visibility = Visibility.Visible;
         VideoLayoutBox.Visibility = Visibility.Visible;
@@ -2510,6 +2511,50 @@ public partial class MainWindow : Window
             return;
         }
         LoadSessionFrom(dialog.FileName, historyIndex);
+    }
+
+    private void LoadLastSession_Click(object sender, RoutedEventArgs e)
+    {
+        var last = AppPrefs.Current.ExistingSessions().FirstOrDefault();
+        if (string.IsNullOrEmpty(last))
+        {
+            MessageBox.Show(this, Loc.T("msg.noLastSession"), Loc.T("chrome.loadLast"));
+            return;
+        }
+        LoadSessionFrom(last);
+    }
+
+    private void RelinkMedia_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = PickRelinkDirectory();
+        if (string.IsNullOrEmpty(directory))
+            return;
+        var dirs = new[] { directory };
+        var before = _session.Inputs.ToDictionary(input => input.Id, input => input.PathOrAddress);
+        int updated;
+        if (TryRemoteMutate(MutationJson.RelinkMedia(dirs), Loc.T("input.relink")))
+        {
+            updated = _session.Inputs.Count(input =>
+                before.TryGetValue(input.Id, out var path) && path != input.PathOrAddress);
+        }
+        else
+        {
+            updated = SessionStore.RelinkMissingMedia(_session, dirs);
+            SessionStore.Publish(_session);
+            RefreshInputList();
+        }
+        MessageBox.Show(this, Loc.Format("msg.relinked", updated), Loc.T("input.relink"));
+    }
+
+    private string? PickRelinkDirectory()
+    {
+        if (HostRole.IsRemote)
+        {
+            var prompt = new RelinkMediaDialog { Owner = this };
+            return prompt.ShowDialog() == true ? prompt.Directory : null;
+        }
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = Loc.T("input.relink") };
+        return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
     }
 
     private void LoadSessionFrom(string path, uint? historyIndex = null)

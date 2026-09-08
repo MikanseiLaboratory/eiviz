@@ -1646,6 +1646,107 @@ final class MixerController: ObservableObject {
         }
     }
 
+    func loadLastSession() {
+        guard let path = AppPrefs.shared.existingSessions().first else {
+            presentError(L10n.t("msg.noLastSession"), title: L10n.t("chrome.loadLast"))
+            return
+        }
+        loadSession(path: path)
+    }
+
+    func relinkMedia() {
+        guard let directory = pickRelinkDirectory() else { return }
+        let before = Dictionary(uniqueKeysWithValues: session.inputs.map { ($0.id, $0.pathOrAddress) })
+        if isRemote {
+            _ = mutateRemote(MixerRemote.relinkMedia([directory]))
+            let count = session.inputs.filter { before[$0.id] != $0.pathOrAddress }.count
+            presentRelinked(count)
+            return
+        }
+        let count = relinkMissingMedia(directories: [directory])
+        publishSession()
+        applySession()
+        objectWillChange.send()
+        presentRelinked(count)
+    }
+
+    private func presentRelinked(_ count: Int) {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("input.relink")
+        alert.informativeText = L10n.format("msg.relinked", "\(count)")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+    }
+
+    private func pickRelinkDirectory() -> String? {
+        if isRemote {
+            let alert = NSAlert()
+            alert.messageText = L10n.t("input.relink")
+            alert.informativeText = L10n.t("input.relinkDir")
+            let field = NSTextField(string: "")
+            field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+            alert.accessoryView = field
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    private func relinkMissingMedia(directories: [String]) -> Int {
+        let unique = uniqueFilenames(directories: directories)
+        var count = 0
+        for index in session.inputs.indices {
+            guard session.inputs[index].isMissingMedia else { continue }
+            guard let name = session.inputs[index].pathOrAddress.flatMap({ URL(fileURLWithPath: $0).lastPathComponent }),
+                  !name.isEmpty,
+                  let found = unique[name]
+            else { continue }
+            session.inputs[index].pathOrAddress = found
+            count += 1
+        }
+        return count
+    }
+
+    private func uniqueFilenames(directories: [String]) -> [String: String] {
+        var found: [String: [String]] = [:]
+        for directory in directories {
+            collectFiles(directory: directory, into: &found, depth: 0)
+        }
+        var unique: [String: String] = [:]
+        for (name, paths) in found {
+            let distinct = Array(Set(paths))
+            if distinct.count == 1 {
+                unique[name] = distinct[0]
+            }
+        }
+        return unique
+    }
+
+    private func collectFiles(directory: String, into found: inout [String: [String]], depth: Int) {
+        if depth > 16 { return }
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: directory) else { return }
+        for name in entries {
+            let path = (directory as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue {
+                collectFiles(directory: path, into: &found, depth: depth + 1)
+                continue
+            }
+            found[name, default: []].append(path)
+        }
+    }
+
     func openSessionFromSystem(path: String) {
         if isRemote { return }
         if !booted {

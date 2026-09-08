@@ -1,3 +1,4 @@
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -47,6 +48,88 @@ internal static class SessionStore
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
+
+    public static int RelinkMissingMedia(Session session, IReadOnlyList<string> directories)
+    {
+        var unique = UniqueFilenames(directories);
+        var count = 0;
+        foreach (var input in session.Inputs)
+        {
+            if (!input.IsMissingMedia())
+                continue;
+            var name = System.IO.Path.GetFileName(input.PathOrAddress);
+            if (string.IsNullOrEmpty(name))
+                continue;
+            if (!unique.TryGetValue(name, out var found))
+                continue;
+            input.PathOrAddress = found;
+            count++;
+        }
+        return count;
+    }
+
+    private static Dictionary<string, string> UniqueFilenames(IReadOnlyList<string> directories)
+    {
+        var found = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var directory in directories)
+        {
+            var trimmed = directory.Trim();
+            if (trimmed.Length == 0 || !System.IO.Directory.Exists(trimmed))
+                continue;
+            CollectFiles(trimmed, found, 0);
+        }
+        var unique = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, paths) in found)
+        {
+            var distinct = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (distinct.Count == 1)
+                unique[name] = distinct[0];
+        }
+        return unique;
+    }
+
+    private static void CollectFiles(string directory, Dictionary<string, List<string>> found, int depth)
+    {
+        if (depth > 16)
+            return;
+        IEnumerable<string> entries;
+        try
+        {
+            entries = System.IO.Directory.EnumerateFileSystemEntries(directory);
+        }
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        foreach (var path in entries)
+        {
+            try
+            {
+                if (System.IO.Directory.Exists(path))
+                {
+                    CollectFiles(path, found, depth + 1);
+                    continue;
+                }
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            var name = System.IO.Path.GetFileName(path);
+            if (string.IsNullOrEmpty(name))
+                continue;
+            if (!found.TryGetValue(name, out var list))
+            {
+                list = [];
+                found[name] = list;
+            }
+            list.Add(path);
+        }
+    }
 
     public static Session Load(string path, uint? historyIndex = null)
     {

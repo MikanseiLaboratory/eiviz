@@ -357,6 +357,8 @@ impl ControlService {
         }
     }
 
+    /// Write the host current session file. The previous document stays in that
+    /// file's history (up to HISTORY_LIMIT).
     fn save_session(&mut self, request_id: &str) -> ControlResult<CommandOutcome> {
         let path = self
             .session_path

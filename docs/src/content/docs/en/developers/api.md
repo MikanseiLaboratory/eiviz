@@ -12,7 +12,7 @@ The control plane is handled by `ControlService` inside the mixer. vMix-compatib
 - Default listen is loopback port 9400. Bind address, port, token, max role, and media directory are host-owned (GUI Preferences, `eivizctl prefs`, or `eiviz-headless --bind` / `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY`). They are not stored in the session file
 - This release uses authenticated `ws://` on a trusted LAN or VPN only. TLS is not provided
 - Published field numbers are never reused. Removals go into `reserved`
-- `SaveSession` has no fields. The host writes the file it already holds. A host with no current file returns `UNAVAILABLE`
+- `SaveSession` writes the host current session file. The request is empty. A host with no current file returns `UNAVAILABLE`
 
 Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane surfaces are not network APIs.
 
@@ -20,7 +20,7 @@ Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane
 
 The default bind is loopback. Headless tokens come from `EIVIZ_API_TOKEN` or `EIVIZ_API_TOKEN_FILE`. GUI listen and remote-client tokens use Windows Credential Manager / macOS Keychain. Tokens are never stored in the session file. Comparison is constant-time.
 
-Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. `SaveSession` writes the host's current file and needs configure. Session bodies move as bytes, not server paths. Non-loopback bind requires authentication.
+Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. `SaveSession` writes the host current file and needs configure. Session bodies move as bytes. Non-loopback bind requires authentication.
 
 ## Commands
 
@@ -33,7 +33,7 @@ Roles are `read` / `operate` / `configure` / `admin`. The server clamps the gran
 | `SnapshotCmd` / `Discover` | operate | Still capture and discovery |
 | `ReplaceSession` | configure | Replace the destination Document (`expected_revision` rejects lost updates) |
 | `MutateSession` | configure | Typed document mutation (mismatched `expected_revision` is rejected; the client reloads) |
-| `SaveSession` | configure | Write the host's current session file. The request is empty; the path never leaves the host |
+| `SaveSession` | configure | Write the host current session file |
 | `BeginUpload` / `WriteChunk` / `CommitUpload` / `AbortUpload` | configure | Host-directory media upload; commit adds a Still/Video Input atomically |
 | `Shutdown` | admin | Graceful stop |
 
@@ -80,9 +80,10 @@ eiviz-headless export --session show.eivz --output show-portable.eivzx
 eiviz-headless history --session show.eivz
 eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
+eiviz-headless run --bind 127.0.0.1:9400
 ```
 
-`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. When `--bind` is omitted, `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
+`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Omit `--session` to create a dated default file under the OS `eiviz/sessions` directory. When `--bind` is omitted, `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
 
 Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime failure.
 

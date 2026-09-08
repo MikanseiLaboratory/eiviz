@@ -1,4 +1,6 @@
 //! On-disk `.eivz` codec: magic + container version + Protobuf payload.
+//! Save keeps the previous document in `history` (newest first, up to HISTORY_LIMIT).
+//! Export writes `.eivzx` with embedded Still/Video and empty history.
 
 use std::path::{Path, PathBuf};
 
@@ -1421,6 +1423,51 @@ mod tests {
         assert_eq!(read_history(&path).unwrap().len(), 1);
         export_document(&exported, &doc).unwrap();
         assert!(read_history(&exported).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_existing_file_is_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("eiviz-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        std::fs::write(&path, b"not-an-eivz").unwrap();
+        let doc = parse(sample_json()).unwrap();
+        assert!(write_document(&path, &doc).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not-an-eivz");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_history_rejects_missing_index() {
+        let dir = std::env::temp_dir().join(format!("eiviz-history-idx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        write_document(&path, &parse(sample_json()).unwrap()).unwrap();
+        let err = extract_history(&path, 0).unwrap_err();
+        assert!(err.contains("history index 0 is missing"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restored_bytes_have_empty_history() {
+        let dir =
+            std::env::temp_dir().join(format!("eiviz-history-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let standalone = dir.join("old.eivz");
+        let mut first = parse(sample_json()).unwrap();
+        first.inputs[0].name = "one".into();
+        write_document(&path, &first).unwrap();
+        let mut second = first.clone();
+        second.inputs[0].name = "two".into();
+        write_document(&path, &second).unwrap();
+        let restored = extract_history(&path, 0).unwrap();
+        assert_eq!(restored.inputs[0].name, "one");
+        std::fs::write(&standalone, encode_file(&restored).unwrap()).unwrap();
+        assert!(read_history(&standalone).unwrap().is_empty());
+        assert_eq!(read_document(&standalone).unwrap().inputs[0].name, "one");
+        assert_eq!(read_document(&path).unwrap().inputs[0].name, "two");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

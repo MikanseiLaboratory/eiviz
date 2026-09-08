@@ -161,6 +161,10 @@ enum MixerRemote {
         encode(["kind": "deleteInput", "id": NSNumber(value: id)])
     }
 
+    static func relinkMedia(_ directories: [String]) -> String {
+        encode(["kind": "relinkMedia", "directories": directories])
+    }
+
     static func deleteScene(_ id: UInt64) -> String {
         encode(["kind": "deleteScene", "id": NSNumber(value: id)])
     }

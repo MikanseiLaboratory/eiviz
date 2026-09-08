@@ -110,6 +110,7 @@ struct ContentView: View {
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
                 Button(L10n.t("chrome.export")) { mixer.exportSession() }
                 Button(L10n.t("chrome.load")) { mixer.loadSession() }
+                Button(L10n.t("chrome.loadLast")) { mixer.loadLastSession() }
                 Menu {
                     ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
                         Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
@@ -412,11 +413,14 @@ struct ContentView: View {
                     Text("Inputs").fontWeight(.bold)
                     CatalogTabBar(input: true)
                     List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
-                        Text(input.name)
+                        Text(input.listLabel(localFiles: !mixer.isRemote))
                             .tag(input.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .onTapGesture { mixer.selectedInputId = input.id }
+                            .contextMenu {
+                                Button(L10n.t("input.relink")) { mixer.relinkMedia() }
+                            }
                     }
                     .scrollContentBackground(.hidden)
                     .background(EivizTheme.list)

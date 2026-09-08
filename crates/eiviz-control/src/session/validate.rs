@@ -123,33 +123,7 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
 }
 
 pub fn validate_for_apply(doc: &Document) -> Result<(), ValidationError> {
-    validate(doc)?;
-    for input in &doc.inputs {
-        match input.kind {
-            InputKind::Still | InputKind::Video => {
-                let Some(path) = input.path_or_address.as_deref() else {
-                    return Err(ValidationError::new(format!(
-                        "input {} is missing a file path",
-                        input.id
-                    )));
-                };
-                if path.trim().is_empty() {
-                    return Err(ValidationError::new(format!(
-                        "input {} is missing a file path",
-                        input.id
-                    )));
-                }
-                if !std::path::Path::new(path).is_file() {
-                    return Err(ValidationError::new(format!(
-                        "input {} file does not exist: {path}",
-                        input.id
-                    )));
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
+    validate(doc)
 }
 
 fn unique_ids(ids: impl Iterator<Item = u64>, kind: &str) -> Result<(), ValidationError> {
@@ -247,5 +221,22 @@ mod tests {
         let doc = parse(src).unwrap();
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("preview"), "{}", err.message);
+    }
+
+    #[test]
+    fn apply_keeps_still_with_missing_file() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Card", "kind": "Still", "pathOrAddress": "/no/such/card.png" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        validate(&doc).unwrap();
+        validate_for_apply(&doc).unwrap();
+        assert_eq!(
+            doc.inputs[0].path_or_address.as_deref(),
+            Some("/no/such/card.png")
+        );
     }
 }

@@ -109,6 +109,9 @@ internal static class MutationJson
     public static string DeleteInput(ulong id) =>
         JsonSerializer.Serialize(new { kind = "deleteInput", id }, Json);
 
+    public static string RelinkMedia(IReadOnlyList<string> directories) =>
+        JsonSerializer.Serialize(new { kind = "relinkMedia", directories }, Json);
+
     public static string DeleteScene(ulong id) =>
         JsonSerializer.Serialize(new { kind = "deleteScene", id }, Json);
 

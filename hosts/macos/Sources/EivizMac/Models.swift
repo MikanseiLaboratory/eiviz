@@ -273,6 +273,19 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
+    var isMissingMedia: Bool {
+        guard kind == .still || kind == .video else { return false }
+        guard let path = pathOrAddress, !path.isEmpty else { return true }
+        return !FileManager.default.fileExists(atPath: path)
+    }
+
+    func listLabel(localFiles: Bool) -> String {
+        if localFiles && isMissingMedia {
+            return "\(name) (\(L10n.t("input.invalid")))"
+        }
+        return name
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
         case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave

@@ -193,6 +193,8 @@ message DiscoverResult {
 
 message Shutdown {}
 
+// Write the host current session file. SavedSession returns that path and the
+// in-file history count.
 message SaveSession {}
 
 message SavedSession {

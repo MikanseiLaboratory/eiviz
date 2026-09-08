@@ -2,21 +2,25 @@
 //! JSON shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
 //! On-disk files use the `eivz` Protobuf envelope in `file`.
 
+pub mod default;
 pub mod file;
 pub mod migration;
 pub mod mutate;
 pub mod reconcile;
+pub mod relink;
 pub mod store;
 mod string_enum;
 pub mod validate;
 
 use string_enum::session_string_enum;
 
+pub use default::{dated_session_filename, dated_session_filename_now, default_document};
 pub use file::{
     CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
     export_document, extract_history, read_document, read_history, write_document,
     write_document_rev,
 };
+pub use relink::{media_file_missing, missing_media_message, relink_missing_media};
 pub use validate::{ValidationError, validate, validate_for_apply};
 
 use serde::{Deserialize, Serialize};
