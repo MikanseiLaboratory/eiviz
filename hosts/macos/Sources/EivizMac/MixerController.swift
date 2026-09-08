@@ -1533,6 +1533,32 @@ final class MixerController: ObservableObject {
         }
     }
 
+    func exportSession() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType.eivizSession]
+        panel.allowsOtherFileTypes = false
+        panel.nameFieldStringValue = "session.eivz"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        session.selectedUnitId = selectedUnitId
+        session.settings.lastSessionPath = nil
+        do {
+            let json = try SessionFile.encode(session)
+            let saved = MixerFFI.withCString(url.path) { path in
+                json.withUnsafeBytes { ptr in
+                    fail(
+                        mixer_session_export(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
+                        "Export session"
+                    )
+                }
+            }
+            if saved {
+                AppPrefs.shared.rememberSession(url.path)
+            }
+        } catch {
+            presentError(L10n.error("Export session", 3), title: L10n.t("action.Export session"))
+        }
+    }
+
     func newSession() {
         replaceSession(MixerSessionData.default())
     }

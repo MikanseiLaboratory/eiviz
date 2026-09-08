@@ -73,6 +73,7 @@ Operator steps for start, REPL, and Remote are in [Headless](/eiviz/en/features/
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -86,4 +87,4 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr
-- Inspect canonical JSON with `eiviz-headless canonicalize`. The on-disk format is `.eivz`
+- Inspect canonical JSON with `eiviz-headless canonicalize`. The on-disk format is `.eivz`. Embed Still/Video files with `eiviz-headless export`

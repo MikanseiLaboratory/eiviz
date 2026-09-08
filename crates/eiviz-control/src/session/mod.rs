@@ -13,8 +13,8 @@ pub mod validate;
 use string_enum::session_string_enum;
 
 pub use file::{
-    CONTAINER_VERSION, FORMAT_VERSION, MAGIC, decode_file, encode_file, read_document,
-    write_document,
+    CONTAINER_VERSION, FORMAT_VERSION, MAGIC, decode_file, encode_file, export_document,
+    read_document, write_document,
 };
 pub use validate::{ValidationError, validate, validate_for_apply};
 
@@ -922,6 +922,10 @@ pub struct UnitDto {
     pub switcher_scene_ids: Vec<u64>,
     #[serde(default = "true_bool")]
     pub always_on_top: bool,
+    #[serde(default)]
+    pub preview_scene_id: u64,
+    #[serde(default)]
+    pub program_scene_id: u64,
 }
 
 session_string_enum! {
@@ -1241,6 +1245,10 @@ pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     write_document(path, &parse(bytes)?)
+}
+
+pub fn export_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    export_document(path, &parse(bytes)?)
 }
 
 #[cfg(test)]

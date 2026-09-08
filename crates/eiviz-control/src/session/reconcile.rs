@@ -202,21 +202,30 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         }
     }
 
-    let preview = next
+    let fallback_preview = next
         .scenes
         .first()
         .map(|scene| ids::scene_gpu_id(scene.id))
         .unwrap_or(0);
-    let program = next
+    let fallback_program = next
         .scenes
         .get(1)
         .map(|scene| ids::scene_gpu_id(scene.id))
-        .unwrap_or(preview);
+        .unwrap_or(fallback_preview);
     for unit in &next.units {
-        // Live PGM/PVW/mix/overlays are not session fields. Seed buses only
-        // when the Mixing Unit itself is new so settings and CRUD cannot
-        // clobber the operator's current buses.
+        // Seed buses when the Mixing Unit itself is new. Stored scene IDs win
+        // over the first/second-scene default when they are present.
         if !prev_units.contains(&unit.id) {
+            let preview = if unit.preview_scene_id != 0 {
+                ids::scene_gpu_id(unit.preview_scene_id)
+            } else {
+                fallback_preview
+            };
+            let program = if unit.program_scene_id != 0 {
+                ids::scene_gpu_id(unit.program_scene_id)
+            } else {
+                fallback_program
+            };
             ops.push(ReconcileOp::SetLiveState {
                 unit_id: unit.id,
                 program,
@@ -934,6 +943,29 @@ mod tests {
             ops.iter()
                 .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
         );
+    }
+
+    #[test]
+    fn cold_apply_uses_stored_preview_program() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1", "previewSceneId": 2, "programSceneId": 1 }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let ops = plan(None, &doc);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            ReconcileOp::SetLiveState {
+                unit_id: 1,
+                program,
+                preview,
+            } if *program == ids::scene_gpu_id(1) && *preview == ids::scene_gpu_id(2)
+        )));
     }
 
     #[test]

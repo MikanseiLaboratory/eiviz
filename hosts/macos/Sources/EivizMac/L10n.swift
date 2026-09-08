@@ -19,9 +19,11 @@ enum L10n {
         let reason: String
         switch (action, code) {
         case ("Load session", 3), ("Load session", -1), ("Load session", -3),
-             ("Save session", 3), ("Save session", -1), ("Save session", -3):
+             ("Save session", 3), ("Save session", -1), ("Save session", -3),
+             ("Export session", 3), ("Export session", -1), ("Export session", -3):
             reason = t("error.badSession")
-        case ("Load session", 5), ("Load session", -5):
+        case ("Load session", 5), ("Load session", -5),
+             ("Export session", 5), ("Export session", -5):
             reason = t("error.io")
         case (_, 1): reason = t("error.alreadyCreated")
         case (_, 2): reason = t("error.notCreated")
@@ -53,6 +55,7 @@ enum L10n {
         "chrome.openRecent": "Open recent",
         "chrome.new": "New",
         "chrome.save": "Save",
+        "chrome.export": "Export",
         "chrome.load": "Load",
         "chrome.connect": "Connect",
         "chrome.disconnect": "Disconnect",
@@ -200,6 +203,7 @@ enum L10n {
         "action.Bind Multiview": "Bind Multiview",
         "action.Load session": "Load session",
         "action.Save session": "Save session",
+        "action.Export session": "Export session",
         "action.Still load": "Still load",
         "action.Video start": "Video load",
         "action.UVC start": "Video capture",
@@ -230,6 +234,7 @@ enum L10n {
         "chrome.openRecent": "最近使ったファイル",
         "chrome.new": "新規",
         "chrome.save": "保存",
+        "chrome.export": "書き出し",
         "chrome.load": "読み込み",
         "chrome.connect": "Connect",
         "chrome.disconnect": "Disconnect",
@@ -377,6 +382,7 @@ enum L10n {
         "action.Bind Multiview": "Multiview のバインド",
         "action.Load session": "セッションの読み込み",
         "action.Save session": "セッションの保存",
+        "action.Export session": "セッションの書き出し",
         "action.Still load": "静止画の読み込み",
         "action.Video start": "動画の読み込み",
         "action.UVC start": "映像キャプチャ",

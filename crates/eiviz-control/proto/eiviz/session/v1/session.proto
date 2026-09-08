@@ -9,6 +9,13 @@ package eiviz.session.v1;
 message SessionFile {
   uint32 format_version = 1;
   Document document = 2;
+  repeated EmbeddedAsset assets = 3;
+}
+
+message EmbeddedAsset {
+  uint64 input_id = 1;
+  string file_name = 2;
+  bytes data = 3;
 }
 
 message Document {
@@ -203,6 +210,8 @@ message MixingUnit {
   SwitcherSceneFilter switcher_scene_filter = 11;
   repeated uint64 switcher_scene_ids = 12;
   bool always_on_top = 13;
+  uint64 preview_scene_id = 14;
+  uint64 program_scene_id = 15;
 }
 
 message Output {

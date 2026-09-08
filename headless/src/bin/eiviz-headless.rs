@@ -42,6 +42,13 @@ enum Cmd {
         #[arg(long)]
         session: PathBuf,
     },
+    /// Write a portable `.eivz` that embeds Still/Video files.
+    Export {
+        #[arg(long)]
+        session: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Apply a session, host the control API, and wait until shutdown.
     Run {
         #[arg(long)]
@@ -67,6 +74,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
+        Cmd::Export { session, output } => match export(&session, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
         Cmd::Run {
             session,
             bind,
@@ -79,13 +90,13 @@ fn main() -> ExitCode {
 }
 
 fn load_valid(path: &PathBuf) -> Result<eiviz_control::Document, u8> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        eprintln!("eiviz-headless error=read {error}");
-        EXIT_ARGS
-    })?;
-    let doc = session::decode_file(&bytes).map_err(|error| {
-        eprintln!("eiviz-headless error=session {error}");
-        EXIT_SESSION
+    let doc = session::read_document(path).map_err(|error| {
+        let missing = std::fs::metadata(path).is_err();
+        eprintln!(
+            "eiviz-headless error={} {error}",
+            if missing { "read" } else { "session" }
+        );
+        if missing { EXIT_ARGS } else { EXIT_SESSION }
     })?;
     validate_for_apply(&doc).map_err(|error| {
         eprintln!("eiviz-headless error=session {}", error.message);
@@ -101,6 +112,15 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
         EXIT_SESSION
     })?;
     std::io::Write::write_all(&mut std::io::stdout(), &bytes).map_err(|_| EXIT_OTHER)?;
+    Ok(())
+}
+
+fn export(input: &PathBuf, output: &PathBuf) -> Result<(), u8> {
+    let doc = load_valid(input)?;
+    session::export_document(output, &doc).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
     Ok(())
 }
 

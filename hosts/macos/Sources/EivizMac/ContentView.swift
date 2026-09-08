@@ -106,6 +106,7 @@ struct ContentView: View {
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
+                Button(L10n.t("chrome.export")) { mixer.exportSession() }
                 Button(L10n.t("chrome.load")) { mixer.loadSession() }
                 Menu {
                     ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in

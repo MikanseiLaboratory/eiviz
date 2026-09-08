@@ -28,8 +28,8 @@ public static class Loc
         var bare = key["action.".Length..];
         var reason = (bare, code) switch
         {
-            ("Load session" or "Save session", 3 or -1 or -3) => T("error.badSession"),
-            ("Load session", 5 or -5) => T("error.io"),
+            ("Load session" or "Save session" or "Export session", 3 or -1 or -3) => T("error.badSession"),
+            ("Load session" or "Export session", 5 or -5) => T("error.io"),
             (_, 1) => T("error.alreadyCreated"),
             (_, 2) => T("error.notCreated"),
             (_, 3) => T("error.invalidArgument"),
@@ -75,6 +75,7 @@ public static class Loc
         ["chrome.openRecent"] = "Open recent",
         ["chrome.new"] = "New",
         ["chrome.save"] = "Save",
+        ["chrome.export"] = "Export",
         ["chrome.load"] = "Load",
         ["chrome.connect"] = "Connect",
         ["chrome.disconnect"] = "Disconnect",
@@ -255,6 +256,7 @@ public static class Loc
         ["action.Delete Mixing Unit"] = "Delete Mixing Unit",
         ["action.Load session"] = "Load session",
         ["action.Save session"] = "Save session",
+        ["action.Export session"] = "Export session",
         ["action.Still load"] = "Still load",
         ["action.Video start"] = "Video load",
         ["action.UVC start"] = "Video capture",
@@ -327,6 +329,7 @@ public static class Loc
         ["chrome.openRecent"] = "最近使ったファイル",
         ["chrome.new"] = "新規",
         ["chrome.save"] = "保存",
+        ["chrome.export"] = "書き出し",
         ["chrome.load"] = "読み込み",
         ["chrome.connect"] = "Connect",
         ["chrome.disconnect"] = "Disconnect",
@@ -507,6 +510,7 @@ public static class Loc
         ["action.Delete Mixing Unit"] = "Mixing Unit の削除",
         ["action.Load session"] = "セッションの読み込み",
         ["action.Save session"] = "セッションの保存",
+        ["action.Export session"] = "セッションの書き出し",
         ["action.Still load"] = "静止画の読み込み",
         ["action.Video start"] = "動画の読み込み",
         ["action.UVC start"] = "映像キャプチャ",

@@ -16,6 +16,7 @@
                 <StackPanel Orientation="Horizontal">
                     <Button x:Name="NewSessionButton" Content="{Binding [chrome.new], Source={x:Static i18n:Loc.Source}}" Width="64" Click="NewSession_Click"/>
                     <Button x:Name="SaveSessionButton" Content="{Binding [chrome.save], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="SaveSession_Click"/>
+                    <Button x:Name="ExportSessionButton" Content="{Binding [chrome.export], Source={x:Static i18n:Loc.Source}}" Width="80" Margin="8,0,0,0" Click="ExportSession_Click"/>
                     <Button x:Name="LoadSessionButton" Content="{Binding [chrome.load], Source={x:Static i18n:Loc.Source}}" Width="72" Margin="8,0,0,0" Click="LoadSession_Click"/>
                     <Button x:Name="ConnectButton" Content="{Binding [chrome.connect], Source={x:Static i18n:Loc.Source}}" Width="88" Click="Connect_Click" Visibility="Collapsed"/>
                     <Button x:Name="OpenRecentButton" Content="▾" Width="22" Click="OpenRecent_Click"/>

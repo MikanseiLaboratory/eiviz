@@ -23,6 +23,13 @@ internal static class SessionStore
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
 
+    public static void Export(Session session, string path)
+    {
+        session.Settings.LastSessionPath = null;
+        var dto = Document.From(session);
+        MixerNative.SessionExportText(path, JsonSerializer.Serialize(dto, Json));
+    }
+
     public static Session FromJson(string json)
     {
         var dto = JsonSerializer.Deserialize<Document>(json, Json)
@@ -344,6 +351,8 @@ internal static class SessionStore
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
         public bool? AlwaysOnTop { get; set; }
+        public ulong PreviewSceneId { get; set; }
+        public ulong ProgramSceneId { get; set; }
         public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
         public List<ulong> SwitcherSceneIds { get; set; } = [];
 
@@ -360,6 +369,8 @@ internal static class SessionStore
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
             AudioLink = unit.AudioLink,
             AlwaysOnTop = unit.AlwaysOnTop,
+            PreviewSceneId = unit.PreviewSceneId,
+            ProgramSceneId = unit.ProgramSceneId,
             SwitcherSceneFilter = unit.SwitcherSceneFilter,
             SwitcherSceneIds = [.. unit.SwitcherSceneIds]
         };
@@ -377,6 +388,8 @@ internal static class SessionStore
                 AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
                 AudioLink = AudioLink,
                 AlwaysOnTop = AlwaysOnTop ?? true,
+                PreviewSceneId = PreviewSceneId,
+                ProgramSceneId = ProgramSceneId,
                 SwitcherSceneFilter = SwitcherSceneFilter
             };
             foreach (var preset in Transitions)

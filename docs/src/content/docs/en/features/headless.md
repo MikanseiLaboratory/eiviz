@@ -28,6 +28,7 @@ The binaries land at `target/release/eiviz-headless` and `target/release/eivizct
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -148,4 +149,4 @@ To rotate a token, change the env var or `eivizctl prefs set token`, then restar
 | 5 | Bind |
 | 6 | Other runtime failure |
 
-Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`.
+Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`. `eiviz-headless export` embeds Still/Video files; load extracts them next to the `.eivz` into `*.media`.

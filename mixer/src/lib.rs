@@ -618,6 +618,40 @@ fn live_unit_from(unit: &LiveUnit) -> crate::vmix_xml::UnitLive {
     }
 }
 
+fn scene_id_from_source(doc: &eiviz_control::session::Document, source: u64) -> u64 {
+    if !crate::abi::is_scene(source) {
+        return 0;
+    }
+    let id = source - crate::abi::SCENE_BASE;
+    if doc.scenes.iter().any(|scene| scene.id == id) {
+        id
+    } else {
+        0
+    }
+}
+
+fn stamp_live_scene_buses(doc: &mut eiviz_control::session::Document) {
+    let snap = live_snapshot();
+    let stamps: Vec<(u64, u64, u64)> = doc
+        .units
+        .iter()
+        .filter_map(|unit| {
+            let live = snap.units.get(&unit.id)?;
+            Some((
+                unit.id,
+                scene_id_from_source(doc, live.preview_source),
+                scene_id_from_source(doc, live.program_source),
+            ))
+        })
+        .collect();
+    for (id, preview, program) in stamps {
+        if let Some(unit) = doc.units.iter_mut().find(|unit| unit.id == id) {
+            unit.preview_scene_id = preview;
+            unit.program_scene_id = program;
+        }
+    }
+}
+
 fn report_io(error: impl Into<String>) -> i32 {
     let error = error.into();
     crate::diag::error(&error);
@@ -2774,19 +2808,16 @@ pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, c
     if path.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
-    match std::fs::read(read_cstr(path)) {
-        Ok(bytes) => {
-            match session::decode_file(&bytes).and_then(|document| session::to_vec(&document)) {
-                Ok(canonical) => copy_bytes(&canonical, out, cap),
-                Err(error) => {
-                    report_session_error(error);
-                    -ERR_INVALID_ARGUMENT
-                }
-            }
-        }
+    let path = read_cstr(path);
+    if let Err(error) = std::fs::read(&path) {
+        report_session_error(error.to_string());
+        return -ERR_IO;
+    }
+    match session::read_document(&path).and_then(|document| session::to_vec(&document)) {
+        Ok(canonical) => copy_bytes(&canonical, out, cap),
         Err(error) => {
-            report_session_error(error.to_string());
-            -ERR_IO
+            report_session_error(error);
+            -ERR_INVALID_ARGUMENT
         }
     }
 }
@@ -2801,7 +2832,32 @@ pub unsafe extern "C" fn mixer_session_save(
         return ERR_INVALID_ARGUMENT;
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
-    match session::save_file(&read_cstr(path), bytes) {
+    match session::parse(bytes).and_then(|mut document| {
+        stamp_live_scene_buses(&mut document);
+        session::write_document(&read_cstr(path), &document)
+    }) {
+        Ok(()) => OK,
+        Err(error) => {
+            report_session_error(error);
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_export(
+    path: *const c_char,
+    json: *const u8,
+    len: usize,
+) -> i32 {
+    if path.is_null() || json.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    match session::parse(bytes).and_then(|mut document| {
+        stamp_live_scene_buses(&mut document);
+        session::export_document(&read_cstr(path), &document)
+    }) {
         Ok(()) => OK,
         Err(error) => {
             report_session_error(error);
@@ -5684,6 +5740,12 @@ mod tests {
         assert_eq!(save, OK);
         let saved_bytes = std::fs::read(&saved_path).unwrap();
         assert_eq!(&saved_bytes[..4], b"EIVZ");
+        let exported_path = dir.join("exported.eivz");
+        let exported_c = CString::new(exported_path.to_string_lossy().as_bytes()).unwrap();
+        let exported =
+            unsafe { mixer_session_export(exported_c.as_ptr(), loaded.as_ptr(), loaded.len()) };
+        assert_eq!(exported, OK);
+        assert_eq!(&std::fs::read(&exported_path).unwrap()[..4], b"EIVZ");
         let n2 = unsafe { mixer_session_load(saved_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
         assert_eq!(n2, n);
         assert_eq!(&buf[..n2 as usize], loaded.as_slice());

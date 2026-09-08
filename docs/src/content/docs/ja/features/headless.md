@@ -28,6 +28,7 @@ cargo build -p eiviz-headless --locked --release --bins
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -148,4 +149,4 @@ tokenを回すときは環境変数または`eivizctl prefs set token`を差し�
 | 5 | bind |
 | 6 | その他のruntime失敗 |
 
-ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。
+ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。Still/Videoを同梱した持ち運びは`eiviz-headless export`で、読み込み時は`.eivz`の隣の`*.media`へ展開します。

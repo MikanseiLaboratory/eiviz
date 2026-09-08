@@ -369,6 +369,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_save", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionSave(string path, byte* json, nuint length);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_export", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionExport(string path, byte* json, nuint length);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_canonicalize")]
     internal static unsafe partial int SessionCanonicalize(byte* json, nuint length, byte* buffer, nuint capacity);
 
@@ -508,6 +511,18 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionSave(path, ptr, (nuint)bytes.Length), "Save session");
+            }
+        }
+    }
+
+    internal static void SessionExportText(string path, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionExport(path, ptr, (nuint)bytes.Length), "Export session");
             }
         }
     }

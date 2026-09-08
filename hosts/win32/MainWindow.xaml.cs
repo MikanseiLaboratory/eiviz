@@ -150,6 +150,7 @@ public partial class MainWindow : Window
             return;
         NewSessionButton.Visibility = Visibility.Collapsed;
         SaveSessionButton.Visibility = Visibility.Collapsed;
+        ExportSessionButton.Visibility = Visibility.Collapsed;
         LoadSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
         DisconnectButton.Visibility = Visibility.Visible;
@@ -2423,6 +2424,27 @@ public partial class MainWindow : Window
             return;
         SessionStore.Save(_session, dialog.FileName);
         AppPrefs.Current.RememberSession(dialog.FileName);
+    }
+
+    private void ExportSession_Click(object sender, RoutedEventArgs e)
+    {
+        var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = Loc.T("filter.sessionSave"),
+            FileName = string.IsNullOrEmpty(last) ? "session.eivz" : System.IO.Path.GetFileName(last)
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+        try
+        {
+            SessionStore.Export(_session, dialog.FileName);
+            AppPrefs.Current.RememberSession(dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("action.Export session"));
+        }
     }
 
     private void NewSession_Click(object sender, RoutedEventArgs e)

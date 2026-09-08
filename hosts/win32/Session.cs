@@ -788,6 +788,8 @@ public sealed class MixingUnitEntry
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public bool AlwaysOnTop { get; set; } = true;
+    public ulong PreviewSceneId { get; set; }
+    public ulong ProgramSceneId { get; set; }
     public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
     public List<ulong> SwitcherSceneIds { get; } = [];
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
@@ -1013,6 +1015,8 @@ public sealed class Session
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);
         session.AddScene("Scene 2", MixerNative.Color);
+        unit.PreviewSceneId = session.Scenes[0].Id;
+        unit.ProgramSceneId = session.Scenes[1].Id;
         session.Outputs.Add(new OutputEntry
         {
             Id = session.NextOutputId++,

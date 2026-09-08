@@ -22,9 +22,37 @@ pub const CONTAINER_VERSION: u16 = 1;
 pub const FORMAT_VERSION: u32 = 1;
 
 pub fn encode_file(doc: &Document) -> Result<Vec<u8>, String> {
+    encode_session(doc, &[])
+}
+
+pub fn decode_file(bytes: &[u8]) -> Result<Document, String> {
+    decode_session(bytes, None)
+}
+
+pub fn read_document(path: impl AsRef<Path>) -> Result<Document, String> {
+    let path = path.as_ref();
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    decode_session(&bytes, Some(path))
+}
+
+pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<(), String> {
+    let canonical = doc.clone().canonicalize();
+    let bytes = encode_session(&canonical, &[])?;
+    atomic_write(path.as_ref(), &bytes)
+}
+
+pub fn export_document(path: impl AsRef<Path>, doc: &Document) -> Result<(), String> {
+    let canonical = doc.clone().canonicalize();
+    let assets = collect_assets(&canonical)?;
+    let bytes = encode_session(&canonical, &assets)?;
+    atomic_write(path.as_ref(), &bytes)
+}
+
+fn encode_session(doc: &Document, assets: &[pb::EmbeddedAsset]) -> Result<Vec<u8>, String> {
     let payload = pb::SessionFile {
         format_version: FORMAT_VERSION,
         document: Some(document_to_pb(doc)),
+        assets: assets.to_vec(),
     }
     .encode_to_vec();
     let mut out = Vec::with_capacity(MAGIC.len() + 2 + payload.len());
@@ -34,25 +62,14 @@ pub fn encode_file(doc: &Document) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-pub fn decode_file(bytes: &[u8]) -> Result<Document, String> {
+fn decode_session(bytes: &[u8], path: Option<&Path>) -> Result<Document, String> {
     if bytes.starts_with(MAGIC) {
-        return decode_eivz(bytes);
+        return decode_eivz(bytes, path);
     }
     Err("not an eiviz session file".into())
 }
 
-pub fn read_document(path: impl AsRef<Path>) -> Result<Document, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    decode_file(&bytes)
-}
-
-pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<(), String> {
-    let canonical = doc.clone().canonicalize();
-    let bytes = encode_file(&canonical)?;
-    atomic_write(path.as_ref(), &bytes)
-}
-
-fn decode_eivz(bytes: &[u8]) -> Result<Document, String> {
+fn decode_eivz(bytes: &[u8], path: Option<&Path>) -> Result<Document, String> {
     if bytes.len() < MAGIC.len() + 2 {
         return Err("truncated eivz file".into());
     }
@@ -70,7 +87,83 @@ fn decode_eivz(bytes: &[u8]) -> Result<Document, String> {
     let Some(document) = file.document else {
         return Err("eivz file is missing a document".into());
     };
-    Ok(document_from_pb(document)?.canonicalize())
+    let mut document = document_from_pb(document)?.canonicalize();
+    if !file.assets.is_empty() {
+        let Some(session_path) = path else {
+            return Err("exported session needs a file path to extract media".into());
+        };
+        extract_assets(&mut document, &file.assets, session_path)?;
+    }
+    Ok(document)
+}
+
+fn collect_assets(doc: &Document) -> Result<Vec<pb::EmbeddedAsset>, String> {
+    let mut assets = Vec::new();
+    for input in &doc.inputs {
+        if input.kind != InputKind::Still && input.kind != InputKind::Video {
+            continue;
+        }
+        let Some(path) = input.path_or_address.as_deref() else {
+            return Err(format!("input {} is missing a file path", input.id));
+        };
+        let source = Path::new(path);
+        if !source.is_file() {
+            return Err(format!("input {} file does not exist: {path}", input.id));
+        }
+        let file_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| format!("input {} has an invalid file name", input.id))?
+            .to_string();
+        let data = std::fs::read(source).map_err(|error| error.to_string())?;
+        assets.push(pb::EmbeddedAsset {
+            input_id: input.id,
+            file_name,
+            data,
+        });
+    }
+    Ok(assets)
+}
+
+fn extract_assets(
+    doc: &mut Document,
+    assets: &[pb::EmbeddedAsset],
+    session_path: &Path,
+) -> Result<(), String> {
+    let dir = media_dir(session_path);
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    for asset in assets {
+        if asset.file_name.is_empty()
+            || asset.file_name.contains('/')
+            || asset.file_name.contains('\\')
+            || asset.file_name.contains("..")
+        {
+            return Err(format!("asset {} has an invalid file name", asset.input_id));
+        }
+        let dest = dir.join(format!("{}_{}", asset.input_id, asset.file_name));
+        std::fs::write(&dest, &asset.data).map_err(|error| error.to_string())?;
+        let Some(input) = doc
+            .inputs
+            .iter_mut()
+            .find(|input| input.id == asset.input_id)
+        else {
+            return Err(format!("asset references missing input {}", asset.input_id));
+        };
+        input.path_or_address = Some(dest.to_string_lossy().into_owned());
+    }
+    Ok(())
+}
+
+fn media_dir(session_path: &Path) -> PathBuf {
+    let stem = session_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("session");
+    match session_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(format!("{stem}.media")),
+        _ => PathBuf::from(format!("{stem}.media")),
+    }
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -493,6 +586,8 @@ fn unit_to_pb(unit: &UnitDto) -> pb::MixingUnit {
         switcher_scene_filter: filter_to_pb(unit.switcher_scene_filter).into(),
         switcher_scene_ids: unit.switcher_scene_ids.clone(),
         always_on_top: unit.always_on_top,
+        preview_scene_id: unit.preview_scene_id,
+        program_scene_id: unit.program_scene_id,
     }
 }
 
@@ -515,6 +610,8 @@ fn unit_from_pb(unit: pb::MixingUnit) -> Result<UnitDto, String> {
         switcher_scene_filter: filter_from_pb(unit.switcher_scene_filter)?,
         switcher_scene_ids: unit.switcher_scene_ids,
         always_on_top: unit.always_on_top,
+        preview_scene_id: unit.preview_scene_id,
+        program_scene_id: unit.program_scene_id,
     })
 }
 
@@ -1004,6 +1101,8 @@ mod tests {
     "id": 1,
     "name": "Mixing Unit 1",
     "alwaysOnTop": false,
+    "previewSceneId": 1,
+    "programSceneId": 1,
     "overlays": [{
       "sceneGpuId": 1,
       "sizeLinked": false,
@@ -1038,6 +1137,8 @@ mod tests {
         assert!(encoded.starts_with(MAGIC));
         let decoded = decode_file(&encoded).unwrap();
         assert_eq!(decoded.units[0].always_on_top, false);
+        assert_eq!(decoded.units[0].preview_scene_id, 1);
+        assert_eq!(decoded.units[0].program_scene_id, 1);
         assert!(!decoded.scenes[0].layers[0].size_linked);
         assert!((decoded.scenes[0].layers[0].crop_x - 0.1).abs() < f32::EPSILON);
         assert!(!decoded.units[0].overlays[0].size_linked);
@@ -1085,6 +1186,7 @@ mod tests {
         let mut file = pb::SessionFile {
             format_version: FORMAT_VERSION,
             document: Some(document_to_pb(&doc)),
+            assets: Vec::new(),
         };
         file.document.as_mut().unwrap().inputs[0].kind = 99;
         let mut bytes = MAGIC.to_vec();
@@ -1100,6 +1202,7 @@ mod tests {
         let file = pb::SessionFile {
             format_version: 99,
             document: Some(document_to_pb(&doc)),
+            assets: Vec::new(),
         };
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
@@ -1116,6 +1219,7 @@ mod tests {
         let file = pb::SessionFile {
             format_version: FORMAT_VERSION,
             document: None,
+            assets: Vec::new(),
         };
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
@@ -1137,5 +1241,27 @@ mod tests {
         let decoded = decode_file(&encoded).unwrap();
         assert_eq!(decoded.inputs[0].name.len(), 1_200_000);
         assert!(to_vec(&decoded).unwrap().len() > 1 << 20);
+    }
+
+    #[test]
+    fn export_embeds_media_and_load_extracts_it() {
+        let dir = std::env::temp_dir().join(format!("eiviz-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("card.png");
+        std::fs::write(&source, b"png-bytes").unwrap();
+        let mut doc = parse(sample_json()).unwrap();
+        doc.inputs[0].kind = InputKind::Still;
+        doc.inputs[0].path_or_address = Some(source.to_string_lossy().into_owned());
+        let exported = dir.join("show.eivz");
+        export_document(&exported, &doc).unwrap();
+        std::fs::remove_file(&source).unwrap();
+        let loaded = read_document(&exported).unwrap();
+        let extracted = loaded.inputs[0]
+            .path_or_address
+            .as_deref()
+            .expect("extracted path");
+        assert!(extracted.ends_with("2_card.png"), "{extracted}");
+        assert_eq!(std::fs::read(extracted).unwrap(), b"png-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -778,6 +778,8 @@ struct MixingUnitEntry: Identifiable, Codable {
     var audioBusId: UInt64 = 1
     var audioLink: AudioLinkMode = .follow
     var alwaysOnTop: Bool = true
+    var previewSceneId: UInt64 = 0
+    var programSceneId: UInt64 = 0
     var switcherSceneFilter: SwitcherSceneFilter = .all
     var switcherSceneIds: [UInt64] = []
     var displayName: String { "\(name)  \(width)x\(height) \(fpsLabel)" }
@@ -809,6 +811,7 @@ struct MixingUnitEntry: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, width, height, fpsNum, fpsDen, transitions, overlays, audioBusId, audioLink, alwaysOnTop
+        case previewSceneId, programSceneId
         case switcherSceneFilter, switcherSceneIds
     }
 
@@ -825,6 +828,8 @@ struct MixingUnitEntry: Identifiable, Codable {
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
         audioLink = try container.decodeIfPresent(AudioLinkMode.self, forKey: .audioLink) ?? .follow
         alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
+        previewSceneId = try container.decodeIfPresent(UInt64.self, forKey: .previewSceneId) ?? 0
+        programSceneId = try container.decodeIfPresent(UInt64.self, forKey: .programSceneId) ?? 0
         switcherSceneFilter = try container.decodeIfPresent(SwitcherSceneFilter.self, forKey: .switcherSceneFilter) ?? .all
         switcherSceneIds = try container.decodeIfPresent([UInt64].self, forKey: .switcherSceneIds) ?? []
     }
@@ -1377,6 +1382,8 @@ struct MixerSessionData: Codable {
         ]
         session.addScene(name: "Scene 1", input: EIVIZ_SRC_BARS)
         session.addScene(name: "Scene 2", input: EIVIZ_SRC_COLOR)
+        session.units[0].previewSceneId = session.scenes[0].id
+        session.units[0].programSceneId = session.scenes[1].id
         session.outputs = [
             OutputEntry(id: session.nextOutputId, name: "eiviz-pgm", transport: .omt, useGpu: true)
         ]
