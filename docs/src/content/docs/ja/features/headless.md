@@ -153,6 +153,6 @@ tokenを回すときは環境変数または`eivizctl prefs set token`を差し�
 | 5 | bind |
 | 6 | その他のruntime失敗 |
 
-ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。`eiviz-headless export`は`.eivzx`を書き、Still/Videoを同梱し履歴は含めません。読み込み時はファイルの隣の`*.media`へ展開します。RemoteのSaveと`eivizctl save`は、いまの`run`セッションファイルへ書き込みます。`eivizctl replace`では保存先は変わりません。
+ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。`eiviz-headless export`は`.eivzx`を書き、Still/Videoを同梱し履歴は含めません。`run`の読み込み時はファイルの隣の`*.media`へ展開します。GUIで書き出しを開くときは、メディアの展開先と作業用`.eivz`を尋ねます。RemoteのSaveと`eivizctl save`は、いまの`run`セッションファイルへ書き込みます。`eivizctl replace`では保存先は変わりません。
 
 `eiviz-headless history --session show.eivz`はファイル内履歴を一覧します（index、unix ms、revision。新しい順、最大20件）。`eiviz-headless restore --session show.eivz --index N --output old.eivz`はその履歴を履歴なしの単体`.eivz`として書き出します。GUIの読み込みでは、履歴があるファイルを選ぶと最新版（既定）か特定のrevisionを選べます。最近使ったファイルとダブルクリックは最新版を開きます。

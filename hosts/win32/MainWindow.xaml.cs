@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -73,6 +74,7 @@ public partial class MainWindow : Window
             SyncTBarsFromMixer();
         };
         _tbarTimer.Start();
+        Loaded += (_, _) => PromptMissingMedia();
         Closed += (_, _) =>
         {
             _tbarTimer.Stop();
@@ -152,7 +154,7 @@ public partial class MainWindow : Window
         NewSessionButton.Visibility = Visibility.Collapsed;
         SaveSessionButton.Visibility = Visibility.Visible;
         SaveSessionButton.IsEnabled = false;
-        ExportSessionButton.Visibility = Visibility.Collapsed;
+        SaveSessionMenuButton.Visibility = Visibility.Collapsed;
         LoadSessionButton.Visibility = Visibility.Collapsed;
         LoadLastSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
@@ -1568,6 +1570,7 @@ public partial class MainWindow : Window
             window.ApplyMixerMix();
         var program = CurrentProgramSceneId();
         var previewGpu = CurrentPreviewSceneGpuId();
+        MixerApply.CaptureSceneBuses(_session);
         var previewId = _session.Scenes.FirstOrDefault(item => item.GpuId == previewGpu)?.Id ?? 0;
         if (program != _shownProgramId || previewId != _shownPreviewId)
             RefreshSceneTiles();
@@ -2424,7 +2427,34 @@ public partial class MainWindow : Window
             SaveRemoteSession();
             return;
         }
-        var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
+        var current = SessionStore.CurrentPath();
+        if (SessionStore.CanOverwrite(current))
+        {
+            SaveSessionTo(current!);
+            return;
+        }
+        SaveSessionAs();
+    }
+
+    private void SaveSessionMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (HostRole.IsRemote)
+            return;
+        var menu = new ContextMenu();
+        var saveAs = new MenuItem { Header = Loc.T("chrome.saveAs") };
+        saveAs.Click += (_, _) => SaveSessionAs();
+        var export = new MenuItem { Header = Loc.T("chrome.export") };
+        export.Click += (_, _) => ExportSession();
+        menu.Items.Add(saveAs);
+        menu.Items.Add(export);
+        menu.PlacementTarget = SaveSessionMenuButton;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void SaveSessionAs()
+    {
+        var last = SessionStore.CurrentPath() ?? AppPrefs.Current.RecentSessions.FirstOrDefault();
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = Loc.T("filter.sessionSave"),
@@ -2434,8 +2464,20 @@ public partial class MainWindow : Window
         };
         if (dialog.ShowDialog(this) != true)
             return;
-        SessionStore.Save(_session, dialog.FileName);
-        AppPrefs.Current.RememberSession(dialog.FileName);
+        SaveSessionTo(dialog.FileName);
+    }
+
+    private void SaveSessionTo(string path)
+    {
+        try
+        {
+            SessionStore.Save(_session, path);
+            AppPrefs.Current.RememberSession(path);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("action.Save session"));
+        }
     }
 
     private void SaveRemoteSession()
@@ -2459,9 +2501,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ExportSession_Click(object sender, RoutedEventArgs e)
+    private void ExportSession()
     {
-        var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
+        var last = SessionStore.CurrentPath() ?? AppPrefs.Current.RecentSessions.FirstOrDefault();
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = Loc.T("filter.sessionExport"),
@@ -2532,7 +2574,7 @@ public partial class MainWindow : Window
         var dirs = new[] { directory };
         var before = _session.Inputs.ToDictionary(input => input.Id, input => input.PathOrAddress);
         int updated;
-        if (TryRemoteMutate(MutationJson.RelinkMedia(dirs), Loc.T("input.relink")))
+        if (TryRemoteMutate(MutationJson.RelinkMedia(dirs), Loc.T("input.relinkFolder")))
         {
             updated = _session.Inputs.Count(input =>
                 before.TryGetValue(input.Id, out var path) && path != input.PathOrAddress);
@@ -2543,7 +2585,31 @@ public partial class MainWindow : Window
             SessionStore.Publish(_session);
             RefreshInputList();
         }
-        MessageBox.Show(this, Loc.Format("msg.relinked", updated), Loc.T("input.relink"));
+        MessageBox.Show(this, Loc.Format("msg.relinked", updated), Loc.T("input.relinkFolder"));
+    }
+
+    private void RelinkInputFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input
+            || input.Kind is not (InputKind.Still or InputKind.Video))
+        {
+            MessageBox.Show(this, Loc.T("msg.selectInputRelink"));
+            return;
+        }
+        var path = PickRelinkFile(input);
+        if (string.IsNullOrEmpty(path))
+            return;
+        if (HostRole.IsRemote)
+        {
+            input.PathOrAddress = path;
+            RemoteMutate(MutationJson.UpsertInput(input), Loc.T("input.relinkFile"));
+            return;
+        }
+        if (!SessionStore.RelinkInput(input, path))
+            return;
+        SessionStore.Publish(_session);
+        RefreshInputList();
+        MessageBox.Show(this, Loc.Format("msg.relinked", 1), Loc.T("input.relinkFile"));
     }
 
     private string? PickRelinkDirectory()
@@ -2553,14 +2619,43 @@ public partial class MainWindow : Window
             var prompt = new RelinkMediaDialog { Owner = this };
             return prompt.ShowDialog() == true ? prompt.Directory : null;
         }
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = Loc.T("input.relink") };
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = Loc.T("input.relinkFolder") };
         return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+    }
+
+    internal string? PickRelinkFile(InputEntry input, Window? owner = null)
+    {
+        owner ??= this;
+        if (HostRole.IsRemote)
+        {
+            var prompt = new RelinkMediaDialog(Loc.T("input.relinkFile"), Loc.T("input.relinkFileHost"))
+            {
+                Owner = owner
+            };
+            return prompt.ShowDialog() == true ? prompt.Directory : null;
+        }
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("input.relinkFile"),
+            Filter = input.Kind == InputKind.Still
+                ? "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff|All|*.*"
+                : "Video|*.mp4;*.mov;*.mkv;*.avi;*.wmv;*.mxf|All|*.*"
+        };
+        return dialog.ShowDialog(owner) == true ? dialog.FileName : null;
     }
 
     private void LoadSessionFrom(string path, uint? historyIndex = null)
     {
         try
         {
+            if (historyIndex is null && SessionStore.FileHasAssets(path))
+            {
+                if (!TryImportExport(path, out var imported, out var dest))
+                    return;
+                ((App)Application.Current).ReloadSession(imported);
+                AppPrefs.Current.RememberSession(dest);
+                return;
+            }
             ((App)Application.Current).ReloadSession(SessionStore.Load(path, historyIndex));
             AppPrefs.Current.RememberSession(path);
         }
@@ -2568,6 +2663,58 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, ex.Message, Loc.T("msg.loadSession"));
         }
+    }
+
+    private bool TryImportExport(string exportPath, out Session session, out string dest)
+    {
+        session = null!;
+        dest = "";
+        var prompt = new ImportExportDialog(exportPath) { Owner = this };
+        if (prompt.ShowDialog() != true)
+            return false;
+        session = SessionStore.Import(exportPath, prompt.SessionPath, prompt.MediaDirectory);
+        dest = prompt.SessionPath;
+        return true;
+    }
+
+    internal void PromptMissingMedia()
+    {
+        if (HostRole.IsRemote)
+            return;
+        var missing = SessionStore.MissingMedia(_session);
+        if (missing.Count == 0)
+            return;
+        var dialog = new MissingMediaDialog(_session) { Owner = this };
+        dialog.ShowDialog();
+        SessionStore.Publish(_session);
+        RefreshInputList();
+    }
+
+    private void ShowInputInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (InputList.SelectedItem is not InputEntry input)
+            return;
+        ShowPathInExplorer(input.PathOrAddress);
+    }
+
+    internal static void ShowPathInExplorer(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+        var target = path.Trim();
+        if (!File.Exists(target) && !Directory.Exists(target))
+        {
+            var parent = Path.GetDirectoryName(target);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+                return;
+            target = parent;
+        }
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = Directory.Exists(target) ? $"\"{target}\"" : $"/select,\"{target}\"",
+            UseShellExecute = true
+        });
     }
 
     internal void CloseOwnedSurfaces()
@@ -2580,6 +2727,9 @@ public partial class MainWindow : Window
             window.Close();
         foreach (var preview in _inputPreviews.Values.ToArray())
             preview.Close();
+        PreviewHost.AutoAttach = false;
+        ProgramHost.AutoAttach = false;
+        MainMultiviewHost.AutoAttach = false;
         PreviewHost.ReleaseNative();
         ProgramHost.ReleaseNative();
         MainMultiviewHost.ReleaseNative();

@@ -17,8 +17,8 @@ use string_enum::session_string_enum;
 pub use default::{dated_session_filename, dated_session_filename_now, default_document};
 pub use file::{
     CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
-    export_document, extract_history, read_document, read_history, write_document,
-    write_document_rev,
+    export_document, extract_history, has_embedded_assets, import_exported_session, read_document,
+    read_history, write_document, write_document_rev,
 };
 pub use relink::{media_file_missing, missing_media_message, relink_missing_media};
 pub use validate::{ValidationError, validate, validate_for_apply};
@@ -1271,8 +1271,12 @@ pub fn stamp_live_scene_buses(doc: &mut Document, live: &crate::live::LiveState)
         .collect();
     for (id, preview, program) in stamps {
         if let Some(unit) = doc.units.iter_mut().find(|unit| unit.id == id) {
-            unit.preview_scene_id = preview;
-            unit.program_scene_id = program;
+            if preview != 0 {
+                unit.preview_scene_id = preview;
+            }
+            if program != 0 {
+                unit.program_scene_id = program;
+            }
         }
     }
 }
@@ -1736,5 +1740,42 @@ mod tests {
         assert!(doc.units[0].transitions[0].keep_preview);
         assert_eq!(doc.units[0].transitions[0].easing, 3);
         assert!((doc.units[0].transitions[0].dip_g - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stamp_keeps_stored_buses_when_live_is_not_a_scene() {
+        let src = r#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1", "previewSceneId": 2, "programSceneId": 1 }]
+        }"#;
+        let mut doc = parse(src.as_bytes()).unwrap();
+        let mut live = crate::live::LiveState::default();
+        live.units.insert(
+            1,
+            crate::live::UnitLiveState {
+                preview_source: 2,
+                program_source: 2,
+                ..Default::default()
+            },
+        );
+        stamp_live_scene_buses(&mut doc, &live);
+        assert_eq!(doc.units[0].preview_scene_id, 2);
+        assert_eq!(doc.units[0].program_scene_id, 1);
+        live.units.insert(
+            1,
+            crate::live::UnitLiveState {
+                preview_source: crate::ids::scene_gpu_id(1),
+                program_source: crate::ids::scene_gpu_id(2),
+                ..Default::default()
+            },
+        );
+        stamp_live_scene_buses(&mut doc, &live);
+        assert_eq!(doc.units[0].preview_scene_id, 1);
+        assert_eq!(doc.units[0].program_scene_id, 2);
     }
 }

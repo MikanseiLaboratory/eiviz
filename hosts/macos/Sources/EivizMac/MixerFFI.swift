@@ -113,6 +113,16 @@ enum MixerFFI {
         }
     }
 
+    static func sessionCurrentPath() -> String? {
+        let (n, bytes) = copyUtf8(startCap: 4096) { mixer_session_current_path($0, $1) }
+        guard n > 0 else { return nil }
+        return String(bytes: bytes, encoding: .utf8)
+    }
+
+    static func sessionHasAssets(_ path: String) -> Bool {
+        withCString(path) { mixer_session_has_assets($0) > 0 }
+    }
+
     static func emptyState() -> EivizUnitState { zeroed() }
     static func emptyOverlay() -> EivizOverlayDesc { zeroed() }
 

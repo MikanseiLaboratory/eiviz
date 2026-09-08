@@ -108,7 +108,12 @@ struct ContentView: View {
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
-                Button(L10n.t("chrome.export")) { mixer.exportSession() }
+                Menu {
+                    Button(L10n.t("chrome.saveAs")) { mixer.saveSessionAs() }
+                    Button(L10n.t("chrome.export")) { mixer.exportSession() }
+                } label: {
+                    Text("▾")
+                }
                 Button(L10n.t("chrome.load")) { mixer.loadSession() }
                 Button(L10n.t("chrome.loadLast")) { mixer.loadLastSession() }
                 Menu {
@@ -419,7 +424,9 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { mixer.selectedInputId = input.id }
                             .contextMenu {
-                                Button(L10n.t("input.relink")) { mixer.relinkMedia() }
+                                Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
+                                Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
+                                Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
                             }
                     }
                     .scrollContentBackground(.hidden)

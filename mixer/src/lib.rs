@@ -2799,6 +2799,74 @@ pub unsafe extern "C" fn mixer_take_fatal(out: *mut u8, cap: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_has_assets(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    match session::has_embedded_assets(&read_cstr(path)) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(error) => {
+            report_session_error(error);
+            -ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_import(
+    export_path: *const c_char,
+    session_dest: *const c_char,
+    media_dir: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if export_path.is_null()
+        || session_dest.is_null()
+        || media_dir.is_null()
+        || out.is_null()
+        || cap == 0
+    {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let export_path = read_cstr(export_path);
+    let session_dest = read_cstr(session_dest);
+    let media_dir = read_cstr(media_dir);
+    if session_dest.is_empty() || media_dir.is_empty() {
+        report_session_error("import needs a session path and a media directory");
+        return -ERR_INVALID_ARGUMENT;
+    }
+    match session::import_exported_session(&export_path, &session_dest, &media_dir)
+        .and_then(|document| session::to_vec(&document))
+    {
+        Ok(canonical) => {
+            remember_session_path(&session_dest);
+            copy_bytes(&canonical, out, cap)
+        }
+        Err(error) => {
+            report_session_error(error);
+            -ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_current_path(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let path = crate::control_service()
+        .lock()
+        .ok()
+        .and_then(|svc| {
+            svc.session_path()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    copy_bytes(path.as_bytes(), out, cap)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
     if path.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
@@ -5787,6 +5855,7 @@ mod tests {
         let mut buf = vec![0u8; 1 << 20];
         let rejected = unsafe { mixer_session_load(json_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
         assert!(rejected < 0, "legacy json must be rejected {rejected}");
+        assert_eq!(unsafe { mixer_session_has_assets(src_c.as_ptr()) }, 0);
         let n = unsafe { mixer_session_load(src_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
         assert!(n > 0, "load eivz {n}");
         let loaded = buf[..n as usize].to_vec();
@@ -5820,6 +5889,10 @@ mod tests {
         assert_eq!(n_rev, n);
         assert_eq!(&buf[..n_rev as usize], loaded.as_slice());
         mixer_session_clear_current();
+        assert_eq!(
+            unsafe { mixer_session_current_path(buf.as_mut_ptr(), buf.len()) },
+            0
+        );
         assert!(
             crate::control_service()
                 .lock()

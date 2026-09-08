@@ -153,6 +153,6 @@ To rotate a token, change the env var or `eivizctl prefs set token`, then restar
 | 5 | Bind |
 | 6 | Other runtime failure |
 
-Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). `eiviz-headless export` writes `.eivzx` with Still/Video embedded and history stripped; load extracts media next to the file into `*.media`. Remote Save and `eivizctl save` write the current `run` session file. `eivizctl replace` does not change that path.
+Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). `eiviz-headless export` writes `.eivzx` with Still/Video embedded and history stripped; `run` extracts media next to the file into `*.media`. The GUI open of an export asks for a media folder and a working `.eivz`. Remote Save and `eivizctl save` write the current `run` session file. `eivizctl replace` does not change that path.
 
 `eiviz-headless history --session show.eivz` lists in-file history (index, unix ms, revision; newest first, up to 20). `eiviz-headless restore --session show.eivz --index N --output old.eivz` writes that entry as a standalone `.eivz` with no history. The GUI load dialog offers Latest (default) or a specific revision when the file has history. Recent files and double-click always open Latest.

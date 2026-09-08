@@ -455,6 +455,7 @@ final class MixerController: ObservableObject {
         remoteReceiveIds.removeAll()
         remoteReceiveKeys.removeAll()
         guard booted else { return }
+        FlipBudget.reset()
         mixer_destroy()
         booted = false
     }
@@ -560,9 +561,45 @@ final class MixerController: ObservableObject {
         session.mergeTagCatalogs()
         session.assignMonitors()
         replaceRuntime()
-        selectedSceneId = session.scenes.first?.id
+        applyStoredBuses()
         selectedUnitId = session.selectedUnitId == 0 ? (session.units.first?.id ?? 1) : session.selectedUnitId
+        let previewId = session.units.first { $0.id == selectedUnitId }?.previewSceneId ?? 0
+        selectedSceneId = previewId != 0 ? previewId : session.scenes.first?.id
         applyVmixApi()
+    }
+
+    private func applyStoredBuses() {
+        for unit in session.units {
+            let previewId = unit.previewSceneId != 0
+                ? unit.previewSceneId
+                : (session.scenes.first?.id ?? 0)
+            let programId = unit.programSceneId != 0
+                ? unit.programSceneId
+                : (session.scenes.count > 1 ? session.scenes[1].id : previewId)
+            let preview = session.scenes.first { $0.id == previewId }?.gpuId ?? 0
+            let program = session.scenes.first { $0.id == programId }?.gpuId ?? preview
+            var state = currentState(unit.id)
+            state.preview_source = preview
+            state.program_source = program
+            fail(mixer_unit_set_state(unit.id, &state), "Restore buses")
+            applyBusSources(unitId: unit.id, preview: preview, program: program)
+        }
+    }
+
+    private func captureSceneBuses() {
+        for index in session.units.indices {
+            let id = session.units[index].id
+            if let gpu = previewByUnit[id],
+               let scene = session.scenes.first(where: { $0.gpuId == gpu })
+            {
+                session.units[index].previewSceneId = scene.id
+            }
+            if let gpu = programByUnit[id],
+               let scene = session.scenes.first(where: { $0.gpuId == gpu })
+            {
+                session.units[index].programSceneId = scene.id
+            }
+        }
     }
 
     func pushAudio() {
@@ -1509,29 +1546,20 @@ final class MixerController: ObservableObject {
     }
 
     func saveSession() {
+        if let path = MixerFFI.sessionCurrentPath(), canOverwrite(path) {
+            writeSession(to: path, export: false)
+            return
+        }
+        saveSessionAs()
+    }
+
+    func saveSessionAs() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType.eivizSession]
         panel.allowsOtherFileTypes = false
-        panel.nameFieldStringValue = "session.eivz"
+        panel.nameFieldStringValue = suggestedSessionName()
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        session.selectedUnitId = selectedUnitId
-        session.settings.lastSessionPath = nil
-        do {
-            let json = try SessionFile.encode(session)
-            let saved = MixerFFI.withCString(url.path) { path in
-                json.withUnsafeBytes { ptr in
-                    fail(
-                        mixer_session_save(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
-                        "Save session"
-                    )
-                }
-            }
-            if saved {
-                AppPrefs.shared.rememberSession(url.path)
-            }
-        } catch {
-            presentError(L10n.error("Save session", 3), title: L10n.t("action.Save session"))
-        }
+        writeSession(to: url.path, export: false)
     }
 
     func saveRemoteSession() {
@@ -1565,23 +1593,54 @@ final class MixerController: ObservableObject {
         panel.allowsOtherFileTypes = false
         panel.nameFieldStringValue = "session.eivzx"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        writeSession(to: url.path, export: true)
+    }
+
+    private func suggestedSessionName() -> String {
+        if let path = MixerFFI.sessionCurrentPath() ?? AppPrefs.shared.recentSessions.first {
+            return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent + ".eivz"
+        }
+        return "session.eivz"
+    }
+
+    private func canOverwrite(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        return lower.hasSuffix(".eivz") && !lower.hasSuffix(".eivzx")
+    }
+
+    private func writeSession(to path: String, export: Bool) {
+        syncAllUnitBuses()
+        captureSceneBuses()
         session.selectedUnitId = selectedUnitId
         session.settings.lastSessionPath = nil
         do {
             let json = try SessionFile.encode(session)
-            let saved = MixerFFI.withCString(url.path) { path in
+            let saved = MixerFFI.withCString(path) { cPath in
                 json.withUnsafeBytes { ptr in
                     fail(
-                        mixer_session_export(path, ptr.bindMemory(to: UInt8.self).baseAddress, json.count),
-                        "Export session"
+                        export
+                            ? mixer_session_export(
+                                cPath,
+                                ptr.bindMemory(to: UInt8.self).baseAddress,
+                                json.count
+                            )
+                            : mixer_session_save(
+                                cPath,
+                                ptr.bindMemory(to: UInt8.self).baseAddress,
+                                json.count
+                            ),
+                        export ? "Export session" : "Save session"
                     )
                 }
             }
             if saved {
-                AppPrefs.shared.rememberSession(url.path)
+                AppPrefs.shared.rememberSession(path)
             }
         } catch {
-            presentError(L10n.error("Export session", 3), title: L10n.t("action.Export session"))
+            presentError(
+                L10n.error(export ? "Export session" : "Save session", 3),
+                title: L10n.t(export ? "action.Export session" : "action.Save session")
+            )
         }
     }
 
@@ -1627,6 +1686,27 @@ final class MixerController: ObservableObject {
                 }
             }
         }
+        if historyIndex == nil, MixerFFI.sessionHasAssets(url.path) {
+            guard let dest = pickImportDestinations(exportPath: url.path) else { return }
+            let (n, bytes) = MixerFFI.withCString(url.path) { export in
+                MixerFFI.withCString(dest.session) { sessionPath in
+                    MixerFFI.withCString(dest.media) { media in
+                        MixerFFI.copyUtf8 { mixer_session_import(export, sessionPath, media, $0, $1) }
+                    }
+                }
+            }
+            guard n > 0 else {
+                fail(n == 0 ? 5 : n, "Load session")
+                return
+            }
+            do {
+                replaceSession(try SessionFile.decode(Data(bytes)))
+                AppPrefs.shared.rememberSession(dest.session)
+            } catch {
+                presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
+            }
+            return
+        }
         let (n, bytes) = MixerFFI.withCString(url.path) { cPath in
             if let historyIndex {
                 MixerFFI.copyUtf8 { mixer_session_load_rev(cPath, historyIndex, $0, $1) }
@@ -1670,6 +1750,16 @@ final class MixerController: ObservableObject {
         presentRelinked(count)
     }
 
+    func relinkInputFile(_ input: InputEntry) {
+        guard input.kind == .still || input.kind == .video else {
+            presentError(L10n.t("msg.selectInputRelink"), title: L10n.t("input.relinkFile"))
+            return
+        }
+        guard let path = pickRelinkFile(for: input) else { return }
+        applyRelinkPath(input, path: path)
+        presentRelinked(1)
+    }
+
     private func presentRelinked(_ count: Int) {
         let alert = NSAlert()
         alert.messageText = L10n.t("input.relink")
@@ -1682,7 +1772,7 @@ final class MixerController: ObservableObject {
     private func pickRelinkDirectory() -> String? {
         if isRemote {
             let alert = NSAlert()
-            alert.messageText = L10n.t("input.relink")
+            alert.messageText = L10n.t("input.relinkFolder")
             alert.informativeText = L10n.t("input.relinkDir")
             let field = NSTextField(string: "")
             field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
@@ -1697,8 +1787,142 @@ final class MixerController: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.message = L10n.t("input.relinkFolder")
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url.path
+    }
+
+    private func pickRelinkFile(for input: InputEntry) -> String? {
+        if isRemote {
+            let alert = NSAlert()
+            alert.messageText = L10n.t("input.relinkFile")
+            alert.informativeText = L10n.t("input.relinkFileHost")
+            let field = NSTextField(string: input.pathOrAddress ?? "")
+            field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+            alert.accessoryView = field
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.message = L10n.t("input.relinkFile")
+        panel.allowedContentTypes = input.kind == .still ? [.image] : [.movie]
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
+    private func applyRelinkPath(_ input: InputEntry, path: String) {
+        if isRemote {
+            var next = input
+            next.pathOrAddress = path
+            _ = mutateRemote(MixerRemote.upsertInput(next))
+            return
+        }
+        guard let index = session.inputs.firstIndex(where: { $0.id == input.id }) else { return }
+        session.inputs[index].pathOrAddress = path
+        publishSession()
+        applySession()
+        objectWillChange.send()
+    }
+
+    private func pickImportDestinations(exportPath: String) -> (session: String, media: String)? {
+        let hint = NSAlert()
+        hint.messageText = L10n.t("chrome.importExport")
+        hint.informativeText = L10n.t("chrome.importExportHint")
+        hint.alertStyle = .informational
+        hint.addButton(withTitle: L10n.t("dialog.ok"))
+        hint.addButton(withTitle: L10n.t("dialog.cancel"))
+        guard hint.runModal() == .alertFirstButtonReturn else { return nil }
+        let exportUrl = URL(fileURLWithPath: exportPath)
+        let parent = exportUrl.deletingLastPathComponent()
+        let stem = exportUrl.deletingPathExtension().lastPathComponent
+        let sessionPanel = NSSavePanel()
+        sessionPanel.allowedContentTypes = [UTType.eivizSession]
+        sessionPanel.allowsOtherFileTypes = false
+        sessionPanel.directoryURL = parent
+        sessionPanel.nameFieldStringValue = stem + ".eivz"
+        sessionPanel.message = L10n.t("chrome.importSession")
+        guard sessionPanel.runModal() == .OK, let sessionUrl = sessionPanel.url else { return nil }
+        let mediaPanel = NSOpenPanel()
+        mediaPanel.canChooseDirectories = true
+        mediaPanel.canCreateDirectories = true
+        mediaPanel.canChooseFiles = false
+        mediaPanel.allowsMultipleSelection = false
+        mediaPanel.directoryURL = parent
+        mediaPanel.message = L10n.t("chrome.importMedia")
+        mediaPanel.prompt = L10n.t("dialog.ok")
+        guard mediaPanel.runModal() == .OK, let mediaUrl = mediaPanel.url else { return nil }
+        return (sessionUrl.path, mediaUrl.path)
+    }
+
+    func showInputInFinder(_ input: InputEntry) {
+        guard let path = input.pathOrAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else { return }
+        let url = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+        let parent = url.deletingLastPathComponent().path
+        guard FileManager.default.fileExists(atPath: parent) else { return }
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: parent)
+    }
+
+    private func promptMissingMedia() {
+        if isRemote { return }
+        guard session.inputs.contains(where: \.isMissingMedia) else { return }
+        while true {
+            let leftover = session.inputs.filter(\.isMissingMedia)
+            if leftover.isEmpty { break }
+            let alert = NSAlert()
+            alert.messageText = L10n.t("input.missingTitle")
+            let lines = leftover.map { "\($0.name) — \($0.pathOrAddress ?? "")" }.joined(separator: "\n")
+            alert.informativeText = L10n.t("input.missingHint") + "\n\n" + lines
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: L10n.t("input.relinkFolder"))
+            alert.addButton(withTitle: L10n.t("input.relinkFile"))
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            let choice = alert.runModal()
+            if choice == .alertFirstButtonReturn {
+                guard let directory = pickRelinkDirectory() else { continue }
+                _ = relinkMissingMedia(directories: [directory])
+                publishSession()
+                applySession()
+                objectWillChange.send()
+                continue
+            }
+            if choice == .alertSecondButtonReturn {
+                guard let input = pickMissingInput(leftover),
+                      let path = pickRelinkFile(for: input)
+                else { continue }
+                applyRelinkPath(input, path: path)
+                continue
+            }
+            break
+        }
+    }
+
+    private func pickMissingInput(_ leftover: [InputEntry]) -> InputEntry? {
+        if leftover.count == 1 { return leftover[0] }
+        let alert = NSAlert()
+        alert.messageText = L10n.t("input.relinkFile")
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24), pullsDown: false)
+        for input in leftover {
+            popup.addItem(withTitle: "\(input.name) — \(input.pathOrAddress ?? "")")
+        }
+        alert.accessoryView = popup
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.addButton(withTitle: L10n.t("dialog.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let index = popup.indexOfSelectedItem
+        guard leftover.indices.contains(index) else { return nil }
+        return leftover[index]
     }
 
     private func relinkMissingMedia(directories: [String]) -> Int {
@@ -1788,6 +2012,7 @@ final class MixerController: ObservableObject {
         closeAllInputPreviews()
         closeAllSwitchers()
         closeAllMultiviews()
+        FlipBudget.reset()
         mixer_destroy()
         session = loaded
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
@@ -1804,6 +2029,7 @@ final class MixerController: ObservableObject {
         applyBusColors()
         applySession()
         bumpSurfaceEpoch()
+        promptMissingMedia()
     }
 
     private func bumpSurfaceEpoch() {
@@ -2223,6 +2449,14 @@ final class MixerController: ObservableObject {
             nextProgram[unitId] = program
             previewByUnit = nextPreview
             programByUnit = nextProgram
+        }
+        if let index = session.units.firstIndex(where: { $0.id == unitId }) {
+            if let scene = session.scenes.first(where: { $0.gpuId == preview }) {
+                session.units[index].previewSceneId = scene.id
+            }
+            if let scene = session.scenes.first(where: { $0.gpuId == program }) {
+                session.units[index].programSceneId = scene.id
+            }
         }
     }
 

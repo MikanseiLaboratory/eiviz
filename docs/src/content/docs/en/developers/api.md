@@ -93,4 +93,4 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr
-- Inspect canonical JSON with `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). Export is `.eivzx` (embedded Still/Video, no history). Both open from the same load UI
+- Inspect canonical JSON with `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). Export is `.eivzx` (embedded Still/Video, no history). Headless load of an export extracts media next to the file. The GUI open of an export asks for a media folder and a working `.eivz`

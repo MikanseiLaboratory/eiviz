@@ -57,6 +57,13 @@ enum FlipBudget {
             : Int(limitSetting)
     }
 
+    static func reset() {
+        attached = 0
+        lastAttach = nil
+        attachTick = 0
+        seenLost = 0
+    }
+
     static func tryOpen(_ surfaces: Int) -> Bool {
         guard surfaces > 0 else { return true }
         if attached + surfaces <= effectiveMax() {

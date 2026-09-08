@@ -62,6 +62,15 @@ public partial class App : Application
             return true;
         try
         {
+            if (SessionStore.FileHasAssets(path))
+            {
+                var prompt = new ImportExportDialog(path);
+                if (prompt.ShowDialog() != true)
+                    return true;
+                Session = SessionStore.Import(path, prompt.SessionPath, prompt.MediaDirectory);
+                AppPrefs.Current.RememberSession(prompt.SessionPath);
+                return true;
+            }
             Session = SessionStore.Load(path);
             AppPrefs.Current.RememberSession(path);
             return true;
@@ -103,6 +112,7 @@ public partial class App : Application
     {
         var previous = MainWindow as MainWindow;
         previous?.CloseOwnedSurfaces();
+        FlipBudget.Reset();
         ReplaceSession(session);
         var next = new MainWindow();
         if (previous is not null)
@@ -145,6 +155,7 @@ public partial class App : Application
         SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
+        MixerApply.ApplySceneBuses(Session);
     }
 
     private void BootRemoteMixer()

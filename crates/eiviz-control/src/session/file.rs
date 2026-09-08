@@ -38,6 +38,35 @@ pub fn read_document(path: impl AsRef<Path>) -> Result<Document, String> {
     decode_session(&bytes, Some(path))
 }
 
+pub fn has_embedded_assets(path: impl AsRef<Path>) -> Result<bool, String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    Ok(!decode_container(&bytes)?.assets.is_empty())
+}
+
+/// Extract embedded Still/Video into `media_dir`, rewrite those paths, and write a
+/// standalone `.eivz` to `session_dest`. Headless load still extracts next to the
+/// export; GUI open of `.eivzx` uses this so the operator picks both destinations.
+pub fn import_exported_session(
+    export_path: impl AsRef<Path>,
+    session_dest: impl AsRef<Path>,
+    media_dir: impl AsRef<Path>,
+) -> Result<Document, String> {
+    let export_path = export_path.as_ref();
+    let session_dest = session_dest.as_ref();
+    let media_dir = media_dir.as_ref();
+    let bytes = std::fs::read(export_path).map_err(|error| error.to_string())?;
+    let file = decode_container(&bytes)?;
+    let Some(document) = file.document else {
+        return Err("eivz file is missing a document".into());
+    };
+    let mut document = document_from_pb(document)?.canonicalize();
+    if !file.assets.is_empty() {
+        extract_assets(&mut document, &file.assets, media_dir)?;
+    }
+    write_document(session_dest, &document)?;
+    Ok(document)
+}
+
 pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<u32, String> {
     write_document_rev(path, doc, 0)
 }
@@ -151,7 +180,7 @@ fn decode_session(bytes: &[u8], path: Option<&Path>) -> Result<Document, String>
         let Some(session_path) = path else {
             return Err("exported session needs a file path to extract media".into());
         };
-        extract_assets(&mut document, &file.assets, session_path)?;
+        extract_assets(&mut document, &file.assets, &media_dir(session_path))?;
     }
     Ok(document)
 }
@@ -216,10 +245,9 @@ fn collect_assets(doc: &Document) -> Result<Vec<pb::EmbeddedAsset>, String> {
 fn extract_assets(
     doc: &mut Document,
     assets: &[pb::EmbeddedAsset],
-    session_path: &Path,
+    dir: &Path,
 ) -> Result<(), String> {
-    let dir = media_dir(session_path);
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     for asset in assets {
         if asset.file_name.is_empty()
             || asset.file_name.contains('/')
@@ -1352,6 +1380,18 @@ mod tests {
             .expect("extracted path");
         assert!(extracted.ends_with("2_card.png"), "{extracted}");
         assert_eq!(std::fs::read(extracted).unwrap(), b"png-bytes");
+        assert!(has_embedded_assets(&exported).unwrap());
+        let media = dir.join("picked-media");
+        let dest = dir.join("imported.eivz");
+        let imported = import_exported_session(&exported, &dest, &media).unwrap();
+        let imported_path = imported.inputs[0]
+            .path_or_address
+            .as_deref()
+            .expect("imported path");
+        assert!(imported_path.contains("picked-media"), "{imported_path}");
+        assert!(imported_path.ends_with("2_card.png"), "{imported_path}");
+        assert_eq!(std::fs::read(imported_path).unwrap(), b"png-bytes");
+        assert!(!has_embedded_assets(&dest).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

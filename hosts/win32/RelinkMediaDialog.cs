@@ -8,9 +8,9 @@ internal sealed class RelinkMediaDialog : Window
 {
     public string Directory { get; private set; } = "";
 
-    public RelinkMediaDialog()
+    public RelinkMediaDialog(string? title = null, string? hint = null)
     {
-        Title = Loc.T("input.relink");
+        Title = title ?? Loc.T("input.relinkFolder");
         Width = 480;
         Height = 160;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -33,16 +33,16 @@ internal sealed class RelinkMediaDialog : Window
         };
         buttons.Children.Add(ok);
         buttons.Children.Add(cancel);
-        var hint = new TextBlock
+        var hintBlock = new TextBlock
         {
-            Text = Loc.T("input.relinkDir"),
+            Text = hint ?? Loc.T("input.relinkDir"),
             Margin = new Thickness(12, 0, 12, 0)
         };
         var root = new DockPanel();
         DockPanel.SetDock(buttons, Dock.Bottom);
-        DockPanel.SetDock(hint, Dock.Top);
+        DockPanel.SetDock(hintBlock, Dock.Top);
         root.Children.Add(buttons);
-        root.Children.Add(hint);
+        root.Children.Add(hintBlock);
         root.Children.Add(box);
         Content = root;
         Loaded += (_, _) => box.Focus();

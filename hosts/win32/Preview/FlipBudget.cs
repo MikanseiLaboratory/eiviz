@@ -23,6 +23,14 @@ internal static class FlipBudget
             : (int)_limitSetting;
     }
 
+    public static void Reset()
+    {
+        Live.Clear();
+        _lastAttach = null;
+        _attachTick = 0;
+        _seenLost = 0;
+    }
+
     public static bool TryOpen(int surfaces, Window? owner = null)
     {
         if (!OperatingSystem.IsWindows() || surfaces <= 0)

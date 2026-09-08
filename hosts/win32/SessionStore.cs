@@ -19,6 +19,7 @@ internal static class SessionStore
 
     public static void Save(Session session, string path)
     {
+        MixerApply.CaptureSceneBuses(session);
         session.Settings.LastSessionPath = null;
         var dto = Document.From(session);
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
@@ -26,10 +27,33 @@ internal static class SessionStore
 
     public static void Export(Session session, string path)
     {
+        MixerApply.CaptureSceneBuses(session);
         session.Settings.LastSessionPath = null;
         var dto = Document.From(session);
         MixerNative.SessionExportText(path, JsonSerializer.Serialize(dto, Json));
     }
+
+    public static Session Import(string exportPath, string sessionDest, string mediaDir)
+    {
+        var json = MixerNative.SessionImportText(exportPath, sessionDest, mediaDir);
+        return FromJson(json);
+    }
+
+    public static bool FileHasAssets(string path) => MixerNative.SessionFileHasAssets(path);
+
+    public static string? CurrentPath()
+    {
+        var path = MixerNative.SessionCurrentPathText();
+        return string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
+    public static bool CanOverwrite(string? path) =>
+        !string.IsNullOrWhiteSpace(path)
+        && path.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase)
+        && !path.EndsWith(".eivzx", StringComparison.OrdinalIgnoreCase);
+
+    public static IReadOnlyList<InputEntry> MissingMedia(Session session) =>
+        [.. session.Inputs.Where(input => input.IsMissingMedia())];
 
     public static Session FromJson(string json)
     {
@@ -48,6 +72,17 @@ internal static class SessionStore
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
+
+    public static bool RelinkInput(InputEntry input, string path)
+    {
+        if (input.Kind is not (InputKind.Still or InputKind.Video))
+            return false;
+        var trimmed = path.Trim();
+        if (trimmed.Length == 0)
+            return false;
+        input.PathOrAddress = trimmed;
+        return true;
+    }
 
     public static int RelinkMissingMedia(Session session, IReadOnlyList<string> directories)
     {

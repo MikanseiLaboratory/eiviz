@@ -366,6 +366,15 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_load", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionLoad(string path, byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_has_assets", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int SessionHasAssets(string path);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_import", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionImport(string exportPath, string sessionDest, string mediaDir, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_current_path")]
+    internal static unsafe partial int SessionCurrentPath(byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_load_rev", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionLoadRev(string path, uint index, byte* buffer, nuint capacity);
 
@@ -511,6 +520,20 @@ internal static partial class MixerNative
 
     internal static unsafe string SessionLoadText(string path) =>
         CopyUtf8((ptr, cap) => SessionLoad(path, ptr, cap));
+
+    internal static unsafe string SessionImportText(string exportPath, string sessionDest, string mediaDir) =>
+        CopyUtf8((ptr, cap) => SessionImport(exportPath, sessionDest, mediaDir, ptr, cap));
+
+    internal static unsafe string SessionCurrentPathText() =>
+        CopyUtf8((ptr, cap) => SessionCurrentPath(ptr, cap), 4096);
+
+    internal static bool SessionFileHasAssets(string path)
+    {
+        var code = SessionHasAssets(path);
+        if (code < 0)
+            ThrowIfFailed(-code, "Load session");
+        return code > 0;
+    }
 
     internal static unsafe string SessionLoadRevText(string path, uint index) =>
         CopyUtf8((ptr, cap) => SessionLoadRev(path, index, ptr, cap));

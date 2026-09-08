@@ -93,4 +93,4 @@ eiviz-headless run --bind 127.0.0.1:9400
 - loopback以外へbindする場合は認証必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSが必要なら手前で終端してください
 - `--media-directory`/`EIVIZ_MEDIA_DIRECTORY`がホストのupload保存先です。未指定時はOSのローカルアプリデータ配下`eiviz/media`です
 - ログはstderrの構造化可能なテキストです
-- 調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。Exportは`.eivzx`（メディア同梱・履歴なし）です。どちらも同じ読み込みUIで開けます
+- 調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。Exportは`.eivzx`（メディア同梱・履歴なし）です。headlessで書き出しを読むときはファイルの隣へメディアを展開します。GUIで書き出しを開くときは、メディアの展開先と作業用`.eivz`を尋ねます
