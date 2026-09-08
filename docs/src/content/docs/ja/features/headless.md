@@ -3,7 +3,7 @@ title: headless
 description: GUIなしでMixerを動かし、eivizctlとRemoteから操作する
 ---
 
-`eiviz-headless`はホストUIなしでMixerを動かすデーモンです。セッションファイル（`.eivz`）を読み、映像合成を行い、Protobuf WebSocketを開きます。既定はloopbackのポート9400です。
+`eiviz-headless`はホストUIなしでMixerを動かすデーモンです。セッションファイル（`.eivz`または`.eivzx`）を読み、映像合成を行い、Protobuf WebSocketを開きます。既定はloopbackのポート9400です。
 
 Linuxは現時点でこの形だけです。WindowsとmacOSのリリースにも同じバイナリが入っています。操作は同じマシンの`eivizctl`、または別PCの`Eiviz.Remote.exe`/`eiviz-remote.app`から行います。プロトコルは[eiviz API](/eiviz/ja/developers/api/)、Remoteの画面操作は[リモート接続](/eiviz/ja/features/remote/)です。
 
@@ -28,7 +28,9 @@ cargo build -p eiviz-headless --locked --release --bins
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
-eiviz-headless export --session show.eivz --output show-portable.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivzx
+eiviz-headless history --session show.eivz
+eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -99,6 +101,7 @@ eiviz> preview --unit 1 --scene 2
 eiviz> cut --unit 1
 eiviz> auto --unit 1 --duration-ms 1000
 eiviz> replace --session show.eivz
+eiviz> save
 eiviz> shutdown
 ```
 
@@ -149,4 +152,6 @@ tokenを回すときは環境変数または`eivizctl prefs set token`を差し�
 | 5 | bind |
 | 6 | その他のruntime失敗 |
 
-ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。Still/Videoを同梱した持ち運びは`eiviz-headless export`で、読み込み時は`.eivz`の隣の`*.media`へ展開します。
+ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。`eiviz-headless export`は`.eivzx`を書き、Still/Videoを同梱し履歴は含めません。読み込み時はファイルの隣の`*.media`へ展開します。RemoteのSaveと`eivizctl save`は`run --session`のファイルへ書き戻します。`eivizctl replace`では保存先は変わりません。
+
+`eiviz-headless history --session show.eivz`はファイル内履歴を一覧します（index、unix ms、revision。新しい順、最大20件）。`eiviz-headless restore --session show.eivz --index N --output old.eivz`はその履歴を履歴なしの単体`.eivz`として書き出します。GUIの読み込みでは、履歴があるファイルを選ぶと最新版（既定）か特定のrevisionを選べます。最近使ったファイルとダブルクリックは最新版を開きます。

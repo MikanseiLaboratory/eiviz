@@ -42,10 +42,24 @@ enum Cmd {
         #[arg(long)]
         session: PathBuf,
     },
-    /// Write a portable `.eivz` that embeds Still/Video files.
+    /// Write a portable `.eivzx` that embeds Still/Video files.
     Export {
         #[arg(long)]
         session: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// List in-file session history (newest first).
+    History {
+        #[arg(long)]
+        session: PathBuf,
+    },
+    /// Write a history entry out as a standalone `.eivz`.
+    Restore {
+        #[arg(long)]
+        session: PathBuf,
+        #[arg(long)]
+        index: u32,
         #[arg(long)]
         output: PathBuf,
     },
@@ -75,6 +89,18 @@ fn main() -> ExitCode {
             Err(code) => ExitCode::from(code),
         },
         Cmd::Export { session, output } => match export(&session, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Cmd::History { session } => match history(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Cmd::Restore {
+            session,
+            index,
+            output,
+        } => match restore(&session, index, &output) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -118,6 +144,37 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
 fn export(input: &PathBuf, output: &PathBuf) -> Result<(), u8> {
     let doc = load_valid(input)?;
     session::export_document(output, &doc).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    Ok(())
+}
+
+fn history(path: &PathBuf) -> Result<(), u8> {
+    let entries = session::read_history(path).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    if entries.is_empty() {
+        println!("0");
+        return Ok(());
+    }
+    for entry in entries {
+        println!("{}\t{}\t{}", entry.index, entry.unix_ms, entry.revision);
+    }
+    Ok(())
+}
+
+fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
+    let doc = session::extract_history(input, index).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    let bytes = session::encode_file(&doc).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    std::fs::write(output, bytes).map_err(|error| {
         eprintln!("eiviz-headless error=session {error}");
         EXIT_SESSION
     })?;
@@ -203,6 +260,8 @@ fn run_daemon_runtime(
                 eprintln!("eiviz-headless error=gpu {error}");
                 code
             })?;
+            let path = session.canonicalize().unwrap_or(session);
+            svc.set_session_path(Some(path));
         }
         let media_path = media_directory.unwrap_or_else(|| eiviz_api::resolve_media_directory(""));
         let media =

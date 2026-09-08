@@ -81,6 +81,7 @@ pub enum Command {
         query: String,
     },
     Shutdown,
+    SaveSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

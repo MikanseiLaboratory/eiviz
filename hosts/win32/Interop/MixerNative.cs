@@ -366,6 +366,15 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_load", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionLoad(string path, byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_load_rev", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionLoadRev(string path, uint index, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_history", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionHistory(string path, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_clear_current")]
+    internal static partial int SessionClearCurrent();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_save", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionSave(string path, byte* json, nuint length);
 
@@ -502,6 +511,12 @@ internal static partial class MixerNative
 
     internal static unsafe string SessionLoadText(string path) =>
         CopyUtf8((ptr, cap) => SessionLoad(path, ptr, cap));
+
+    internal static unsafe string SessionLoadRevText(string path, uint index) =>
+        CopyUtf8((ptr, cap) => SessionLoadRev(path, index, ptr, cap));
+
+    internal static unsafe string SessionHistoryText(string path) =>
+        CopyUtf8((ptr, cap) => SessionHistory(path, ptr, cap));
 
     internal static void SessionSaveText(string path, string json)
     {

@@ -2,6 +2,10 @@ import EivizMixer
 import Foundation
 
 enum MixerFFI {
+    static func withCString<R>(_ string: String, _ body: (UnsafePointer<CChar>) -> R) -> R {
+        string.withCString(body)
+    }
+
     static func listenOwnerText() -> String {
         var buffer = [UInt8](repeating: 0, count: 256)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

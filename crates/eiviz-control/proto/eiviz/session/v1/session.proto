@@ -10,12 +10,19 @@ message SessionFile {
   uint32 format_version = 1;
   Document document = 2;
   repeated EmbeddedAsset assets = 3;
+  repeated HistoryEntry history = 4;
 }
 
 message EmbeddedAsset {
   uint64 input_id = 1;
   string file_name = 2;
   bytes data = 3;
+}
+
+message HistoryEntry {
+  uint64 unix_ms = 1;
+  uint64 revision = 2;
+  bytes document = 3;
 }
 
 message Document {

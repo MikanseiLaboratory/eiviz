@@ -55,6 +55,10 @@ impl CanonicalSessionStore {
         Ok((document, self.revision, previous))
     }
 
+    pub fn set_document_keep_revision(&mut self, document: Document) {
+        self.document = Some(document);
+    }
+
     pub fn rollback(&mut self, previous: Option<Document>, revision: u64) {
         self.document = previous;
         self.revision = revision;

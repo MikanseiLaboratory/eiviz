@@ -43,6 +43,9 @@ internal static partial class MixerRemote
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replace")]
     internal static unsafe partial int Replace(int handle, byte* json, nuint length, ulong expectedRevision);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_save_session")]
+    internal static unsafe partial int SaveSession(int handle, byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_video_play")]
     internal static partial int VideoPlay(int handle, ulong inputId, uint playing);
 
@@ -114,6 +117,30 @@ internal static partial class MixerRemote
                         buffer = new byte[buffer.Length * 2];
                         continue;
                     }
+                    return string.Empty;
+                }
+            }
+        }
+    }
+
+    internal static string SaveSessionJson(int handle)
+    {
+        var buffer = new byte[8192];
+        unsafe
+        {
+            for (;;)
+            {
+                fixed (byte* ptr = buffer)
+                {
+                    var n = SaveSession(handle, ptr, (nuint)buffer.Length);
+                    if (n >= 0)
+                        return n == 0 ? string.Empty : Encoding.UTF8.GetString(buffer, 0, n);
+                    if (n == -1 && buffer.Length < 16 << 20)
+                    {
+                        buffer = new byte[buffer.Length * 2];
+                        continue;
+                    }
+                    MixerNative.ThrowIfFailed(n < 0 ? -n : n, "Save session");
                     return string.Empty;
                 }
             }

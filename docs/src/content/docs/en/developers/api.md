@@ -12,6 +12,7 @@ The control plane is handled by `ControlService` inside the mixer. vMix-compatib
 - Default listen is loopback port 9400. Bind address, port, token, max role, and media directory are host-owned (GUI Preferences, `eivizctl prefs`, or `eiviz-headless --bind` / `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY`). They are not stored in the session file
 - This release uses authenticated `ws://` on a trusted LAN or VPN only. TLS is not provided
 - Published field numbers are never reused. Removals go into `reserved`
+- `SaveSession` has no fields. The host writes the file it already holds. A host with no current file returns `UNAVAILABLE`
 
 Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane surfaces are not network APIs.
 
@@ -19,7 +20,7 @@ Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane
 
 The default bind is loopback. Headless tokens come from `EIVIZ_API_TOKEN` or `EIVIZ_API_TOKEN_FILE`. GUI listen and remote-client tokens use Windows Credential Manager / macOS Keychain. Tokens are never stored in the session file. Comparison is constant-time.
 
-Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. Session bodies move as bytes, not server paths. Non-loopback bind requires authentication.
+Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. `SaveSession` writes the host's current file and needs configure. Session bodies move as bytes, not server paths. Non-loopback bind requires authentication.
 
 ## Commands
 
@@ -32,6 +33,7 @@ Roles are `read` / `operate` / `configure` / `admin`. The server clamps the gran
 | `SnapshotCmd` / `Discover` | operate | Still capture and discovery |
 | `ReplaceSession` | configure | Replace the destination Document (`expected_revision` rejects lost updates) |
 | `MutateSession` | configure | Typed document mutation (mismatched `expected_revision` is rejected; the client reloads) |
+| `SaveSession` | configure | Write the host's current session file. The request is empty; the path never leaves the host |
 | `BeginUpload` / `WriteChunk` / `CommitUpload` / `AbortUpload` | configure | Host-directory media upload; commit adds a Still/Video Input atomically |
 | `Shutdown` | admin | Graceful stop |
 
@@ -52,6 +54,7 @@ Operator steps are in [Remote connection](/eiviz/en/features/remote/). Still/Vid
 ```bash
 eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN status
 eivizctl cut --unit 1
+eivizctl save
 eivizctl snapshot
 eivizctl shutdown
 eivizctl prefs
@@ -73,7 +76,9 @@ Operator steps for start, REPL, and Remote are in [Headless](/eiviz/en/features/
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
-eiviz-headless export --session show.eivz --output show-portable.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivzx
+eiviz-headless history --session show.eivz
+eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -87,4 +92,4 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr
-- Inspect canonical JSON with `eiviz-headless canonicalize`. The on-disk format is `.eivz`. Embed Still/Video files with `eiviz-headless export`
+- Inspect canonical JSON with `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). Export is `.eivzx` (embedded Still/Video, no history). Both open from the same load UI

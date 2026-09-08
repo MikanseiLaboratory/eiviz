@@ -22,6 +22,8 @@ enum L10n {
              ("Save session", 3), ("Save session", -1), ("Save session", -3),
              ("Export session", 3), ("Export session", -1), ("Export session", -3):
             reason = t("error.badSession")
+        case ("Save session", 2), ("Save session", -2):
+            reason = t("error.noSessionFile")
         case ("Load session", 5), ("Load session", -5),
              ("Export session", 5), ("Export session", -5):
             reason = t("error.io")
@@ -134,6 +136,7 @@ enum L10n {
         "prefs.remoteHelp": "eiviz-remote language, theme, renderer, and OMT receive.",
         "msg.remoteConnectFailed": "Could not connect to the remote eiviz.",
         "msg.remoteIdle": "Not connected.",
+        "msg.remoteSaved": "Saved to {0} (history {1}).",
         "msg.remoteDisconnected": "Disconnected.",
         "msg.remoteAuthFailed": "Auth failed.",
         "msg.remoteResync": "Re-syncing.",
@@ -178,6 +181,11 @@ enum L10n {
         "mv.bottom": "Bottom",
         "dialog.ok": "OK",
         "dialog.cancel": "Cancel",
+        "history.title": "Open session",
+        "history.latest": "Latest",
+        "history.entry": "History {0}  {1}  rev {2}",
+        "history.open": "Open",
+        "history.cancel": "Cancel",
         "msg.addInput": "Add Input",
         "msg.editInput": "Edit Input",
         "msg.mixCycle": "A Mix Input cannot target a Mixing Unit that already uses it.",
@@ -190,6 +198,7 @@ enum L10n {
         "error.io": "I/O error",
         "error.unknown": "Error ({0})",
         "error.badSession": "This file is not a valid session.",
+        "error.noSessionFile": "The host has no session file. Save once on the host first.",
         "error.missingFile": "The file does not exist.",
         "error.mixerFatal": "An unexpected error occurred. The session has been saved and eiviz will now exit. See the error log for details.",
         "error.abiMismatch": "The Rust mixer ABI does not match this host.",
@@ -313,6 +322,7 @@ enum L10n {
         "prefs.remoteHelp": "eiviz-remoteの言語、テーマ、描画バックエンド、OMT受信です。",
         "msg.remoteConnectFailed": "リモートeivizに接続できませんでした。",
         "msg.remoteIdle": "未接続です。",
+        "msg.remoteSaved": "{0}へ保存しました（履歴 {1}件）。",
         "msg.remoteDisconnected": "切断されました。",
         "msg.remoteAuthFailed": "認証に失敗しました。",
         "msg.remoteResync": "再同期中です。",
@@ -357,6 +367,11 @@ enum L10n {
         "mv.bottom": "下",
         "dialog.ok": "OK",
         "dialog.cancel": "キャンセル",
+        "history.title": "セッションを開く",
+        "history.latest": "最新版",
+        "history.entry": "履歴 {0}  {1}  rev {2}",
+        "history.open": "開く",
+        "history.cancel": "キャンセル",
         "msg.addInput": "入力の追加",
         "msg.editInput": "入力の編集",
         "msg.mixCycle": "すでに載せているMixing UnitをMix Inputの対象にはできません。",
@@ -369,6 +384,7 @@ enum L10n {
         "error.io": "入出力エラーです",
         "error.unknown": "エラー ({0})",
         "error.badSession": "セッションとして読めないファイルです。",
+        "error.noSessionFile": "ホストにセッションファイルがありません。ホスト側で一度保存してください。",
         "error.missingFile": "ファイルが存在しません。",
         "error.mixerFatal": "予期しないエラーが発生しました。セッションを保存しeivizを終了します。詳細なエラー内容はエラーログをご確認ください。",
         "error.abiMismatch": "ミキサーの ABI がこのホストと一致しません。",

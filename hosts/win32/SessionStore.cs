@@ -48,11 +48,14 @@ internal static class SessionStore
 
     public static void ReplaceRuntime(Session session) => Publish(session);
 
-    public static Session Load(string path)
+    public static Session Load(string path, uint? historyIndex = null)
     {
         try
         {
-            var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
+            var json = historyIndex is uint index
+                ? MixerNative.SessionLoadRevText(path, index)
+                : MixerNative.SessionLoadText(path);
+            var dto = JsonSerializer.Deserialize<Document>(json, Json)
                 ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
             return dto.ToSession();
         }

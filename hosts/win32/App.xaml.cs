@@ -56,7 +56,8 @@ public partial class App : Application
     {
         var path = args.Select(item => item.Trim('"'))
             .FirstOrDefault(item =>
-                item.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase));
+                item.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase)
+                || item.EndsWith(".eivzx", StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(path))
             return true;
         try

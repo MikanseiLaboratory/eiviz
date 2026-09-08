@@ -94,6 +94,8 @@ struct ContentView: View {
                 }
                 Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
                     .disabled(!mixer.remoteConnected)
+                Button(L10n.t("chrome.save")) { mixer.saveRemoteSession() }
+                    .disabled(!mixer.remoteConnected)
                 Picker("", selection: Binding(
                     get: { prefs.remoteVideoLayout },
                     set: { mixer.setRemoteVideoLayout($0) }

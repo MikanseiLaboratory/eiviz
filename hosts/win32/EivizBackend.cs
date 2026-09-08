@@ -468,6 +468,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     private string _lastRemoteError = "";
 
     public RemoteEivizBackend(int handle) => _handle = handle;
+    public int Handle => _handle;
     public bool IsRemote => true;
     public bool Connected => _connected;
     public bool CanPreviewInputs => false;

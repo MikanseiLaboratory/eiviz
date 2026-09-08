@@ -56,6 +56,7 @@ message Request {
     CommitMediaUpload commit_media_upload = 36;
     AbortMediaUpload abort_media_upload = 37;
     Shutdown shutdown = 40;
+    SaveSession save_session = 41;
   }
 }
 
@@ -69,6 +70,7 @@ message Response {
     Snapshot snapshot = 11;
     UploadAccepted upload_accepted = 12;
     DiscoverResult discover = 13;
+    SavedSession saved_session = 14;
   }
 }
 
@@ -190,6 +192,13 @@ message DiscoverResult {
 }
 
 message Shutdown {}
+
+message SaveSession {}
+
+message SavedSession {
+  string path = 1;
+  uint32 history_count = 2;
+}
 
 message Capabilities {
   string protocol_version = 1;

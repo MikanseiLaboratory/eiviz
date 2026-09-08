@@ -13,8 +13,9 @@ pub mod validate;
 use string_enum::session_string_enum;
 
 pub use file::{
-    CONTAINER_VERSION, FORMAT_VERSION, MAGIC, decode_file, encode_file, export_document,
-    read_document, write_document,
+    CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
+    export_document, extract_history, read_document, read_history, write_document,
+    write_document_rev,
 };
 pub use validate::{ValidationError, validate, validate_for_apply};
 
@@ -1244,11 +1245,44 @@ pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    write_document(path, &parse(bytes)?)
+    write_document(path, &parse(bytes)?).map(|_| ())
 }
 
 pub fn export_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     export_document(path, &parse(bytes)?)
+}
+
+pub fn stamp_live_scene_buses(doc: &mut Document, live: &crate::live::LiveState) {
+    let stamps: Vec<(u64, u64, u64)> = doc
+        .units
+        .iter()
+        .filter_map(|unit| {
+            let state = live.units.get(&unit.id)?;
+            Some((
+                unit.id,
+                scene_id_from_source(doc, state.preview_source),
+                scene_id_from_source(doc, state.program_source),
+            ))
+        })
+        .collect();
+    for (id, preview, program) in stamps {
+        if let Some(unit) = doc.units.iter_mut().find(|unit| unit.id == id) {
+            unit.preview_scene_id = preview;
+            unit.program_scene_id = program;
+        }
+    }
+}
+
+fn scene_id_from_source(doc: &Document, source: u64) -> u64 {
+    if source & crate::ids::SCENE_BASE != crate::ids::SCENE_BASE {
+        return 0;
+    }
+    let id = source - crate::ids::SCENE_BASE;
+    if doc.scenes.iter().any(|scene| scene.id == id) {
+        id
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]

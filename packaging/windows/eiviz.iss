@@ -66,6 +66,7 @@ Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; T
 
 [Registry]
 Root: HKCR; Subkey: ".eivz"; ValueType: string; ValueName: ""; ValueData: "eiviz.session"; Flags: uninsdeletevalue
+Root: HKCR; Subkey: ".eivzx"; ValueType: string; ValueName: ""; ValueData: "eiviz.session"; Flags: uninsdeletevalue
 Root: HKCR; Subkey: "eiviz.session"; ValueType: string; ValueName: ""; ValueData: "eiviz Session"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "eiviz.session\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
 Root: HKCR; Subkey: "eiviz.session\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""

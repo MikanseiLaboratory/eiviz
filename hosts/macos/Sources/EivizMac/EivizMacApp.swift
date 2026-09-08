@@ -26,7 +26,8 @@ struct EivizMacApp: App {
                     EivizTheme.applyAppAppearance()
                     mixer.boot()
                     if let path = CommandLine.arguments.dropFirst().first(where: {
-                        $0.lowercased().hasSuffix(".eivz")
+                        let lower = $0.lowercased()
+                        return lower.hasSuffix(".eivz") || lower.hasSuffix(".eivzx")
                     }) {
                         mixer.openSessionFromSystem(path: path)
                     }

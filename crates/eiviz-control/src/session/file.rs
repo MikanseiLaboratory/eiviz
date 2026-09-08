@@ -20,9 +20,10 @@ mod pb {
 pub const MAGIC: &[u8; 4] = b"EIVZ";
 pub const CONTAINER_VERSION: u16 = 1;
 pub const FORMAT_VERSION: u32 = 1;
+pub const HISTORY_LIMIT: usize = 20;
 
 pub fn encode_file(doc: &Document) -> Result<Vec<u8>, String> {
-    encode_session(doc, &[])
+    encode_session(doc, &[], Vec::new())
 }
 
 pub fn decode_file(bytes: &[u8]) -> Result<Document, String> {
@@ -35,24 +36,100 @@ pub fn read_document(path: impl AsRef<Path>) -> Result<Document, String> {
     decode_session(&bytes, Some(path))
 }
 
-pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<(), String> {
+pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<u32, String> {
+    write_document_rev(path, doc, 0)
+}
+
+pub fn write_document_rev(
+    path: impl AsRef<Path>,
+    doc: &Document,
+    revision: u64,
+) -> Result<u32, String> {
+    let path = path.as_ref();
     let canonical = doc.clone().canonicalize();
-    let bytes = encode_session(&canonical, &[])?;
-    atomic_write(path.as_ref(), &bytes)
+    let new_doc_bytes = document_to_pb(&canonical).encode_to_vec();
+    let history = if path.exists() {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        let file = decode_container(&bytes)?;
+        let old_doc_bytes = file
+            .document
+            .as_ref()
+            .map(Message::encode_to_vec)
+            .unwrap_or_default();
+        let mut history = file.history;
+        if !old_doc_bytes.is_empty() && old_doc_bytes != new_doc_bytes {
+            history.insert(
+                0,
+                pb::HistoryEntry {
+                    unix_ms: unix_ms_now(),
+                    revision,
+                    document: old_doc_bytes,
+                },
+            );
+            history.truncate(HISTORY_LIMIT);
+        }
+        history
+    } else {
+        Vec::new()
+    };
+    let count = history.len() as u32;
+    let bytes = encode_session(&canonical, &[], history)?;
+    atomic_write(path, &bytes)?;
+    Ok(count)
 }
 
 pub fn export_document(path: impl AsRef<Path>, doc: &Document) -> Result<(), String> {
     let canonical = doc.clone().canonicalize();
     let assets = collect_assets(&canonical)?;
-    let bytes = encode_session(&canonical, &assets)?;
+    let bytes = encode_session(&canonical, &assets, Vec::new())?;
     atomic_write(path.as_ref(), &bytes)
 }
 
-fn encode_session(doc: &Document, assets: &[pb::EmbeddedAsset]) -> Result<Vec<u8>, String> {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryMeta {
+    pub index: u32,
+    pub unix_ms: u64,
+    pub revision: u64,
+}
+
+pub fn read_history(path: impl AsRef<Path>) -> Result<Vec<HistoryMeta>, String> {
+    let bytes = std::fs::read(path.as_ref()).map_err(|error| error.to_string())?;
+    let file = decode_container(&bytes)?;
+    Ok(file
+        .history
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| HistoryMeta {
+            index: index as u32,
+            unix_ms: entry.unix_ms,
+            revision: entry.revision,
+        })
+        .collect())
+}
+
+pub fn extract_history(path: impl AsRef<Path>, index: u32) -> Result<Document, String> {
+    let bytes = std::fs::read(path.as_ref()).map_err(|error| error.to_string())?;
+    let file = decode_container(&bytes)?;
+    let entry = file
+        .history
+        .get(index as usize)
+        .ok_or_else(|| format!("history index {index} is missing"))?;
+    let document =
+        pb::Document::decode(entry.document.as_slice()).map_err(|error| error.to_string())?;
+    document_from_pb(document).map(|document| document.canonicalize())
+}
+
+fn encode_session(
+    doc: &Document,
+    assets: &[pb::EmbeddedAsset],
+    history: Vec<pb::HistoryEntry>,
+) -> Result<Vec<u8>, String> {
     let payload = pb::SessionFile {
         format_version: FORMAT_VERSION,
         document: Some(document_to_pb(doc)),
         assets: assets.to_vec(),
+        history,
     }
     .encode_to_vec();
     let mut out = Vec::with_capacity(MAGIC.len() + 2 + payload.len());
@@ -63,13 +140,24 @@ fn encode_session(doc: &Document, assets: &[pb::EmbeddedAsset]) -> Result<Vec<u8
 }
 
 fn decode_session(bytes: &[u8], path: Option<&Path>) -> Result<Document, String> {
-    if bytes.starts_with(MAGIC) {
-        return decode_eivz(bytes, path);
+    let file = decode_container(bytes)?;
+    let Some(document) = file.document else {
+        return Err("eivz file is missing a document".into());
+    };
+    let mut document = document_from_pb(document)?.canonicalize();
+    if !file.assets.is_empty() {
+        let Some(session_path) = path else {
+            return Err("exported session needs a file path to extract media".into());
+        };
+        extract_assets(&mut document, &file.assets, session_path)?;
     }
-    Err("not an eiviz session file".into())
+    Ok(document)
 }
 
-fn decode_eivz(bytes: &[u8], path: Option<&Path>) -> Result<Document, String> {
+fn decode_container(bytes: &[u8]) -> Result<pb::SessionFile, String> {
+    if !bytes.starts_with(MAGIC) {
+        return Err("not an eiviz session file".into());
+    }
     if bytes.len() < MAGIC.len() + 2 {
         return Err("truncated eivz file".into());
     }
@@ -84,17 +172,14 @@ fn decode_eivz(bytes: &[u8], path: Option<&Path>) -> Result<Document, String> {
             file.format_version
         ));
     }
-    let Some(document) = file.document else {
-        return Err("eivz file is missing a document".into());
-    };
-    let mut document = document_from_pb(document)?.canonicalize();
-    if !file.assets.is_empty() {
-        let Some(session_path) = path else {
-            return Err("exported session needs a file path to extract media".into());
-        };
-        extract_assets(&mut document, &file.assets, session_path)?;
-    }
-    Ok(document)
+    Ok(file)
+}
+
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn collect_assets(doc: &Document) -> Result<Vec<pb::EmbeddedAsset>, String> {
@@ -1187,6 +1272,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             document: Some(document_to_pb(&doc)),
             assets: Vec::new(),
+            history: Vec::new(),
         };
         file.document.as_mut().unwrap().inputs[0].kind = 99;
         let mut bytes = MAGIC.to_vec();
@@ -1203,6 +1289,7 @@ mod tests {
             format_version: 99,
             document: Some(document_to_pb(&doc)),
             assets: Vec::new(),
+            history: Vec::new(),
         };
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
@@ -1220,6 +1307,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             document: None,
             assets: Vec::new(),
+            history: Vec::new(),
         };
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
@@ -1262,6 +1350,77 @@ mod tests {
             .expect("extracted path");
         assert!(extracted.ends_with("2_card.png"), "{extracted}");
         assert_eq!(std::fs::read(extracted).unwrap(), b"png-bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_appends_history_and_restores() {
+        let dir = std::env::temp_dir().join(format!("eiviz-history-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let mut first = parse(sample_json()).unwrap();
+        first.inputs[0].name = "one".into();
+        assert_eq!(write_document(&path, &first).unwrap(), 0);
+        assert!(read_history(&path).unwrap().is_empty());
+        let mut second = first.clone();
+        second.inputs[0].name = "two".into();
+        assert_eq!(write_document_rev(&path, &second, 4).unwrap(), 1);
+        let history = read_history(&path).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].index, 0);
+        assert_eq!(history[0].revision, 4);
+        assert_eq!(extract_history(&path, 0).unwrap().inputs[0].name, "one");
+        assert_eq!(read_document(&path).unwrap().inputs[0].name, "two");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_dedupes_unchanged_save() {
+        let dir = std::env::temp_dir().join(format!("eiviz-history-dedupe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let mut doc = parse(sample_json()).unwrap();
+        doc.inputs[0].name = "keep".into();
+        write_document(&path, &doc).unwrap();
+        doc.inputs[0].name = "next".into();
+        assert_eq!(write_document(&path, &doc).unwrap(), 1);
+        assert_eq!(write_document(&path, &doc).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_is_capped() {
+        let dir = std::env::temp_dir().join(format!("eiviz-history-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let mut doc = parse(sample_json()).unwrap();
+        for i in 0..=HISTORY_LIMIT {
+            doc.inputs[0].name = format!("rev-{i}");
+            write_document(&path, &doc).unwrap();
+        }
+        let history = read_history(&path).unwrap();
+        assert_eq!(history.len(), HISTORY_LIMIT);
+        assert_eq!(extract_history(&path, 0).unwrap().inputs[0].name, "rev-19");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_strips_history() {
+        let dir = std::env::temp_dir().join(format!("eiviz-history-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("card.png");
+        std::fs::write(&source, b"png-bytes").unwrap();
+        let path = dir.join("show.eivz");
+        let exported = dir.join("show.eivzx");
+        let mut doc = parse(sample_json()).unwrap();
+        doc.inputs[0].kind = InputKind::Still;
+        doc.inputs[0].path_or_address = Some(source.to_string_lossy().into_owned());
+        write_document(&path, &doc).unwrap();
+        doc.inputs[0].name = "later".into();
+        write_document(&path, &doc).unwrap();
+        assert_eq!(read_history(&path).unwrap().len(), 1);
+        export_document(&exported, &doc).unwrap();
+        assert!(read_history(&exported).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

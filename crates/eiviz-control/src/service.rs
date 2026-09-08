@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::command::{Command, Incoming, SessionMutation};
@@ -30,6 +31,8 @@ pub struct CommandOutcome {
     pub sequence: u64,
     pub discover_kind: String,
     pub discover_payload: String,
+    pub saved_path: String,
+    pub history_count: u32,
 }
 
 #[derive(Clone)]
@@ -49,6 +52,7 @@ pub struct ControlService {
     dedupe: HashMap<RequestKey, CachedOutcome>,
     dedupe_order: VecDeque<RequestKey>,
     epoch: String,
+    session_path: Option<PathBuf>,
 }
 
 impl ControlService {
@@ -64,6 +68,7 @@ impl ControlService {
             dedupe: HashMap::new(),
             dedupe_order: VecDeque::new(),
             epoch: uuid::Uuid::new_v4().to_string(),
+            session_path: None,
         }
     }
 
@@ -77,6 +82,14 @@ impl ControlService {
 
     pub fn epoch(&self) -> &str {
         &self.epoch
+    }
+
+    pub fn session_path(&self) -> Option<&Path> {
+        self.session_path.as_deref()
+    }
+
+    pub fn set_session_path(&mut self, path: Option<PathBuf>) {
+        self.session_path = path;
     }
 
     pub fn document(&self) -> Option<&Document> {
@@ -190,6 +203,7 @@ impl ControlService {
                 mutation,
                 expected_revision,
             } => self.mutate_session(*mutation, expected_revision, &key.request_id),
+            Command::SaveSession => self.save_session(&key.request_id),
             other => self.execute_live(&key.request_id, other),
         };
         self.remember(&key, result.clone());
@@ -317,6 +331,7 @@ impl ControlService {
                     sequence: self.hub.next_sequence(),
                     discover_kind: kind_name.into(),
                     discover_payload: payload,
+                    ..Default::default()
                 })
             }
             Command::OverlayAuto {
@@ -336,10 +351,35 @@ impl ControlService {
                     ..Default::default()
                 })
             }
-            Command::ReplaceSession { .. } | Command::MutateSession { .. } => {
-                Err(ControlError::internal("replace routed incorrectly"))
-            }
+            Command::ReplaceSession { .. }
+            | Command::MutateSession { .. }
+            | Command::SaveSession => Err(ControlError::internal("replace routed incorrectly")),
         }
+    }
+
+    fn save_session(&mut self, request_id: &str) -> ControlResult<CommandOutcome> {
+        let path = self
+            .session_path
+            .clone()
+            .ok_or_else(|| ControlError::unavailable("no session file on host"))?;
+        let mut document = self
+            .store
+            .document_cloned()
+            .ok_or_else(|| ControlError::unavailable("no session loaded"))?;
+        let live = self.port.live_state().unwrap_or_default();
+        crate::session::stamp_live_scene_buses(&mut document, &live);
+        self.store.set_document_keep_revision(document.clone());
+        let history_count =
+            crate::session::write_document_rev(&path, &document, self.store.revision())
+                .map_err(ControlError::io)?;
+        let _ = request_id;
+        Ok(CommandOutcome {
+            revision: self.store.revision(),
+            sequence: self.hub.next_sequence(),
+            saved_path: path.to_string_lossy().into_owned(),
+            history_count,
+            ..Default::default()
+        })
     }
 
     #[inline(never)]
@@ -1303,6 +1343,63 @@ mod tests {
                 probe.units()[&1].program_source,
                 crate::ids::scene_gpu_id(1)
             );
+        });
+    }
+
+    #[test]
+    fn save_session_without_path_is_rejected() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            svc.replace_session(bars_doc(), None, "boot").unwrap();
+            let err = svc
+                .execute(
+                    RequestKey {
+                        client_instance_id: "t".into(),
+                        request_id: "save".into(),
+                    },
+                    Command::SaveSession,
+                )
+                .unwrap_err();
+            assert!(matches!(err, ControlError::Unavailable { .. }));
+        });
+    }
+
+    #[test]
+    fn save_session_stamps_and_writes() {
+        on_big_stack(|| {
+            let dir = std::env::temp_dir().join(format!("eiviz-save-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("show.eivz");
+            let mut svc = ControlService::new(FakeMixer::default());
+            svc.replace_session(bars_doc(), None, "boot").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "t".into(),
+                    request_id: "cut".into(),
+                },
+                Command::Cut {
+                    unit_id: 1,
+                    swap: true,
+                    incoming: Incoming::Preview,
+                },
+            )
+            .unwrap();
+            svc.set_session_path(Some(path.clone()));
+            let outcome = svc
+                .execute(
+                    RequestKey {
+                        client_instance_id: "t".into(),
+                        request_id: "save".into(),
+                    },
+                    Command::SaveSession,
+                )
+                .unwrap();
+            assert_eq!(outcome.history_count, 0);
+            assert_eq!(std::path::Path::new(&outcome.saved_path), path.as_path());
+            let loaded = crate::session::read_document(&path).unwrap();
+            assert_eq!(loaded.units[0].program_scene_id, 1);
+            assert_eq!(loaded.units[0].preview_scene_id, 2);
+            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 }

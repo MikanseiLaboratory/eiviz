@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -149,7 +150,8 @@ public partial class MainWindow : Window
         if (!HostRole.IsRemote)
             return;
         NewSessionButton.Visibility = Visibility.Collapsed;
-        SaveSessionButton.Visibility = Visibility.Collapsed;
+        SaveSessionButton.Visibility = Visibility.Visible;
+        SaveSessionButton.IsEnabled = false;
         ExportSessionButton.Visibility = Visibility.Collapsed;
         LoadSessionButton.Visibility = Visibility.Collapsed;
         ConnectButton.Visibility = Visibility.Visible;
@@ -356,6 +358,8 @@ public partial class MainWindow : Window
             SettingsButton.IsEnabled = live;
         if (DisconnectButton.IsEnabled != live)
             DisconnectButton.IsEnabled = live;
+        if (SaveSessionButton.IsEnabled != live)
+            SaveSessionButton.IsEnabled = live;
     }
 
     private void RefreshStatusBar()
@@ -2414,11 +2418,18 @@ public partial class MainWindow : Window
 
     private void SaveSession_Click(object sender, RoutedEventArgs e)
     {
+        if (HostRole.IsRemote)
+        {
+            SaveRemoteSession();
+            return;
+        }
         var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Filter = Loc.T("filter.sessionSave"),
-            FileName = string.IsNullOrEmpty(last) ? "session.eivz" : System.IO.Path.GetFileName(last)
+            FileName = string.IsNullOrEmpty(last)
+                ? "session.eivz"
+                : System.IO.Path.GetFileNameWithoutExtension(last) + ".eivz"
         };
         if (dialog.ShowDialog(this) != true)
             return;
@@ -2426,13 +2437,36 @@ public partial class MainWindow : Window
         AppPrefs.Current.RememberSession(dialog.FileName);
     }
 
+    private void SaveRemoteSession()
+    {
+        if (Application.Current is not App { Backend: RemoteEivizBackend remote } || !remote.Connected)
+            return;
+        try
+        {
+            using var payload = JsonDocument.Parse(MixerRemote.SaveSessionJson(remote.Handle));
+            var path = payload.RootElement.TryGetProperty("path", out var pathEl)
+                ? pathEl.GetString() ?? ""
+                : "";
+            var history = payload.RootElement.TryGetProperty("historyCount", out var countEl)
+                ? countEl.GetUInt32()
+                : 0;
+            MessageBox.Show(this, Loc.Format("msg.remoteSaved", path, history), Loc.T("action.Save session"));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("action.Save session"));
+        }
+    }
+
     private void ExportSession_Click(object sender, RoutedEventArgs e)
     {
         var last = AppPrefs.Current.RecentSessions.FirstOrDefault();
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
-            Filter = Loc.T("filter.sessionSave"),
-            FileName = string.IsNullOrEmpty(last) ? "session.eivz" : System.IO.Path.GetFileName(last)
+            Filter = Loc.T("filter.sessionExport"),
+            FileName = string.IsNullOrEmpty(last)
+                ? "session.eivzx"
+                : System.IO.Path.GetFileNameWithoutExtension(last) + ".eivzx"
         };
         if (dialog.ShowDialog(this) != true)
             return;
@@ -2449,6 +2483,7 @@ public partial class MainWindow : Window
 
     private void NewSession_Click(object sender, RoutedEventArgs e)
     {
+        MixerNative.SessionClearCurrent();
         ((App)Application.Current).ReloadSession(Session.Default());
     }
 
@@ -2457,14 +2492,31 @@ public partial class MainWindow : Window
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Loc.T("filter.session") };
         if (dialog.ShowDialog(this) != true)
             return;
-        LoadSessionFrom(dialog.FileName);
+        uint? historyIndex = null;
+        try
+        {
+            var entries = SessionHistoryDialog.Parse(MixerNative.SessionHistoryText(dialog.FileName));
+            if (entries.Count > 0)
+            {
+                var picker = new SessionHistoryDialog(entries) { Owner = this };
+                if (picker.ShowDialog() != true)
+                    return;
+                historyIndex = picker.HistoryIndex;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Loc.T("msg.loadSession"));
+            return;
+        }
+        LoadSessionFrom(dialog.FileName, historyIndex);
     }
 
-    private void LoadSessionFrom(string path)
+    private void LoadSessionFrom(string path, uint? historyIndex = null)
     {
         try
         {
-            ((App)Application.Current).ReloadSession(SessionStore.Load(path));
+            ((App)Application.Current).ReloadSession(SessionStore.Load(path, historyIndex));
             AppPrefs.Current.RememberSession(path);
         }
         catch (Exception ex)

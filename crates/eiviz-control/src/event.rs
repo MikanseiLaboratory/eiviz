@@ -109,5 +109,6 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Snapshot { .. } => "Snapshot",
         Command::Discover { .. } => "Discover",
         Command::Shutdown => "Shutdown",
+        Command::SaveSession => "SaveSession",
     }
 }

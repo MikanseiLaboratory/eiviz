@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
     static let eivizSession = UTType(exportedAs: "jp.mikanseilaboratory.eiviz.session")
+    static let eivizSessionExport = UTType(exportedAs: "jp.mikanseilaboratory.eiviz.session-export")
 }
 
 struct RemoteVideoItem: Hashable {
@@ -1533,11 +1534,36 @@ final class MixerController: ObservableObject {
         }
     }
 
+    func saveRemoteSession() {
+        guard isRemote, remoteHandle != 0, remoteConnected else { return }
+        let (n, bytes) = MixerFFI.copyUtf8(startCap: 8192) {
+            mixer_remote_save_session(remoteHandle, $0, $1)
+        }
+        guard n >= 0 else {
+            fail(n < 0 ? -n : n, "Save session")
+            return
+        }
+        struct SavedRemote: Decodable {
+            let path: String
+            let historyCount: UInt32
+        }
+        guard let payload = try? JSONDecoder().decode(SavedRemote.self, from: Data(bytes)) else {
+            presentError(L10n.error("Save session", 3), title: L10n.t("action.Save session"))
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = L10n.t("action.Save session")
+        alert.informativeText = L10n.format("msg.remoteSaved", payload.path, "\(payload.historyCount)")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L10n.t("dialog.ok"))
+        alert.runModal()
+    }
+
     func exportSession() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType.eivizSession]
+        panel.allowedContentTypes = [UTType.eivizSessionExport]
         panel.allowsOtherFileTypes = false
-        panel.nameFieldStringValue = "session.eivz"
+        panel.nameFieldStringValue = "session.eivzx"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         session.selectedUnitId = selectedUnitId
         session.settings.lastSessionPath = nil
@@ -1560,23 +1586,53 @@ final class MixerController: ObservableObject {
     }
 
     func newSession() {
+        _ = mixer_session_clear_current()
         replaceSession(MixerSessionData.default())
     }
 
     func loadSession(path: String? = nil) {
+        let fromPanel = path == nil
         let url: URL
         if let path {
             url = URL(fileURLWithPath: path)
         } else {
             let panel = NSOpenPanel()
-            panel.allowedContentTypes = [UTType.eivizSession]
+            panel.allowedContentTypes = [UTType.eivizSession, UTType.eivizSessionExport]
             panel.allowsOtherFileTypes = false
             panel.allowsMultipleSelection = false
             guard panel.runModal() == .OK, let picked = panel.url else { return }
             url = picked
         }
-        let (n, bytes) = MixerFFI.withCString(url.path) { path in
-            MixerFFI.copyUtf8 { mixer_session_load(path, $0, $1) }
+        var historyIndex: UInt32?
+        if fromPanel {
+            let (historyN, historyBytes) = MixerFFI.withCString(url.path) { cPath in
+                MixerFFI.copyUtf8 { mixer_session_history(cPath, $0, $1) }
+            }
+            guard historyN >= 0 else {
+                fail(historyN == 0 ? 5 : historyN, "Load session")
+                return
+            }
+            guard let entries = Self.parseHistory(historyBytes) else {
+                presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
+                return
+            }
+            if !entries.isEmpty {
+                switch pickHistory(entries) {
+                case .cancel:
+                    return
+                case .latest:
+                    break
+                case .revision(let index):
+                    historyIndex = index
+                }
+            }
+        }
+        let (n, bytes) = MixerFFI.withCString(url.path) { cPath in
+            if let historyIndex {
+                MixerFFI.copyUtf8 { mixer_session_load_rev(cPath, historyIndex, $0, $1) }
+            } else {
+                MixerFFI.copyUtf8 { mixer_session_load(cPath, $0, $1) }
+            }
         }
         guard n > 0 else {
             fail(n == 0 ? 5 : n, "Load session")
@@ -2752,6 +2808,54 @@ final class MixerController: ObservableObject {
         guard let message = MixerFFI.check(code, action) else { return true }
         presentError(message, title: L10n.t("action.\(action)"))
         return false
+    }
+
+    private struct SessionHistoryEntry: Decodable {
+        let index: UInt32
+        let unixMs: UInt64
+        let revision: UInt64
+    }
+
+    private enum HistoryPick {
+        case cancel
+        case latest
+        case revision(UInt32)
+    }
+
+    private static func parseHistory(_ bytes: [UInt8]) -> [SessionHistoryEntry]? {
+        let data = Data(bytes)
+        if data.isEmpty || data == Data("[]".utf8) {
+            return []
+        }
+        return try? JSONDecoder().decode([SessionHistoryEntry].self, from: data)
+    }
+
+    private func pickHistory(_ entries: [SessionHistoryEntry]) -> HistoryPick {
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 380, height: 24), pullsDown: false)
+        popup.addItem(withTitle: L10n.t("history.latest"))
+        popup.lastItem?.tag = -1
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        for entry in entries {
+            let when = formatter.string(
+                from: Date(timeIntervalSince1970: TimeInterval(entry.unixMs) / 1000)
+            )
+            popup.addItem(
+                withTitle: L10n.format("history.entry", "\(entry.index)", when, "\(entry.revision)")
+            )
+            popup.lastItem?.tag = Int(entry.index)
+        }
+        popup.selectItem(at: 0)
+        let alert = NSAlert()
+        alert.messageText = L10n.t("history.title")
+        alert.alertStyle = .informational
+        alert.accessoryView = popup
+        alert.addButton(withTitle: L10n.t("history.open"))
+        alert.addButton(withTitle: L10n.t("history.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return .cancel }
+        let tag = popup.selectedTag()
+        return tag < 0 ? .latest : .revision(UInt32(tag))
     }
 }
 

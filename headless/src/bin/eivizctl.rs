@@ -72,6 +72,7 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         expected_revision: u64,
     },
+    Save,
     Mutate {
         json: String,
         #[arg(long, default_value_t = 0)]
@@ -200,6 +201,17 @@ async fn run_cmd(session: &ControlSession, cmd: Cmd, json: bool) -> Result<(), S
                 .map_err(|e| e.to_string())?;
             if !json {
                 println!("ok");
+            }
+        }
+        Cmd::Save => {
+            let (path, history_count) = session.save_session().await.map_err(|e| e.to_string())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "path": path, "historyCount": history_count })
+                );
+            } else {
+                println!("ok path={path} history={history_count}");
             }
         }
         Cmd::Mutate {

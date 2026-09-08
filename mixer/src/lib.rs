@@ -618,38 +618,33 @@ fn live_unit_from(unit: &LiveUnit) -> crate::vmix_xml::UnitLive {
     }
 }
 
-fn scene_id_from_source(doc: &eiviz_control::session::Document, source: u64) -> u64 {
-    if !crate::abi::is_scene(source) {
-        return 0;
+fn stamp_live_scene_buses(doc: &mut eiviz_control::session::Document) {
+    let snap = live_snapshot();
+    let mut live = eiviz_control::LiveState::default();
+    for (id, unit) in snap.units {
+        live.units.insert(
+            id,
+            eiviz_control::UnitLiveState {
+                program_source: unit.program_source,
+                preview_source: unit.preview_source,
+                ..Default::default()
+            },
+        );
     }
-    let id = source - crate::abi::SCENE_BASE;
-    if doc.scenes.iter().any(|scene| scene.id == id) {
-        id
-    } else {
-        0
+    eiviz_control::session::stamp_live_scene_buses(doc, &live);
+}
+
+fn remember_session_path(path: impl Into<std::path::PathBuf>) {
+    if let Ok(mut svc) = crate::control_service().lock() {
+        svc.set_session_path(Some(path.into()));
     }
 }
 
-fn stamp_live_scene_buses(doc: &mut eiviz_control::session::Document) {
-    let snap = live_snapshot();
-    let stamps: Vec<(u64, u64, u64)> = doc
-        .units
-        .iter()
-        .filter_map(|unit| {
-            let live = snap.units.get(&unit.id)?;
-            Some((
-                unit.id,
-                scene_id_from_source(doc, live.preview_source),
-                scene_id_from_source(doc, live.program_source),
-            ))
-        })
-        .collect();
-    for (id, preview, program) in stamps {
-        if let Some(unit) = doc.units.iter_mut().find(|unit| unit.id == id) {
-            unit.preview_scene_id = preview;
-            unit.program_scene_id = program;
-        }
-    }
+fn session_revision() -> u64 {
+    crate::control_service()
+        .lock()
+        .map(|svc| svc.revision())
+        .unwrap_or(0)
 }
 
 fn report_io(error: impl Into<String>) -> i32 {
@@ -2814,7 +2809,10 @@ pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, c
         return -ERR_IO;
     }
     match session::read_document(&path).and_then(|document| session::to_vec(&document)) {
-        Ok(canonical) => copy_bytes(&canonical, out, cap),
+        Ok(canonical) => {
+            remember_session_path(&path);
+            copy_bytes(&canonical, out, cap)
+        }
         Err(error) => {
             report_session_error(error);
             -ERR_INVALID_ARGUMENT
@@ -2831,12 +2829,17 @@ pub unsafe extern "C" fn mixer_session_save(
     if path.is_null() || json.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
+    let path = read_cstr(path);
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    let revision = session_revision();
     match session::parse(bytes).and_then(|mut document| {
         stamp_live_scene_buses(&mut document);
-        session::write_document(&read_cstr(path), &document)
+        session::write_document_rev(&path, &document, revision)
     }) {
-        Ok(()) => OK,
+        Ok(_) => {
+            remember_session_path(&path);
+            OK
+        }
         Err(error) => {
             report_session_error(error);
             -1
@@ -2879,6 +2882,58 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
     match session::canonicalize_bytes(bytes) {
         Ok(canonical) => copy_bytes(&canonical, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_session_clear_current() -> i32 {
+    if let Ok(mut svc) = crate::control_service().lock() {
+        svc.set_session_path(None);
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_history(
+    path: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if path.is_null() || out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let path = read_cstr(path);
+    match session::read_history(&path)
+        .and_then(|history| serde_json::to_vec(&history).map_err(|error| error.to_string()))
+    {
+        Ok(json) => copy_bytes(&json, out, cap),
+        Err(error) => {
+            report_session_error(error);
+            -ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_load_rev(
+    path: *const c_char,
+    index: u32,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    if path.is_null() || out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let path = read_cstr(path);
+    match session::extract_history(&path, index).and_then(|document| session::to_vec(&document)) {
+        Ok(canonical) => {
+            remember_session_path(&path);
+            copy_bytes(&canonical, out, cap)
+        }
         Err(error) => {
             report_session_error(error);
             -ERR_INVALID_ARGUMENT
@@ -5746,9 +5801,36 @@ mod tests {
             unsafe { mixer_session_export(exported_c.as_ptr(), loaded.as_ptr(), loaded.len()) };
         assert_eq!(exported, OK);
         assert_eq!(&std::fs::read(&exported_path).unwrap()[..4], b"EIVZ");
+        let hist_n =
+            unsafe { mixer_session_history(saved_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
+        assert!(hist_n >= 0, "history {hist_n}");
+        assert_eq!(&buf[..hist_n as usize], b"[]");
+        let mut value: serde_json::Value = serde_json::from_slice(&loaded).unwrap();
+        value["inputs"][0]["name"] = serde_json::Value::String("changed".into());
+        let edited = serde_json::to_vec(&value).unwrap();
+        let save2 = unsafe { mixer_session_save(saved_c.as_ptr(), edited.as_ptr(), edited.len()) };
+        assert_eq!(save2, OK);
+        let hist_n =
+            unsafe { mixer_session_history(saved_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
+        assert!(hist_n > 2, "history after overwrite {hist_n}");
+        let history_json = String::from_utf8(buf[..hist_n as usize].to_vec()).unwrap();
+        assert!(history_json.contains("\"index\":0"), "{history_json}");
+        let n_rev =
+            unsafe { mixer_session_load_rev(saved_c.as_ptr(), 0, buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(n_rev, n);
+        assert_eq!(&buf[..n_rev as usize], loaded.as_slice());
+        mixer_session_clear_current();
+        assert!(
+            crate::control_service()
+                .lock()
+                .unwrap()
+                .session_path()
+                .is_none()
+        );
         let n2 = unsafe { mixer_session_load(saved_c.as_ptr(), buf.as_mut_ptr(), buf.len()) };
-        assert_eq!(n2, n);
-        assert_eq!(&buf[..n2 as usize], loaded.as_slice());
+        assert!(n2 > 0, "load saved current {n2}");
+        let current: serde_json::Value = serde_json::from_slice(&buf[..n2 as usize]).unwrap();
+        assert_eq!(current["inputs"][0]["name"], "changed");
         let n3 = unsafe {
             mixer_session_canonicalize(loaded.as_ptr(), loaded.len(), buf.as_mut_ptr(), buf.len())
         };

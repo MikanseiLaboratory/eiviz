@@ -3,7 +3,7 @@ title: Headless
 description: Run the mixer without a GUI, then operate it from eivizctl or Remote
 ---
 
-`eiviz-headless` is the mixer daemon with no host UI. It loads a session file (`.eivz`), runs compose, and opens a Protobuf WebSocket. The default is loopback port 9400.
+`eiviz-headless` is the mixer daemon with no host UI. It loads a session file (`.eivz` or `.eivzx`), runs compose, and opens a Protobuf WebSocket. The default is loopback port 9400.
 
 Linux ships in this form today. Windows and macOS releases include the same binaries. Operate it with `eivizctl` on the same machine, or with `Eiviz.Remote.exe` / `eiviz-remote.app` on another PC. Protocol details are in [eiviz API](/eiviz/en/developers/api/). Remote UI steps are in [Remote connection](/eiviz/en/features/remote/).
 
@@ -28,7 +28,9 @@ The binaries land at `target/release/eiviz-headless` and `target/release/eivizct
 ```bash
 eiviz-headless validate --session show.eivz
 eiviz-headless canonicalize --session show.eivz
-eiviz-headless export --session show.eivz --output show-portable.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivzx
+eiviz-headless history --session show.eivz
+eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
 ```
 
@@ -99,6 +101,7 @@ eiviz> preview --unit 1 --scene 2
 eiviz> cut --unit 1
 eiviz> auto --unit 1 --duration-ms 1000
 eiviz> replace --session show.eivz
+eiviz> save
 eiviz> shutdown
 ```
 
@@ -149,4 +152,6 @@ To rotate a token, change the env var or `eivizctl prefs set token`, then restar
 | 5 | Bind |
 | 6 | Other runtime failure |
 
-Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`. `eiviz-headless export` embeds Still/Video files; load extracts them next to the `.eivz` into `*.media`.
+Logs are on stderr. Canonical JSON for inspection comes from `eiviz-headless canonicalize`. Ordinary save is `.eivz` (in-file history, no media). `eiviz-headless export` writes `.eivzx` with Still/Video embedded and history stripped; load extracts media next to the file into `*.media`. Remote Save and `eivizctl save` write back to the `run --session` file. `eivizctl replace` does not change that path.
+
+`eiviz-headless history --session show.eivz` lists in-file history (index, unix ms, revision; newest first, up to 20). `eiviz-headless restore --session show.eivz --index N --output old.eivz` writes that entry as a standalone `.eivz` with no history. The GUI load dialog offers Latest (default) or a specific revision when the file has history. Recent files and double-click always open Latest.

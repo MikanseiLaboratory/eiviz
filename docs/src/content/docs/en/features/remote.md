@@ -32,6 +32,12 @@ The Settings window sends display, performance, outputs, audio, and Web API fiel
 
 Session edits use `MutateSession` with `expected_revision`. A mismatched revision is rejected; reload and try again.
 
+## Save
+
+The Save button writes the host's current session file. Remote does not send a path or filename. The host must already have a file (GUI Save, or `eiviz-headless run --session`). If the host has never saved, the request fails. Success shows the saved path and how many in-file history entries remain. The previous document is kept inside the `.eivz` (up to 20). Export files (`.eivzx`) do not include that history.
+
+`eivizctl save` is the same command.
+
 ## Media directory
 
 Uploaded Still/Video files land on the host. The default when unset is:
