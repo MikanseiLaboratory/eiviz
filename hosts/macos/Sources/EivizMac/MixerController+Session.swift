@@ -55,19 +55,19 @@ extension MixerController {
         writeSession(to: url.path, export: true)
     }
 
-    private func suggestedSessionName() -> String {
+    func suggestedSessionName() -> String {
         if let path = MixerFFI.sessionCurrentPath() ?? AppPrefs.shared.recentSessions.first {
             return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent + ".eivz"
         }
         return "session.eivz"
     }
 
-    private func canOverwrite(_ path: String) -> Bool {
+    func canOverwrite(_ path: String) -> Bool {
         let lower = path.lowercased()
         return lower.hasSuffix(".eivz") && !lower.hasSuffix(".eivzx")
     }
 
-    private func writeSession(to path: String, export: Bool) {
+    func writeSession(to path: String, export: Bool) {
         syncAllUnitBuses()
         captureSceneBuses()
         session.selectedUnitId = selectedUnitId
@@ -222,7 +222,7 @@ extension MixerController {
         presentRelinked(1)
     }
 
-    private func presentRelinked(_ count: Int) {
+    func presentRelinked(_ count: Int) {
         let alert = NSAlert()
         alert.messageText = L10n.t("input.relink")
         alert.informativeText = L10n.format("msg.relinked", "\(count)")
@@ -232,7 +232,7 @@ extension MixerController {
         alert.runModal()
     }
 
-    private func pickRelinkDirectory() -> String? {
+    func pickRelinkDirectory() -> String? {
         if isRemote {
             let alert = NSAlert()
             alert.messageText = L10n.t("input.relinkFolder")
@@ -257,7 +257,7 @@ extension MixerController {
         return url.path
     }
 
-    private func pickRelinkFile(for input: InputEntry) -> String? {
+    func pickRelinkFile(for input: InputEntry) -> String? {
         if isRemote {
             let alert = NSAlert()
             alert.messageText = L10n.t("input.relinkFile")
@@ -283,7 +283,7 @@ extension MixerController {
         return url.path
     }
 
-    private func applyRelinkPath(_ input: InputEntry, path: String) {
+    func applyRelinkPath(_ input: InputEntry, path: String) {
         if isRemote {
             var next = input
             next.pathOrAddress = path
@@ -297,7 +297,7 @@ extension MixerController {
         objectWillChange.send()
     }
 
-    private func pickImportDestinations(exportPath: String) -> (session: String, media: String)? {
+    func pickImportDestinations(exportPath: String) -> (session: String, media: String)? {
         let hint = NSAlert()
         hint.messageText = L10n.t("chrome.importExport")
         hint.informativeText = L10n.t("chrome.importExportHint")
@@ -344,7 +344,7 @@ extension MixerController {
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: parent)
     }
 
-    private func promptMissingMedia() {
+    func promptMissingMedia() {
         if isRemote { return }
         guard session.inputs.contains(where: \.isMissingMedia) else { return }
         while true {
@@ -379,7 +379,7 @@ extension MixerController {
         }
     }
 
-    private func pickMissingInput(_ leftover: [InputEntry]) -> InputEntry? {
+    func pickMissingInput(_ leftover: [InputEntry]) -> InputEntry? {
         if leftover.count == 1 { return leftover[0] }
         let alert = NSAlert()
         alert.messageText = L10n.t("input.relinkFile")
@@ -397,7 +397,7 @@ extension MixerController {
         return leftover[index]
     }
 
-    private func relinkMissingMedia(directories: [String]) -> Int {
+    func relinkMissingMedia(directories: [String]) -> Int {
         let unique = uniqueFilenames(directories: directories)
         var count = 0
         for index in session.inputs.indices {
@@ -412,7 +412,7 @@ extension MixerController {
         return count
     }
 
-    private func uniqueFilenames(directories: [String]) -> [String: String] {
+    func uniqueFilenames(directories: [String]) -> [String: String] {
         var found: [String: [String]] = [:]
         for directory in directories {
             collectFiles(directory: directory, into: &found, depth: 0)
@@ -427,7 +427,7 @@ extension MixerController {
         return unique
     }
 
-    private func collectFiles(directory: String, into found: inout [String: [String]], depth: Int) {
+    func collectFiles(directory: String, into found: inout [String: [String]], depth: Int) {
         if depth > 16 { return }
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: directory) else { return }
@@ -480,7 +480,7 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
-    private func replaceSession(_ loaded: MixerSessionData) {
+    func replaceSession(_ loaded: MixerSessionData) {
         closeAllInputPreviews()
         closeAllSwitchers()
         closeAllMultiviews()
@@ -508,7 +508,7 @@ extension MixerController {
         surfaceEpoch &+= 1
     }
 
-    private func closeAllMultiviews() {
+    func closeAllMultiviews() {
         for id in Array(multiviewWindows.keys) {
             let window = multiviewWindows.removeValue(forKey: id)
             window?.delegate = nil
@@ -529,13 +529,13 @@ extension MixerController {
         selectedVideoId ?? session.inputs.first { $0.kind == .video }?.id
     }
 
-    private func copyVideoInfo(_ id: UInt64) -> EivizVideoInfo? {
+    func copyVideoInfo(_ id: UInt64) -> EivizVideoInfo? {
         var info = EivizVideoInfo(playing: 0, is_file: 0, position_hns: 0, duration_hns: 0)
         guard mixer_video_copy_info(id, &info) == EIVIZ_OK else { return nil }
         return info
     }
 
-    private func startVideoInput(
+    func startVideoInput(
         id: UInt64,
         path: String,
         capture: UInt32,
@@ -608,7 +608,7 @@ extension MixerController {
         videoFraction = value
     }
 
-    private func attachInputs() {
+    func attachInputs() {
         for input in session.inputs where input.kind != .omt && input.kind != .ndi {
             attach(input)
         }
@@ -617,7 +617,7 @@ extension MixerController {
         }
     }
 
-    private func attach(_ input: InputEntry) {
+    func attach(_ input: InputEntry) {
         switch input.kind {
         case .color, .bars:
             fail(
@@ -717,7 +717,7 @@ extension MixerController {
         input.kind == .mix ? 0 : (input.busMask == 0 ? 1 : input.busMask)
     }
 
-    private func startCapture(_ input: InputEntry) {
+    func startCapture(_ input: InputEntry) {
         guard let deviceId = input.pathOrAddress else { return }
         let start = {
             self.startVideoInput(
@@ -783,7 +783,7 @@ extension MixerController {
         fail(mixer_unit_set_state(unit.id, &state), "Overlays")
     }
 
-    private func pushState(unitId: UInt64, program: UInt64, preview: UInt64, mix: Float, kind: UInt32) {
+    func pushState(unitId: UInt64, program: UInt64, preview: UInt64, mix: Float, kind: UInt32) {
         var state = MixerFFI.emptyState()
         state.program_source = program
         state.preview_source = preview
@@ -802,7 +802,7 @@ extension MixerController {
         return state
     }
 
-    private func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry, forceEnabled: UUID? = nil) {
+    func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry, forceEnabled: UUID? = nil) {
         let enabled = unit.overlays.filter { $0.enabled || $0.id == forceEnabled }.prefix(8)
         state.overlay_count = UInt32(enabled.count)
         for (index, slot) in enabled.enumerated() {
@@ -818,19 +818,19 @@ extension MixerController {
         }
     }
 
-    private func unit(for id: UInt64?) -> MixingUnitEntry {
+    func unit(for id: UInt64?) -> MixingUnitEntry {
         guard let id else { return selectedUnit }
         return session.units.first { $0.id == id } ?? selectedUnit
     }
 
-    private func normalizePixelSortDefaults(_ unitId: UInt64) {
+    func normalizePixelSortDefaults(_ unitId: UInt64) {
         guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
         for i in session.units[index].transitions.indices {
             TransitionCatalog.applyKindDefaults(&session.units[index].transitions[i])
         }
     }
 
-    private func resolvedCustomWgsl(_ preset: TransitionPreset) -> String {
+    func resolvedCustomWgsl(_ preset: TransitionPreset) -> String {
         if preset.kind != EIVIZ_TRANSITION_CUSTOM {
             return ""
         }
@@ -840,11 +840,11 @@ extension MixerController {
         return CustomWgslEditor.template
     }
 
-    private func tbarPreset() -> TransitionPreset {
+    func tbarPreset() -> TransitionPreset {
         tbarPreset(for: selectedUnit)
     }
 
-    private func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
+    func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
         let list = unit.transitions
         guard !list.isEmpty else {
             return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true)
@@ -887,20 +887,20 @@ extension MixerController {
         updateStatus()
     }
 
-    private func syncAllUnitBuses() {
+    func syncAllUnitBuses() {
         for unit in session.units {
             syncUnitBuses(unit.id)
         }
     }
 
-    private func syncUnitBuses(_ unitId: UInt64) {
+    func syncUnitBuses(_ unitId: UInt64) {
         var state = MixerFFI.emptyState()
         guard mixer_unit_get_state(unitId, &state) == EIVIZ_OK else { return }
         applyBusSources(unitId: unitId, preview: state.preview_source, program: state.program_source)
         applyMixerMix(unitId: unitId, mix: state.mix)
     }
 
-    private func applyMixerMix(unitId: UInt64, mix value: Float) {
+    func applyMixerMix(unitId: UInt64, mix value: Float) {
         if mixByUnit[unitId].map({ abs($0 - value) > 0.002 }) ?? true {
             var next = mixByUnit
             next[unitId] = value
@@ -932,7 +932,7 @@ extension MixerController {
         }
     }
 
-    private func mixUnitUses(_ unit: MixingUnitEntry, sourceId: UInt64) -> Bool {
+    func mixUnitUses(_ unit: MixingUnitEntry, sourceId: UInt64) -> Bool {
         if unit.overlays.contains(where: { $0.sceneGpuId == sourceId }) {
             return true
         }
@@ -981,7 +981,7 @@ extension MixerController {
         }
     }
 
-    private func remoteVideoReady() -> Bool {
+    func remoteVideoReady() -> Bool {
         if AppPrefs.shared.remoteVideoLayout == .multiview {
             return MixerFFI.sourceStatus(MixerRemote.mainMultiviewSourceId).hasVideo
         }
@@ -989,7 +989,7 @@ extension MixerController {
             && MixerFFI.sourceStatus(MixerRemote.programSourceId).hasVideo
     }
 
-    private func remoteVideoError() -> String? {
+    func remoteVideoError() -> String? {
         if AppPrefs.shared.remoteVideoLayout == .multiview {
             let error = MixerFFI.sourceErrorText(MixerRemote.mainMultiviewSourceId)
             return error.isEmpty ? nil : error
@@ -1001,7 +1001,7 @@ extension MixerController {
         return nil
     }
 
-    private func handleMixerFatal() -> Bool {
+    func handleMixerFatal() -> Bool {
         if fatalHandled { return true }
         let fatal = MixerFFI.takeFatalText()
         guard !fatal.isEmpty else { return false }
@@ -1018,7 +1018,7 @@ extension MixerController {
         return true
     }
 
-    private func saveRecoveredSession() {
+    func saveRecoveredSession() {
         let dir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/eiviz", isDirectory: true)
         do {
@@ -1195,7 +1195,7 @@ extension MixerController {
         mutateRemote(MixerRemote.upsertScene(scene))
     }
 
-    private func commitRemoteOverlays(unitId: UInt64) {
+    func commitRemoteOverlays(unitId: UInt64) {
         guard let unit = session.units.first(where: { $0.id == unitId }) else { return }
         for (index, slot) in unit.overlays.enumerated() {
             _ = mutateRemote(
@@ -1204,8 +1204,6 @@ extension MixerController {
             )
         }
     }
-
-    private let remoteMutateGate = RemoteMutateGate()
 
     func discoverInput(kind: String, query: String = "") -> String {
         guard isRemote, remoteHandle != 0 else {
@@ -1234,7 +1232,7 @@ extension MixerController {
         return true
     }
 
-    private func remoteMutateError() -> String {
+    func remoteMutateError() -> String {
         let statusJson = MixerRemote.status(remoteHandle)
         if let data = statusJson.data(using: .utf8),
            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1343,7 +1341,7 @@ extension MixerController {
         refreshRemoteWarn()
     }
 
-    private func applyRemoteLiveBuses(_ liveJson: String) {
+    func applyRemoteLiveBuses(_ liveJson: String) {
         guard let data = liveJson.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
@@ -1367,7 +1365,7 @@ extension MixerController {
         }
     }
 
-    private func publishedOutputs() -> [OutputEntry] {
+    func publishedOutputs() -> [OutputEntry] {
         session.outputs.filter {
             $0.enabled
                 && ($0.transport == .omt || $0.transport == .ndi)
@@ -1375,19 +1373,19 @@ extension MixerController {
         }
     }
 
-    private func remotePublishedSource(_ kind: OutputSourceKind, unitId: UInt64) -> OutputEntry? {
+    func remotePublishedSource(_ kind: OutputSourceKind, unitId: UInt64) -> OutputEntry? {
         let matches = publishedOutputs().filter { $0.sourceKind == kind && $0.unitId == unitId }
         guard matches.count == 1 else { return nil }
         return matches.first
     }
 
-    private func remotePublishedUnique(_ kind: OutputSourceKind) -> OutputEntry? {
+    func remotePublishedUnique(_ kind: OutputSourceKind) -> OutputEntry? {
         let matches = publishedOutputs().filter { $0.sourceKind == kind }
         guard matches.count == 1 else { return nil }
         return matches.first
     }
 
-    private func remotePublishedMultiview(_ layoutGpuId: UInt64) -> UInt64? {
+    func remotePublishedMultiview(_ layoutGpuId: UInt64) -> UInt64? {
         let matches = publishedOutputs().filter { $0.sourceKind == .multiview && $0.sourceId == layoutGpuId }
         guard matches.count == 1, let output = matches.first else { return nil }
         return MixerRemote.sourceBase | output.id
@@ -1485,7 +1483,7 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
-    private func remoteVideoBindKey(_ item: RemoteVideoItem) -> String {
+    func remoteVideoBindKey(_ item: RemoteVideoItem) -> String {
         if item.transport == .ndi {
             return "\(item.transport.rawValue):\(item.address)"
         }
@@ -1560,7 +1558,7 @@ extension MixerController {
     }
 
     @discardableResult
-    private func connectRemoteChoice(_ id: UInt64, _ item: RemoteVideoItem) -> Bool {
+    func connectRemoteChoice(_ id: UInt64, _ item: RemoteVideoItem) -> Bool {
         let resolved = resolveRemoteVideo(item)
         _ = mixer_destroy_source(id)
         guard canConnectRemoteVideo(resolved) else { return false }
@@ -1575,14 +1573,14 @@ extension MixerController {
         return code == 0
     }
 
-    private func canConnectRemoteVideo(_ item: RemoteVideoItem) -> Bool {
+    func canConnectRemoteVideo(_ item: RemoteVideoItem) -> Bool {
         let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.isEmpty else { return false }
         if item.transport == .ndi { return true }
         return address.contains("://")
     }
 
-    private func resolveRemoteVideo(_ item: RemoteVideoItem) -> RemoteVideoItem {
+    func resolveRemoteVideo(_ item: RemoteVideoItem) -> RemoteVideoItem {
         let address = item.address.trimmingCharacters(in: .whitespacesAndNewlines)
         if address.isEmpty {
             return item
@@ -1599,7 +1597,7 @@ extension MixerController {
         return RemoteVideoItem(transport: item.transport, address: found, label: "\(prefix)  \(found)")
     }
 
-    private func addressRefersTo(_ discovered: String, name: String) -> Bool {
+    func addressRefersTo(_ discovered: String, name: String) -> Bool {
         if discovered.compare(name, options: .caseInsensitive) == .orderedSame {
             return true
         }
@@ -1639,7 +1637,7 @@ extension MixerController {
         return try? JSONDecoder().decode([SessionHistoryEntry].self, from: data)
     }
 
-    private func pickHistory(_ entries: [SessionHistoryEntry]) -> HistoryPick {
+    func pickHistory(_ entries: [SessionHistoryEntry]) -> HistoryPick {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 380, height: 24), pullsDown: false)
         popup.addItem(withTitle: L10n.t("history.latest"))
         popup.lastItem?.tag = -1

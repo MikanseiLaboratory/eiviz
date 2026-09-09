@@ -68,11 +68,11 @@ final class MixerController: ObservableObject {
     @Published var kindMenuGroup: [UUID: TransitionGroup] = [:]
     @Published var inputFilter = ListFilter.all
     @Published var sceneFilter = ListFilter.all
-    @Published private(set) var surfaceEpoch: UInt64 = 0
-    @Published private(set) var isRemote = false
-    @Published private(set) var remoteConnected = false
-    @Published private(set) var remoteRevision: UInt64 = 0
-    @Published private(set) var remoteVideoCatalogEpoch: UInt64 = 0
+    @Published var surfaceEpoch: UInt64 = 0
+    @Published var isRemote = false
+    @Published var remoteConnected = false
+    @Published var remoteRevision: UInt64 = 0
+    @Published var remoteVideoCatalogEpoch: UInt64 = 0
     @Published var videoUnavailable = false
 
     var booted = false
@@ -81,8 +81,8 @@ final class MixerController: ObservableObject {
     var tbarLatching = false
     var meterTimer: Timer?
     var mixTimer: Timer?
-    @Published private(set) var previewByUnit: [UInt64: UInt64] = [:]
-    @Published private(set) var programByUnit: [UInt64: UInt64] = [:]
+    @Published var previewByUnit: [UInt64: UInt64] = [:]
+    @Published var programByUnit: [UInt64: UInt64] = [:]
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
     var inputPreviewControllers: [UInt64: NSWindowController] = [:]
     let inputPreviewCloser = InputPreviewCloser()
@@ -108,6 +108,7 @@ final class MixerController: ObservableObject {
     var discoveredOmt: [String] = []
     var discoveredNdi: [String] = []
     var remoteDiscoverTask: Task<Void, Never>?
+    let remoteMutateGate = RemoteMutateGate()
 
     var selectedUnit: MixingUnitEntry {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
@@ -647,7 +648,7 @@ final class MixerController: ObservableObject {
 }
 
 
-private final class InputPreviewCloser: NSObject, NSWindowDelegate {
+final class InputPreviewCloser: NSObject, NSWindowDelegate {
     var onClose: ((UInt64) -> Void)?
 
     func windowWillClose(_ notification: Notification) {
@@ -672,7 +673,7 @@ private final class InputPreviewCloser: NSObject, NSWindowDelegate {
     }
 }
 
-private final class RemoteMutateGate: @unchecked Sendable {
+final class RemoteMutateGate: @unchecked Sendable {
     let lock = NSLock()
     var revision: UInt64 = 0
 
@@ -705,7 +706,7 @@ private final class RemoteMutateGate: @unchecked Sendable {
     }
 }
 
-private final class SwitcherCloser: NSObject, NSWindowDelegate {
+final class SwitcherCloser: NSObject, NSWindowDelegate {
     var onClose: ((UInt64) -> Void)?
 
     func windowWillClose(_ notification: Notification) {
