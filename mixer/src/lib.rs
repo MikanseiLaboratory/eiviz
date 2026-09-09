@@ -51,25 +51,26 @@ pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
-    ERR_ALREADY_CREATED, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_BARS,
-    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo,
-    MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc,
-    Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK,
-    SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
-    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
-    TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
-    TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
-    TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
-    TRANSITION_FILM_BURN, TRANSITION_FLIP, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
-    TRANSITION_GRID_DISSOLVE, TRANSITION_HEART, TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE,
-    TRANSITION_LOREZ, TRANSITION_LUMA_MORPH, TRANSITION_METAMIX, TRANSITION_MULTITASK,
-    TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
-    TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE, TRANSITION_ROLLER_DOOR,
-    TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_STATIC, TRANSITION_STINGER,
-    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
-    TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
+    ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
+    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
+    MixerRebarInfo, MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
+    NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM,
+    OUTPUT_SOURCE, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
+    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
+    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
+    TRANSITION_BARN_DOOR, TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK,
+    TRANSITION_CROSS_ZOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM,
+    TRANSITION_CUT, TRANSITION_DATAMOSH, TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN,
+    TRANSITION_DIR_LEFT, TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE,
+    TRANSITION_FADE, TRANSITION_FILM_BURN, TRANSITION_FLIP, TRANSITION_FLY_ROTATE,
+    TRANSITION_GLITCH, TRANSITION_GRID_DISSOLVE, TRANSITION_HEART, TRANSITION_IRIS,
+    TRANSITION_KALEIDOSCOPE, TRANSITION_LOREZ, TRANSITION_LUMA_MORPH, TRANSITION_METAMIX,
+    TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
+    TRANSITION_PIXEL_SORT, TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE,
+    TRANSITION_ROLLER_DOOR, TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR,
+    TRANSITION_STATIC, TRANSITION_STINGER, TRANSITION_SWIRL, TRANSITION_TILE,
+    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap,
+    UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
 pub use eiviz_control::{ControlFacade, ControlService, RequestKey};
 pub use runtime::ProcessMixer;
@@ -131,7 +132,7 @@ impl ControlFacade for MixerFacade {
     }
 }
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
@@ -311,6 +312,7 @@ struct Shared {
     compose_dirty: bool,
     thumbs: HashMap<u64, crate::thumb::ThumbSub>,
     mix_inputs: HashMap<u64, MixInputSpec>,
+    audio_snap: Arc<Mutex<audio::AudioMixSnapshot>>,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -322,8 +324,7 @@ struct Shared {
 struct Telemetry {
     last_error: String,
     last_render_ms: f32,
-    follow_primed: bool,
-    monitor_pcm: VecDeque<f32>,
+    audio_monitor: audio::AudioMonitor,
     last_ram_bytes: u64,
     last_vram_bytes: u64,
     last_compose_vram: u64,
@@ -513,9 +514,11 @@ enum GpuCmd {
         unit_id: u64,
         kind: u32,
         surface: NativeSurface,
+        reply: mpsc::Sender<i32>,
     },
     DetachUnit {
         unit_id: u64,
+        reply: mpsc::Sender<i32>,
     },
     AttachMonitor {
         monitor_id: u64,
@@ -561,26 +564,63 @@ struct Mixer {
     omt_gpu: OmtGpu,
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
+    audio_sched: Option<audio::AudioScheduler>,
     stop: Arc<AtomicBool>,
     backend: u32,
     #[cfg(target_os = "macos")]
     surface_gpu: present::SurfaceGpu,
 }
 
-static MIXER: OnceLock<Mutex<Option<Mixer>>> = OnceLock::new();
+enum MixerSlot {
+    Empty,
+    Initializing,
+    Running(Mixer),
+    Stopping,
+}
 
-fn mixer_slot() -> &'static Mutex<Option<Mixer>> {
-    MIXER.get_or_init(|| Mutex::new(None))
+static MIXER: OnceLock<Mutex<MixerSlot>> = OnceLock::new();
+
+fn mixer_slot() -> &'static Mutex<MixerSlot> {
+    MIXER.get_or_init(|| Mutex::new(MixerSlot::Empty))
 }
 
 fn with_mixer<T>(f: impl FnOnce(&mut Mixer) -> T) -> Result<T, i32> {
     let start = Instant::now();
     let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    let result = match slot.as_mut() {
-        Some(mixer) => Ok(f(mixer)),
-        None => Err(ERR_NOT_CREATED),
+    let result = match &mut *slot {
+        MixerSlot::Running(mixer) => Ok(f(mixer)),
+        _ => Err(ERR_NOT_CREATED),
     };
     crate::diag::lock_held("mixer_slot", start, result)
+}
+
+fn reserve_mixer_create() -> i32 {
+    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    match *slot {
+        MixerSlot::Empty => {
+            *slot = MixerSlot::Initializing;
+            OK
+        }
+        _ => ERR_ALREADY_CREATED,
+    }
+}
+
+fn commit_mixer_create(mixer: Mixer) -> i32 {
+    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    match *slot {
+        MixerSlot::Initializing => {
+            *slot = MixerSlot::Running(mixer);
+            OK
+        }
+        _ => ERR_ALREADY_CREATED,
+    }
+}
+
+fn abort_mixer_create() {
+    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    if matches!(*slot, MixerSlot::Initializing) {
+        *slot = MixerSlot::Empty;
+    }
 }
 
 pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
@@ -719,10 +759,25 @@ fn take_source_uploads(id: u64) -> Result<Arc<Mutex<UploadStore>>, i32> {
 
 /// Send a GPU command that replies, without holding the mixer slot while waiting.
 /// Holding the slot across `recv` deadlocks if the render thread needs the host.
-fn send_gpu_and_wait(send: impl FnOnce(&Mixer, mpsc::Sender<i32>) -> i32) -> i32 {
+fn send_gpu_and_wait(send: impl FnOnce(&mut Mixer, mpsc::Sender<i32>) -> i32) -> i32 {
+    send_gpu_and_wait_timeout(send, Duration::from_secs(30))
+}
+
+fn send_gpu_and_wait_timeout(
+    send: impl FnOnce(&mut Mixer, mpsc::Sender<i32>) -> i32,
+    timeout: Duration,
+) -> i32 {
     let (reply_tx, reply_rx) = mpsc::channel();
     match with_mixer(|mixer| send(mixer, reply_tx)) {
-        Ok(OK) => reply_rx.recv().unwrap_or(ERR_DEVICE),
+        Ok(OK) => match reply_rx.recv_timeout(timeout) {
+            Ok(code) => code,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                crate::diag::error("gpu command timed out");
+                report_session_error("gpu command timed out");
+                ERR_DEVICE
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => ERR_DEVICE,
+        },
         Ok(code) => code,
         Err(code) => code,
     }
@@ -802,8 +857,6 @@ pub extern "C" fn mixer_create_with_backend(
     fps_den: u32,
 ) -> i32 {
     crate::diag::init();
-    crate::diag::reset_generation();
-    reset_frame_caches();
     crate::diag::info(&format!("mixer_create backend={backend}"));
     let _ = crate::diag::profile_send();
     if fps_num == 0 || fps_den == 0 {
@@ -813,17 +866,43 @@ pub extern "C" fn mixer_create_with_backend(
         report_session_error(format!("unknown GPU backend {backend}"));
         return ERR_INVALID_ARGUMENT;
     };
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
-    if slot.is_some() {
+    if reserve_mixer_create() != OK {
         return ERR_ALREADY_CREATED;
     }
+    crate::diag::reset_generation();
+    reset_frame_caches();
+    match start_mixer(request, fps_num, fps_den) {
+        Ok(mixer) => {
+            let code = commit_mixer_create(mixer);
+            if code != OK {
+                abort_mixer_create();
+                return code;
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            let _ = thread::Builder::new()
+                .name("eiviz-ndi-find".into())
+                .spawn(ndi::warm_finder);
+            OK
+        }
+        Err(code) => {
+            abort_mixer_create();
+            code
+        }
+    }
+}
+
+fn start_mixer(
+    request: crate::device::BackendRequest,
+    fps_num: u32,
+    fps_den: u32,
+) -> Result<Mixer, i32> {
     let device = match GpuDevice::with_backend(request) {
         Ok(device) => device,
         Err(error) => {
             let message = format!("gpu device: {error}");
             crate::diag::error(&message);
             report_session_error(message);
-            return ERR_DEVICE;
+            return Err(ERR_DEVICE);
         }
     };
     let backend = crate::device::abi_of_backend(device.adapter.get_info().backend);
@@ -839,7 +918,8 @@ pub extern "C" fn mixer_create_with_backend(
             Ok(ctx) => Some(ctx),
             Err(error) => {
                 eprintln!("eiviz dxgi video: {error}");
-                return ERR_DEVICE;
+                report_session_error(format!("dxgi video: {error}"));
+                return Err(ERR_DEVICE);
             }
         }
     } else {
@@ -861,8 +941,7 @@ pub extern "C" fn mixer_create_with_backend(
     let telemetry = Arc::new(Mutex::new(Telemetry {
         last_error: String::new(),
         last_render_ms: 0.0,
-        follow_primed: false,
-        monitor_pcm: VecDeque::new(),
+        audio_monitor: audio::AudioMonitor::default(),
         last_ram_bytes: 0,
         last_vram_bytes: 0,
         last_compose_vram: 0,
@@ -900,6 +979,7 @@ pub extern "C" fn mixer_create_with_backend(
         compose_dirty: false,
         thumbs: HashMap::new(),
         mix_inputs: HashMap::new(),
+        audio_snap: Arc::new(Mutex::new(audio::AudioMixSnapshot::default())),
     }));
     let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
@@ -925,7 +1005,17 @@ pub extern "C" fn mixer_create_with_backend(
             );
         })
         .expect("render thread");
-    *slot = Some(Mixer {
+    let audio_snap = Arc::clone(&shared.lock().expect("shared").audio_snap);
+    let monitor = telemetry.lock().expect("telemetry").audio_monitor.clone();
+    let audio_inputs = uploads.lock().expect("uploads").audio_store();
+    let audio_sched = Some(audio::AudioScheduler::start(
+        audio,
+        audio_inputs,
+        audio_snap,
+        monitor.pcm,
+        monitor.primed,
+    ));
+    Ok(Mixer {
         shared,
         uploads,
         telemetry,
@@ -934,16 +1024,12 @@ pub extern "C" fn mixer_create_with_backend(
         omt_gpu: omt_send_gpu,
         thumb_pixels,
         render: Some(render),
+        audio_sched,
         stop,
         backend,
         #[cfg(target_os = "macos")]
         surface_gpu,
-    });
-    #[cfg(any(windows, target_os = "macos"))]
-    let _ = thread::Builder::new()
-        .name("eiviz-ndi-find".into())
-        .spawn(ndi::warm_finder);
-    OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -954,7 +1040,7 @@ pub extern "C" fn mixer_backend() -> u32 {
 pub(crate) fn mixer_created() -> bool {
     mixer_slot()
         .lock()
-        .map(|slot| slot.is_some())
+        .map(|slot| matches!(*slot, MixerSlot::Running(_)))
         .unwrap_or(false)
 }
 
@@ -990,7 +1076,8 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                 shared.audio.mix_input_peaks(),
             )
         };
-        let uploads = mixer.uploads.lock().expect("uploads");
+        let audio_in = mixer.uploads.lock().expect("uploads").audio_store();
+        let audio_in = audio_in.lock().expect("audio");
         let mut peaks = vec![LivePeak {
             id: 0,
             left: master.0,
@@ -1003,14 +1090,13 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                 right,
             });
         }
-        for id in uploads.ids() {
+        for id in audio_in.ids() {
             if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
                 continue;
             }
-            let Some(ring) = uploads.get(id) else {
+            let Some((left, right)) = audio_in.peak(id) else {
                 continue;
             };
-            let (left, right) = ring.peak();
             peaks.push(LivePeak { id, left, right });
         }
         for (id, left, right) in mix_peaks {
@@ -1032,8 +1118,18 @@ pub extern "C" fn mixer_destroy() {
 pub(crate) fn mixer_destroy_inner() {
     crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
-    let Some(mut mixer) = mixer_slot().lock().expect("mixer mutex poisoned").take() else {
-        return;
+    let mut mixer = {
+        let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+        match std::mem::replace(&mut *slot, MixerSlot::Stopping) {
+            MixerSlot::Running(mixer) => mixer,
+            previous => {
+                *slot = match previous {
+                    MixerSlot::Initializing => MixerSlot::Empty,
+                    other => other,
+                };
+                return;
+            }
+        }
     };
     mixer.stop.store(true, Ordering::Relaxed);
     let (audio, receivers, videos) = {
@@ -1047,6 +1143,9 @@ pub(crate) fn mixer_destroy_inner() {
         (audio, receivers, videos)
     };
     crate::diag::info("mixer_destroy audio");
+    if let Some(mut sched) = mixer.audio_sched.take() {
+        sched.stop();
+    }
     audio.shutdown();
     crate::diag::info("mixer_destroy drop receivers");
     drop(receivers);
@@ -1062,6 +1161,7 @@ pub(crate) fn mixer_destroy_inner() {
     }
     crate::diag::info("mixer_destroy drop");
     drop(mixer);
+    *mixer_slot().lock().expect("mixer mutex poisoned") = MixerSlot::Empty;
     crate::diag::reset_generation();
     reset_frame_caches();
     crate::diag::info("mixer_destroy end");
@@ -1257,28 +1357,36 @@ pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) ->
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_unit(unit_id: u64) -> i32 {
-    with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
-        shared.units.remove(&unit_id);
-        let mut gone = Vec::new();
-        shared.outputs.retain(|id, output| {
-            if output.unit_id == unit_id {
-                gone.push(*id);
-                false
-            } else {
-                true
+    send_gpu_and_wait_timeout(
+        |mixer, reply| {
+            let mut shared = mixer.shared.lock().expect("shared");
+            shared.units.remove(&unit_id);
+            let mut gone = Vec::new();
+            shared.outputs.retain(|id, output| {
+                if output.unit_id == unit_id {
+                    gone.push(*id);
+                    false
+                } else {
+                    true
+                }
+            });
+            drop(shared);
+            for output_id in gone {
+                if let Some(worker) = mixer.send_workers.remove(&output_id) {
+                    shutdown_output_worker(worker);
+                }
             }
-        });
-        drop(shared);
-        for output_id in gone {
-            if let Some(worker) = mixer.send_workers.remove(&output_id) {
-                shutdown_output_worker(worker);
+            if mixer
+                .cmds
+                .send(GpuCmd::DetachUnit { unit_id, reply })
+                .is_err()
+            {
+                return ERR_DEVICE;
             }
-        }
-        let _ = mixer.cmds.send(GpuCmd::DetachUnit { unit_id });
-        OK
-    })
-    .unwrap_or_else(|code| code)
+            OK
+        },
+        Duration::from_secs(2),
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1886,15 +1994,24 @@ pub extern "C" fn mixer_unit_detach_native(
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
         return ERR_INVALID_ARGUMENT;
     };
-    with_mixer(|mixer| {
-        let _ = mixer.cmds.send(GpuCmd::Detach {
-            unit_id,
-            kind,
-            surface,
-        });
-        OK
-    })
-    .unwrap_or_else(|code| code)
+    send_gpu_and_wait_timeout(
+        |mixer, reply| {
+            if mixer
+                .cmds
+                .send(GpuCmd::Detach {
+                    unit_id,
+                    kind,
+                    surface,
+                    reply,
+                })
+                .is_err()
+            {
+                return ERR_DEVICE;
+            }
+            OK
+        },
+        Duration::from_secs(2),
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -2053,9 +2170,17 @@ pub unsafe extern "C" fn mixer_push_audio(
     // SAFETY: caller keeps planar readable for this call only.
     let samples = unsafe { std::slice::from_raw_parts(planar, count) };
     with_mixer(|mixer| {
-        with_uploads(mixer, |uploads| {
-            uploads.push_audio(id, sample_rate, channels, frames, pts, samples);
-        });
+        let audio = mixer.uploads.lock().expect("uploads").audio_store();
+        audio.lock().expect("audio").ingest_audio(
+            id,
+            crate::upload::AudioPacket {
+                timestamp: pts,
+                sample_rate,
+                channels,
+                samples_per_channel: frames as i32,
+                pcm_planar_f32: samples.to_vec(),
+            },
+        );
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3208,7 +3333,8 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_flush_audio(id: u64) -> i32 {
     with_mixer(|mixer| {
-        with_uploads(mixer, |uploads| uploads.flush_audio(id));
+        let audio = mixer.uploads.lock().expect("uploads").audio_store();
+        audio.lock().expect("audio").flush_audio(id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3430,14 +3556,20 @@ pub unsafe extern "C" fn mixer_copy_follow_audio(out: *mut f32, cap: u32) -> i32
     }
     with_mixer(|mixer| {
         let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
-        let mut telemetry = mixer.telemetry.lock().expect("telemetry");
-        if !telemetry.follow_primed {
+        let monitor = mixer
+            .telemetry
+            .lock()
+            .expect("telemetry")
+            .audio_monitor
+            .clone();
+        if !monitor.primed.load(Ordering::Relaxed) {
             dest.fill(0.0);
             return 0;
         }
-        let n = dest.len().min(telemetry.monitor_pcm.len());
+        let mut pcm = monitor.pcm.lock().expect("monitor pcm");
+        let n = dest.len().min(pcm.len());
         for slot in dest.iter_mut().take(n) {
-            *slot = telemetry.monitor_pcm.pop_front().unwrap_or(0.0);
+            *slot = pcm.pop_front().unwrap_or(0.0);
         }
         let hold = dest
             .get(n.saturating_sub(1).min(dest.len().saturating_sub(1)))
@@ -3486,7 +3618,8 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             drop(shared);
             (master, buses, mix_peaks, uploads)
         };
-        let uploads = uploads.lock().expect("uploads");
+        let audio_in = uploads.lock().expect("uploads").audio_store();
+        let audio_in = audio_in.lock().expect("audio");
         let mut n = 0u32;
         if n < cap {
             let (left, right) = master;
@@ -3512,17 +3645,16 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             }
             n += 1;
         }
-        for id in uploads.ids() {
+        for id in audio_in.ids() {
             if n >= cap {
                 break;
             }
             if mix_peaks.iter().any(|(mix_id, ..)| *mix_id == id) {
                 continue;
             }
-            let Some(ring) = uploads.get(id) else {
+            let Some((left, right)) = audio_in.peak(id) else {
                 continue;
             };
-            let (left, right) = ring.peak();
             unsafe {
                 *out.add(n as usize) = AudioPeak {
                     source_id: id,
@@ -3910,8 +4042,6 @@ fn render_loop(
     let mut next = Instant::now();
     let clock_start = Instant::now();
     let mut frame_i = 0u64;
-    let mut audio_produced = 0u64;
-    let mut audio_carry = 0u64;
     let mut last_bus: HashMap<u64, (u64, u64, u32, u64)> = HashMap::new();
     let mut snapshot = Vec::new();
     let mut scene_specs = Vec::new();
@@ -3967,8 +4097,15 @@ fn render_loop(
                     unit_id,
                     kind,
                     surface,
-                } => presenters.detach(unit_id, kind, surface),
-                GpuCmd::DetachUnit { unit_id } => presenters.detach_unit(unit_id),
+                    reply,
+                } => {
+                    presenters.detach(unit_id, kind, surface);
+                    let _ = reply.send(OK);
+                }
+                GpuCmd::DetachUnit { unit_id, reply } => {
+                    presenters.detach_unit(unit_id);
+                    let _ = reply.send(OK);
+                }
                 GpuCmd::AttachMonitor {
                     monitor_id,
                     source_id,
@@ -4064,15 +4201,6 @@ fn render_loop(
             .set_video_delay(buffer_frames, fps_num, fps_den);
         let now = Instant::now();
         if next + frame_dt.saturating_mul(buffer_frames) < now {
-            let target =
-                (clock_start.elapsed().as_secs_f64() * f64::from(AUDIO_RATE)).floor() as u64;
-            let skip = target.saturating_sub(audio_produced) as usize;
-            if skip > 0 {
-                let audio = shared.lock().expect("shared").audio.clone();
-                uploads.lock().expect("uploads").skip_audio_frames(skip);
-                audio.skip_bus_frames(skip);
-            }
-            audio_produced = target;
             next = now;
         }
         if next > Instant::now() {
@@ -4147,6 +4275,35 @@ fn render_loop(
             guard.compose_dirty = false;
             let thumbs_snap = guard.thumbs.clone();
             let mix_inputs = guard.mix_inputs.clone();
+            let audio_routes: Vec<audio::AudioOutputRoute> = outputs_snap
+                .iter()
+                .filter(|output| {
+                    output.audio_bus_id != 0 && output.source_kind != SRC_KIND_MU_MULTIVIEW
+                })
+                .map(|output| {
+                    let tx = output.tx.clone();
+                    audio::AudioOutputRoute {
+                        audio_bus_id: output.audio_bus_id,
+                        source_kind: output.source_kind,
+                        send: Arc::new(move |packet| {
+                            let _ = tx.send(SendCmd::Audio { packet });
+                        }),
+                    }
+                })
+                .collect();
+            *guard.audio_snap.lock().expect("audio snap") = audio::AudioMixSnapshot {
+                units: snapshot.clone(),
+                scenes: scene_specs.clone(),
+                mix_inputs: mix_inputs.clone(),
+                fps_num,
+                fps_den,
+                generators: generators
+                    .iter()
+                    .map(|(id, spec)| (*id, (spec.tone_hz, spec.tone_level_dbfs)))
+                    .collect(),
+                outputs: audio_routes,
+                buffer_frames: guard.frame_buffer_frames,
+            };
             drop(guard);
             let changed_units: Vec<u64> = snapshot
                 .iter()
@@ -4519,49 +4676,6 @@ fn render_loop(
                     set_error(&telemetry, "present monitors panicked");
                 }
             }
-            audio_carry += AUDIO_RATE as u64 * u64::from(fps_den);
-            let audio_frames = (audio_carry / u64::from(fps_num.max(1))) as usize;
-            audio_carry %= u64::from(fps_num.max(1));
-            audio_produced = audio_produced.saturating_add(audio_frames as u64);
-            let (audio, tone_packets) = {
-                let mut guard = shared.lock().expect("shared");
-                let audio = guard.audio.clone();
-                let mut tone_packets = Vec::new();
-                if audio_frames > 0 {
-                    for (id, spec) in &generators {
-                        if spec.tone_hz <= 0.0 {
-                            continue;
-                        }
-                        let phase = guard.tone_phase.entry(*id).or_insert(0.0);
-                        tone_packets.push((
-                            *id,
-                            generator_audio::sine_packet(
-                                phase,
-                                spec.tone_hz,
-                                spec.tone_level_dbfs,
-                                audio_frames,
-                                pts,
-                            ),
-                        ));
-                    }
-                }
-                (audio, tone_packets)
-            };
-            let mut upload_guard = uploads.lock().expect("uploads");
-            for (id, packet) in tone_packets {
-                upload_guard.ingest_audio(id, packet);
-            }
-            let mixed = audio.mix(
-                &mut upload_guard,
-                &snapshot,
-                &scene_specs,
-                audio_frames,
-                true,
-                &mix_inputs,
-                fps_num,
-                fps_den,
-            );
-            drop(upload_guard);
             let compose_vram = composer.vram_bytes();
             let delay_vram = frame_delay.vram_bytes();
             let send_vram = gpu_sends.vram_bytes();
@@ -4577,14 +4691,6 @@ fn render_loop(
                 .saturating_add(send_vram);
             {
                 let mut guard = telemetry.lock().expect("telemetry");
-                guard.monitor_pcm.extend(mixed.master.iter().copied());
-                let cap = AUDIO_RATE as usize;
-                while guard.monitor_pcm.len() > cap {
-                    guard.monitor_pcm.pop_front();
-                }
-                if guard.monitor_pcm.len() >= (AUDIO_RATE as usize) / 5 {
-                    guard.follow_primed = true;
-                }
                 guard.last_render_ms = frame_begin.elapsed().as_secs_f32() * 1000.0;
                 guard.last_ram_bytes = ram;
                 guard.last_compose_vram = compose_vram;
@@ -4599,24 +4705,6 @@ fn render_loop(
                         1000.0 * fps_den as f32 / fps_num.max(1) as f32,
                         outputs_snap.len()
                     ));
-                }
-            }
-            if audio_frames > 0 {
-                for output in &outputs_snap {
-                    // Multiview stays silent on NDI and OMT. Wiring a bus is
-                    // technically possible (same SendCmd::Audio as PGM), but
-                    // mosaic encode is heavy, CPU Multiview uses irregular async
-                    // readback, and pairing PCM before/after that encode either
-                    // buffers at the receiver or waits behind the mosaic. Skip
-                    // it rather than add a second clocked audio path.
-                    if output.audio_bus_id == 0 || output.source_kind == SRC_KIND_MU_MULTIVIEW {
-                        continue;
-                    }
-                    let packet = interleaved_to_packet(mixed.for_bus(output.audio_bus_id), pts);
-                    if packet.samples_per_channel <= 0 {
-                        continue;
-                    }
-                    let _ = output.tx.send(SendCmd::Audio { packet });
                 }
             }
         }
@@ -4765,24 +4853,6 @@ fn emit_gpu_encode(copies: &[GpuEncodeCopy], pts: i64) {
     }
 }
 
-fn interleaved_to_packet(interleaved: &[f32], pts: i64) -> AudioPacket {
-    let frames = interleaved.len() / 2;
-    let mut planar = Vec::with_capacity(frames * 2);
-    for sample in interleaved.iter().step_by(2) {
-        planar.push(*sample);
-    }
-    for sample in interleaved.iter().skip(1).step_by(2) {
-        planar.push(*sample);
-    }
-    AudioPacket {
-        timestamp: pts,
-        sample_rate: AUDIO_RATE,
-        channels: 2,
-        samples_per_channel: frames as i32,
-        pcm_planar_f32: planar,
-    }
-}
-
 #[allow(dead_code)]
 fn follow_gains(
     snapshot: &[UnitSnap],
@@ -4859,10 +4929,13 @@ fn audio_for_source(
     scenes: &HashMap<u64, SceneSpec>,
     source_id: u64,
 ) -> Option<AudioPacket> {
-    if let Some(ring) = uploads.get(source_id) {
-        if ring.audio.is_some() {
-            return ring.audio.clone();
-        }
+    if let Some(audio) = uploads
+        .audio_store()
+        .lock()
+        .ok()
+        .and_then(|store| store.latest_packet(source_id))
+    {
+        return Some(audio);
     }
     if crate::abi::is_scene(source_id)
         && let Some(spec) = scenes.get(&source_id)

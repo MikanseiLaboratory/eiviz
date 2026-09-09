@@ -127,16 +127,11 @@ pub struct SourceRing {
     write: AtomicUsize,
     pub last_pts: i64,
     pub has_frame: bool,
-    pub audio: Option<AudioPacket>,
     pub gpu: Option<GpuVideoFrame>,
     playout_depth: usize,
     cpu_fifo: VecDeque<CpuQueuedFrame>,
     gpu_fifo: VecDeque<GpuVideoFrame>,
     free: Vec<Vec<u8>>,
-    fifo: SampleRing,
-    last_peak: (f32, f32),
-    last_hold: (f32, f32),
-    fifo_primed: bool,
     ring_vram: u64,
     cache_ram: u64,
 }
@@ -379,16 +374,11 @@ impl SourceRing {
             write: AtomicUsize::new(0),
             last_pts: 0,
             has_frame: false,
-            audio: None,
             gpu: None,
             playout_depth: 1,
             cpu_fifo: VecDeque::new(),
             gpu_fifo: VecDeque::new(),
             free: Vec::new(),
-            fifo: SampleRing::new(AUDIO_FIFO_FRAMES * 2),
-            last_peak: (0.0, 0.0),
-            last_hold: (0.0, 0.0),
-            fifo_primed: false,
             ring_vram: 0,
             cache_ram: 0,
         }
@@ -542,63 +532,6 @@ impl SourceRing {
         }
     }
 
-    pub fn peak(&self) -> (f32, f32) {
-        self.last_peak
-    }
-
-    pub fn ingest_audio(&mut self, packet: AudioPacket) {
-        self.last_peak = peak_planar(&packet);
-        let stereo = resample_to_stereo_48k(&packet);
-        self.fifo.extend(stereo);
-        if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
-            self.fifo_primed = true;
-        }
-        self.audio = Some(packet);
-    }
-
-    pub fn clear_audio(&mut self) {
-        self.fifo.clear();
-        self.audio = None;
-        self.last_peak = (0.0, 0.0);
-        self.last_hold = (0.0, 0.0);
-        self.fifo_primed = false;
-    }
-
-    #[cfg(test)]
-    fn pop_stereo(&mut self) -> (f32, f32) {
-        if !self.fifo_primed {
-            return (0.0, 0.0);
-        }
-        self.trim_to_live();
-        if self.fifo.len() >= 2 {
-            let left = self.fifo.pop_front().unwrap_or(self.last_hold.0);
-            let right = self.fifo.pop_front().unwrap_or(left);
-            self.last_hold = (left, right);
-            (left, right)
-        } else {
-            self.last_hold
-        }
-    }
-
-    pub fn skip_audio_frames(&mut self, frames: usize) {
-        let n = frames.saturating_mul(2).min(self.fifo.len());
-        if n > 0 {
-            self.fifo.drain_front(n);
-        }
-    }
-
-    /// Drop old samples when a producer ran ahead of picture (typical for files).
-    fn trim_to_live(&mut self) {
-        let live = AUDIO_LIVE_FRAMES.saturating_mul(2);
-        let max = AUDIO_LIVE_FRAMES.saturating_mul(2).saturating_mul(2);
-        if self.fifo.len() > max {
-            let drop = self.fifo.len().saturating_sub(live);
-            if drop > 0 {
-                self.fifo.drain_front(drop);
-            }
-        }
-    }
-
     #[cfg(test)]
     pub fn latest_rgba_or_packed(&self) -> &[u8] {
         self.slots[self.write.load(Ordering::Acquire)].as_slice()
@@ -667,21 +600,200 @@ pub(crate) fn texture_bytes(texture: &wgpu::Texture) -> u64 {
     u64::from(size.width) * u64::from(size.height) * u64::from(size.depth_or_array_layers) * bpp
 }
 
+struct AudioRing {
+    fifo: SampleRing,
+    last_peak: (f32, f32),
+    last_hold: (f32, f32),
+    fifo_primed: bool,
+    audio: Option<AudioPacket>,
+}
+
+impl AudioRing {
+    fn new() -> Self {
+        Self {
+            fifo: SampleRing::new(AUDIO_FIFO_FRAMES * 2),
+            last_peak: (0.0, 0.0),
+            last_hold: (0.0, 0.0),
+            fifo_primed: false,
+            audio: None,
+        }
+    }
+
+    fn ingest(&mut self, packet: AudioPacket) {
+        self.last_peak = peak_planar(&packet);
+        let stereo = resample_to_stereo_48k(&packet);
+        self.fifo.extend(stereo);
+        if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
+            self.fifo_primed = true;
+        }
+        self.audio = Some(packet);
+    }
+
+    fn clear(&mut self) {
+        self.fifo.clear();
+        self.audio = None;
+        self.last_peak = (0.0, 0.0);
+        self.last_hold = (0.0, 0.0);
+        self.fifo_primed = false;
+    }
+
+    #[cfg(test)]
+    fn pop_stereo(&mut self) -> (f32, f32) {
+        if !self.fifo_primed {
+            return (0.0, 0.0);
+        }
+        self.trim_to_live();
+        if self.fifo.len() >= 2 {
+            let left = self.fifo.pop_front().unwrap_or(self.last_hold.0);
+            let right = self.fifo.pop_front().unwrap_or(left);
+            self.last_hold = (left, right);
+            (left, right)
+        } else {
+            self.last_hold
+        }
+    }
+
+    #[allow(dead_code)]
+    fn skip_frames(&mut self, frames: usize) {
+        let n = frames.saturating_mul(2).min(self.fifo.len());
+        if n > 0 {
+            self.fifo.drain_front(n);
+        }
+    }
+
+    fn trim_to_live(&mut self) {
+        let live = AUDIO_LIVE_FRAMES.saturating_mul(2);
+        let max = AUDIO_LIVE_FRAMES.saturating_mul(2).saturating_mul(2);
+        if self.fifo.len() > max {
+            let drop = self.fifo.len().saturating_sub(live);
+            if drop > 0 {
+                self.fifo.drain_front(drop);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
+pub struct AudioInputStore {
+    sources: HashMap<u64, AudioRing>,
+}
+
+impl AudioInputStore {
+    pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
+        self.sources
+            .entry(id)
+            .or_insert_with(AudioRing::new)
+            .ingest(packet);
+    }
+
+    pub fn flush_audio(&mut self, id: u64) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.clear();
+        }
+    }
+
+    pub fn unregister(&mut self, id: u64) {
+        self.sources.remove(&id);
+    }
+
+    pub fn primed_ids(&self) -> Vec<u64> {
+        self.sources
+            .iter()
+            .filter(|(_, ring)| ring.fifo_primed)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    pub fn peak(&self, id: u64) -> Option<(f32, f32)> {
+        self.sources.get(&id).map(|ring| ring.last_peak)
+    }
+
+    pub fn latest_packet(&self, id: u64) -> Option<AudioPacket> {
+        self.sources.get(&id).and_then(|ring| ring.audio.clone())
+    }
+
+    #[cfg(test)]
+    pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
+        let Some(ring) = self.sources.get_mut(&id) else {
+            return vec![(0.0, 0.0); frames];
+        };
+        let mut out = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            out.push(ring.pop_stereo());
+        }
+        notify_fifo();
+        out
+    }
+
+    pub fn pop_frames_into(&mut self, id: u64, frames: usize, out: &mut Vec<f32>) {
+        out.clear();
+        let Some(ring) = self.sources.get_mut(&id) else {
+            out.resize(frames * 2, 0.0);
+            return;
+        };
+        if !ring.fifo_primed {
+            out.resize(frames * 2, 0.0);
+            return;
+        }
+        ring.trim_to_live();
+        let want = frames * 2;
+        ring.fifo.pop_into(want, out);
+        while out.len() < want {
+            out.push(ring.last_hold.0);
+            out.push(ring.last_hold.1);
+        }
+        if want >= 2 {
+            ring.last_hold = (out[want - 2], out[want - 1]);
+        }
+        notify_fifo();
+    }
+
+    #[allow(dead_code)]
+    pub fn skip_audio_frames(&mut self, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        for ring in self.sources.values_mut() {
+            ring.skip_frames(frames);
+        }
+        notify_fifo();
+    }
+
+    pub fn fifo_frames(&self, id: u64) -> usize {
+        self.sources
+            .get(&id)
+            .map(|ring| ring.fifo.len() / 2)
+            .unwrap_or(0)
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.sources.keys().copied()
+    }
+}
+
 pub struct UploadStore {
     sources: HashMap<u64, SourceRing>,
+    audio: Arc<Mutex<AudioInputStore>>,
+}
+
+impl Default for UploadStore {
+    fn default() -> Self {
+        Self {
+            sources: HashMap::new(),
+            audio: Arc::new(Mutex::new(AudioInputStore::default())),
+        }
+    }
 }
 
 impl UploadStore {
+    pub fn audio_store(&self) -> Arc<Mutex<AudioInputStore>> {
+        Arc::clone(&self.audio)
+    }
+
     pub fn register(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
         let prev = self.sources.remove(&id);
         let mut ring = SourceRing::new(width, height, format);
         if let Some(old) = prev {
-            ring.audio = old.audio;
-            ring.fifo = old.fifo;
-            ring.last_peak = old.last_peak;
-            ring.last_hold = old.last_hold;
-            ring.fifo_primed = old.fifo_primed;
             ring.playout_depth = old.playout_depth;
             if old.width == width && old.height == height && old.format == format {
                 ring.gpu = old.gpu;
@@ -699,6 +811,7 @@ impl UploadStore {
 
     pub fn unregister(&mut self, id: u64) {
         self.sources.remove(&id);
+        self.audio.lock().expect("audio").unregister(id);
     }
 
     pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
@@ -863,85 +976,34 @@ impl UploadStore {
         pts: i64,
         planar: &[f32],
     ) {
-        let Some(ring) = self.sources.get_mut(&id) else {
-            return;
-        };
-        ring.ingest_audio(AudioPacket {
-            timestamp: pts,
-            sample_rate,
-            channels,
-            samples_per_channel: frames as i32,
-            pcm_planar_f32: planar.to_vec(),
-        });
+        self.audio.lock().expect("audio").ingest_audio(
+            id,
+            AudioPacket {
+                timestamp: pts,
+                sample_rate,
+                channels,
+                samples_per_channel: frames as i32,
+                pcm_planar_f32: planar.to_vec(),
+            },
+        );
     }
 
     pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
-        if self.sources.get(&id).is_none() {
-            self.register(id, 16, 16, CpuFormat::Bgra);
-        }
-        if let Some(ring) = self.sources.get_mut(&id) {
-            ring.ingest_audio(packet);
-        }
-    }
-
-    pub fn primed_ids(&self) -> Vec<u64> {
-        self.sources
-            .iter()
-            .filter(|(_, ring)| ring.fifo_primed)
-            .map(|(id, _)| *id)
-            .collect()
+        self.audio.lock().expect("audio").ingest_audio(id, packet);
     }
 
     #[cfg(test)]
     pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
-        let Some(ring) = self.sources.get_mut(&id) else {
-            return vec![(0.0, 0.0); frames];
-        };
-        let mut out = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            out.push(ring.pop_stereo());
-        }
-        notify_fifo();
-        out
+        self.audio.lock().expect("audio").pop_frames(id, frames)
     }
 
-    pub fn pop_frames_into(&mut self, id: u64, frames: usize, out: &mut Vec<f32>) {
-        out.clear();
-        let Some(ring) = self.sources.get_mut(&id) else {
-            out.resize(frames * 2, 0.0);
-            return;
-        };
-        if !ring.fifo_primed {
-            out.resize(frames * 2, 0.0);
-            return;
-        }
-        ring.trim_to_live();
-        let want = frames * 2;
-        ring.fifo.pop_into(want, out);
-        while out.len() < want {
-            out.push(ring.last_hold.0);
-            out.push(ring.last_hold.1);
-        }
-        if want >= 2 {
-            ring.last_hold = (out[want - 2], out[want - 1]);
-        }
-        notify_fifo();
-    }
-
+    #[allow(dead_code)]
     pub fn skip_audio_frames(&mut self, frames: usize) {
-        if frames == 0 {
-            return;
-        }
-        for ring in self.sources.values_mut() {
-            ring.skip_audio_frames(frames);
-        }
-        notify_fifo();
+        self.audio.lock().expect("audio").skip_audio_frames(frames);
     }
 
     pub fn flush_audio(&mut self, id: u64) {
-        if let Some(ring) = self.sources.get_mut(&id) {
-            ring.clear_audio();
-        }
+        self.audio.lock().expect("audio").flush_audio(id);
     }
 
     pub fn flush_video(&mut self, id: u64) {
@@ -958,10 +1020,7 @@ impl UploadStore {
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
-        self.sources
-            .get(&id)
-            .map(|ring| ring.fifo.len() / 2)
-            .unwrap_or(0)
+        self.audio.lock().expect("audio").fifo_frames(id)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -974,19 +1033,21 @@ impl UploadStore {
 }
 
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    wait_fifo_below(uploads, id, AUDIO_FIFO_HIGH_FRAMES);
-    uploads.lock().expect("uploads").ingest_audio(id, packet);
+    let audio = uploads.lock().expect("uploads").audio_store();
+    wait_fifo_below(&audio, id, AUDIO_FIFO_HIGH_FRAMES);
+    audio.lock().expect("audio").ingest_audio(id, packet);
 }
 
 /// File pumps are clocked by video PTS. Keep only a short audio lead so the
 /// mix does not play 400–500 ms of already-decoded sound behind the current frame.
 pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    wait_fifo_below(uploads, id, AUDIO_LIVE_FRAMES);
-    uploads.lock().expect("uploads").ingest_audio(id, packet);
+    let audio = uploads.lock().expect("uploads").audio_store();
+    wait_fifo_below(&audio, id, AUDIO_LIVE_FRAMES);
+    audio.lock().expect("audio").ingest_audio(id, packet);
 }
 
-fn wait_fifo_below(uploads: &Mutex<UploadStore>, id: u64, limit: usize) {
-    let mut guard = uploads.lock().expect("uploads");
+fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
+    let mut guard = audio.lock().expect("audio");
     while guard.fifo_frames(id) >= limit {
         let (next, timeout) = fifo_cond()
             .wait_timeout(guard, Duration::from_millis(50))

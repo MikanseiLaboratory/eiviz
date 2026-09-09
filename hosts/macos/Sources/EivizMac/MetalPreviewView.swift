@@ -67,19 +67,24 @@ final class MetalSurfaceView: NSView {
     }
 
     deinit {
-        let wasAttached = attached
-        let wasBudgeted = budgeted
-        if wasAttached {
-            detachMixerOnly()
+        if attached || budgeted {
+            _ = detachMixerOnly()
         }
-        if wasBudgeted {
+        if budgeted {
             FlipBudget.end(self)
         }
     }
 
+    func dismantle() {
+        let retained = Unmanaged.passRetained(self)
+        defer { retained.release() }
+        releaseNative()
+    }
+
     func releaseNative() {
         guard attached || budgeted else { return }
-        detachMixerOnly()
+        let code = detachMixerOnly()
+        guard code == EIVIZ_OK else { return }
         attached = false
         attachedKey = ""
         if budgeted {
@@ -88,13 +93,12 @@ final class MetalSurfaceView: NSView {
         }
     }
 
-    nonisolated private func detachMixerOnly() {
+    nonisolated private func detachMixerOnly() -> Int32 {
         let handle = Int(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         if detachIsMonitor {
-            _ = mixer_detach_monitor(detachMonitorId)
-        } else {
-            _ = mixer_unit_detach_native(detachUnitId, detachKind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
+            return mixer_detach_monitor(detachMonitorId)
         }
+        return mixer_unit_detach_native(detachUnitId, detachKind, EIVIZ_NATIVE_APPKIT_NSVIEW, handle)
     }
 
     func attachIfNeeded() {
@@ -279,5 +283,11 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
             surface.role = role
         }
         surface.attachIfNeeded()
+    }
+
+    func dismantleNSView(_ nsView: PreviewHostView, coordinator: Coordinator) {
+        _ = coordinator
+        guard let surface = nsView.subviews.first as? MetalSurfaceView else { return }
+        surface.dismantle()
     }
 }

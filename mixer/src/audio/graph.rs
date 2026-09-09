@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::abi::{MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
-use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, SampleRing, UploadStore};
+use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, AudioInputStore, SampleRing};
 
 use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
@@ -77,6 +77,7 @@ impl BusRing {
         }
     }
 
+    #[allow(dead_code)]
     pub fn skip_frames(&self, frames: usize) {
         if frames == 0 {
             return;
@@ -308,7 +309,7 @@ impl AudioGraph {
 
     pub fn mix(
         &mut self,
-        uploads: &mut UploadStore,
+        uploads: &mut AudioInputStore,
         snapshot: &[crate::abi::UnitSnap],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
@@ -813,12 +814,74 @@ fn add_self_mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::AudioDelay;
+    use crate::upload::AudioInputStore;
 
     #[test]
     fn resolve_output_audio_bus_keeps_none() {
         assert_eq!(resolve_output_audio_bus(0), 0);
         assert_eq!(resolve_output_audio_bus(MASTER_BUS), MASTER_BUS);
         assert_eq!(resolve_output_audio_bus(3), 3);
+    }
+
+    #[test]
+    fn mix_keeps_sample_count_for_broadcast_clocks() {
+        let mut graph = AudioGraph::with_defaults();
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        graph.set_input(10, 1, 1.0, false);
+        uploads.ingest_audio(
+            10,
+            crate::upload::AudioPacket {
+                timestamp: 0,
+                sample_rate: AUDIO_RATE,
+                channels: 2,
+                samples_per_channel: AUDIO_RATE,
+                pcm_planar_f32: vec![0.25; AUDIO_RATE as usize * 2],
+            },
+        );
+        let snapshot = [(
+            1,
+            1920,
+            1080,
+            60_000,
+            1_001,
+            UnitState {
+                program_source: 10,
+                preview_source: 10,
+                ..UnitState::default()
+            },
+            0,
+            None,
+        )];
+        for (fps_num, fps_den, frames) in [(60_000u32, 1_001u32, 300u32), (30_000, 1_001, 150)] {
+            let mut carry = 0u64;
+            let mut total = 0usize;
+            for _ in 0..frames {
+                carry += AUDIO_RATE as u64 * u64::from(fps_den);
+                let audio_frames = (carry / u64::from(fps_num)) as usize;
+                carry %= u64::from(fps_num);
+                if audio_frames == 0 {
+                    continue;
+                }
+                let mixed = graph.mix(
+                    &mut uploads,
+                    &snapshot,
+                    &[],
+                    audio_frames,
+                    &mut delay,
+                    true,
+                    &HashMap::new(),
+                    fps_num,
+                    fps_den,
+                );
+                assert_eq!(mixed.master.len(), audio_frames * 2);
+                total += audio_frames;
+            }
+            let expected = (AUDIO_RATE as u64 * u64::from(fps_den) * u64::from(frames)
+                / u64::from(fps_num)) as usize;
+            assert_eq!(total, expected, "fps {fps_num}/{fps_den}");
+        }
     }
 
     #[test]

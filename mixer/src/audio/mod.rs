@@ -6,6 +6,7 @@ mod coreaudio;
 mod device;
 mod graph;
 mod info;
+mod scheduler;
 #[cfg(windows)]
 mod wasapi;
 
@@ -15,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::OverlayDesc;
-use crate::upload::{AUDIO_RATE, UploadStore};
+use crate::upload::{AUDIO_RATE, AudioInputStore};
 
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
@@ -23,6 +24,22 @@ pub use graph::{
     MASTER_BUS, MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
+pub use scheduler::{AudioMixSnapshot, AudioOutputRoute, AudioScheduler};
+
+#[derive(Clone)]
+pub struct AudioMonitor {
+    pub pcm: Arc<Mutex<VecDeque<f32>>>,
+    pub primed: Arc<AtomicBool>,
+}
+
+impl Default for AudioMonitor {
+    fn default() -> Self {
+        Self {
+            pcm: Arc::new(Mutex::new(VecDeque::new())),
+            primed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
 
 pub(crate) const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
@@ -87,6 +104,7 @@ impl AudioDelay {
         out
     }
 
+    #[allow(dead_code)]
     pub fn skip_frames(&mut self, frames: usize) {
         let n = frames.saturating_mul(2);
         for fifo in self.fifos.values_mut() {
@@ -227,7 +245,7 @@ impl AudioEngine {
 
     pub fn mix(
         &self,
-        uploads: &mut UploadStore,
+        uploads: &mut AudioInputStore,
         snapshot: &[crate::abi::UnitSnap],
         scenes: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         frames: usize,
@@ -261,6 +279,7 @@ impl AudioEngine {
         self.graph.lock().expect("audio").mix_input_peaks()
     }
 
+    #[allow(dead_code)]
     pub fn skip_bus_frames(&self, frames: usize) {
         if frames == 0 {
             return;
