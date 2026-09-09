@@ -157,6 +157,7 @@ fn windows_list() -> Vec<CaptureProcess> {
     out
 }
 
+#[cfg(windows)]
 fn gui_window_titles() -> std::collections::HashMap<u32, String> {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
@@ -211,6 +212,7 @@ fn gui_window_titles() -> std::collections::HashMap<u32, String> {
     titles
 }
 
+#[cfg(windows)]
 fn skip_system_exe(exe: &str) -> bool {
     matches!(
         exe_basename(exe).as_str(),
