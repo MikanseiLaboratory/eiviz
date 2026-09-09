@@ -155,9 +155,11 @@ internal sealed class MeterStrip : StackPanel
         }
         if (showOpen)
         {
-            AddHandler(
-                MouseDoubleClickEvent,
-                new MouseButtonEventHandler((_, _) => OpenRequested?.Invoke(TargetId)));
+            MouseLeftButtonDown += (_, e) =>
+            {
+                if (e.ClickCount == 2)
+                    OpenRequested?.Invoke(TargetId);
+            };
         }
     }
 
