@@ -32,10 +32,10 @@ eiviz-headless export --session show.eivz --output show-portable.eivzx
 eiviz-headless history --session show.eivz
 eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
-eiviz-headless run --bind 127.0.0.1:9400
+eiviz-headless run --bind 127.0.0.1:9400 --renderer auto
 ```
 
-`validate` and `canonicalize` do not initialize the GPU. `run` validates the session, creates the runtime at that FPS, then waits on the WebSocket accept. Omit `--session` to create a dated default file under the OS `eiviz/sessions` directory. When ready it prints `eiviz-headless session=` and `eiviz-headless ready ws=` on stderr. Stop with Ctrl+C (and SIGTERM on Unix).
+`validate` and `canonicalize` do not initialize the GPU. `run` validates the session, creates the runtime at that FPS, then waits on the WebSocket accept. Omit `--session` to create a dated default file under the OS `eiviz/sessions` directory. When ready it prints `eiviz-headless session=` and `eiviz-headless ready ws=` on stderr. Ctrl+C (and SIGTERM on Unix) and API `shutdown` share the same stop path. After `ready`, stdin accepts the same one-line commands as `eivizctl`. `watch` and `prefs` are rejected on stdin. EOF or a parse error does not stop the daemon.
 
 When `--bind` is omitted, the `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Non-loopback bind requires a token. This release is authenticated `ws://` on a trusted LAN or VPN only; TLS is not included.
 
@@ -49,15 +49,17 @@ Values that match GUI Preferences are host-owned. They are not stored in the ses
 | `token` | Connection token. Display is `(set)` |
 | `mediaDirectory` | Where Still/Video uploaded from Remote is stored |
 | `maxRole` | Role cap: `read` / `operate` / `configure` / `admin` |
+| `renderer` | GPU backend: `auto` / `dx12` / `vulkan` / `metal`. An OS-unsupported value is an error |
 
 The file is `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json` (falling back to `~/.config/eiviz/headless-prefs.json`). Values apply on the next `eiviz-headless run`.
 
 Leftmost wins:
 
 - bind: `--bind` → prefs `bind` → `127.0.0.1:9400`
-- token: `EIVIZ_API_TOKEN` or `EIVIZ_API_TOKEN_FILE` → prefs `token`
+- token: prefs `token` only (headless does not read token env vars)
+- renderer: `--renderer` → prefs `renderer` → `auto`
 - media directory: `--media-directory` or `EIVIZ_MEDIA_DIRECTORY` → prefs `mediaDirectory` → OS local-app-data `eiviz/media`
-- max role: prefs `maxRole` → `EIVIZ_API_ROLE` → `admin` if a token is set, otherwise `read`
+- max role: prefs `maxRole` → `admin` when unset
 
 The default media directory when unset is `%LOCALAPPDATA%\eiviz\media` on Windows, `~/Library/Application Support/eiviz/media` on macOS, and `$XDG_DATA_HOME/eiviz/media` on Linux (`~/.local/share/eiviz/media` if that is unset).
 
@@ -72,7 +74,7 @@ eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 
 Listen edits and live mixer ops are separate.
 
-`prefs` writes the local listen file. That works while the daemon is stopped. Live ops and `mutate` need `eiviz-headless run` to have printed `ready`.
+`prefs` writes the local listen file. That works while the daemon is stopped. Live ops need `eiviz-headless run` to have printed `ready`.
 
 ```text
 eiviz> prefs
@@ -91,28 +93,28 @@ The same commands work as subcommands:
 eivizctl prefs
 eivizctl prefs get bind
 eivizctl prefs set bind 127.0.0.1:9400
+eivizctl prefs set renderer dx12
 ```
 
-Live ops are one line. Roles are in [eiviz API](/eiviz/en/developers/api/).
+Live ops are one line. Roles are in [eiviz API](/eiviz/en/developers/api/). Partial edits are typed CRUD. Unspecified fields stay as they are. The snapshot revision is sent as `expected_revision`. `--force` sends revision 0. There is no silent retry.
 
 ```text
 eiviz> status
-eiviz> snapshot
-eiviz> preview --unit 1 --scene 2
-eiviz> cut --unit 1
-eiviz> auto --unit 1 --duration-ms 1000
-eiviz> replace --session show.eivz
-eiviz> save
+eiviz> session show
+eiviz> input list
+eiviz> input add --name Cam --kind Uvc
+eiviz> input edit --id 2 --name CamA
+eiviz> scene add --name Opening
+eiviz> scene layer add --scene 1 --input 2
+eiviz> mix preview --unit 1 --scene 2
+eiviz> mix cut --unit 1
+eiviz> mix auto --unit 1 --duration-ms 1000
+eiviz> session replace --session show.eivz
+eiviz> session save
 eiviz> shutdown
 ```
 
-Partial session edits use `mutate`. JSON `kind` is camelCase. `expected_revision` 0 skips the conflict check. The REPL `mutate` always sends 0.
-
-```text
-eiviz> mutate {"kind":"deleteInput","id":2}
-```
-
-Settings-window fields use `"kind":"setSettings"`. That payload needs `settings`, `outputs`, and `buses` together. A partial object is rejected, so take a `snapshot` first, or send the same change from the Remote Settings window.
+`--from-json` replaces one DTO. Raw Mutation JSON is not accepted.
 
 ## Connect from Remote
 
@@ -135,13 +137,9 @@ Preview and Program live video come from an NDI or OMT output on the destination
 
 | Variable | Use |
 | --- | --- |
-| `EIVIZ_API_TOKEN` | Token for the server |
-| `EIVIZ_API_TOKEN_FILE` | Read the server token from a file |
-| `EIVIZ_API_REQUIRE_AUTH` | Anything other than `0` requires auth. Unset means required when a token is set |
-| `EIVIZ_API_ROLE` | Server max role |
 | `EIVIZ_MEDIA_DIRECTORY` | Upload root |
 
-To rotate a token, change the env var or `eivizctl prefs set token`, then restart `eiviz-headless`.
+To rotate a token, run `eivizctl prefs set token` and restart `eiviz-headless`. Headless auth uses prefs as the source of truth. `EIVIZ_API_TOKEN` is for the GUI / native WebSocket path, not headless.
 
 ## Exit codes
 

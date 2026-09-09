@@ -26,8 +26,8 @@
                               SelectionChanged="VideoLayout_SelectionChanged"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button x:Name="SnapshotButton" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Click="Snapshot_Click"/>
-                    <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="8,0,0,0" Click="Logs_Click"/>
+                    <Button x:Name="SnapshotButton" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Width="120" Margin="0,0,8,0" Click="Snapshot_Click" Visibility="Collapsed"/>
+                    <Button Content="{Binding [chrome.logs], Source={x:Static i18n:Loc.Source}}" Width="64" Click="Logs_Click"/>
                     <Button x:Name="SettingsButton" Content="{Binding [chrome.settings], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Settings_Click"/>
                     <Button Content="{Binding [chrome.preferences], Source={x:Static i18n:Loc.Source}}" Width="96" Margin="8,0,0,0" Click="Preferences_Click"/>
                 </StackPanel>
@@ -177,7 +177,7 @@
                                       Margin="0,0,0,4">
                             <StackPanel x:Name="InputTabBar" Orientation="Horizontal"/>
                         </ScrollViewer>
-                        <Grid DockPanel.Dock="Bottom">
+                        <Grid x:Name="InputActionsGrid" DockPanel.Dock="Bottom">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="8"/>
@@ -189,11 +189,11 @@
                                 <ColumnDefinition Width="8"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Button Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Height="32" Click="AddInput_Click"/>
-                            <Button Grid.Column="2" Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Height="32" Click="EditInput_Click"/>
+                            <Button x:Name="AddInputButton" Content="{Binding [chrome.add], Source={x:Static i18n:Loc.Source}}" Height="32" Click="AddInput_Click"/>
+                            <Button x:Name="EditInputButton" Grid.Column="2" Content="{Binding [chrome.edit], Source={x:Static i18n:Loc.Source}}" Height="32" Click="EditInput_Click"/>
                             <Button x:Name="PreviewInputButton" Grid.Column="4" Content="{Binding [chrome.previewInput], Source={x:Static i18n:Loc.Source}}" Height="32" Click="PreviewInput_Click"/>
-                            <Button Grid.Column="6" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Height="32" Click="SnapshotInput_Click"/>
-                            <Button Grid.Column="8" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Height="32" Click="RemoveInput_Click"/>
+                            <Button x:Name="SnapshotInputButton" Grid.Column="6" Content="{Binding [chrome.screenshot], Source={x:Static i18n:Loc.Source}}" Height="32" Click="SnapshotInput_Click" Visibility="Collapsed"/>
+                            <Button x:Name="DeleteInputButton" Grid.Column="8" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Height="32" Click="RemoveInput_Click"/>
                         </Grid>
                         <ListBox x:Name="InputList" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                                  SelectionChanged="InputList_SelectionChanged"

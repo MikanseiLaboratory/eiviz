@@ -147,6 +147,8 @@ public partial class SceneTile : UserControl
 
     private void Settings_RightClick(object sender, MouseButtonEventArgs e)
     {
+        if (HostRole.IsRemote)
+            return;
         Raise(SceneSnapshotRequested);
         e.Handled = true;
     }

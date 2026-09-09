@@ -702,17 +702,27 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
         })],
         InputKind::OMT => vec![ReconcileOp::ConnectOmt(live_connect(input))],
         InputKind::NDI => vec![ReconcileOp::ConnectNdi(live_connect(input))],
-        InputKind::Mix => vec![ReconcileOp::DefineMixInput(MixInputApply {
-            id: input.id,
-            target_id: input.mix_target_id,
-            source_kind: match input.mix_source {
+        InputKind::Mix => {
+            let mut target_id = input.mix_target_id;
+            let source_kind = match input.mix_source {
                 MixSource::MuPreview => 1,
                 MixSource::MuProgram => 2,
                 MixSource::SessionMultiview => 3,
-            },
-            delay: input.frame_buffer_frames,
-            audio_bus_id: input.mix_audio_bus_id,
-        })],
+            };
+            if input.mix_source == MixSource::SessionMultiview
+                && target_id != 0
+                && target_id < ids::MULTIVIEW_BASE
+            {
+                target_id = ids::multiview_gpu_id(target_id);
+            }
+            vec![ReconcileOp::DefineMixInput(MixInputApply {
+                id: input.id,
+                target_id,
+                source_kind,
+                delay: input.frame_buffer_frames,
+                audio_bus_id: input.mix_audio_bus_id,
+            })]
+        }
     }
 }
 
@@ -1098,6 +1108,29 @@ mod tests {
             !ops.iter()
                 .any(|op| matches!(op, ReconcileOp::LoadStill { .. }))
         );
+    }
+
+    #[test]
+    fn mix_session_multiview_promotes_layout_id() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Bars", "kind": "Bars" },
+            { "id": 20, "name": "MV", "kind": "Mix", "mixSource": "SessionMultiview", "mixTargetId": 1 }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 20, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "multiviews": [{ "id": 1, "name": "MV 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let ops = plan(None, &doc);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            ReconcileOp::DefineMixInput(spec)
+                if spec.id == 20
+                    && spec.source_kind == 3
+                    && spec.target_id == ids::multiview_gpu_id(1)
+        )));
     }
 
     #[test]

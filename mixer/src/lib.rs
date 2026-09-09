@@ -1046,19 +1046,25 @@ pub(crate) fn mixer_destroy_inner() {
         let videos = ();
         (audio, receivers, videos)
     };
+    crate::diag::info("mixer_destroy audio");
     audio.shutdown();
+    crate::diag::info("mixer_destroy drop receivers");
     drop(receivers);
     drop(videos);
     let _ = mixer.cmds.send(GpuCmd::Shutdown);
     if let Some(join) = mixer.render.take() {
-        crate::diag::join_timeout(join, Duration::from_secs(2), "render");
+        if !crate::diag::join_timeout(join, Duration::from_secs(2), "render") {
+            crate::diag::warn("render still running after join timeout");
+        }
     }
     for worker in std::mem::take(&mut mixer.send_workers).into_values() {
         shutdown_output_worker(worker);
     }
-    crate::diag::info("mixer_destroy end");
+    crate::diag::info("mixer_destroy drop");
+    drop(mixer);
     crate::diag::reset_generation();
     reset_frame_caches();
+    crate::diag::info("mixer_destroy end");
 }
 
 #[unsafe(no_mangle)]
@@ -3867,11 +3873,13 @@ fn acquired() -> &'static Mutex<HashMap<u64, Acquired>> {
 }
 
 pub(crate) fn reset_frame_caches() {
-    if let Ok(mut slot) = last_frames().lock() {
-        slot.clear();
+    match last_frames().try_lock() {
+        Ok(mut slot) => slot.clear(),
+        Err(_) => crate::diag::warn("last_frames lock busy; skip reset"),
     }
-    if let Ok(mut slot) = acquired().lock() {
-        slot.clear();
+    match acquired().try_lock() {
+        Ok(mut slot) => slot.clear(),
+        Err(_) => crate::diag::warn("acquired lock busy; skip reset"),
     }
 }
 
@@ -4043,15 +4051,7 @@ fn render_loop(
             let use_rebar = guard.rebar.available && guard.rebar_optimization;
             let direct_sample = use_rebar && cfg!(target_os = "macos");
             (
-                {
-                    let mix_max = guard
-                        .mix_inputs
-                        .values()
-                        .map(|spec| spec.delay)
-                        .max()
-                        .unwrap_or(1);
-                    guard.frame_buffer_frames.clamp(1, 8).max(mix_max)
-                },
+                { guard.frame_buffer_frames.clamp(1, 8) },
                 use_rebar,
                 direct_sample,
             )
@@ -4367,7 +4367,9 @@ fn render_loop(
                         label: Some("eiviz compose"),
                     });
             {
-                let mix_sources = resolve_mix_sources(&mix_inputs, &frame_delay);
+                let mix_owned = resolve_mix_sources(&mix_inputs, &composer);
+                let mix_sources: HashMap<u64, &wgpu::Texture> =
+                    mix_owned.iter().map(|(id, tex)| (*id, tex)).collect();
                 composer.stage_mix_inputs(
                     &device,
                     &mut encoder,
@@ -4473,15 +4475,6 @@ fn render_loop(
                 &mut encoder,
                 &composer,
                 snapshot.iter().map(|(id, ..)| *id),
-            );
-            frame_delay.capture_scenes(
-                &device,
-                &mut encoder,
-                &composer,
-                mix_inputs
-                    .values()
-                    .filter(|spec| spec.is_session_multiview())
-                    .map(|spec| spec.target_id),
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             device.submit(Some(encoder.finish()));
@@ -4638,9 +4631,7 @@ fn snapshot_texture<'a>(
     kind: u32,
 ) -> Option<&'a wgpu::Texture> {
     if crate::abi::is_scene(source_id) {
-        return composer
-            .scene_texture(source_id)
-            .or_else(|| frame_delay.scene_rgba_at(source_id, 0));
+        return composer.scene_texture(source_id);
     }
     if kind == OUTPUT_SOURCE {
         return composer.mix_texture(source_id).or_else(|| {
@@ -4933,29 +4924,32 @@ fn mix_source_cycles(
     false
 }
 
-fn resolve_mix_sources<'a>(
+fn resolve_mix_sources(
     mix_inputs: &HashMap<u64, MixInputSpec>,
-    frame_delay: &'a FrameDelay,
-) -> HashMap<u64, &'a wgpu::Texture> {
+    composer: &Composer,
+) -> HashMap<u64, wgpu::Texture> {
     let mut sources = HashMap::new();
     for id in mix_inputs.keys() {
-        if let Some(texture) = mix_rgba_at(mix_inputs, frame_delay, *id) {
+        if let Some(texture) = mix_rgba_at(mix_inputs, composer, *id) {
             sources.insert(*id, texture);
         }
     }
     sources
 }
 
-fn mix_rgba_at<'a>(
+fn mix_rgba_at(
     mix_inputs: &HashMap<u64, MixInputSpec>,
-    frame_delay: &'a FrameDelay,
+    composer: &Composer,
     source_id: u64,
-) -> Option<&'a wgpu::Texture> {
+) -> Option<wgpu::Texture> {
     let spec = mix_inputs.get(&source_id)?;
+    // Always the previous compose. Auto/T-bar discards the delay ring, and
+    // hopping between ring and live looks like a cut. Frame Buffer does not
+    // apply to Mix Input video.
     if spec.is_session_multiview() {
-        frame_delay.scene_rgba_at(spec.target_id, spec.delay)
+        composer.scene_texture(spec.target_id).cloned()
     } else if let Some(bus) = spec.unit_bus() {
-        frame_delay.rgba_at(spec.target_id, bus, spec.delay)
+        composer.rgba_texture(spec.target_id, bus).cloned()
     } else {
         None
     }
@@ -5513,6 +5507,72 @@ mod tests {
         let (scenes, uploads) = collect_live_ids(&specs, &[], &[], &outputs, &HashMap::new());
         assert!(scenes.contains(&mv));
         assert!(uploads.contains(&SRC_COLOR));
+    }
+
+    #[test]
+    fn mix_source_cycles_self_but_not_mutual() {
+        let mix_a = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
+        let mix_b = crate::abi::MixInputSpec::new(2, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
+        let mix_inputs = HashMap::from([(20, mix_a), (21, mix_b)]);
+        let scene_a = SceneSpec {
+            width: 320,
+            height: 180,
+            layers: std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: 20,
+                ..crate::abi::OverlayDesc::default()
+            }]),
+            labels: std::sync::Arc::from([]),
+            mv_label: MvLabelStyle::default(),
+        };
+        let scene_b = SceneSpec {
+            width: 320,
+            height: 180,
+            layers: std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: 21,
+                ..crate::abi::OverlayDesc::default()
+            }]),
+            labels: std::sync::Arc::from([]),
+            mv_label: MvLabelStyle::default(),
+        };
+        let scenes = HashMap::from([(SCENE_BASE | 2, scene_a), (SCENE_BASE | 3, scene_b)]);
+
+        let self_on_a = UnitState {
+            program_source: SCENE_BASE | 2,
+            preview_source: SRC_BARS,
+            ..UnitState::default()
+        };
+        assert!(unit_uses_mix_cycle(1, &self_on_a, &mix_inputs, &scenes));
+
+        let nest_b = UnitState {
+            program_source: SCENE_BASE | 2,
+            preview_source: SRC_BARS,
+            ..UnitState::default()
+        };
+        assert!(!unit_uses_mix_cycle(2, &nest_b, &mix_inputs, &scenes));
+
+        let mutual_a = UnitState {
+            program_source: SCENE_BASE | 3,
+            preview_source: SRC_COLOR,
+            ..UnitState::default()
+        };
+        let mutual_b = UnitState {
+            program_source: SCENE_BASE | 2,
+            preview_source: SRC_BLUE,
+            ..UnitState::default()
+        };
+        assert!(!unit_uses_mix_cycle(1, &mutual_a, &mix_inputs, &scenes));
+        assert!(!unit_uses_mix_cycle(2, &mutual_b, &mix_inputs, &scenes));
+    }
+
+    #[test]
+    fn mix_input_spec_promotes_raw_multiview() {
+        let spec = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_MULTIVIEW, 1, 0).unwrap();
+        assert_eq!(spec.target_id, MULTIVIEW_BASE | 1);
+        let already =
+            crate::abi::MixInputSpec::new(MULTIVIEW_BASE | 1, SRC_KIND_MU_MULTIVIEW, 1, 0).unwrap();
+        assert_eq!(already.target_id, MULTIVIEW_BASE | 1);
+        let program = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
+        assert_eq!(program.target_id, 1);
     }
 
     #[test]

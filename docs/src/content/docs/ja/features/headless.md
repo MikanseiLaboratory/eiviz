@@ -32,10 +32,10 @@ eiviz-headless export --session show.eivz --output show-portable.eivzx
 eiviz-headless history --session show.eivz
 eiviz-headless restore --session show.eivz --index 0 --output old.eivz
 eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
-eiviz-headless run --bind 127.0.0.1:9400
+eiviz-headless run --bind 127.0.0.1:9400 --renderer auto
 ```
 
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションを検証し、そのFPSでruntimeを作り、WebSocketの受付を始めて待機します。`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定ファイルを作ります。準備できるとstderrへ`eiviz-headless session=`と`eiviz-headless ready ws=`が出ます。Ctrl+C（UnixはSIGTERMも）で停止します。
+`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションを検証し、そのFPSでruntimeを作り、WebSocketの受付を始めて待機します。`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定ファイルを作ります。準備できるとstderrへ`eiviz-headless session=`と`eiviz-headless ready ws=`が出ます。Ctrl+C（UnixはSIGTERMも）とAPIの`shutdown`は同じ停止経路です。stdinへ`eivizctl`と同じ1行コマンドを書けます。`watch`と`prefs`はstdinでは使えません。EOFや構文誤りではdaemonは止まりません。
 
 `--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。loopback以外へbindするときはtokenが必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません。
 
@@ -49,15 +49,17 @@ GUIの環境設定に相当する値は、ホスト固有です。セッショ�
 | `token` | 接続token。表示は`(set)` |
 | `mediaDirectory` | Remoteから上げたStill/Videoの保存先 |
 | `maxRole` | 付与roleの上限。`read`/`operate`/`configure`/`admin` |
+| `renderer` | GPUバックエンド。`auto`/`dx12`/`vulkan`/`metal`。OSが受けない値はエラー |
 
 ファイルは`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`（未設定なら`~/.config/eiviz/headless-prefs.json`）です。反映は次の`eiviz-headless run`です。
 
 優先順位は次のとおりです。左が勝ちます。
 
 - bind: `--bind` → prefsの`bind` → `127.0.0.1:9400`
-- token: `EIVIZ_API_TOKEN`または`EIVIZ_API_TOKEN_FILE` → prefsの`token`
+- token: prefsの`token`のみ（headlessは環境変数で上書きしない）
+- renderer: `--renderer` → prefsの`renderer` → `auto`
 - メディア保存先: `--media-directory`または`EIVIZ_MEDIA_DIRECTORY` → prefsの`mediaDirectory` → OSのローカルアプリデータ配下`eiviz/media`
-- 最大role: prefsの`maxRole` → 環境変数`EIVIZ_API_ROLE` → tokenがあれば`admin`、無ければ`read`
+- 最大role: prefsの`maxRole` → 未指定なら`admin`
 
 未指定のメディア保存先はWindowsが`%LOCALAPPDATA%\eiviz\media`、macOSが`~/Library/Application Support/eiviz/media`、Linuxが`$XDG_DATA_HOME/eiviz/media`（未設定なら`~/.local/share/eiviz/media`）です。
 
@@ -72,7 +74,7 @@ eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 
 待ち受けの編集と、動いているMixerへの操作は別物です。
 
-`prefs`はローカルの待ち受けファイルです。daemonが止まっていても書けます。ライブ操作と`mutate`は、先に`eiviz-headless run`が`ready`になっている必要があります。
+`prefs`はローカルの待ち受けファイルです。daemonが止まっていても書けます。ライブ操作は、先に`eiviz-headless run`が`ready`になっている必要があります。
 
 ```text
 eiviz> prefs
@@ -91,28 +93,28 @@ eiviz> prefs set maxRole configure
 eivizctl prefs
 eivizctl prefs get bind
 eivizctl prefs set bind 127.0.0.1:9400
+eivizctl prefs set renderer dx12
 ```
 
-ライブ操作は1行で打てます。権限の対応は[eiviz API](/eiviz/ja/developers/api/)です。
+ライブ操作は1行で打てます。権限の対応は[eiviz API](/eiviz/ja/developers/api/)です。部分更新は型付きCRUDです。未指定の欄は現状のまま残します。衝突検査はスナップショットのrevisionを`expected_revision`に使います。`--force`はrevision 0です。黙って再試行しません。
 
 ```text
 eiviz> status
-eiviz> snapshot
-eiviz> preview --unit 1 --scene 2
-eiviz> cut --unit 1
-eiviz> auto --unit 1 --duration-ms 1000
-eiviz> replace --session show.eivz
-eiviz> save
+eiviz> session show
+eiviz> input list
+eiviz> input add --name Cam --kind Uvc
+eiviz> input edit --id 2 --name CamA
+eiviz> scene add --name Opening
+eiviz> scene layer add --scene 1 --input 2
+eiviz> mix preview --unit 1 --scene 2
+eiviz> mix cut --unit 1
+eiviz> mix auto --unit 1 --duration-ms 1000
+eiviz> session replace --session show.eivz
+eiviz> session save
 eiviz> shutdown
 ```
 
-セッションの部分更新は`mutate`です。JSONの`kind`はcamelCaseです。`expected_revision`が0のときは衝突検査をしません。REPLの`mutate`は常に0です。
-
-```text
-eiviz> mutate {"kind":"deleteInput","id":2}
-```
-
-設定ウィンドウ相当は`kind`が`setSettings`です。`settings`、`outputs`、`buses`をまとめて送ります。欠けると拒否されるので、先に`snapshot`で現状を取るか、Remoteの設定ウィンドウから送ってください。
+DTO全体を差し替えるときだけ`--from-json`です。rawなMutation JSONは送りません。
 
 ## Remoteから接続する
 
@@ -135,13 +137,9 @@ PreviewとProgramのライブ映像は、接続先のNDIまたはOMT出力をRem
 
 | 変数 | 用途 |
 | --- | --- |
-| `EIVIZ_API_TOKEN` | サーバーのtoken |
-| `EIVIZ_API_TOKEN_FILE` | サーバーのtokenをファイルから読む |
-| `EIVIZ_API_REQUIRE_AUTH` | `0`以外で認証必須。未設定時はtokenがあれば必須 |
-| `EIVIZ_API_ROLE` | サーバーの最大role |
 | `EIVIZ_MEDIA_DIRECTORY` | アップロード保存先 |
 
-tokenを回すときは環境変数または`eivizctl prefs set token`を差し替え、`eiviz-headless`を再起動します。
+tokenを回すときは`eivizctl prefs set token`を差し替え、`eiviz-headless`を再起動します。headlessの認証はprefsが正本です。`EIVIZ_API_TOKEN`はGUI/native WS向けで、headlessは読みません。
 
 ## 終了コード
 

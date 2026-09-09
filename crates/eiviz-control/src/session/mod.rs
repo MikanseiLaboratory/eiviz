@@ -3,6 +3,7 @@
 //! On-disk files use the `eivz` Protobuf envelope in `file`.
 
 pub mod default;
+pub mod edit;
 pub mod file;
 pub mod migration;
 pub mod mutate;
@@ -301,26 +302,54 @@ impl Renderer {
 
     /// ABI for `mixer_create_with_backend` on this OS.
     pub fn create_abi(self) -> u32 {
-        #[cfg(windows)]
-        {
-            if matches!(self, Self::Metal) {
-                return 0;
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            if matches!(self, Self::Dx12 | Self::Vulkan) {
-                return 0;
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if matches!(self, Self::Dx12 | Self::Metal) {
-                return 0;
-            }
+        if !self.os_supported() {
+            return 0;
         }
         self.to_abi()
     }
+
+    pub fn parse_name(raw: &str) -> Option<Self> {
+        match normalize_renderer_name(raw).as_str() {
+            "auto" => Some(Self::Auto),
+            "dx12" | "d3d12" | "direct3d12" => Some(Self::Dx12),
+            "vulkan" => Some(Self::Vulkan),
+            "metal" => Some(Self::Metal),
+            _ => Self::from_str_loose(raw),
+        }
+    }
+
+    pub fn os_supported(self) -> bool {
+        #[cfg(windows)]
+        {
+            !matches!(self, Self::Metal)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            matches!(self, Self::Auto | Self::Metal)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            matches!(self, Self::Auto | Self::Vulkan)
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            matches!(self, Self::Auto)
+        }
+    }
+
+    pub fn unsupported_os_message(self) -> Option<String> {
+        if self.os_supported() {
+            return None;
+        }
+        Some(format!(
+            "renderer {} is not available on this OS",
+            self.as_str()
+        ))
+    }
+}
+
+fn normalize_renderer_name(raw: &str) -> String {
+    raw.trim().replace(['-', '_'], "").to_ascii_lowercase()
 }
 
 session_string_enum! {
@@ -1365,6 +1394,30 @@ mod tests {
         assert!(
             text.contains("\"renderer\": \"Vulkan\"") || text.contains("\"renderer\":\"Vulkan\"")
         );
+    }
+
+    #[test]
+    fn renderer_parse_name_accepts_cli_aliases() {
+        assert_eq!(Renderer::parse_name("vulkan"), Some(Renderer::Vulkan));
+        assert_eq!(Renderer::parse_name("DX12"), Some(Renderer::Dx12));
+        assert_eq!(Renderer::parse_name("direct3d-12"), Some(Renderer::Dx12));
+        assert_eq!(Renderer::parse_name("nope"), None);
+        #[cfg(windows)]
+        {
+            assert!(Renderer::Dx12.os_supported());
+            assert!(Renderer::Vulkan.os_supported());
+            assert!(!Renderer::Metal.os_supported());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(Renderer::Metal.os_supported());
+            assert!(!Renderer::Vulkan.os_supported());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(Renderer::Vulkan.os_supported());
+            assert!(!Renderer::Dx12.os_supported());
+        }
     }
 
     #[test]

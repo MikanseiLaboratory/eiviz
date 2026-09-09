@@ -2,8 +2,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser};
 use eiviz_api::client::{ControlClient, ControlSession};
+use eiviz_headless::ctl::{self, CtlCommand, Line, PrefsCmd, parse_line};
 
 #[derive(Parser)]
 #[command(
@@ -21,74 +22,14 @@ struct Cli {
     /// Read the token from a file (trailing whitespace is trimmed)
     #[arg(long)]
     token_file: Option<PathBuf>,
-    /// Suppress the "ok" line on live ops
+    /// Emit machine-readable JSON for one-shot commands
     #[arg(long)]
     json: bool,
     /// Open an interactive prompt instead of running one command
     #[arg(long)]
     repl: bool,
     #[command(subcommand)]
-    cmd: Option<Cmd>,
-}
-
-#[derive(Parser)]
-#[command(
-    name = "eivizctl",
-    no_binary_name = true,
-    disable_version_flag = true,
-    subcommand_required = true
-)]
-struct ReplLine {
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    Status,
-    Snapshot,
-    Watch,
-    Preview {
-        #[arg(long, default_value_t = 1)]
-        unit: u64,
-        #[arg(long)]
-        scene: u64,
-    },
-    Cut {
-        #[arg(long, default_value_t = 1)]
-        unit: u64,
-        #[arg(long, default_value_t = true)]
-        swap: bool,
-    },
-    Auto {
-        #[arg(long, default_value_t = 1)]
-        unit: u64,
-        #[arg(long, default_value_t = 1000)]
-        duration_ms: u32,
-    },
-    Replace {
-        #[arg(long)]
-        session: PathBuf,
-        #[arg(long, default_value_t = 0)]
-        expected_revision: u64,
-    },
-    Save,
-    Mutate {
-        json: String,
-        #[arg(long, default_value_t = 0)]
-        expected_revision: u64,
-    },
-    Prefs {
-        #[command(subcommand)]
-        action: Option<PrefsCmd>,
-    },
-    Shutdown,
-}
-
-#[derive(Subcommand)]
-enum PrefsCmd {
-    Get { key: String },
-    Set { key: String, value: Vec<String> },
+    cmd: Option<CtlCommand>,
 }
 
 #[tokio::main]
@@ -110,7 +51,8 @@ async fn main() -> ExitCode {
         repl(&client, cli.json).await
     } else {
         match cli.cmd {
-            Some(Cmd::Prefs { action }) => prefs_cmd(action),
+            Some(CtlCommand::Prefs { action }) => prefs_cmd(action),
+            Some(cmd) if cmd.is_watch() => run_watch(&client).await,
             Some(cmd) => run_once(&client, cmd, cli.json).await,
             None => {
                 let mut cmd = Cli::command();
@@ -141,112 +83,26 @@ fn load_token(token: Option<String>, token_file: Option<PathBuf>) -> Result<Stri
     Ok(token.unwrap_or_default())
 }
 
-async fn run_once(client: &ControlClient, cmd: Cmd, json: bool) -> Result<(), String> {
+async fn run_once(client: &ControlClient, cmd: CtlCommand, json: bool) -> Result<(), String> {
     let session = client.connect().await.map_err(|e| e.to_string())?;
-    run_cmd(&session, cmd, json).await
+    ctl::run_cmd(&session, cmd, json).await
 }
 
-async fn run_cmd(session: &ControlSession, cmd: Cmd, json: bool) -> Result<(), String> {
-    match cmd {
-        Cmd::Status | Cmd::Snapshot => {
-            let snap = session.snapshot_json().await.map_err(|e| e.to_string())?;
-            println!("{snap}");
-        }
-        Cmd::Watch => {
-            session.subscribe(0).await.map_err(|e| e.to_string())?;
-            loop {
-                for kind in session.take_events() {
-                    println!("{kind}");
-                }
-                let view = session.view();
-                if !view.document_json.is_empty() {
-                    println!("{}", String::from_utf8_lossy(&view.document_json));
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        }
-        Cmd::Preview { unit, scene } => {
-            session
-                .preview(unit, scene)
-                .await
-                .map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-        Cmd::Cut { unit, swap } => {
-            session.cut(unit, swap).await.map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-        Cmd::Auto { unit, duration_ms } => {
-            session
-                .auto(unit, duration_ms, true)
-                .await
-                .map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-        Cmd::Replace {
-            session: path,
-            expected_revision,
-        } => {
-            let document = eiviz_control::session::read_document(&path)?;
-            let document_json = eiviz_control::session::to_vec(&document)?;
-            session
-                .replace_session(document_json, expected_revision)
-                .await
-                .map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-        Cmd::Save => {
-            let (path, history_count) = session.save_session().await.map_err(|e| e.to_string())?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({ "path": path, "historyCount": history_count })
-                );
-            } else {
-                println!("ok path={path} history={history_count}");
-            }
-        }
-        Cmd::Mutate {
-            json: body,
-            expected_revision,
-        } => {
-            session
-                .mutate_session(body.into_bytes(), expected_revision)
-                .await
-                .map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-        Cmd::Prefs { action } => prefs_cmd(action)?,
-        Cmd::Shutdown => {
-            session.shutdown().await.map_err(|e| e.to_string())?;
-            if !json {
-                println!("ok");
-            }
-        }
-    }
-    Ok(())
+async fn run_watch(client: &ControlClient) -> Result<(), String> {
+    let session = client.connect().await.map_err(|e| e.to_string())?;
+    ctl::run_watch(&session).await
 }
 
 fn prefs_cmd(action: Option<PrefsCmd>) -> Result<(), String> {
     match action {
         None => {
-            let prefs = eiviz_headless::HeadlessPrefs::load();
+            let prefs = eiviz_headless::HeadlessPrefs::load()?;
             println!("path={}", eiviz_headless::HeadlessPrefs::path().display());
             println!("{}", prefs.display());
             Ok(())
         }
         Some(PrefsCmd::Get { key }) => {
-            let prefs = eiviz_headless::HeadlessPrefs::load();
+            let prefs = eiviz_headless::HeadlessPrefs::load()?;
             match prefs.get(&key) {
                 Ok(Some(value)) if normalize_prefs_key(&key) == "token" => {
                     println!("{}", if value.is_empty() { "" } else { "(set)" });
@@ -265,7 +121,7 @@ fn prefs_cmd(action: Option<PrefsCmd>) -> Result<(), String> {
         }
         Some(PrefsCmd::Set { key, value }) => {
             let joined = value.join(" ");
-            let mut prefs = eiviz_headless::HeadlessPrefs::load();
+            let mut prefs = eiviz_headless::HeadlessPrefs::load()?;
             prefs.set(&key, &joined)?;
             let path = prefs.save()?;
             println!("ok path={}", path.display());
@@ -300,20 +156,23 @@ async fn repl(client: &ControlClient, json: bool) -> Result<(), String> {
         match parse_repl_line(line) {
             ReplAction::Exit => break,
             ReplAction::Help => {
-                let mut cmd = ReplLine::command();
+                let mut cmd = Line::command();
                 if let Err(error) = cmd.print_help() {
                     eprintln!("{error}");
                 }
                 println!();
             }
-            ReplAction::Cmd(Cmd::Prefs { action }) => {
+            ReplAction::Cmd(CtlCommand::Prefs { action }) => {
                 if let Err(error) = prefs_cmd(action) {
                     eprintln!("{error}");
                 }
             }
+            ReplAction::Cmd(cmd) if cmd.is_watch() => {
+                eprintln!("watch is not supported in the REPL");
+            }
             ReplAction::Cmd(cmd) => match ensure_session(client, &mut session).await {
                 Ok(session) => {
-                    if let Err(error) = run_cmd(session, cmd, json).await {
+                    if let Err(error) = ctl::run_cmd(session, cmd, json).await {
                         eprintln!("{error}");
                     }
                 }
@@ -356,7 +215,7 @@ async fn read_line() -> Result<Option<String>, String> {
 enum ReplAction {
     Exit,
     Help,
-    Cmd(Cmd),
+    Cmd(CtlCommand),
     Error(String),
 }
 
@@ -366,46 +225,8 @@ fn parse_repl_line(line: &str) -> ReplAction {
         "help" | "?" => return ReplAction::Help,
         _ => {}
     }
-    if let Some(body) = line.strip_prefix("mutate ") {
-        let body = body.trim();
-        if body.starts_with('{') {
-            return ReplAction::Cmd(Cmd::Mutate {
-                json: body.to_string(),
-                expected_revision: 0,
-            });
-        }
+    match parse_line(line) {
+        Ok(cmd) => ReplAction::Cmd(cmd),
+        Err(error) => ReplAction::Error(error),
     }
-    let args = match split_repl_args(line) {
-        Ok(args) => args,
-        Err(error) => return ReplAction::Error(error),
-    };
-    match ReplLine::try_parse_from(args) {
-        Ok(parsed) => ReplAction::Cmd(parsed.cmd),
-        Err(error) => ReplAction::Error(error.to_string()),
-    }
-}
-
-fn split_repl_args(line: &str) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    let mut cur = String::new();
-    let mut quote = None;
-    for c in line.chars() {
-        match (quote, c) {
-            (None, '"' | '\'') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            (None, c) if c.is_whitespace() => {
-                if !cur.is_empty() {
-                    args.push(std::mem::take(&mut cur));
-                }
-            }
-            (_, c) => cur.push(c),
-        }
-    }
-    if quote.is_some() {
-        return Err("unclosed quote".into());
-    }
-    if !cur.is_empty() {
-        args.push(cur);
-    }
-    Ok(args)
 }

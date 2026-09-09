@@ -1,8 +1,10 @@
 //! Headless host package. Binaries live in `src/bin`.
 
+pub mod ctl;
 pub mod prefs;
+pub mod stdin_control;
 
-pub use prefs::HeadlessPrefs;
+pub use prefs::{HeadlessPrefs, parse_renderer, require_os_renderer, resolve_renderer};
 
 #[cfg(test)]
 mod tests {

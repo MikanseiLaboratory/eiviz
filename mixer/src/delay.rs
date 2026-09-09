@@ -19,20 +19,6 @@ struct UnitRing {
     write: usize,
     read: usize,
     queued: usize,
-    filled: usize,
-    width: u32,
-    height: u32,
-    depth: usize,
-}
-
-struct SceneSlot {
-    texture: wgpu::Texture,
-}
-
-struct SceneRing {
-    slots: Vec<SceneSlot>,
-    write: usize,
-    filled: usize,
     width: u32,
     height: u32,
     depth: usize,
@@ -41,7 +27,6 @@ struct SceneRing {
 pub struct FrameDelay {
     depth: usize,
     units: HashMap<u64, UnitRing>,
-    scenes: HashMap<u64, SceneRing>,
     epoch: u64,
 }
 
@@ -50,7 +35,6 @@ impl FrameDelay {
         Self {
             depth: depth.clamp(1, 8) as usize,
             units: HashMap::new(),
-            scenes: HashMap::new(),
             epoch: 1,
         }
     }
@@ -62,7 +46,6 @@ impl FrameDelay {
         }
         self.depth = depth;
         self.units.clear();
-        self.scenes.clear();
         self.epoch = self.epoch.wrapping_add(1);
     }
 
@@ -71,19 +54,11 @@ impl FrameDelay {
     }
 
     pub fn vram_bytes(&self) -> u64 {
-        let units = self
-            .units
+        self.units
             .values()
             .flat_map(|ring| ring.slots.iter())
             .map(DelaySlot::vram_bytes)
-            .sum::<u64>();
-        let scenes = self
-            .scenes
-            .values()
-            .flat_map(|ring| ring.slots.iter())
-            .map(|slot| texture_bytes(&slot.texture))
-            .sum::<u64>();
-        units + scenes
+            .sum::<u64>()
     }
 
     /// Drop queued display frames so present falls back to the current compose
@@ -100,7 +75,6 @@ impl FrameDelay {
             ring.write = 0;
             ring.read = 0;
             ring.queued = 0;
-            ring.filled = 0;
             changed = true;
         }
         if changed {
@@ -134,33 +108,6 @@ impl FrameDelay {
             copy_optional(encoder, src.packed_prv.as_ref(), slot.packed_prv.as_ref());
             ring.write = (ring.write + 1) % cap;
             ring.queued = ring.queued.saturating_add(1).min(cap.saturating_sub(1));
-            ring.filled = ring.filled.saturating_add(1).min(cap);
-            self.epoch = self.epoch.wrapping_add(1);
-        }
-    }
-
-    pub fn capture_scenes(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        composer: &Composer,
-        scene_ids: impl IntoIterator<Item = u64>,
-    ) {
-        for scene_id in scene_ids {
-            let Some(src) = composer.scene_texture(scene_id) else {
-                continue;
-            };
-            let width = src.size().width;
-            let height = src.size().height;
-            self.ensure_scene(device, scene_id, width, height);
-            let Some(ring) = self.scenes.get_mut(&scene_id) else {
-                continue;
-            };
-            let cap = ring.slots.len();
-            let slot = &mut ring.slots[ring.write];
-            copy_tex(encoder, src, &slot.texture);
-            ring.write = (ring.write + 1) % cap;
-            ring.filled = ring.filled.saturating_add(1).min(cap);
             self.epoch = self.epoch.wrapping_add(1);
         }
     }
@@ -203,20 +150,6 @@ impl FrameDelay {
             OUTPUT_PREVIEW => Some(&slot.preview),
             _ => Some(&slot.mixed),
         }
-    }
-
-    pub fn rgba_at(&self, unit_id: u64, kind: u32, offset: u32) -> Option<&wgpu::Texture> {
-        let ring = self.units.get(&unit_id)?;
-        let slot = ring.slot_at(offset)?;
-        match kind {
-            OUTPUT_PREVIEW => Some(&slot.preview),
-            _ => Some(&slot.mixed),
-        }
-    }
-
-    pub fn scene_rgba_at(&self, scene_id: u64, offset: u32) -> Option<&wgpu::Texture> {
-        let ring = self.scenes.get(&scene_id)?;
-        Some(&ring.slot_at(offset)?.texture)
     }
 
     pub fn view_for_source(&self, source_id: u64) -> Option<wgpu::TextureView> {
@@ -265,39 +198,8 @@ impl FrameDelay {
                 write: 0,
                 read: 0,
                 queued: 0,
-                filled: 0,
                 width: src.width,
                 height: src.height,
-                depth,
-            },
-        );
-        self.epoch = self.epoch.wrapping_add(1);
-    }
-
-    fn ensure_scene(&mut self, device: &GpuDevice, scene_id: u64, width: u32, height: u32) {
-        let depth = self.depth;
-        let cap = depth + 1;
-        let recreate = self.scenes.get(&scene_id).is_none_or(|ring| {
-            ring.width != width
-                || ring.height != height
-                || ring.depth != depth
-                || ring.slots.len() != cap
-        });
-        if !recreate {
-            return;
-        }
-        self.scenes.insert(
-            scene_id,
-            SceneRing {
-                slots: (0..cap)
-                    .map(|_| SceneSlot {
-                        texture: make_delay_texture(device, width, height, false),
-                    })
-                    .collect(),
-                write: 0,
-                filled: 0,
-                width,
-                height,
                 depth,
             },
         );
@@ -311,28 +213,6 @@ impl UnitRing {
             return None;
         }
         self.slots.get(self.read)
-    }
-
-    fn slot_at(&self, offset: u32) -> Option<&DelaySlot> {
-        let offset = offset.max(1) as usize;
-        if self.filled == 0 {
-            return None;
-        }
-        let back = offset.min(self.filled);
-        let idx = (self.write + self.slots.len() - back) % self.slots.len();
-        self.slots.get(idx)
-    }
-}
-
-impl SceneRing {
-    fn slot_at(&self, offset: u32) -> Option<&SceneSlot> {
-        let offset = offset.max(1) as usize;
-        if self.filled == 0 {
-            return None;
-        }
-        let back = offset.min(self.filled);
-        let idx = (self.write + self.slots.len() - back) % self.slots.len();
-        self.slots.get(idx)
     }
 }
 

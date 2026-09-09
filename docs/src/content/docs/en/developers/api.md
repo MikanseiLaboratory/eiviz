@@ -9,7 +9,7 @@ The control plane is handled by `ControlService` inside the mixer. vMix-compatib
 
 - Protocol: `eiviz.control.v1` (`crates/eiviz-api/proto/eiviz/control/v1/control.proto`)
 - WebSocket: `ws://`, subprotocol `eiviz.protobuf.v1`, one binary frame per Envelope
-- Default listen is loopback port 9400. Bind address, port, token, max role, and media directory are host-owned (GUI Preferences, `eivizctl prefs`, or `eiviz-headless --bind` / `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY`). They are not stored in the session file
+- Default listen is loopback port 9400. Bind address, port, token, max role, renderer, and media directory are host-owned (GUI Preferences, `eivizctl prefs`, or `eiviz-headless --bind` / `--renderer` / `EIVIZ_MEDIA_DIRECTORY`). Headless token comes from prefs. They are not stored in the session file
 - This release uses authenticated `ws://` on a trusted LAN or VPN only. TLS is not provided
 - Published field numbers are never reused. Removals go into `reserved`
 - `SaveSession` writes the host current session file. The request is empty. A host with no current file returns `UNAVAILABLE`
@@ -18,7 +18,7 @@ Video/audio frames, GPU textures, HWND/NSView, and other presentation/data-plane
 
 ## Auth and roles
 
-The default bind is loopback. Headless tokens come from `EIVIZ_API_TOKEN` or `EIVIZ_API_TOKEN_FILE`. GUI listen and remote-client tokens use Windows Credential Manager / macOS Keychain. Tokens are never stored in the session file. Comparison is constant-time.
+The default bind is loopback. Headless tokens come from `eivizctl prefs`. GUI listen and remote-client tokens use Windows Credential Manager / macOS Keychain. Tokens are never stored in the session file. Comparison is constant-time.
 
 Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. `SaveSession` writes the host current file and needs configure. Session bodies move as bytes. Non-loopback bind requires authentication.
 
@@ -53,9 +53,10 @@ Operator steps are in [Remote connection](/eiviz/en/features/remote/). Still/Vid
 
 ```bash
 eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN status
-eivizctl cut --unit 1
-eivizctl save
-eivizctl snapshot
+eivizctl mix cut --unit 1
+eivizctl session save
+eivizctl session show
+eivizctl input edit --id 2 --name CamA
 eivizctl shutdown
 eivizctl prefs
 eivizctl prefs get bind
@@ -63,11 +64,11 @@ eivizctl prefs set bind 127.0.0.1:9400
 eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
 ```
 
-The default is a one-shot CLI with a subcommand. Pass `--repl` for an interactive prompt, with `--url` and `--token` or `--token-file`. The REPL keeps the WebSocket open. Type `prefs`, `prefs get`, `prefs set`, and `mutate <json>` on a line.
+The default is a one-shot CLI with a subcommand. Pass `--repl` for an interactive prompt, with `--url` and `--token` or `--token-file`. The REPL keeps the WebSocket open. Type `prefs` and the typed CRUD / live commands. There is no raw `mutate`.
 
-`prefs` edits the headless listen file: `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, and `maxRole`. Token display is `(set)`. CLI `--bind` and `EIVIZ_API_TOKEN` / `EIVIZ_MEDIA_DIRECTORY` override the file. Values apply on the next `eiviz-headless run`.
+`prefs` edits the headless listen file: `%LOCALAPPDATA%\eiviz\headless-prefs.json` on Windows, or `$XDG_CONFIG_HOME/eiviz/headless-prefs.json`. Keys are `bind`, `token`, `mediaDirectory`, `maxRole`, and `renderer`. Token display is `(set)`. Headless auth uses prefs only. Values apply on the next `eiviz-headless run`.
 
-`mutate` sends `MutateSession`. Settings-window fields use `"kind":"setSettings"`. `expected_revision` 0 skips the conflict check.
+Partial edits send the current snapshot revision as `expected_revision`. `--force` sends revision 0. Unspecified fields stay as they are.
 
 ## Headless daemon
 
@@ -79,17 +80,17 @@ eiviz-headless canonicalize --session show.eivz
 eiviz-headless export --session show.eivz --output show-portable.eivzx
 eiviz-headless history --session show.eivz
 eiviz-headless restore --session show.eivz --index 0 --output old.eivz
-eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
+eiviz-headless run --session show.eivz --bind 127.0.0.1:9400 --renderer auto
 eiviz-headless run --bind 127.0.0.1:9400
 ```
 
-`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Omit `--session` to create a dated default file under the OS `eiviz/sessions` directory. When `--bind` is omitted, `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Ctrl+C/SIGTERM stops accept, then workers, inputs/outputs, then render, with a join deadline. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
+`validate` and `canonicalize` do not initialize the GPU. `run` parses/validates the session, creates the runtime at that FPS, replace/reconciles, then waits on API readiness. Omit `--session` to create a dated default file under the OS `eiviz/sessions` directory. When `--bind` is omitted, `eivizctl prefs` bind is used, then `127.0.0.1:9400`. Renderer is `--renderer` → prefs → `auto`. An OS-unsupported value is an error. Ctrl+C/SIGTERM and API `shutdown` share one stop path: stop accept, wait connections, stop the mixer, then the runtime, with a join deadline. Stdin uses the same syntax as `eivizctl`. The GUI mixer also hosts this WebSocket when listen is enabled in Preferences (bind/token/media directory) or Settings (enable/port).
 
 Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime failure.
 
 ## Operations
 
-- Rotate tokens by changing `EIVIZ_API_TOKEN` or `eivizctl prefs set token` (headless), or the listen token in Preferences, then restart
+- Rotate tokens with `eivizctl prefs set token` (headless) or the listen token in Preferences, then restart
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr

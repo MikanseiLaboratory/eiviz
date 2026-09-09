@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use eiviz_api::Role;
+use eiviz_control::session::Renderer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,6 +16,8 @@ pub struct HeadlessPrefs {
     pub media_directory: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<String>,
 }
 
 impl HeadlessPrefs {
@@ -21,13 +25,20 @@ impl HeadlessPrefs {
         config_dir().join("headless-prefs.json")
     }
 
-    pub fn load() -> Self {
-        Self::load_from(&Self::path()).unwrap_or_default()
+    pub fn load() -> Result<Self, String> {
+        Self::load_from(&Self::path())
     }
 
-    pub fn load_from(path: &Path) -> Option<Self> {
-        let text = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&text).ok()
+    pub fn load_from(path: &Path) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = fs::read_to_string(path)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let prefs: Self = serde_json::from_str(&text)
+            .map_err(|error| format!("parse {}: {error}", path.display()))?;
+        prefs.validate()?;
+        Ok(prefs)
     }
 
     pub fn save(&self) -> Result<PathBuf, String> {
@@ -37,11 +48,26 @@ impl HeadlessPrefs {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<(), String> {
+        self.validate()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         let text = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
         fs::write(path, text).map_err(|error| error.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(role) = self.max_role.as_deref() {
+            Role::try_from_name(role)?;
+        }
+        if let Some(renderer) = self.renderer.as_deref() {
+            parse_renderer(renderer)?;
+        }
+        Ok(())
+    }
+
+    pub fn renderer(&self) -> Result<Option<Renderer>, String> {
+        self.renderer.as_deref().map(parse_renderer).transpose()
     }
 
     pub fn get(&self, key: &str) -> Result<Option<String>, String> {
@@ -50,9 +76,8 @@ impl HeadlessPrefs {
             "token" => Ok(self.token.clone()),
             "mediadirectory" => Ok(self.media_directory.clone()),
             "maxrole" => Ok(self.max_role.clone()),
-            _ => Err(format!(
-                "unknown prefs key '{key}' (bind, token, mediaDirectory, maxRole)"
-            )),
+            "renderer" => Ok(self.renderer.clone()),
+            _ => Err(unknown_key(key)),
         }
     }
 
@@ -62,12 +87,19 @@ impl HeadlessPrefs {
             "bind" => self.bind = empty_to_none(value),
             "token" => self.token = empty_to_none(value),
             "mediadirectory" => self.media_directory = empty_to_none(value),
-            "maxrole" => self.max_role = empty_to_none(value),
-            _ => {
-                return Err(format!(
-                    "unknown prefs key '{key}' (bind, token, mediaDirectory, maxRole)"
-                ));
+            "maxrole" => {
+                if !value.is_empty() {
+                    Role::try_from_name(value)?;
+                }
+                self.max_role = empty_to_none(value);
             }
+            "renderer" => {
+                if !value.is_empty() {
+                    parse_renderer(value)?;
+                }
+                self.renderer = empty_to_none(value);
+            }
+            _ => return Err(unknown_key(key)),
         }
         Ok(())
     }
@@ -81,8 +113,32 @@ impl HeadlessPrefs {
         };
         let media = self.media_directory.as_deref().unwrap_or("");
         let role = self.max_role.as_deref().unwrap_or("");
-        format!("bind={bind}\ntoken={token}\nmediaDirectory={media}\nmaxRole={role}")
+        let renderer = self.renderer.as_deref().unwrap_or("");
+        format!(
+            "bind={bind}\ntoken={token}\nmediaDirectory={media}\nmaxRole={role}\nrenderer={renderer}"
+        )
     }
+}
+
+pub fn parse_renderer(raw: &str) -> Result<Renderer, String> {
+    Renderer::parse_name(raw)
+        .ok_or_else(|| format!("unknown renderer '{raw}' (auto, dx12, vulkan, metal)"))
+}
+
+pub fn require_os_renderer(renderer: Renderer) -> Result<Renderer, String> {
+    if let Some(message) = renderer.unsupported_os_message() {
+        return Err(message);
+    }
+    Ok(renderer)
+}
+
+pub fn resolve_renderer(cli: Option<&str>, prefs: &HeadlessPrefs) -> Result<Renderer, String> {
+    let renderer = if let Some(raw) = cli.filter(|value| !value.trim().is_empty()) {
+        parse_renderer(raw)?
+    } else {
+        prefs.renderer()?.unwrap_or(Renderer::Auto)
+    };
+    require_os_renderer(renderer)
 }
 
 fn empty_to_none(value: &str) -> Option<String> {
@@ -95,6 +151,10 @@ fn empty_to_none(value: &str) -> Option<String> {
 
 fn normalize_key(key: &str) -> String {
     key.trim().replace(['-', '_'], "").to_ascii_lowercase()
+}
+
+fn unknown_key(key: &str) -> String {
+    format!("unknown prefs key '{key}' (bind, token, mediaDirectory, maxRole, renderer)")
 }
 
 fn config_dir() -> PathBuf {
@@ -123,6 +183,7 @@ mod tests {
         let mut prefs = HeadlessPrefs::default();
         prefs.set("bind", "127.0.0.1:9400").unwrap();
         prefs.set("media-directory", "/tmp/eiviz-media").unwrap();
+        prefs.set("renderer", "vulkan").unwrap();
         assert_eq!(
             prefs.get("bind").unwrap().as_deref(),
             Some("127.0.0.1:9400")
@@ -131,8 +192,83 @@ mod tests {
             prefs.get("mediaDirectory").unwrap().as_deref(),
             Some("/tmp/eiviz-media")
         );
+        assert_eq!(prefs.get("renderer").unwrap().as_deref(), Some("vulkan"));
         let json = serde_json::to_string(&prefs).unwrap();
         let again: HeadlessPrefs = serde_json::from_str(&json).unwrap();
         assert_eq!(prefs, again);
+    }
+
+    #[test]
+    fn unknown_renderer_and_role_are_rejected() {
+        let mut prefs = HeadlessPrefs::default();
+        assert!(prefs.set("renderer", "opengl").is_err());
+        assert!(prefs.set("maxRole", "root").is_err());
+        let broken = HeadlessPrefs {
+            renderer: Some("opengl".into()),
+            ..HeadlessPrefs::default()
+        };
+        assert!(broken.validate().is_err());
+    }
+
+    #[test]
+    fn load_missing_file_is_default() {
+        let path =
+            std::env::temp_dir().join(format!("eiviz-missing-prefs-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        assert_eq!(
+            HeadlessPrefs::load_from(&path).unwrap(),
+            HeadlessPrefs::default()
+        );
+    }
+
+    #[test]
+    fn load_broken_json_is_error() {
+        let path =
+            std::env::temp_dir().join(format!("eiviz-broken-prefs-{}.json", std::process::id()));
+        fs::write(&path, "{not json").unwrap();
+        assert!(
+            HeadlessPrefs::load_from(&path)
+                .unwrap_err()
+                .contains("parse")
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn resolve_renderer_prefers_cli() {
+        let mut prefs = HeadlessPrefs::default();
+        prefs.set("renderer", "auto").unwrap();
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                resolve_renderer(Some("dx12"), &prefs).unwrap(),
+                Renderer::Dx12
+            );
+            assert!(resolve_renderer(Some("metal"), &prefs).is_err());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                resolve_renderer(Some("vulkan"), &prefs).unwrap(),
+                Renderer::Vulkan
+            );
+            assert!(resolve_renderer(Some("dx12"), &prefs).is_err());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                resolve_renderer(Some("metal"), &prefs).unwrap(),
+                Renderer::Metal
+            );
+            assert!(resolve_renderer(Some("vulkan"), &prefs).is_err());
+        }
+    }
+
+    #[test]
+    fn token_display_is_masked() {
+        let mut prefs = HeadlessPrefs::default();
+        prefs.set("token", "secret").unwrap();
+        assert!(prefs.display().contains("token=(set)"));
+        assert!(!prefs.display().contains("secret"));
     }
 }

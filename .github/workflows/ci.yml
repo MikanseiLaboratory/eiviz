@@ -61,6 +61,61 @@ jobs:
       - name: Validate sample session
         run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eivz
 
+      # windows-latest exposes WARP/DX12, not a Vulkan adapter. Vulkan exit is linux-vulkan.
+      - name: Run headless Bars session and confirm process exit
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:TEMP "eiviz-headless-ci.out.log"
+          $err = Join-Path $env:TEMP "eiviz-headless-ci.err.log"
+          Remove-Item $out, $err -ErrorAction SilentlyContinue
+          function Read-SharedLog([string] $path) {
+            if (-not (Test-Path $path)) { return "" }
+            $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try {
+              $reader = New-Object IO.StreamReader($stream)
+              $reader.ReadToEnd()
+            } finally {
+              $stream.Dispose()
+            }
+          }
+          function Combined-Log { "$(Read-SharedLog $out)$(Read-SharedLog $err)" }
+          $proc = Start-Process -FilePath ".\target\release\eiviz-headless.exe" -ArgumentList @(
+            "run",
+            "--session", "headless\tests\fixtures\bars.eivz",
+            "--bind", "127.0.0.1:0",
+            "--renderer", "dx12"
+          ) -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
+          $ready = $false
+          $ws = $null
+          for ($i = 0; $i -lt 40; $i++) {
+            $text = Combined-Log
+            if ($text -match "eiviz-headless ready ws=([^\s]+)") {
+              $ready = $true
+              $ws = $Matches[1]
+              break
+            }
+            if ($proc.HasExited) {
+              Write-Output (Combined-Log)
+              throw "headless exited before ready (status=$($proc.ExitCode))"
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            Write-Output (Combined-Log)
+            throw "headless did not become ready"
+          }
+          & .\target\release\eivizctl.exe --url "ws://$ws" shutdown
+          if (-not $proc.WaitForExit(15000)) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Write-Output (Combined-Log)
+            throw "headless still running after shutdown"
+          }
+          Write-Output (Combined-Log)
+          if ($proc.ExitCode -ne 0) {
+            throw "headless exited with $($proc.ExitCode)"
+          }
+
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
 
@@ -198,9 +253,16 @@ jobs:
           pid=$!
           for _ in $(seq 1 40); do
             if grep -q "eiviz-headless ready ws=" /tmp/eiviz-headless.log; then
-              kill -TERM "$pid" || true
-              wait "$pid" || true
+              kill -TERM "$pid"
+              set +e
+              wait "$pid"
+              status=$?
+              set -e
               cat /tmp/eiviz-headless.log
+              if [ "$status" -ne 0 ]; then
+                echo "headless exited with $status after SIGTERM"
+                exit "$status"
+              fi
               exit 0
             fi
             if ! kill -0 "$pid" 2>/dev/null; then

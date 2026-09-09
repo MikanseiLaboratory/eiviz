@@ -17,4 +17,4 @@ pub use media::{
     FileMediaStorage, MediaStorage, MediaStorageConfig, default_media_directory,
     default_sessions_directory, resolve_media_directory,
 };
-pub use server::{ServerBind, ServerConfig, listen, spawn};
+pub use server::{ServerBind, ServerConfig, ServerHandle, listen, spawn};

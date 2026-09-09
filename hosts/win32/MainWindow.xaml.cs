@@ -147,7 +147,11 @@ public partial class MainWindow : Window
     private void ApplyRemoteChrome()
     {
         if (!HostRole.IsRemote)
+        {
+            SnapshotButton.Visibility = Visibility.Visible;
+            SnapshotInputButton.Visibility = Visibility.Visible;
             return;
+        }
         NewSessionButton.Visibility = Visibility.Collapsed;
         SaveSessionButton.Visibility = Visibility.Visible;
         SaveSessionButton.IsEnabled = false;
@@ -162,10 +166,25 @@ public partial class MainWindow : Window
         MultiviewSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
         SnapshotButton.Visibility = Visibility.Collapsed;
+        SnapshotInputButton.Visibility = Visibility.Collapsed;
+        PackRemoteInputActions();
         RemoteIdleText.Text = Loc.T("msg.remoteIdle");
         FillVideoLayoutBox();
         ApplyVideoLayout();
         ApplyRemoteLiveUi(false);
+    }
+
+    private void PackRemoteInputActions()
+    {
+        InputActionsGrid.ColumnDefinitions.Clear();
+        InputActionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        InputActionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        InputActionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        InputActionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        InputActionsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(AddInputButton, 0);
+        Grid.SetColumn(EditInputButton, 2);
+        Grid.SetColumn(DeleteInputButton, 4);
     }
 
     private void FillVideoSources()
@@ -352,8 +371,6 @@ public partial class MainWindow : Window
         var mix = live ? Visibility.Visible : Visibility.Collapsed;
         if (MixUnitBar.Visibility != mix)
             MixUnitBar.Visibility = mix;
-        if (SnapshotButton.IsEnabled != live)
-            SnapshotButton.IsEnabled = live;
         if (SettingsButton.IsEnabled != live)
             SettingsButton.IsEnabled = live;
         if (DisconnectButton.IsEnabled != live)
@@ -1931,7 +1948,7 @@ public partial class MainWindow : Window
     {
         if (InputList.SelectedItem is not InputEntry input)
         {
-            MessageBox.Show(this, Loc.T("msg.selectInputPreview"));
+            MessageBox.Show(this, Loc.T("msg.selectInputScreenshot"));
             return;
         }
         SnapshotInput(input);

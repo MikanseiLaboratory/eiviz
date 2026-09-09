@@ -3,6 +3,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tokio::sync::watch;
+use tokio::task::JoinSet;
+
 use crate::auth::{AuthConfig, Role};
 use crate::codec::{MAX_MESSAGE_BYTES, WS_SUBPROTOCOL, decode_envelope, encode_envelope};
 use crate::media::{DEFAULT_CHUNK_SIZE, MediaStorage, parse_kind};
@@ -47,18 +50,51 @@ pub struct ServerBind {
     pub ws_addr: SocketAddr,
 }
 
+pub struct ServerHandle {
+    pub bind: ServerBind,
+    stop: watch::Sender<bool>,
+    shutdown_rx: watch::Receiver<bool>,
+    task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+}
+
+impl ServerHandle {
+    pub async fn wait_shutdown_request(&mut self) {
+        let _ = self.shutdown_rx.wait_for(|stop| *stop).await;
+    }
+
+    pub async fn shutdown(mut self) -> std::io::Result<()> {
+        let _ = self.stop.send(true);
+        let Some(task) = self.task.take() else {
+            return Ok(());
+        };
+        match tokio::time::timeout(Duration::from_secs(5), task).await {
+            Ok(joined) => joined.map_err(std::io::Error::other)?,
+            Err(_) => {
+                eprintln!("eiviz-api shutdown timed out after 5s");
+                Err(std::io::Error::other("api shutdown timed out"))
+            }
+        }
+    }
+}
+
 pub async fn spawn(config: ServerConfig, control: Arc<dyn ControlFacade>) -> std::io::Result<()> {
-    let (bind, task) = listen(config, control).await?;
-    eprintln!("eiviz-api listening ws={}", bind.ws_addr);
-    task.await.map_err(std::io::Error::other)?
+    let handle = listen(config, control).await?;
+    eprintln!("eiviz-api listening ws={}", handle.bind.ws_addr);
+    handle
+        .task
+        .expect("listen always stores the accept task")
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 pub async fn listen(
     config: ServerConfig,
     control: Arc<dyn ControlFacade>,
-) -> std::io::Result<(ServerBind, tokio::task::JoinHandle<std::io::Result<()>>)> {
+) -> std::io::Result<ServerHandle> {
     let ws = TcpListener::bind(config.bind).await?;
     let ws_addr = ws.local_addr()?;
+    let (stop, stop_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = Arc::new(State {
         control,
         auth: config.auth.clone(),
@@ -67,21 +103,46 @@ pub async fn listen(
         idle_timeout: config.idle_timeout,
         media: config.media.clone(),
         pending: Mutex::new(HashMap::new()),
+        stop: stop_rx,
+        shutdown: shutdown_tx,
     });
-    let task = tokio::spawn(async move { accept_loop(ws, state).await });
-    Ok((ServerBind { ws_addr }, task))
+    let accept_state = Arc::clone(&state);
+    let task = tokio::spawn(async move { accept_loop(ws, accept_state).await });
+    Ok(ServerHandle {
+        bind: ServerBind { ws_addr },
+        stop,
+        shutdown_rx,
+        task: Some(task),
+    })
 }
 
 async fn accept_loop(ws: TcpListener, state: Arc<State>) -> std::io::Result<()> {
+    let mut connections = JoinSet::new();
+    let mut stop_rx = state.stop.clone();
     loop {
-        let (stream, _) = ws.accept().await?;
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(error) = handle_ws(state, stream).await {
-                eprintln!("eiviz api ws: {error}");
+        tokio::select! {
+            result = ws.accept() => {
+                let (stream, _) = result?;
+                let state = Arc::clone(&state);
+                connections.spawn(async move {
+                    let mut stop_rx = state.stop.clone();
+                    tokio::select! {
+                        result = handle_ws(Arc::clone(&state), stream) => {
+                            if let Err(error) = result {
+                                eprintln!("eiviz api ws: {error}");
+                            }
+                        }
+                        _ = stop_rx.wait_for(|stop| *stop) => {}
+                    }
+                });
             }
-        });
+            _ = stop_rx.wait_for(|stop| *stop) => break,
+            Some(_) = connections.join_next() => {}
+        }
     }
+    connections.abort_all();
+    while connections.join_next().await.is_some() {}
+    Ok(())
 }
 
 struct PendingUpload {
@@ -98,6 +159,8 @@ struct State {
     idle_timeout: Duration,
     media: Option<Arc<dyn MediaStorage>>,
     pending: Mutex<HashMap<String, PendingUpload>>,
+    stop: watch::Receiver<bool>,
+    shutdown: watch::Sender<bool>,
 }
 
 async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
@@ -200,10 +263,30 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
                                     last_seq = sub.after_sequence;
                                     subscribed = true;
                                 }
+                                let shutdown_cmd = matches!(
+                                    request.payload,
+                                    Some(request::Payload::Shutdown(_))
+                                );
                                 let response = dispatch(&state, &instance, role, request);
+                                let shutdown_ok = shutdown_cmd
+                                    && response
+                                        .kind
+                                        .as_ref()
+                                        .is_some_and(|kind| match kind {
+                                            envelope::Kind::Response(item) => item
+                                                .status
+                                                .as_ref()
+                                                .is_none_or(|status| {
+                                                    status.code.is_empty() || status.code == "OK"
+                                                }),
+                                            _ => false,
+                                        });
                                 ws.send(Message::Binary(encode_envelope(&response).into()))
                                     .await
                                     .map_err(|error| error.to_string())?;
+                                if shutdown_ok {
+                                    let _ = state.shutdown.send(true);
+                                }
                                 last_activity = Instant::now();
                             }
                             _ => return Err("unexpected envelope".into()),
@@ -611,6 +694,7 @@ fn exec_cmd(
     request_id: &str,
     command: Command,
 ) -> Result<ProtoResponse, ControlError> {
+    let shutdown = matches!(command, Command::Shutdown);
     state
         .control
         .execute(
@@ -621,7 +705,9 @@ fn exec_cmd(
             command,
         )
         .and_then(|outcome| {
-            if !outcome.saved_path.is_empty() {
+            if shutdown {
+                Ok(ok_response(outcome, request_id.into()))
+            } else if !outcome.saved_path.is_empty() {
                 Ok(saved_session_response(outcome, request_id.into()))
             } else if !outcome.discover_kind.is_empty() {
                 Ok(discover_response(outcome, request_id.into()))
@@ -632,6 +718,19 @@ fn exec_cmd(
                     .map(|snap| proto_snapshot(snap, request_id.into()))
             }
         })
+}
+
+fn ok_response(outcome: eiviz_control::CommandOutcome, request_id: String) -> ProtoResponse {
+    ProtoResponse {
+        request_id,
+        status: Some(Status {
+            code: "OK".into(),
+            message: String::new(),
+        }),
+        revision: outcome.revision,
+        sequence: outcome.sequence,
+        payload: None,
+    }
 }
 
 fn saved_session_response(
@@ -832,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn websocket_snapshot_and_auth() {
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: "secret".into(),
                 require_auth: true,
@@ -842,18 +941,18 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let ok = ControlClient::websocket(&url, "secret");
         assert!(ok.snapshot_json().await.is_ok());
         let bad = ControlClient::websocket(&url, "nope");
         assert!(bad.snapshot_json().await.is_err());
-        task.abort();
+        let _ = handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn websocket_cut_goes_through_control_service() {
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: String::new(),
                 require_auth: false,
@@ -863,20 +962,20 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         ControlClient::websocket(&url, "")
             .cut(1, true)
             .await
             .unwrap();
         let snap = control.snapshot().unwrap();
         assert_eq!(snap.revision, 1);
-        task.abort();
+        let _ = handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn client_cannot_elevate_past_max_role() {
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: "secret".into(),
                 require_auth: true,
@@ -886,17 +985,17 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let client = ControlClient::websocket(&url, "secret");
         assert!(client.snapshot_json().await.is_ok());
         assert!(client.cut(1, true).await.is_err());
-        task.abort();
+        let _ = handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn websocket_discover_returns_host_payload() {
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: String::new(),
                 require_auth: false,
@@ -906,7 +1005,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let client = ControlClient::websocket(&url, "");
         let uvc = client.discover("uvc", "").await.unwrap();
         assert_eq!(uvc, "[]");
@@ -914,13 +1013,13 @@ mod tests {
         assert_eq!(modes, "[]");
         let omt = client.discover("omt", "").await.unwrap();
         assert_eq!(omt, "");
-        task.abort();
+        let _ = handle.shutdown().await;
     }
 
     #[tokio::test]
     async fn two_subscribers_see_the_same_cut() {
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: String::new(),
                 require_auth: false,
@@ -930,7 +1029,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let a = ControlClient::websocket(&url, "").connect().await.unwrap();
         let b = ControlClient::websocket(&url, "").connect().await.unwrap();
         a.subscribe(0).await.unwrap();
@@ -949,7 +1048,7 @@ mod tests {
                 .iter()
                 .any(|kind| kind == "LiveChanged" || kind == "CommandApplied")
         );
-        task.abort();
+        let _ = handle.shutdown().await;
     }
 
     #[tokio::test]
@@ -958,7 +1057,7 @@ mod tests {
         let store =
             crate::FileMediaStorage::new(crate::MediaStorageConfig::new(dir.clone())).unwrap();
         let control = ready_control();
-        let (bind, task) = listen(
+        let handle = listen(
             ServerConfig {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 auth: AuthConfig {
@@ -974,7 +1073,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let session = ControlClient::websocket(&url, "").connect().await.unwrap();
         let src = std::env::temp_dir().join(format!("eiviz-src-{}.png", uuid::Uuid::new_v4()));
         std::fs::write(&src, b"\x89PNG\r\n").unwrap();
@@ -989,7 +1088,7 @@ mod tests {
                 .iter()
                 .any(|input| input.name == "Logo")
         );
-        task.abort();
+        let _ = handle.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -999,7 +1098,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("show.eivz");
         let control = ready_control_with_path(path);
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: "secret".into(),
                 require_auth: true,
@@ -1009,10 +1108,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let client = ControlClient::websocket(&url, "secret");
         assert!(client.save_session().await.is_err());
-        task.abort();
+        let _ = handle.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1022,7 +1121,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("show.eivz");
         let control = ready_control_with_path(path.clone());
-        let (bind, task) = listen(
+        let handle = listen(
             config(AuthConfig {
                 token: String::new(),
                 require_auth: false,
@@ -1032,7 +1131,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let url = format!("ws://{}", bind.ws_addr);
+        let url = format!("ws://{}", handle.bind.ws_addr);
         let (saved, count) = ControlClient::websocket(&url, "")
             .save_session()
             .await
@@ -1040,7 +1139,28 @@ mod tests {
         assert_eq!(std::path::Path::new(&saved), path.as_path());
         assert_eq!(count, 0);
         assert!(path.is_file());
-        task.abort();
+        let _ = handle.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn shutdown_command_requests_server_stop() {
+        let control = ready_control();
+        let mut handle = listen(
+            config(AuthConfig {
+                token: String::new(),
+                require_auth: false,
+                max_role: Role::Admin,
+            }),
+            control,
+        )
+        .await
+        .unwrap();
+        let url = format!("ws://{}", handle.bind.ws_addr);
+        ControlClient::websocket(&url, "").shutdown().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle.wait_shutdown_request())
+            .await
+            .expect("api shutdown request");
+        handle.shutdown().await.unwrap();
     }
 }

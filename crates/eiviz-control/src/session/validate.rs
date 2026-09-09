@@ -69,17 +69,34 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
         }
     }
     for input in &doc.inputs {
-        if input.kind == InputKind::Mix {
-            if input.mix_target_id == 0 || !unit_ids.contains(&input.mix_target_id) {
-                return Err(ValidationError::new(format!(
-                    "mix input {} references missing unit {}",
-                    input.id, input.mix_target_id
-                )));
+        if input.kind != InputKind::Mix {
+            continue;
+        }
+        if input.mix_target_id == 0 {
+            return Err(ValidationError::new(format!(
+                "mix input {} has no target",
+                input.id
+            )));
+        }
+        match input.mix_source {
+            MixSource::SessionMultiview => {
+                if !mv_ids.iter().any(|&id| {
+                    id == input.mix_target_id
+                        || crate::ids::multiview_gpu_id(id) == input.mix_target_id
+                }) {
+                    return Err(ValidationError::new(format!(
+                        "mix input {} references missing multiview {}",
+                        input.id, input.mix_target_id
+                    )));
+                }
             }
-            if input.mix_source == MixSource::SessionMultiview
-                && !mv_ids.contains(&input.mix_target_id)
-            {
-                // mix_target_id is the MU for preview/program; SessionMultiview uses mix_target as layout id
+            MixSource::MuProgram | MixSource::MuPreview => {
+                if !unit_ids.contains(&input.mix_target_id) {
+                    return Err(ValidationError::new(format!(
+                        "mix input {} references missing unit {}",
+                        input.id, input.mix_target_id
+                    )));
+                }
             }
         }
     }
@@ -162,7 +179,10 @@ fn detect_mix_cycles(doc: &Document) -> Result<(), ValidationError> {
     use std::collections::{HashMap, HashSet};
     let mut edges: HashMap<u64, u64> = HashMap::new();
     for input in &doc.inputs {
-        if input.kind == InputKind::Mix && input.mix_target_id != 0 {
+        if input.kind == InputKind::Mix
+            && input.mix_source != MixSource::SessionMultiview
+            && input.mix_target_id != 0
+        {
             edges.insert(input.id, input.mix_target_id);
         }
     }
@@ -238,5 +258,47 @@ mod tests {
             doc.inputs[0].path_or_address.as_deref(),
             Some("/no/such/card.png")
         );
+    }
+
+    #[test]
+    fn mix_session_multiview_accepts_layout_or_gpu_id() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Bars", "kind": "Bars" },
+            { "id": 20, "name": "MV", "kind": "Mix", "mixSource": "SessionMultiview", "mixTargetId": 1 }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "multiviews": [{ "id": 1, "name": "MV 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        validate(&doc).unwrap();
+
+        let mut gpu = doc.clone();
+        gpu.inputs[1].mix_target_id = crate::ids::multiview_gpu_id(1);
+        validate(&gpu).unwrap();
+
+        let mut missing = doc;
+        missing.inputs[1].mix_target_id = 9;
+        let err = validate(&missing).unwrap_err();
+        assert!(err.message.contains("multiview"), "{}", err.message);
+    }
+
+    #[test]
+    fn mix_mu_program_rejects_gpu_multiview_id_as_unit() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Bars", "kind": "Bars" },
+            { "id": 20, "name": "PGM", "kind": "Mix", "mixSource": "MuProgram", "mixTargetId": 131073 }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "multiviews": [{ "id": 1, "name": "MV 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("unit"), "{}", err.message);
     }
 }
