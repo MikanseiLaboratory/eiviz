@@ -1,13 +1,11 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::abi::{
-    GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OverlayDesc, Rect, SRC_BARS,
-    SRC_BLACK, SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM,
-    TRANSITION_DATAMOSH, TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER,
-    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
-    mixing_unit_preview, mixing_unit_source,
+    GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
+    SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
+    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER, UnitState, is_multiview,
+    is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
 use crate::pool::{UniformPool, uniform_dyn};
@@ -125,48 +123,15 @@ struct SourceGpu {
     owned: bool,
 }
 
-pub struct UnitTargets {
-    pub width: u32,
-    pub height: u32,
-    pub program: wgpu::Texture,
-    pub preview: wgpu::Texture,
-    pub mixed: wgpu::Texture,
-    pub prev: wgpu::Texture,
-    sort_a: wgpu::Texture,
-    sort_b: wgpu::Texture,
-    flow: wgpu::Texture,
-    bloom_a: wgpu::Texture,
-    bloom_b: wgpu::Texture,
-    aux: wgpu::Texture,
-    pub packed: Option<wgpu::Texture>,
-    pub packed_prv: Option<wgpu::Texture>,
-    program_view: wgpu::TextureView,
-    preview_view: wgpu::TextureView,
-    mixed_view: wgpu::TextureView,
-    prev_view: wgpu::TextureView,
-    sort_b_view: wgpu::TextureView,
-    flow_view: wgpu::TextureView,
-    bloom_a_view: wgpu::TextureView,
-    bloom_b_view: wgpu::TextureView,
-    aux_view: wgpu::TextureView,
-    prev_seeded: bool,
-    packed_view: Option<wgpu::TextureView>,
-}
+mod cache;
+mod pipeline;
+mod scene;
+mod unit;
 
-struct SceneGpu {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    packed: Option<wgpu::Texture>,
-    packed_view: Option<wgpu::TextureView>,
-    width: u32,
-    height: u32,
-    layers: Arc<[OverlayDesc]>,
-    labels: Arc<[String]>,
-    label_size: f32,
-    label_percent: bool,
-    label_top: bool,
-}
-
+use cache::{LabelTexKey, label_cache_key, mv_label_rgb, mv_tally_program};
+use pipeline::*;
+use scene::SceneGpu;
+pub use unit::UnitTargets;
 pub struct Composer {
     color: wgpu::RenderPipeline,
     bars: wgpu::RenderPipeline,
@@ -307,7 +272,7 @@ impl Composer {
         let color = pipeline(
             device,
             "color",
-            include_str!("../shaders/color.wgsl"),
+            include_str!("../../shaders/color.wgsl"),
             &color_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             false,
@@ -315,7 +280,7 @@ impl Composer {
         let bars = pipeline(
             device,
             "bars",
-            include_str!("../shaders/bars.wgsl"),
+            include_str!("../../shaders/bars.wgsl"),
             &color_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             false,
@@ -323,7 +288,7 @@ impl Composer {
         let blit = pipeline(
             device,
             "blit",
-            include_str!("../shaders/blit.wgsl"),
+            include_str!("../../shaders/blit.wgsl"),
             &blit_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             true,
@@ -331,7 +296,7 @@ impl Composer {
         let uyvy = pipeline(
             device,
             "uyvy",
-            include_str!("../shaders/uyvy_to_rgba.wgsl"),
+            include_str!("../../shaders/uyvy_to_rgba.wgsl"),
             &blit_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             true,
@@ -339,7 +304,7 @@ impl Composer {
         let mix = pipeline(
             device,
             "mix",
-            include_str!("../shaders/mix.wgsl"),
+            include_str!("../../shaders/mix.wgsl"),
             &mix_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             false,
@@ -347,7 +312,7 @@ impl Composer {
         let pack = pipeline(
             device,
             "pack",
-            include_str!("../shaders/rgba_to_uyvy.wgsl"),
+            include_str!("../../shaders/rgba_to_uyvy.wgsl"),
             &pack_bg_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             false,
@@ -355,28 +320,28 @@ impl Composer {
         let sort_cs = compute_pipeline(
             device,
             "sort",
-            include_str!("../shaders/sort.wgsl"),
+            include_str!("../../shaders/sort.wgsl"),
             &fx1_layout,
             "cs_main",
         )?;
         let flow_cs = compute_pipeline(
             device,
             "flow",
-            include_str!("../shaders/flow.wgsl"),
+            include_str!("../../shaders/flow.wgsl"),
             &fx2_layout,
             "cs_main",
         )?;
         let bloom_cs = compute_pipeline(
             device,
             "bloom",
-            include_str!("../shaders/bloom.wgsl"),
+            include_str!("../../shaders/bloom.wgsl"),
             &fx2_layout,
             "cs_main",
         )?;
         let bloom_blur_cs = compute_pipeline(
             device,
             "bloom-blur",
-            include_str!("../shaders/bloom_blur.wgsl"),
+            include_str!("../../shaders/bloom_blur.wgsl"),
             &fx1_layout,
             "cs_main",
         )?;
@@ -2517,560 +2482,6 @@ impl Composer {
     }
 }
 
-impl UnitTargets {
-    fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST;
-        let program = make_texture(device, width, height, usage);
-        let preview = make_texture(device, width, height, usage);
-        let mixed = make_texture(device, width, height, usage);
-        let prev = make_texture(device, width, height, usage);
-        let fx = wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::COPY_DST;
-        let sort_a = make_texture(device, width, height, fx);
-        let sort_b = make_texture(device, width, height, fx);
-        let aux = make_texture(device, width, height, fx);
-        let half_w = (width / 2).max(1);
-        let half_h = (height / 2).max(1);
-        let flow = make_texture(device, half_w, half_h, fx);
-        let bloom_a = make_texture(device, half_w, half_h, fx);
-        let bloom_b = make_texture(device, half_w, half_h, fx);
-        Self {
-            width,
-            height,
-            program_view: program.create_view(&Default::default()),
-            preview_view: preview.create_view(&Default::default()),
-            mixed_view: mixed.create_view(&Default::default()),
-            prev_view: prev.create_view(&Default::default()),
-            sort_b_view: sort_b.create_view(&Default::default()),
-            flow_view: flow.create_view(&Default::default()),
-            bloom_a_view: bloom_a.create_view(&Default::default()),
-            bloom_b_view: bloom_b.create_view(&Default::default()),
-            aux_view: aux.create_view(&Default::default()),
-            prev_seeded: false,
-            packed_view: None,
-            program,
-            preview,
-            mixed,
-            prev,
-            sort_a,
-            sort_b,
-            flow,
-            bloom_a,
-            bloom_b,
-            aux,
-            packed: None,
-            packed_prv: None,
-        }
-    }
-
-    fn vram_bytes(&self) -> u64 {
-        let mut total = texture_bytes(&self.program)
-            + texture_bytes(&self.preview)
-            + texture_bytes(&self.mixed)
-            + texture_bytes(&self.prev)
-            + texture_bytes(&self.sort_a)
-            + texture_bytes(&self.sort_b)
-            + texture_bytes(&self.flow)
-            + texture_bytes(&self.bloom_a)
-            + texture_bytes(&self.bloom_b)
-            + texture_bytes(&self.aux);
-        if let Some(tex) = &self.packed {
-            total += texture_bytes(tex);
-        }
-        if let Some(tex) = &self.packed_prv {
-            total += texture_bytes(tex);
-        }
-        total
-    }
-}
-
-fn stub_named_fn(src: &str, name: &str, stub: &str) -> String {
-    let needle = format!("fn {name}");
-    let Some(start) = src.find(&needle) else {
-        return src.to_string();
-    };
-    let rest = &src[start..];
-    let Some(brace) = rest.find('{') else {
-        return src.to_string();
-    };
-    let mut depth = 0i32;
-    let mut end = None;
-    for (i, ch) in rest[brace..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(start + brace + i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let Some(end) = end else {
-        return src.to_string();
-    };
-    format!("{}{}{}", &src[..start], stub, &src[end..])
-}
-
-fn custom_mix_source(user_wgsl: &str) -> String {
-    let body = stub_named_fn(
-        user_wgsl,
-        "user_compute",
-        "fn user_compute(id: vec3<u32>, dim: vec2<u32>) {}",
-    );
-    format!(
-        "{}\n{}\n@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {{\n    if params.mix <= 0.001 {{\n        return textureSample(pgm_tex, src_samp, in.uv);\n    }}\n    if params.mix >= 0.999 {{\n        return textureSample(pvw_tex, src_samp, in.uv);\n    }}\n    return user_transition(in.uv, params.mix);\n}}\n",
-        CUSTOM_MIX_PREAMBLE, body
-    )
-}
-
-fn custom_compute_source(user_wgsl: &str) -> String {
-    let body = stub_named_fn(
-        user_wgsl,
-        "user_transition",
-        "fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32> { return vec4<f32>(0.0); }",
-    );
-    format!(
-        "{}\n{}\n@compute @workgroup_size(8, 8)\nfn cs_user(@builtin(global_invocation_id) id: vec3<u32>) {{\n    let dim = vec2<u32>(textureDimensions(aux_out));\n    if id.x >= dim.x || id.y >= dim.y {{ return; }}\n    user_compute(id, dim);\n}}\n",
-        USER_COMPUTE_PREAMBLE, body
-    )
-}
-
-const CUSTOM_MIX_PREAMBLE: &str = r#"
-struct VsOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-struct MixParams {
-    mix: f32,
-    kind: u32,
-    direction: u32,
-    softness: f32,
-    dip: vec4<f32>,
-    param: f32,
-    time: f32,
-    resolution: vec2<f32>,
-}
-@group(0) @binding(0) var pgm_tex: texture_2d<f32>;
-@group(0) @binding(1) var pvw_tex: texture_2d<f32>;
-@group(0) @binding(2) var src_samp: sampler;
-@group(0) @binding(3) var<uniform> params: MixParams;
-@group(0) @binding(4) var prev_tex: texture_2d<f32>;
-@group(0) @binding(5) var src_samp_n: sampler;
-@group(0) @binding(6) var flow_tex: texture_2d<f32>;
-@group(0) @binding(7) var bloom_tex: texture_2d<f32>;
-@group(0) @binding(8) var aux_tex: texture_2d<f32>;
-@group(0) @binding(9) var aux2_tex: texture_2d<f32>;
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0),
-    );
-    let pos = positions[index];
-    var out: VsOut;
-    out.clip = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
-    return out;
-}
-"#;
-
-const USER_COMPUTE_PREAMBLE: &str = r#"
-struct MixParams {
-    mix: f32,
-    kind: u32,
-    direction: u32,
-    softness: f32,
-    dip: vec4<f32>,
-    param: f32,
-    time: f32,
-    resolution: vec2<f32>,
-}
-@group(0) @binding(0) var pgm_tex: texture_2d<f32>;
-@group(0) @binding(1) var pvw_tex: texture_2d<f32>;
-@group(0) @binding(2) var src_samp: sampler;
-@group(0) @binding(3) var<uniform> params: MixParams;
-@group(0) @binding(4) var prev_tex: texture_2d<f32>;
-@group(0) @binding(5) var src_samp_n: sampler;
-@group(0) @binding(6) var flow_tex: texture_2d<f32>;
-@group(0) @binding(7) var bloom_tex: texture_2d<f32>;
-@group(0) @binding(8) var aux_out: texture_storage_2d<rgba8unorm, write>;
-fn user_store(p: vec2<i32>, c: vec4<f32>) {
-    textureStore(aux_out, p, c);
-}
-"#;
-
-fn color_for(id: u64) -> [f32; 4] {
-    match id {
-        SRC_BLUE => [0.0, 0.0, 1.0, 1.0],
-        SRC_BLACK => [0.0, 0.0, 0.0, 1.0],
-        _ => [1.0, 0.0, 0.0, 1.0],
-    }
-}
-
-fn copy_texture(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu::Texture) {
-    let size = src.size();
-    if size != dst.size() {
-        return;
-    }
-    encoder.copy_texture_to_texture(
-        src.as_image_copy(),
-        dst.as_image_copy(),
-        wgpu::Extent3d {
-            width: size.width,
-            height: size.height,
-            depth_or_array_layers: 1,
-        },
-    );
-}
-
-fn make_texture(
-    device: &GpuDevice,
-    width: u32,
-    height: u32,
-    usage: wgpu::TextureUsages,
-) -> wgpu::Texture {
-    make_texture_format(
-        device,
-        width,
-        height,
-        usage,
-        wgpu::TextureFormat::Rgba8Unorm,
-    )
-}
-
-fn make_texture_format(
-    device: &GpuDevice,
-    width: u32,
-    height: u32,
-    usage: wgpu::TextureUsages,
-    format: wgpu::TextureFormat,
-) -> wgpu::Texture {
-    device.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("eiviz target"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage,
-        view_formats: &[],
-    })
-}
-
-fn pipeline(
-    device: &GpuDevice,
-    label: &str,
-    source: &str,
-    layout: &wgpu::BindGroupLayout,
-    format: wgpu::TextureFormat,
-    blend: bool,
-) -> Result<wgpu::RenderPipeline, String> {
-    let shader = device
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-    let pipeline_layout = device
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(label),
-            bind_group_layouts: &[Some(layout)],
-            immediate_size: 0,
-        });
-    Ok(device
-        .device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        }))
-}
-
-fn compute_pipeline(
-    device: &GpuDevice,
-    label: &str,
-    source: &str,
-    layout: &wgpu::BindGroupLayout,
-    entry: &str,
-) -> Result<wgpu::ComputePipeline, String> {
-    let shader = device
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-    let pipeline_layout = device
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(label),
-            bind_group_layouts: &[Some(layout)],
-            immediate_size: 0,
-        });
-    Ok(device
-        .device
-        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some(entry),
-            compilation_options: Default::default(),
-            cache: None,
-        }))
-}
-
-fn begin_clear<'a>(
-    encoder: &'a mut wgpu::CommandEncoder,
-    view: &'a wgpu::TextureView,
-) -> wgpu::RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("eiviz clear"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        occlusion_query_set: None,
-        timestamp_writes: None,
-        multiview_mask: None,
-    })
-}
-
-fn write_aligned_texture(
-    device: &GpuDevice,
-    texture: &wgpu::Texture,
-    data: &[u8],
-    row_bytes: u32,
-    height: u32,
-    tex_width: u32,
-    format: wgpu::TextureFormat,
-    uploader: Option<&mut crate::rebar::FrameUploader>,
-) {
-    if let Some(uploader) = uploader {
-        if uploader
-            .upload(device, texture, data, row_bytes, height, tex_width, format)
-            .is_ok()
-        {
-            return;
-        }
-    }
-    let aligned = row_bytes.div_ceil(256) * 256;
-    let (bytes, pitch) = if aligned == row_bytes {
-        (Cow::Borrowed(data), row_bytes)
-    } else {
-        let mut padded = vec![0u8; aligned as usize * height as usize];
-        let row = row_bytes as usize;
-        for y in 0..height as usize {
-            let src = y * row;
-            let dst = y * aligned as usize;
-            if src + row <= data.len() {
-                padded[dst..dst + row].copy_from_slice(&data[src..src + row]);
-            }
-        }
-        (Cow::Owned(padded), aligned)
-    };
-    device.queue.write_texture(
-        texture.as_image_copy(),
-        &bytes,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(pitch),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width: tex_width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-}
-
-fn solid_swatch(device: &GpuDevice, rgba: [u8; 4]) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = make_texture(
-        device,
-        8,
-        8,
-        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-    );
-    let pixels = vec![rgba; 64];
-    let bytes: Vec<u8> = pixels.into_iter().flatten().collect();
-    let mut padded = vec![0u8; 256 * 8];
-    for y in 0..8 {
-        let src = y * 32;
-        let dst = y * 256;
-        padded[dst..dst + 32].copy_from_slice(&bytes[src..src + 32]);
-    }
-    device.queue.write_texture(
-        texture.as_image_copy(),
-        &padded,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(256),
-            rows_per_image: Some(8),
-        },
-        wgpu::Extent3d {
-            width: 8,
-            height: 8,
-            depth_or_array_layers: 1,
-        },
-    );
-    let view = texture.create_view(&Default::default());
-    (texture, view)
-}
-
-fn begin<'a>(
-    encoder: &'a mut wgpu::CommandEncoder,
-    view: &'a wgpu::TextureView,
-) -> wgpu::RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("eiviz pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        occlusion_query_set: None,
-        timestamp_writes: None,
-        multiview_mask: None,
-    })
-}
-
-fn sampled_compute(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn storage_write(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    }
-}
-
-fn sampler_compute(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    }
-}
-
-fn sampled(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct LabelTexKey {
-    text: String,
-    rgb: [u8; 3],
-    font_q: u16,
-    dest_w: u32,
-}
-
-impl LabelTexKey {
-    fn new(text: &str, rgb: [u8; 3], font_px: f32, dest_w: u32) -> Self {
-        Self {
-            text: text.to_string(),
-            rgb,
-            font_q: (font_px * 2.0).round() as u16,
-            dest_w,
-        }
-    }
-}
-
-fn label_cache_key(key: &LabelTexKey) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
-    LABEL_BASE.wrapping_add(0xF000) ^ hasher.finish()
-}
-
-fn mv_label_rgb(source_id: u64, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) -> [u8; 3] {
-    if mixing_unit_from_source(source_id).is_none() {
-        return inactive;
-    }
-    match mixing_unit_bus(source_id) {
-        OUTPUT_PREVIEW => preview,
-        OUTPUT_PROGRAM => program,
-        _ => inactive,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{FULL_UV, crop_blit};
@@ -3156,21 +2567,4 @@ mod tests {
         assert!(!super::generator_needs_rebake(&spec, Some(&spec), true));
         assert!(super::generator_needs_draw_update(&spec, Some(&spec), true));
     }
-}
-
-fn mv_tally_program(source_id: u64, tallies: &[(u64, u64)]) -> Option<bool> {
-    if mixing_unit_from_source(source_id).is_some() {
-        return match mixing_unit_bus(source_id) {
-            OUTPUT_PREVIEW => Some(false),
-            OUTPUT_PROGRAM => Some(true),
-            _ => None,
-        };
-    }
-    if source_id != 0 && tallies.iter().any(|(_, program)| *program == source_id) {
-        return Some(true);
-    }
-    if source_id != 0 && tallies.iter().any(|(preview, _)| *preview == source_id) {
-        return Some(false);
-    }
-    None
 }
