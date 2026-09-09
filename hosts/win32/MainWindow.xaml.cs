@@ -59,7 +59,11 @@ public partial class MainWindow : Window
         RebuildSceneTabs();
         UnitBox.ItemsSource = _session.Units;
         _suppressUnitChange = true;
-        UnitBox.SelectedIndex = 0;
+        var unit = _session.Units.FirstOrDefault(item => item.Id == _session.SelectedUnitId)
+            ?? _session.Units.FirstOrDefault();
+        UnitBox.SelectedItem = unit;
+        if (unit is not null)
+            _session.SelectedUnitId = unit.Id;
         _suppressUnitChange = false;
         RebuildScenes();
         RebuildTransitions();
@@ -96,8 +100,8 @@ public partial class MainWindow : Window
             BindMainVideo();
             if (!HostRole.IsRemote)
                 AudioGraphSync.Push(_session);
-            if (_session.Scenes.Count > 0)
-                SelectScene(_session.Scenes[0]);
+            SyncSelectedSceneFromMixer();
+            RefreshSceneTiles();
         };
         if (HostRole.IsRemote)
             RemoteVideoCatalog.Updated += OnRemoteVideoCatalogUpdated;
@@ -106,7 +110,6 @@ public partial class MainWindow : Window
     internal void ReloadFromSession()
     {
         var selectedUnit = _session.SelectedUnitId;
-        var selectedScene = _selectedScene?.Id;
         var selectedInput = InputList.SelectedItem is InputEntry input ? input.Id : 0UL;
         BindInputList();
         RebuildInputTabs();
@@ -118,14 +121,8 @@ public partial class MainWindow : Window
             ?? _session.Units.FirstOrDefault();
         _suppressUnitChange = false;
         RebuildScenes();
-        if (selectedScene is ulong sceneId)
-        {
-            var scene = _session.Scenes.FirstOrDefault(item => item.Id == sceneId);
-            if (scene is not null)
-                SelectScene(scene);
-        }
-        else if (_session.Scenes.Count > 0)
-            SelectScene(_session.Scenes[0]);
+        SyncSelectedSceneFromMixer();
+        RefreshSceneTiles();
         if (selectedInput != 0)
         {
             var keep = _session.Inputs.FirstOrDefault(item => item.Id == selectedInput);
@@ -2473,6 +2470,7 @@ public partial class MainWindow : Window
         {
             SessionStore.Save(_session, path);
             AppPrefs.Current.RememberSession(path);
+            StatusToast.Show(this, Loc.T("msg.saved"));
         }
         catch (Exception ex)
         {
@@ -2493,7 +2491,7 @@ public partial class MainWindow : Window
             var history = payload.RootElement.TryGetProperty("historyCount", out var countEl)
                 ? countEl.GetUInt32()
                 : 0;
-            MessageBox.Show(this, Loc.Format("msg.remoteSaved", path, history), Loc.T("action.Save session"));
+            StatusToast.Show(this, Loc.Format("msg.remoteSaved", path, history));
         }
         catch (Exception ex)
         {

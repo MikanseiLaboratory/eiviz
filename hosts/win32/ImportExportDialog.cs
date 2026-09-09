@@ -13,6 +13,7 @@ internal sealed class ImportExportDialog : Window
     public ImportExportDialog(string exportPath)
     {
         Title = Loc.T("chrome.importExport");
+        HostDialog.Apply(this);
         Width = 560;
         Height = 240;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;

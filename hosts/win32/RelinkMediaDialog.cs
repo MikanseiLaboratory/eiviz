@@ -11,6 +11,7 @@ internal sealed class RelinkMediaDialog : Window
     public RelinkMediaDialog(string? title = null, string? hint = null)
     {
         Title = title ?? Loc.T("input.relinkFolder");
+        HostDialog.Apply(this);
         Width = 480;
         Height = 160;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;

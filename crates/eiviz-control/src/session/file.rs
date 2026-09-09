@@ -74,7 +74,7 @@ pub fn write_document(path: impl AsRef<Path>, doc: &Document) -> Result<u32, Str
 pub fn write_document_rev(
     path: impl AsRef<Path>,
     doc: &Document,
-    revision: u64,
+    _revision: u64,
 ) -> Result<u32, String> {
     let path = path.as_ref();
     let canonical = doc.clone().canonicalize();
@@ -89,11 +89,17 @@ pub fn write_document_rev(
             .unwrap_or_default();
         let mut history = file.history;
         if !old_doc_bytes.is_empty() && old_doc_bytes != new_doc_bytes {
+            let generation = history
+                .iter()
+                .map(|entry| entry.revision)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
             history.insert(
                 0,
                 pb::HistoryEntry {
                     unix_ms: unix_ms_now(),
-                    revision,
+                    revision: generation,
                     document: old_doc_bytes,
                 },
             );
@@ -1410,7 +1416,7 @@ mod tests {
         let history = read_history(&path).unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].index, 0);
-        assert_eq!(history[0].revision, 4);
+        assert_eq!(history[0].revision, 1);
         assert_eq!(extract_history(&path, 0).unwrap().inputs[0].name, "one");
         assert_eq!(read_document(&path).unwrap().inputs[0].name, "two");
         let _ = std::fs::remove_dir_all(&dir);

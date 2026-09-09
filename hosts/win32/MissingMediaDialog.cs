@@ -14,6 +14,7 @@ internal sealed class MissingMediaDialog : Window
     {
         _session = session;
         Title = Loc.T("input.missingTitle");
+        HostDialog.Apply(this);
         Width = 620;
         Height = 380;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;

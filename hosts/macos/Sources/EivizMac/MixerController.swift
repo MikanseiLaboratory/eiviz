@@ -1579,12 +1579,7 @@ final class MixerController: ObservableObject {
             presentError(L10n.error("Save session", 3), title: L10n.t("action.Save session"))
             return
         }
-        let alert = NSAlert()
-        alert.messageText = L10n.t("action.Save session")
-        alert.informativeText = L10n.format("msg.remoteSaved", payload.path, "\(payload.historyCount)")
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L10n.t("dialog.ok"))
-        alert.runModal()
+        AppKitDialog.toast(L10n.format("msg.remoteSaved", payload.path, "\(payload.historyCount)"))
     }
 
     func exportSession() {
@@ -1635,6 +1630,9 @@ final class MixerController: ObservableObject {
             }
             if saved {
                 AppPrefs.shared.rememberSession(path)
+                if !export {
+                    AppKitDialog.toast(L10n.t("msg.saved"))
+                }
             }
         } catch {
             presentError(
@@ -1766,6 +1764,7 @@ final class MixerController: ObservableObject {
         alert.informativeText = L10n.format("msg.relinked", "\(count)")
         alert.alertStyle = .informational
         alert.addButton(withTitle: L10n.t("dialog.ok"))
+        AppKitDialog.elevate(alert)
         alert.runModal()
     }
 
@@ -1779,6 +1778,7 @@ final class MixerController: ObservableObject {
             alert.accessoryView = field
             alert.addButton(withTitle: L10n.t("dialog.ok"))
             alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            AppKitDialog.elevate(alert)
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
             let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
@@ -1788,6 +1788,7 @@ final class MixerController: ObservableObject {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.message = L10n.t("input.relinkFolder")
+        AppKitDialog.apply(panel)
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url.path
     }
@@ -1802,6 +1803,7 @@ final class MixerController: ObservableObject {
             alert.accessoryView = field
             alert.addButton(withTitle: L10n.t("dialog.ok"))
             alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            AppKitDialog.elevate(alert)
             guard alert.runModal() == .alertFirstButtonReturn else { return nil }
             let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
@@ -1812,6 +1814,7 @@ final class MixerController: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.message = L10n.t("input.relinkFile")
         panel.allowedContentTypes = input.kind == .still ? [.image] : [.movie]
+        AppKitDialog.apply(panel)
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url.path
     }
@@ -1837,6 +1840,7 @@ final class MixerController: ObservableObject {
         hint.alertStyle = .informational
         hint.addButton(withTitle: L10n.t("dialog.ok"))
         hint.addButton(withTitle: L10n.t("dialog.cancel"))
+        AppKitDialog.elevate(hint)
         guard hint.runModal() == .alertFirstButtonReturn else { return nil }
         let exportUrl = URL(fileURLWithPath: exportPath)
         let parent = exportUrl.deletingLastPathComponent()
@@ -1847,6 +1851,7 @@ final class MixerController: ObservableObject {
         sessionPanel.directoryURL = parent
         sessionPanel.nameFieldStringValue = stem + ".eivz"
         sessionPanel.message = L10n.t("chrome.importSession")
+        AppKitDialog.apply(sessionPanel)
         guard sessionPanel.runModal() == .OK, let sessionUrl = sessionPanel.url else { return nil }
         let mediaPanel = NSOpenPanel()
         mediaPanel.canChooseDirectories = true
@@ -1856,6 +1861,7 @@ final class MixerController: ObservableObject {
         mediaPanel.directoryURL = parent
         mediaPanel.message = L10n.t("chrome.importMedia")
         mediaPanel.prompt = L10n.t("dialog.ok")
+        AppKitDialog.apply(mediaPanel)
         guard mediaPanel.runModal() == .OK, let mediaUrl = mediaPanel.url else { return nil }
         return (sessionUrl.path, mediaUrl.path)
     }
@@ -1888,6 +1894,7 @@ final class MixerController: ObservableObject {
             alert.addButton(withTitle: L10n.t("input.relinkFolder"))
             alert.addButton(withTitle: L10n.t("input.relinkFile"))
             alert.addButton(withTitle: L10n.t("dialog.ok"))
+            AppKitDialog.elevate(alert)
             let choice = alert.runModal()
             if choice == .alertFirstButtonReturn {
                 guard let directory = pickRelinkDirectory() else { continue }
@@ -1919,6 +1926,7 @@ final class MixerController: ObservableObject {
         alert.accessoryView = popup
         alert.addButton(withTitle: L10n.t("dialog.ok"))
         alert.addButton(withTitle: L10n.t("dialog.cancel"))
+        AppKitDialog.elevate(alert)
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let index = popup.indexOfSelectedItem
         guard leftover.indices.contains(index) else { return nil }
@@ -2540,6 +2548,7 @@ final class MixerController: ObservableObject {
         alert.messageText = L10n.t("error.mixerFatal")
         alert.alertStyle = .critical
         alert.addButton(withTitle: L10n.t("dialog.ok"))
+        AppKitDialog.elevate(alert)
         alert.runModal()
         NSApplication.shared.terminate(nil)
         return true
@@ -2577,6 +2586,7 @@ final class MixerController: ObservableObject {
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: L10n.t("dialog.ok"))
+        AppKitDialog.elevate(alert)
         alert.runModal()
     }
 
@@ -3172,12 +3182,12 @@ final class MixerController: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
-        for entry in entries {
+        for (offset, entry) in entries.enumerated() {
             let when = formatter.string(
                 from: Date(timeIntervalSince1970: TimeInterval(entry.unixMs) / 1000)
             )
             popup.addItem(
-                withTitle: L10n.format("history.entry", "\(entry.index)", when, "\(entry.revision)")
+                withTitle: L10n.format("history.entry", "\(offset + 1)", when)
             )
             popup.lastItem?.tag = Int(entry.index)
         }
@@ -3188,6 +3198,7 @@ final class MixerController: ObservableObject {
         alert.accessoryView = popup
         alert.addButton(withTitle: L10n.t("history.open"))
         alert.addButton(withTitle: L10n.t("history.cancel"))
+        AppKitDialog.elevate(alert)
         guard alert.runModal() == .alertFirstButtonReturn else { return .cancel }
         let tag = popup.selectedTag()
         return tag < 0 ? .latest : .revision(UInt32(tag))

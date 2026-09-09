@@ -13,20 +13,22 @@ internal sealed class SessionHistoryDialog : Window
     public SessionHistoryDialog(IReadOnlyList<SessionHistoryEntry> entries)
     {
         Title = Loc.T("history.title");
+        HostDialog.Apply(this);
         Width = 420;
         Height = 320;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
         var list = new ListBox { Margin = new Thickness(12) };
         list.Items.Add(new ListBoxItem { Content = Loc.T("history.latest"), Tag = null });
-        foreach (var entry in entries)
+        for (var i = 0; i < entries.Count; i++)
         {
+            var entry = entries[i];
             var when = DateTimeOffset.FromUnixTimeMilliseconds((long)entry.UnixMs)
                 .ToLocalTime()
                 .ToString("g", CultureInfo.CurrentCulture);
             list.Items.Add(new ListBoxItem
             {
-                Content = Loc.Format("history.entry", entry.Index, when, entry.Revision),
+                Content = Loc.Format("history.entry", i + 1, when),
                 Tag = entry.Index
             });
         }
