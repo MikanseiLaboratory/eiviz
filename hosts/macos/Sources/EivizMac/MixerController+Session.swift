@@ -1637,7 +1637,7 @@ extension MixerController {
         return try? JSONDecoder().decode([SessionHistoryEntry].self, from: data)
     }
 
-    func pickHistory(_ entries: [SessionHistoryEntry]) -> HistoryPick {
+    private func pickHistory(_ entries: [SessionHistoryEntry]) -> HistoryPick {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 380, height: 24), pullsDown: false)
         popup.addItem(withTitle: L10n.t("history.latest"))
         popup.lastItem?.tag = -1
