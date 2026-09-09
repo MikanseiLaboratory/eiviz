@@ -144,6 +144,7 @@ enum TextPrompt {
     }
 }
 
+@MainActor
 enum AppKitDialog {
     static func elevate(_ alert: NSAlert) {
         NSApp.activate(ignoringOtherApps: true)
@@ -203,7 +204,6 @@ enum AppKitDialog {
             window.close()
         }
     }
-}
 }
 
 struct CatalogTabBar: View {
