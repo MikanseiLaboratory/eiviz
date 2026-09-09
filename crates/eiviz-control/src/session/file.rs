@@ -1215,7 +1215,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{parse, to_vec, Renderer};
+    use crate::session::{Renderer, parse, to_vec};
 
     fn sample_json() -> &'static [u8] {
         br#"{
@@ -1319,9 +1319,11 @@ mod tests {
         let mut bad_container = MAGIC.to_vec();
         bad_container.extend_from_slice(&2u16.to_le_bytes());
         bad_container.extend_from_slice(&[0u8; 4]);
-        assert!(decode_file(&bad_container)
-            .unwrap_err()
-            .contains("container version"));
+        assert!(
+            decode_file(&bad_container)
+                .unwrap_err()
+                .contains("container version")
+        );
         let mut payload = encode_file(&parse(sample_json()).unwrap()).unwrap();
         payload.truncate(8);
         assert!(decode_file(&payload).is_err());
@@ -1356,9 +1358,11 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
         bytes.extend_from_slice(&file.encode_to_vec());
-        assert!(decode_file(&bytes)
-            .unwrap_err()
-            .contains("format version 99"));
+        assert!(
+            decode_file(&bytes)
+                .unwrap_err()
+                .contains("format version 99")
+        );
     }
 
     #[test]
@@ -1372,9 +1376,11 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
         bytes.extend_from_slice(&file.encode_to_vec());
-        assert!(decode_file(&bytes)
-            .unwrap_err()
-            .contains("missing a document"));
+        assert!(
+            decode_file(&bytes)
+                .unwrap_err()
+                .contains("missing a document")
+        );
     }
 
     #[test]

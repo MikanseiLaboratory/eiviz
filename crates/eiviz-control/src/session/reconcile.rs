@@ -1015,18 +1015,22 @@ mod tests {
         let doc = parse(src).unwrap();
         let ops = plan(None, &doc);
         assert!(matches!(ops.first(), Some(ReconcileOp::Settings)));
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::CreateUnit { id: 1, .. })));
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DefineGenerator(_))));
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DefineScene(_))));
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::CreateUnit { id: 1, .. }))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DefineGenerator(_)))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DefineScene(_)))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
+        );
     }
 
     #[test]
@@ -1062,24 +1066,30 @@ mod tests {
         }"#;
         let doc = parse(src).unwrap();
         let ops = plan(Some(&doc), &doc);
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DefineGenerator(_))));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DestroySource { .. })));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::StartVideo(_))));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DefineScene(_))));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::ConfigureUnit { .. })));
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DefineGenerator(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DefineScene(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::ConfigureUnit { .. }))
+        );
     }
 
     #[test]
@@ -1097,18 +1107,22 @@ mod tests {
         let mut next = doc.clone();
         next.settings.vmix_api_port = 9099;
         let ops = plan(Some(&doc), &next);
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::StartVideo(_))));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::DestroySource { .. })));
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. })));
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. }))
+        );
     }
 
     #[test]
@@ -1121,12 +1135,14 @@ mod tests {
         }"#;
         let doc = parse(src).unwrap();
         let ops = plan(None, &doc);
-        assert!(ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::FailInput { id: 2, .. })));
-        assert!(!ops
-            .iter()
-            .any(|op| matches!(op, ReconcileOp::LoadStill { .. })));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailInput { id: 2, .. }))
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::LoadStill { .. }))
+        );
     }
 
     #[test]

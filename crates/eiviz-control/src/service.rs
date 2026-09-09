@@ -11,10 +11,10 @@ use crate::lifecycle::Lifecycle;
 use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Capabilities, Query, Snapshot};
+use crate::session::Document;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, repair_live};
 use crate::session::store::CanonicalSessionStore;
-use crate::session::Document;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
 
 const DEDUPE_CAP: usize = 1024;
@@ -1107,12 +1107,13 @@ mod tests {
                 },
             )
             .unwrap();
-            assert!(svc
-                .document()
-                .unwrap()
-                .inputs
-                .iter()
-                .any(|item| item.name == "Logo"));
+            assert!(
+                svc.document()
+                    .unwrap()
+                    .inputs
+                    .iter()
+                    .any(|item| item.name == "Logo")
+            );
             let err = svc
                 .mutate_session(SessionMutation::DeleteInput { id: 2 }, Some(1), "stale")
                 .unwrap_err();
@@ -1229,10 +1230,12 @@ mod tests {
                 },
             )
             .unwrap();
-            assert!(probe
-                .ops()
-                .iter()
-                .any(|op| op.starts_with("overlay 1 true")));
+            assert!(
+                probe
+                    .ops()
+                    .iter()
+                    .any(|op| op.starts_with("overlay 1 true"))
+            );
         });
     }
 
@@ -1307,9 +1310,11 @@ mod tests {
                 probe.units()[&1].preview_source,
                 crate::ids::scene_gpu_id(2)
             );
-            assert!(!probe.ops()[after_cut..]
-                .iter()
-                .any(|op| op.starts_with("set_live")));
+            assert!(
+                !probe.ops()[after_cut..]
+                    .iter()
+                    .any(|op| op.starts_with("set_live"))
+            );
         });
     }
 
@@ -1335,9 +1340,11 @@ mod tests {
             let after_cut = probe.ops().len();
             svc.replace_session(video_doc(), Some(1), "settings")
                 .unwrap();
-            assert!(!probe.ops()[after_cut..]
-                .iter()
-                .any(|op| op.starts_with("seek") || op.starts_with("video ")));
+            assert!(
+                !probe.ops()[after_cut..]
+                    .iter()
+                    .any(|op| op.starts_with("seek") || op.starts_with("video "))
+            );
             assert_eq!(
                 probe.units()[&1].program_source,
                 crate::ids::scene_gpu_id(1)

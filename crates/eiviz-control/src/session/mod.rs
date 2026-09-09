@@ -17,12 +17,12 @@ use string_enum::session_string_enum;
 
 pub use default::{dated_session_filename, dated_session_filename_now, default_document};
 pub use file::{
-    decode_file, encode_file, export_document, extract_history, has_embedded_assets,
-    import_exported_session, read_document, read_history, write_document, write_document_rev,
-    HistoryMeta, CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, MAGIC,
+    CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
+    export_document, extract_history, has_embedded_assets, import_exported_session, read_document,
+    read_history, write_document, write_document_rev,
 };
 pub use relink::{media_file_missing, missing_media_message, relink_missing_media};
-pub use validate::{validate, validate_for_apply, ValidationError};
+pub use validate::{ValidationError, validate, validate_for_apply};
 
 use serde::{Deserialize, Serialize};
 

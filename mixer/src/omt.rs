@@ -964,19 +964,13 @@ mod tests {
             let _ = done_tx.send(());
         });
         let start = Instant::now();
-        let mut sent = 0u32;
-        while start.elapsed() < Duration::from_millis(150) {
-            send_audio_via_ingress(&ingress, &pkt(i64::from(sent))).expect("ingress send");
-            sent += 1;
-            std::thread::sleep(Duration::from_millis(10));
+        for i in 0..20 {
+            send_audio_via_ingress(&ingress, &pkt(i)).expect("ingress send");
         }
+        let elapsed = start.elapsed();
         assert!(
-            sent >= 10,
-            "delayed video must not stall 10 ms PCM, sent={sent}"
-        );
-        assert!(
-            start.elapsed() < Duration::from_millis(250),
-            "ingress send must stay off the encode worker"
+            elapsed < Duration::from_millis(100),
+            "delayed video must not stall PCM ingress, elapsed={elapsed:?}"
         );
         done_rx
             .recv_timeout(Duration::from_secs(1))
