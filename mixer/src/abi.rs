@@ -4,6 +4,7 @@ pub const ERR_NOT_CREATED: i32 = 2;
 pub const ERR_INVALID_ARGUMENT: i32 = 3;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
+pub const ERR_BUFFER_TOO_SMALL: i32 = 6;
 
 pub const BACKEND_AUTO: u32 = 0;
 pub const BACKEND_DX12: u32 = 1;

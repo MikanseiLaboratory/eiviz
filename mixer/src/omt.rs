@@ -953,6 +953,21 @@ mod tests {
     }
 
     #[test]
+    fn quality_from_abi_keeps_protocol_values() {
+        use openmediatransport::Quality;
+        assert!(matches!(super::quality_from_abi(0), Quality::Default));
+        assert!(matches!(super::quality_from_abi(1), Quality::Low));
+        assert!(matches!(super::quality_from_abi(50), Quality::Medium));
+        assert!(matches!(super::quality_from_abi(100), Quality::High));
+        assert!(matches!(super::quality_from_abi(2), Quality::Default));
+        assert!(matches!(super::quality_from_abi(3), Quality::Default));
+        assert_eq!(super::quality_to_abi(Quality::Default), 0);
+        assert_eq!(super::quality_to_abi(Quality::Low), 1);
+        assert_eq!(super::quality_to_abi(Quality::Medium), 50);
+        assert_eq!(super::quality_to_abi(Quality::High), 100);
+    }
+
+    #[test]
     fn omt_query_matches_output_name() {
         assert!(omt_query_matches(
             "eiviz-pgm",

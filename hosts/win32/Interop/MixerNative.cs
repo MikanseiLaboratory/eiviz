@@ -76,6 +76,7 @@ internal static partial class MixerNative
     internal const uint EasingSmoothstep = 4;
 
     internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
+    internal const int ErrBufferTooSmall = 6;
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
@@ -603,12 +604,14 @@ internal static partial class MixerNative
                     var n = call(ptr, (nuint)buffer.Length);
                     if (n >= 0)
                         return n == 0 ? string.Empty : Encoding.UTF8.GetString(buffer, 0, n);
-                    if (n == -1 && buffer.Length < 16 << 20)
+                    var needed = -n;
+                    if (buffer.Length < 16 << 20 && (needed == 1 || needed == ErrBufferTooSmall || needed > buffer.Length))
                     {
-                        buffer = new byte[buffer.Length * 2];
+                        var next = needed > buffer.Length ? needed : buffer.Length * 2;
+                        buffer = new byte[Math.Min(Math.Max(next, buffer.Length * 2), 16 << 20)];
                         continue;
                     }
-                    ThrowIfFailed(n < 0 ? -n : n, "Copy buffer");
+                    ThrowIfFailed(needed, "Copy buffer");
                     return string.Empty;
                 }
             }

@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 #define EIVIZ_OK 0
+#define EIVIZ_ERR_BUFFER_TOO_SMALL 6
 
 #define EIVIZ_SRC_COLOR 1ull
 #define EIVIZ_SRC_BARS 2ull

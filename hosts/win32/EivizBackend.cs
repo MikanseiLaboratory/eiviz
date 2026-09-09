@@ -318,7 +318,20 @@ internal sealed class LocalEivizBackend : IEivizBackend
         }
         catch
         {
-            // Keep the last good document when event JSON is truncated.
+            var json = MixerNative.SnapshotText();
+            if (string.IsNullOrEmpty(json) || Application.Current is not App app)
+                return;
+            try
+            {
+                var next = SessionStore.FromJson(json);
+                next.SelectedUnitId = app.Session.SelectedUnitId;
+                app.ReplaceDocument(next);
+                Changed?.Invoke();
+            }
+            catch
+            {
+                // Keep the last good document when snapshot JSON is unusable.
+            }
         }
     }
 
