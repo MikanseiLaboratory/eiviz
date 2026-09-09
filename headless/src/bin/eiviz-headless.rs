@@ -372,13 +372,7 @@ fn auth_from_prefs(prefs: &eiviz_headless::HeadlessPrefs) -> Result<AuthConfig, 
     let require_auth = !token.is_empty();
     let max_role = match prefs.max_role.as_deref() {
         Some(name) => eiviz_api::Role::try_from_name(name)?,
-        None => {
-            if require_auth {
-                eiviz_api::Role::Admin
-            } else {
-                eiviz_api::Role::Read
-            }
-        }
+        None => eiviz_api::Role::Admin,
     };
     Ok(AuthConfig {
         token,

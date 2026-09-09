@@ -59,7 +59,7 @@ Leftmost wins:
 - token: prefs `token` only (headless does not read token env vars)
 - renderer: `--renderer` → prefs `renderer` → `auto`
 - media directory: `--media-directory` or `EIVIZ_MEDIA_DIRECTORY` → prefs `mediaDirectory` → OS local-app-data `eiviz/media`
-- max role: prefs `maxRole` → `admin` if a token is set, otherwise `read`
+- max role: prefs `maxRole` → `admin` when unset
 
 The default media directory when unset is `%LOCALAPPDATA%\eiviz\media` on Windows, `~/Library/Application Support/eiviz/media` on macOS, and `$XDG_DATA_HOME/eiviz/media` on Linux (`~/.local/share/eiviz/media` if that is unset).
 

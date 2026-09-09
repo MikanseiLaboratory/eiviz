@@ -59,7 +59,7 @@ GUIの環境設定に相当する値は、ホスト固有です。セッショ�
 - token: prefsの`token`のみ（headlessは環境変数で上書きしない）
 - renderer: `--renderer` → prefsの`renderer` → `auto`
 - メディア保存先: `--media-directory`または`EIVIZ_MEDIA_DIRECTORY` → prefsの`mediaDirectory` → OSのローカルアプリデータ配下`eiviz/media`
-- 最大role: prefsの`maxRole` → tokenがあれば`admin`、無ければ`read`
+- 最大role: prefsの`maxRole` → 未指定なら`admin`
 
 未指定のメディア保存先はWindowsが`%LOCALAPPDATA%\eiviz\media`、macOSが`~/Library/Application Support/eiviz/media`、Linuxが`$XDG_DATA_HOME/eiviz/media`（未設定なら`~/.local/share/eiviz/media`）です。
 
