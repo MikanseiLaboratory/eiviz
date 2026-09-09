@@ -375,7 +375,7 @@ public partial class MultiviewSlotsWindow : Window
         if (tile.Kind == MvSlotKind.Scene)
             choices.AddRange(_session.Scenes.Select(item => new SlotChoice(item.Name, item.GpuId)));
         else if (tile.Kind == MvSlotKind.Input)
-            choices.AddRange(_session.Inputs.Select(item => new SlotChoice(item.Name, item.Id)));
+            choices.AddRange(_session.Inputs.Select(item => new SlotChoice(item.ListLabel, item.Id)));
         else if (tile.Kind is MvSlotKind.MuPreview or MvSlotKind.MuProgram)
             choices.AddRange(_session.Units.Select(item => new SlotChoice(item.Name, item.Id)));
         box.ItemsSource = choices;

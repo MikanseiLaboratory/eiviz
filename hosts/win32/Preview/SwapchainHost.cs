@@ -102,6 +102,8 @@ internal sealed partial class SwapchainHost : HwndHost
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
         DetachNative();
+        if (_attached)
+            throw new InvalidOperationException("Preview surface detach did not complete; HWND was not destroyed");
         if (!DestroyWindow(hwnd.Handle))
             throw new InvalidOperationException($"Could not destroy preview HWND: {Marshal.GetLastWin32Error()}");
         _hwnd = nint.Zero;
@@ -237,10 +239,10 @@ internal sealed partial class SwapchainHost : HwndHost
     {
         if (!_attached)
             return;
-        if (IsMonitor)
-            MixerNative.DetachMonitor(MonitorId);
-        else
-            MixerNative.DetachOutput(UnitId, OutputKind, _hwnd);
+        var code = IsMonitor
+            ? MixerNative.DetachMonitor(MonitorId)
+            : MixerNative.DetachOutput(UnitId, OutputKind, _hwnd);
+        MixerNative.ThrowIfFailed(code, "Detach preview surface");
         _attached = false;
         _sizedWidth = 0;
         _sizedHeight = 0;

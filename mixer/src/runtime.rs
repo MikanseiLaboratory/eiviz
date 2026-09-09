@@ -7,7 +7,10 @@ use eiviz_control::port::*;
 use eiviz_control::service::{ControlService, RequestKey};
 use eiviz_control::{Command, Incoming};
 
-use crate::abi::{ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect, UnitState};
+use crate::abi::{
+    ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect,
+    UnitState,
+};
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_set_bus_gain,
     mixer_audio_set_headphone_copy_master, mixer_audio_set_input, mixer_audio_set_unit_link,
@@ -652,9 +655,19 @@ pub(crate) fn poll_event(after: u64, out: &mut [u8]) -> i32 {
         return 0;
     }
     let json = serde_json::to_vec(&events_json(&events)).unwrap_or_default();
-    let n = json.len().min(out.len());
-    out[..n].copy_from_slice(&json[..n]);
-    n as i32
+    copy_json_payload(&json, out)
+}
+
+pub(crate) fn copy_json_payload(json: &[u8], out: &mut [u8]) -> i32 {
+    if json.len() > out.len() {
+        return if json.len() > ERR_BUFFER_TOO_SMALL as usize {
+            -(json.len() as i32)
+        } else {
+            -ERR_BUFFER_TOO_SMALL
+        };
+    }
+    out[..json.len()].copy_from_slice(json);
+    json.len() as i32
 }
 
 fn events_json(events: &[eiviz_control::Event]) -> serde_json::Value {
@@ -766,5 +779,30 @@ pub(crate) fn c_cut(unit_id: u64, swap: u32, incoming: u64) -> i32 {
             Err(error) => -error.to_abi(),
         },
         Err(_) => -ERR_INVALID_ARGUMENT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_json_payload;
+    use crate::abi::ERR_BUFFER_TOO_SMALL;
+
+    #[test]
+    fn event_payload_returns_needed_length_instead_of_truncating() {
+        let json = vec![b'x'; 64];
+        let mut small = [0u8; 8];
+        let code = copy_json_payload(&json, &mut small);
+        assert_eq!(code, -64);
+        assert!(small.iter().all(|byte| *byte == 0));
+        let mut exact = vec![0u8; json.len()];
+        assert_eq!(copy_json_payload(&json, &mut exact), 64);
+        assert_eq!(exact, json);
+    }
+
+    #[test]
+    fn tiny_event_payload_uses_buffer_too_small_code() {
+        let json = [b'{', b'}'];
+        let mut out = [0u8; 1];
+        assert_eq!(copy_json_payload(&json, &mut out), -ERR_BUFFER_TOO_SMALL);
     }
 }

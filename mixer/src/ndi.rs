@@ -4,6 +4,21 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+enum NdiSendCmd {
+    Video {
+        packed: Arc<[u8]>,
+        width: i32,
+        height: i32,
+        stride: i32,
+        pts: i64,
+        fps_num: i32,
+        fps_den: i32,
+    },
+    Audio(AudioPacket),
+    Pump,
+    Shutdown,
+}
+
 use grafton_ndi::{
     AudioFrame, BorrowedVideoFrame, Finder, FinderOptions, LineStrideOrSize, NDI, PixelFormat,
     Receiver, ReceiverBandwidth, ReceiverColorFormat, ReceiverOptions, ScanType, Sender,
@@ -182,11 +197,8 @@ impl Drop for NdiReceiver {
 }
 
 pub struct NdiSender {
-    /// Kept until the next async submit (or drop) so the SDK can read it.
-    inflight: Option<Arc<[u8]>>,
-    sender: Option<Arc<Sender>>,
-    audio_tx: Option<SyncSender<AudioPacket>>,
-    audio_thread: Option<JoinHandle<()>>,
+    cmd_tx: Option<SyncSender<NdiSendCmd>>,
+    worker: Option<JoinHandle<()>>,
     pack_ms: f32,
     sdk_ms: f32,
 }
@@ -195,38 +207,80 @@ impl NdiSender {
     pub fn start(name: &str) -> Result<Self, String> {
         let ndi = runtime()?;
         // Video stays clocked so the source stays visible when no audio is
-        // sent (None / silent Master). Audio clocks on a dedicated thread
-        // would be fine, but clock_audio on the shared send thread blocked
-        // after GPU encode (issue 141). grafton-ndi requires one clock.
+        // sent (None / silent Master). Audio is not clocked here: grafton-ndi
+        // requires one clock, and clock_audio on the send path blocked after
+        // GPU encode (issue 141). One worker owns Sender so video/audio never
+        // alias a Rust &mut across threads.
         let options = SenderOptions::builder(name)
             .clock_video(true)
             .clock_audio(false)
             .build();
-        let sender = Arc::new(Sender::new(ndi, &options).map_err(|error| error.to_string())?);
-        let (audio_tx, audio_rx) = sync_channel::<AudioPacket>(8);
-        let worker = Arc::clone(&sender);
-        let audio_thread = thread::Builder::new()
-            .name("eiviz-ndi-audio".into())
+        let mut sender = Sender::new(ndi, &options).map_err(|error| error.to_string())?;
+        let (cmd_tx, cmd_rx) = sync_channel::<NdiSendCmd>(16);
+        let worker = thread::Builder::new()
+            .name("eiviz-ndi-send".into())
             .spawn(move || {
-                while let Ok(audio) = audio_rx.recv() {
-                    if let Ok(frame) = build_audio_frame(&audio) {
-                        worker.send_audio(&frame);
+                let mut inflight: Option<Arc<[u8]>> = None;
+                while let Ok(cmd) = cmd_rx.recv() {
+                    match cmd {
+                        NdiSendCmd::Shutdown => break,
+                        NdiSendCmd::Pump => {
+                            let _ = sender.connection_count(Duration::ZERO);
+                        }
+                        NdiSendCmd::Audio(audio) => {
+                            if let Ok(frame) = build_audio_frame(&audio) {
+                                sender.send_audio(&frame);
+                            }
+                        }
+                        NdiSendCmd::Video {
+                            packed,
+                            width,
+                            height,
+                            stride,
+                            pts,
+                            fps_num,
+                            fps_den,
+                        } => {
+                            // SAFETY: packed is tightly packed UYVY at width*2.
+                            // The slice lives through send_video_async, then
+                            // stays in inflight until the next submit or drop.
+                            let borrowed = unsafe {
+                                BorrowedVideoFrame::from_parts_unchecked(
+                                    packed.as_ref(),
+                                    width,
+                                    height,
+                                    PixelFormat::UYVY.into(),
+                                    fps_num,
+                                    fps_den,
+                                    width as f32 / height.max(1) as f32,
+                                    ScanType::Progressive,
+                                    pts,
+                                    LineStrideOrSize::LineStrideBytes(stride),
+                                    None,
+                                    pts,
+                                )
+                            };
+                            let token = sender.send_video_async(&borrowed);
+                            // Forget the token so Drop does not flush/wait.
+                            // The next async submit waits for this buffer.
+                            std::mem::forget(token);
+                            inflight = Some(packed);
+                        }
                     }
                 }
+                drop(inflight);
             })
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            inflight: None,
-            sender: Some(sender),
-            audio_tx: Some(audio_tx),
-            audio_thread: Some(audio_thread),
+            cmd_tx: Some(cmd_tx),
+            worker: Some(worker),
             pack_ms: 0.0,
             sdk_ms: 0.0,
         })
     }
 
-    fn sender(&self) -> Result<&Arc<Sender>, String> {
-        self.sender
+    fn cmds(&self) -> Result<&SyncSender<NdiSendCmd>, String> {
+        self.cmd_tx
             .as_ref()
             .ok_or_else(|| "ndi sender stopped".into())
     }
@@ -234,8 +288,10 @@ impl NdiSender {
     pub fn pump(&mut self) -> Result<bool, String> {
         // Always encode. connection_count can stay 0 on macOS until a receiver
         // has already seen a source, so gating on it hides the sender entirely.
-        let _ = self.sender()?.connection_count(Duration::ZERO);
-        Ok(true)
+        match self.cmds()?.try_send(NdiSendCmd::Pump) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(true),
+            Err(TrySendError::Disconnected(_)) => Err("ndi sender stopped".into()),
+        }
     }
 
     pub fn send_video_uyvy(
@@ -257,43 +313,21 @@ impl NdiSender {
         let width_i = width.max(1) as i32;
         let height_i = height.max(1) as i32;
         let packed_stride = width_i.saturating_mul(2);
-        let sender = Arc::clone(self.sender()?);
         let t1 = timed.then(std::time::Instant::now);
-        {
-            // SAFETY: packed is tightly packed UYVY at width*2. The slice lives
-            // through send_video_async, then moves into inflight until the next
-            // submit or sender drop (Inner flushes the in-flight async frame).
-            let borrowed = unsafe {
-                BorrowedVideoFrame::from_parts_unchecked(
-                    packed.as_ref(),
-                    width_i,
-                    height_i,
-                    PixelFormat::UYVY.into(),
-                    fps_num.max(1) as i32,
-                    fps_den.max(1) as i32,
-                    width as f32 / height.max(1) as f32,
-                    ScanType::Progressive,
-                    pts,
-                    LineStrideOrSize::LineStrideBytes(packed_stride),
-                    None,
-                    pts,
-                )
-            };
-            // SAFETY: NDI documents concurrent send_video_async_v2 and send_audio_v3
-            // on one instance as thread-safe. grafton takes &mut Sender only to
-            // lifetime-bind AsyncVideoToken. We forget the token (its Drop would
-            // flush and wait) and keep `packed` in inflight; the next async submit
-            // waits for the previous buffer, then we replace inflight.
-            unsafe {
-                let sender_mut = &mut *(Arc::as_ptr(&sender) as *mut Sender);
-                let token = sender_mut.send_video_async(&borrowed);
-                std::mem::forget(token);
-            }
-        }
+        self.cmds()?
+            .send(NdiSendCmd::Video {
+                packed,
+                width: width_i,
+                height: height_i,
+                stride: packed_stride,
+                pts,
+                fps_num: fps_num.max(1) as i32,
+                fps_den: fps_den.max(1) as i32,
+            })
+            .map_err(|_| "ndi sender stopped".to_string())?;
         if let Some(t1) = t1 {
             self.sdk_ms = t1.elapsed().as_secs_f32() * 1000.0;
         }
-        self.inflight = Some(packed);
         Ok(())
     }
 
@@ -305,25 +339,21 @@ impl NdiSender {
         if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
             return Ok(());
         }
-        let Some(tx) = self.audio_tx.as_ref() else {
-            return Err("ndi audio thread stopped".into());
-        };
-        match tx.try_send(audio.clone()) {
+        match self.cmds()?.try_send(NdiSendCmd::Audio(audio.clone())) {
             Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
-            Err(TrySendError::Disconnected(_)) => Err("ndi audio thread stopped".into()),
+            Err(TrySendError::Disconnected(_)) => Err("ndi sender stopped".into()),
         }
     }
 }
 
 impl Drop for NdiSender {
     fn drop(&mut self) {
-        self.audio_tx.take();
-        if let Some(handle) = self.audio_thread.take() {
-            let _ = handle.join();
+        if let Some(tx) = self.cmd_tx.take() {
+            let _ = tx.send(NdiSendCmd::Shutdown);
         }
-        // Flush in-flight async video before releasing the buffer.
-        self.sender.take();
-        self.inflight.take();
+        if let Some(handle) = self.worker.take() {
+            crate::diag::join_timeout(handle, Duration::from_secs(2), "ndi-send");
+        }
     }
 }
 

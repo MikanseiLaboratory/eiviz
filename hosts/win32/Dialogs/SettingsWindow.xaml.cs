@@ -710,7 +710,7 @@ public partial class SettingsWindow : Window
         {
             case OutputSourceKind.Input:
                 box.ItemsSource = _session.Inputs;
-                box.DisplayMemberPath = "Name";
+                box.DisplayMemberPath = "ListLabel";
                 box.SelectedValuePath = "Id";
                 box.SelectedValue = output.SourceId;
                 if (box.SelectedItem is InputEntry input)

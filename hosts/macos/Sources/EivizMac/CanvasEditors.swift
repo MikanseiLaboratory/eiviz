@@ -78,7 +78,7 @@ struct SceneEditorView: View {
                     set: { mixer.selectedInputId = $0 }
                 )) {
                     ForEach(mixer.session.inputs) { input in
-                        Text(input.name).tag(input.id)
+                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                     }
                 }
                 Button("Add layer") { addLayer() }
@@ -205,7 +205,7 @@ struct SceneEditorView: View {
     private func label(_ layer: SceneLayer) -> String {
         let input = mixer.session.inputs.first { $0.id == layer.inputId }
         let order = (layers.firstIndex { $0.id == layer.id } ?? 0) + 1
-        return "\(order). \(input?.name ?? "\(layer.inputId)")"
+        return "\(order). \(input?.listLabel(in: mixer.session, localFiles: !mixer.isRemote) ?? "\(layer.inputId)")"
     }
 
     private func mutate(_ body: (inout SceneEntry) -> Void) {
@@ -314,7 +314,7 @@ struct SceneEditorView: View {
                 }
             )) {
                 ForEach(mixer.session.inputs) { input in
-                    Text(input.name).tag(input.id)
+                    Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                 }
             }
             .disabled(locked)

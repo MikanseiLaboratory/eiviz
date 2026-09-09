@@ -2,11 +2,10 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
-use eiviz_mixer::{BACKEND_VULKAN, mixer_backend, mixer_create_with_backend};
 use eiviz_mixer::{
-    EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
-    MULTIVIEW_BASE, MixerRebarInfo, MixerStats, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
+    BACKEND_DX12, BACKEND_METAL, EASING_IN_OUT, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
+    ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo, MixerStats,
+    NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
     OUTPUT_SOURCE, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
     SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM,
     TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
@@ -15,14 +14,16 @@ use eiviz_mixer::{
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
     mixer_audio_bus_count, mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
-    mixer_create_unit, mixer_define_generator, mixer_define_mix_input, mixer_define_scene,
-    mixer_destroy, mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover,
-    mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
+    mixer_create_unit, mixer_create_with_backend, mixer_define_generator, mixer_define_mix_input,
+    mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_omt_connect,
+    mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
     mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
-    mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
-    mixer_video_enum_captures, mixer_video_start,
+    mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_detach_native,
+    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
+    mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
+#[cfg(target_os = "linux")]
+use eiviz_mixer::{BACKEND_VULKAN, mixer_backend};
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
 use openmediatransport::{
@@ -1743,6 +1744,48 @@ fn snapshot_writes_png() {
     let input_bytes = std::fs::read(&input_path).expect("input png");
     assert!(input_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let _ = std::fs::remove_file(&input_path);
+    mixer_destroy();
+}
+
+#[test]
+fn unsupported_backend_create_returns_within_timeout() {
+    mixer_destroy();
+    let unsupported = if cfg!(windows) {
+        BACKEND_METAL
+    } else if cfg!(target_os = "macos") {
+        BACKEND_DX12
+    } else {
+        BACKEND_METAL
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(mixer_create_with_backend(unsupported, 0, 60_000, 1_001));
+    });
+    let code = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("unsupported backend create must return");
+    assert_eq!(code, ERR_DEVICE);
+    mixer_destroy();
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn unit_detach_completes_before_host_may_destroy_surface() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let start = Instant::now();
+    let native = if cfg!(windows) {
+        NATIVE_WIN32_HWND
+    } else {
+        NATIVE_APPKIT_NSVIEW
+    };
+    let code = mixer_unit_detach_native(1, 0, native, 1);
+    assert_ne!(code, ERR_INVALID_ARGUMENT);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "detach must acknowledge before the host destroys the native view"
+    );
     mixer_destroy();
 }
 

@@ -726,6 +726,15 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
     }
 }
 
+pub(crate) fn omt_quality_to_abi(quality: OmtQuality) -> u32 {
+    match quality {
+        OmtQuality::Default => 0,
+        OmtQuality::Low => 1,
+        OmtQuality::Medium => 50,
+        OmtQuality::High => 100,
+    }
+}
+
 fn live_connect(input: &InputDto) -> LiveConnectApply {
     LiveConnectApply {
         id: input.id,
@@ -740,12 +749,7 @@ fn live_connect(input: &InputDto) -> LiveConnectApply {
                     0
                 }
             }
-            _ => match input.omt_quality {
-                OmtQuality::Default => 0,
-                OmtQuality::Low => 1,
-                OmtQuality::Medium => 2,
-                OmtQuality::High => 3,
-            },
+            _ => omt_quality_to_abi(input.omt_quality),
         },
         save_mode: match input.bandwidth_save {
             BandwidthSave::AlwaysLow => 0,
@@ -1131,6 +1135,40 @@ mod tests {
                     && spec.source_kind == 3
                     && spec.target_id == ids::multiview_gpu_id(1)
         )));
+    }
+
+    #[test]
+    fn omt_quality_maps_to_mixer_abi_values() {
+        assert_eq!(omt_quality_to_abi(OmtQuality::Default), 0);
+        assert_eq!(omt_quality_to_abi(OmtQuality::Low), 1);
+        assert_eq!(omt_quality_to_abi(OmtQuality::Medium), 50);
+        assert_eq!(omt_quality_to_abi(OmtQuality::High), 100);
+        for (label, expected) in [("Default", 0u32), ("Low", 1), ("Medium", 50), ("High", 100)] {
+            let src = format!(
+                r#"{{
+                  "version": 2,
+                  "inputs": [{{
+                    "id": 10,
+                    "name": "Cam",
+                    "kind": "Omt",
+                    "pathOrAddress": "omt://studio/cam",
+                    "omtQuality": "{label}"
+                  }}],
+                  "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 10, "width": 1, "height": 1 }}] }}],
+                  "units": [{{ "id": 1, "name": "MU 1" }}]
+                }}"#
+            );
+            let doc = parse(src.as_bytes()).unwrap();
+            let ops = plan(None, &doc);
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    ReconcileOp::ConnectOmt(spec)
+                        if spec.id == 10 && spec.quality_or_bandwidth == expected
+                )),
+                "omtQuality {label} should map to ABI {expected}"
+            );
+        }
     }
 
     #[test]

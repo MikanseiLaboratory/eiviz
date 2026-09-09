@@ -86,7 +86,7 @@ struct OverlayView: View {
                     }
                 } else {
                     ForEach(mixer.session.inputs) { input in
-                        Text(input.name).tag(input.id)
+                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                     }
                 }
             }
@@ -192,7 +192,7 @@ struct OverlayView: View {
         )) {
             if slot.sourceKind == .input {
                 ForEach(mixer.session.inputs) { input in
-                    Text(input.name).tag(input.id)
+                    Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                 }
             } else {
                 ForEach(mixer.session.scenes) { scene in
@@ -219,7 +219,7 @@ struct OverlayView: View {
 
     private func sourceName(_ slot: OverlaySlot) -> String {
         if slot.sourceKind == .input {
-            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.listLabel(in: mixer.session, localFiles: !mixer.isRemote) ?? "Input"
         }
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }

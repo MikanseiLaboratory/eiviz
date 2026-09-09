@@ -63,7 +63,7 @@ public partial class ResourceMonitorWindow : Window
             var vram = usage.VramBytes;
             var cpu = input.Kind is InputKind.OMT or InputKind.NDI or InputKind.UVC or InputKind.Video ? "live" : "—";
             rows.Add(new Row(
-                input.Name,
+                input.ListLabel,
                 input.Kind.ToString(),
                 usage.Width == 0 ? "—" : $"{usage.Width}x{usage.Height}",
                 cpu,

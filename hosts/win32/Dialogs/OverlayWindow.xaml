@@ -18,7 +18,7 @@
                     <ComboBoxItem Content="Scene"/>
                     <ComboBoxItem Content="Input"/>
                 </ComboBox>
-                <ComboBox x:Name="AddSourceBox" Margin="0,0,0,6" DisplayMemberPath="Name"/>
+                <ComboBox x:Name="AddSourceBox" Margin="0,0,0,6"/>
                 <Button Content="Add overlay" Height="28" Click="Add_Click"/>
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                     <Button Content="Z up" Width="72" Click="ZUp_Click"/>
@@ -57,7 +57,7 @@
                         <ComboBoxItem Content="Scene"/>
                         <ComboBoxItem Content="Input"/>
                     </ComboBox>
-                    <ComboBox x:Name="SourceBox" Margin="0,0,0,8" DisplayMemberPath="Name"
+                    <ComboBox x:Name="SourceBox" Margin="0,0,0,8"
                               SelectionChanged="SourceBox_SelectionChanged"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
