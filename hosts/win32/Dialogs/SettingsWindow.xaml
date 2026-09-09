@@ -49,11 +49,16 @@
                 </StackPanel>
                 <TextBlock Text="{Binding [settings.masterFps], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="FpsBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">
-                    <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
-                    <ComboBoxItem Content="50p" Tag="50/1"/>
-                    <ComboBoxItem Content="30p" Tag="30/1"/>
+                    <ComboBoxItem Content="23.976p" Tag="24000/1001"/>
                     <ComboBoxItem Content="24p" Tag="24/1"/>
+                    <ComboBoxItem Content="25p" Tag="25/1"/>
+                    <ComboBoxItem Content="29.97p" Tag="30000/1001"/>
+                    <ComboBoxItem Content="30p" Tag="30/1"/>
+                    <ComboBoxItem Content="50p" Tag="50/1"/>
+                    <ComboBoxItem Content="NTSC 59.94p" Tag="60000/1001" IsSelected="True"/>
                     <ComboBoxItem Content="60p" Tag="60/1"/>
+                    <ComboBoxItem Content="119.88p" Tag="120000/1001"/>
+                    <ComboBoxItem Content="120p" Tag="120/1"/>
                 </ComboBox>
                 <TextBlock Text="{Binding [settings.defaultUnitSize], Source={x:Static i18n:Loc.Source}}"/>
                 <ComboBox x:Name="SizeBox" Margin="0,4,0,12" Width="220" HorizontalAlignment="Left">

@@ -77,7 +77,7 @@ struct SceneEditorView: View {
                     get: { mixer.selectedInputId ?? EIVIZ_SRC_BARS },
                     set: { mixer.selectedInputId = $0 }
                 )) {
-                    ForEach(mixer.session.inputs) { input in
+                    ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
                         Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                     }
                 }
@@ -313,7 +313,7 @@ struct SceneEditorView: View {
                     push()
                 }
             )) {
-                ForEach(mixer.session.inputs) { input in
+                ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
                     Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                 }
             }

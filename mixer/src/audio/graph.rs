@@ -39,10 +39,13 @@ impl MixedAudio {
             return &[];
         }
         let id = resolve_output_audio_bus(audio_bus_id);
-        self.by_bus
-            .get(&id)
-            .map(Vec::as_slice)
-            .unwrap_or(self.master.as_slice())
+        if let Some(samples) = self.by_bus.get(&id) {
+            return samples.as_slice();
+        }
+        if id == MASTER_BUS {
+            return self.master.as_slice();
+        }
+        &[]
     }
 }
 
@@ -118,7 +121,6 @@ pub struct AudioBus {
     pub device_id: String,
     pub map_left: i32,
     pub map_right: i32,
-    pub exclusive: bool,
     pub gain: f32,
     pub mute: bool,
     pub peak: (f32, f32),
@@ -172,16 +174,7 @@ impl AudioGraph {
         // Default Master is Enabled (no device). Opening WASAPI/HAL here
         // grabbed the machine output before the host could apply session buses.
         let master_kind = DEVICE_NONE;
-        graph.upsert_bus(
-            MASTER_BUS,
-            "Master",
-            ROLE_MASTER,
-            master_kind,
-            "",
-            0,
-            1,
-            false,
-        );
+        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, master_kind, "", 0, 1);
         graph.upsert_bus(
             HEADPHONE_BUS,
             "Headphone",
@@ -190,7 +183,6 @@ impl AudioGraph {
             "",
             0,
             1,
-            false,
         );
         graph
     }
@@ -204,7 +196,6 @@ impl AudioGraph {
         device_id: &str,
         map_left: i32,
         map_right: i32,
-        exclusive: bool,
     ) {
         if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == id) {
             bus.name = name.to_string();
@@ -213,7 +204,6 @@ impl AudioGraph {
             bus.device_id = device_id.to_string();
             bus.map_left = map_left;
             bus.map_right = map_right;
-            bus.exclusive = exclusive;
             return;
         }
         let bit = if role == ROLE_MASTER {
@@ -234,7 +224,6 @@ impl AudioGraph {
             device_id: device_id.to_string(),
             map_left,
             map_right,
-            exclusive,
             gain: 1.0,
             mute: false,
             peak: (0.0, 0.0),
@@ -296,7 +285,6 @@ impl AudioGraph {
             let key = DeviceKey {
                 kind: bus.device_kind,
                 id: bus.device_id.clone(),
-                exclusive: bus.exclusive,
             };
             groups.entry(key).or_default().push((
                 Arc::clone(&bus.ring),
@@ -885,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_audio_for_bus_falls_back_to_master() {
+    fn mixed_audio_for_bus_does_not_alias_unknown_to_master() {
         let mixed = MixedAudio {
             master: vec![0.5, -0.5],
             by_bus: HashMap::from([(3, vec![0.25, 0.25])]),
@@ -893,6 +881,6 @@ mod tests {
         assert!(mixed.for_bus(0).is_empty());
         assert_eq!(mixed.for_bus(1), &[0.5, -0.5]);
         assert_eq!(mixed.for_bus(3), &[0.25, 0.25]);
-        assert_eq!(mixed.for_bus(9), &[0.5, -0.5]);
+        assert!(mixed.for_bus(9).is_empty());
     }
 }

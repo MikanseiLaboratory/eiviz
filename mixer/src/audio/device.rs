@@ -1,7 +1,7 @@
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    eConsole, eRender,
+    DEVICE_STATE_ACTIVE, EDataFlow, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, eCapture, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
@@ -27,16 +27,16 @@ pub fn enumerate(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
     n
 }
 
-pub fn channel_count(kind: u32, device_id: &str) -> i32 {
+pub fn io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     if kind == DEVICE_ASIO {
-        return 2;
+        return super::asio::probe_io_channels(device_id).unwrap_or((0, 0));
     }
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let Ok(enumerator) =
             CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
         else {
-            return 2;
+            return (0, 0);
         };
         let device = if device_id.is_empty() {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
@@ -45,9 +45,10 @@ pub fn channel_count(kind: u32, device_id: &str) -> i32 {
             enumerator.GetDevice(PCWSTR(wide.as_ptr()))
         };
         let Ok(device) = device else {
-            return 2;
+            return (0, 0);
         };
-        mix_channels(&device).unwrap_or(2) as i32
+        let n = mix_channels(&device).unwrap_or(0) as i32;
+        (n, n)
     }
 }
 
@@ -59,7 +60,34 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
         else {
             return 0;
         };
-        let Ok(collection) = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) else {
+        let mut n = 0usize;
+        n += enumerate_wasapi_flow(
+            &enumerator,
+            eCapture,
+            super::info::AUDIO_DIR_CAPTURE,
+            0,
+            &mut dest[n..],
+        );
+        n += enumerate_wasapi_flow(
+            &enumerator,
+            eRender,
+            super::info::AUDIO_DIR_RENDER,
+            super::info::AUDIO_CAP_LOOPBACK,
+            &mut dest[n..],
+        );
+        n
+    }
+}
+
+fn enumerate_wasapi_flow(
+    enumerator: &IMMDeviceEnumerator,
+    flow: EDataFlow,
+    direction: u32,
+    caps: u32,
+    dest: &mut [AudioDeviceInfo],
+) -> usize {
+    unsafe {
+        let Ok(collection) = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE) else {
             return 0;
         };
         let Ok(count) = collection.GetCount() else {
@@ -81,6 +109,8 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
                 channels,
                 id: cbuf(&id),
                 name: cbuf(&name),
+                direction,
+                caps,
             };
             n += 1;
         }
@@ -138,11 +168,14 @@ pub fn enumerate_asio_registry(dest: &mut [AudioDeviceInfo]) -> usize {
             if clsid.is_empty() {
                 continue;
             }
+            let (ins, outs) = super::asio::listed_io(&driver, &clsid);
             dest[n] = AudioDeviceInfo {
                 kind: DEVICE_ASIO,
-                channels: 2,
+                channels: ins.max(outs).max(0) as u32,
                 id: cbuf(&clsid),
                 name: cbuf(&driver),
+                direction: super::info::AUDIO_DIR_BOTH,
+                caps: 0,
             };
             n += 1;
         }

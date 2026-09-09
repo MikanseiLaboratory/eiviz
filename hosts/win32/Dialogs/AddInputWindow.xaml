@@ -214,6 +214,38 @@
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
                                Text="Mix Input reads N frames ago from the existing delay ring. Audio is a delayed copy of the selected bus, or silence if None. Same Mixing Unit wiring is refused."/>
                 </StackPanel>
+                <StackPanel x:Name="AudioPanel" Visibility="Collapsed">
+                    <TextBlock Text="Audio capture" Margin="0,0,0,8"/>
+                    <TextBlock Text="Mode" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="AudioModeBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8" SelectionChanged="AudioMode_Changed">
+                        <ComboBoxItem Content="Microphone / line in" Tag="mic" IsSelected="True"/>
+                        <ComboBoxItem Content="Output device loopback" Tag="loopback"/>
+                        <ComboBoxItem Content="Application Audio" Tag="process"/>
+                        <ComboBoxItem Content="ASIO" Tag="asio"/>
+                    </ComboBox>
+                    <StackPanel x:Name="AudioDevicePanel">
+                        <TextBlock Text="Device" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="AudioDeviceBox" Height="28" SelectionChanged="AudioDevice_Changed"/>
+                    </StackPanel>
+                    <StackPanel x:Name="AudioMapPanel" Visibility="Collapsed">
+                        <TextBlock Text="Map" Margin="0,8,0,4"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="L" Width="16" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="AudioMapLeftBox" Width="80" Height="28" Margin="0,0,12,0"/>
+                            <TextBlock Text="R" Width="16" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="AudioMapRightBox" Width="80" Height="28"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel x:Name="AudioProcessPanel" Visibility="Collapsed">
+                        <TextBlock Text="Process" Margin="0,0,0,4"/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="Refresh" Width="88" Click="RefreshAudioProcesses_Click"/>
+                            <ComboBox x:Name="AudioProcessBox" Height="28" Margin="0,0,8,0"/>
+                        </DockPanel>
+                    </StackPanel>
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="Empty device follows the Windows default. Application Audio lists processes with a visible window and stores the exe or AUMID, not a PID. ASIO shares the driver with output buses; pick any input channel for L and R. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
+                </StackPanel>
             </Grid>
         </DockPanel>
     </Grid>

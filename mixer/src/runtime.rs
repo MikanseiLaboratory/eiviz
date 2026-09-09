@@ -12,15 +12,16 @@ use crate::abi::{
     UnitState,
 };
 use crate::{
-    mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_set_bus_gain,
-    mixer_audio_set_headphone_copy_master, mixer_audio_set_input, mixer_audio_set_unit_link,
-    mixer_bind_multiview, mixer_create_unit, mixer_define_generator, mixer_define_mix_input,
-    mixer_define_scene, mixer_destroy_scene, mixer_destroy_source, mixer_destroy_unit,
-    mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
+    mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_capture_start,
+    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_master, mixer_audio_set_input,
+    mixer_audio_set_unit_link, mixer_bind_multiview, mixer_create_unit, mixer_define_generator,
+    mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
+    mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
-    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
-    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
+    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label,
+    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure,
+    mixer_unit_get_state, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -242,6 +243,27 @@ impl MixerPort for ProcessMixer {
         })
     }
 
+    fn audio_capture_start(&mut self, spec: AudioCaptureApply) -> ControlResult<()> {
+        let device = CString::new(spec.device_id)
+            .map_err(|error| ControlError::invalid(error.to_string()))?;
+        let exe = CString::new(spec.process_exe)
+            .map_err(|error| ControlError::invalid(error.to_string()))?;
+        let aumid = CString::new(spec.process_aumid)
+            .map_err(|error| ControlError::invalid(error.to_string()))?;
+        map_abi(unsafe {
+            mixer_audio_capture_start(
+                spec.id,
+                spec.kind,
+                device.as_ptr(),
+                spec.mode,
+                spec.map_left,
+                spec.map_right,
+                exe.as_ptr(),
+                aumid.as_ptr(),
+            )
+        })
+    }
+
     fn destroy_source(&mut self, id: u64) -> ControlResult<()> {
         map_abi(mixer_destroy_source(id))
     }
@@ -267,6 +289,10 @@ impl MixerPort for ProcessMixer {
                 u32::from(spec.use_gpu),
                 spec.audio_bus_id,
                 u32::from(spec.skip_encode_when_no_receivers),
+                spec.width,
+                spec.height,
+                spec.fps_num,
+                spec.fps_den,
             )
         })
     }
@@ -287,7 +313,6 @@ impl MixerPort for ProcessMixer {
                 device.as_ptr(),
                 spec.map_left as i32,
                 spec.map_right as i32,
-                u32::from(spec.exclusive),
             )
         })?;
         map_abi(mixer_audio_set_bus_gain(
@@ -325,6 +350,10 @@ impl MixerPort for ProcessMixer {
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()> {
         map_abi(mixer_set_frame_buffer(frames))
+    }
+
+    fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()> {
+        map_abi(mixer_set_master_fps(fps_num, fps_den))
     }
 
     fn set_rebar_optimization(&mut self, enabled: bool) -> ControlResult<()> {
@@ -564,6 +593,10 @@ impl MixerPort for ProcessMixer {
 
     fn discover_uvc_modes(&self, device_id: &str) -> ControlResult<String> {
         encode_capture_modes(device_id)
+    }
+
+    fn discover_audio(&self) -> ControlResult<String> {
+        Ok(crate::audio::processes_json())
     }
 
     fn apply_reconcile(

@@ -12,6 +12,7 @@ struct DelaySlot {
     preview_view: wgpu::TextureView,
     packed: Option<wgpu::Texture>,
     packed_prv: Option<wgpu::Texture>,
+    pts: i64,
 }
 
 struct UnitRing {
@@ -88,6 +89,7 @@ impl FrameDelay {
         encoder: &mut wgpu::CommandEncoder,
         composer: &Composer,
         unit_ids: impl IntoIterator<Item = u64>,
+        pts: i64,
     ) {
         for unit_id in unit_ids {
             let Some(src) = composer.unit(unit_id) else {
@@ -106,10 +108,16 @@ impl FrameDelay {
             copy_tex(encoder, &src.preview, &slot.preview);
             copy_optional(encoder, src.packed.as_ref(), slot.packed.as_ref());
             copy_optional(encoder, src.packed_prv.as_ref(), slot.packed_prv.as_ref());
+            slot.pts = pts;
             ring.write = (ring.write + 1) % cap;
             ring.queued = ring.queued.saturating_add(1).min(cap.saturating_sub(1));
             self.epoch = self.epoch.wrapping_add(1);
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn display_pts(&self, unit_id: u64) -> Option<i64> {
+        Some(self.units.get(&unit_id)?.display_slot()?.pts)
     }
 
     pub fn consume_display(&mut self, drain: bool) {
@@ -227,6 +235,7 @@ impl DelaySlot {
             preview,
             packed: None,
             packed_prv: None,
+            pts: 0,
         };
         if src.packed.is_some() {
             slot.packed = Some(make_delay_texture(device, src.width / 2, src.height, true));

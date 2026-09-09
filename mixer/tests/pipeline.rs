@@ -188,7 +188,11 @@ fn compose_omt_and_program_out() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -202,7 +206,11 @@ fn compose_omt_and_program_out() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -237,7 +245,11 @@ fn omt_program_shows_fade_during_auto() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -483,7 +495,11 @@ fn omt_multiview_output_is_received() {
                 1,
                 1,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -497,7 +513,11 @@ fn omt_multiview_output_is_received() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -551,7 +571,11 @@ fn omt_program_sends_master_audio() {
                 1,
                 0,
                 1,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -568,6 +592,18 @@ fn omt_program_sends_master_audio() {
         energy > 1e-6,
         "OMT Program with Master should send tone audio, energy={energy}"
     );
+    let packets = wait_omt_audio_packets(&audio, 8, Duration::from_secs(2));
+    assert!(
+        packets.len() >= 6,
+        "OMT PCM must keep arriving while video encodes, got {}",
+        packets.len()
+    );
+    for window in packets.windows(2) {
+        assert!(
+            window[1] >= window[0],
+            "OMT audio timestamps must be monotonic, got {packets:?}"
+        );
+    }
     mixer_destroy();
 }
 
@@ -593,7 +629,11 @@ fn omt_gpu_in_and_out() {
                 1,
                 1,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -789,6 +829,21 @@ fn wait_omt_audio_energy(session: &ReceiverSession, timeout: Duration) -> f32 {
         thread::sleep(Duration::from_millis(10));
     }
     best
+}
+
+fn wait_omt_audio_packets(session: &ReceiverSession, want: usize, timeout: Duration) -> Vec<i64> {
+    let deadline = Instant::now() + timeout;
+    let mut stamps = Vec::new();
+    while Instant::now() < deadline && stamps.len() < want {
+        while let Some(audio) = session.try_recv_audio() {
+            stamps.push(audio.timestamp);
+            if stamps.len() >= want {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    stamps
 }
 
 fn mean_red_blue(frame: &DecodedVideoFrame) -> (f32, f32) {
@@ -1063,7 +1118,11 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                     1,
                     0,
                     0,
-                    1
+                    1,
+                    0,
+                    0,
+                    0,
+                    0
                 ),
                 OK
             );
@@ -1082,7 +1141,11 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             ERR_IO
         );

@@ -1,4 +1,6 @@
-use crate::session::{Document, InputKind, MixSource, OutputSourceKind, OutputTransport};
+use crate::session::{
+    AudioCaptureMode, Document, InputKind, MixSource, OutputSourceKind, OutputTransport,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
@@ -56,6 +58,12 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 unit.id, unit.program_scene_id
             )));
         }
+        if !valid_rate(unit.fps_num, unit.fps_den) {
+            return Err(ValidationError::new(format!(
+                "mixing unit {} frame rate {}/{} is invalid",
+                unit.id, unit.fps_num, unit.fps_den
+            )));
+        }
     }
 
     for scene in &doc.scenes {
@@ -66,6 +74,47 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                     scene.id, layer.input_id
                 )));
             }
+            if doc
+                .inputs
+                .iter()
+                .find(|input| input.id == layer.input_id)
+                .is_some_and(|input| !input.kind.has_video())
+            {
+                return Err(ValidationError::new(format!(
+                    "scene {} cannot place audio-only input {}",
+                    scene.id, layer.input_id
+                )));
+            }
+        }
+    }
+    for input in &doc.inputs {
+        if input.kind != InputKind::Audio {
+            continue;
+        }
+        if input.audio_capture_mode == AudioCaptureMode::ProcessLoopback
+            && input.audio_process_exe.trim().is_empty()
+            && input.audio_process_aumid.trim().is_empty()
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} needs a process exe or AUMID",
+                input.id
+            )));
+        }
+        if input.audio_device_kind == crate::session::AudioDeviceKind::Asio
+            && input.audio_capture_mode == AudioCaptureMode::ProcessLoopback
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} cannot use ASIO with process loopback",
+                input.id
+            )));
+        }
+        if input.audio_device_kind == crate::session::AudioDeviceKind::Asio
+            && (input.audio_map_left < 0 || input.audio_map_right < 0)
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} ASIO L/R map is invalid",
+                input.id
+            )));
         }
     }
     for input in &doc.inputs {
@@ -132,11 +181,44 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 output.id, output.audio_bus_id
             )));
         }
+        if (output.width == 0) != (output.height == 0) {
+            return Err(ValidationError::new(format!(
+                "output {} size must set both width and height, or neither",
+                output.id
+            )));
+        }
+        if output.width != 0 {
+            if output.width < 16 || output.height < 16 || output.width % 2 != 0 {
+                return Err(ValidationError::new(format!(
+                    "output {} size {}x{} is invalid",
+                    output.id, output.width, output.height
+                )));
+            }
+        }
+        if (output.fps_num == 0) != (output.fps_den == 0) {
+            return Err(ValidationError::new(format!(
+                "output {} frame rate must set both fps_num and fps_den, or neither",
+                output.id
+            )));
+        }
+        if output.fps_num > 0 && !valid_rate(output.fps_num, output.fps_den) {
+            return Err(ValidationError::new(format!(
+                "output {} frame rate {}/{} is invalid",
+                output.id, output.fps_num, output.fps_den
+            )));
+        }
     }
-    if doc.settings.master_fps_num == 0 || doc.settings.master_fps_den == 0 {
-        return Err(ValidationError::new("master fps is zero"));
+    if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
+        return Err(ValidationError::new("master fps is invalid"));
     }
     Ok(())
+}
+
+fn valid_rate(num: u32, den: u32) -> bool {
+    if num == 0 || den == 0 || num > 240_000 || den > 100_000 {
+        return false;
+    }
+    (u64::from(den).saturating_mul(10_000_000) / u64::from(num)) > 0
 }
 
 pub fn validate_for_apply(doc: &Document) -> Result<(), ValidationError> {
@@ -300,5 +382,76 @@ mod tests {
         let doc = parse(src).unwrap();
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("unit"), "{}", err.message);
+    }
+
+    #[test]
+    fn process_loopback_requires_exe_or_aumid() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "App", "kind": "Audio", "audioCaptureMode": "ProcessLoopback" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("process"), "{}", err.message);
+
+        let ok = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "App", "kind": "Audio", "audioCaptureMode": "ProcessLoopback", "audioProcessExe": "Spotify.exe" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        validate(&parse(ok).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn asio_accepts_independent_lr_maps() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Mono", "kind": "Audio", "audioDeviceKind": "Asio", "audioDeviceId": "{453661B3-88C3-45C4-8877-4C03B6490C33}", "audioMapLeft": 0, "audioMapRight": 0 },
+            { "id": 3, "name": "Cross", "kind": "Audio", "audioDeviceKind": "Asio", "audioDeviceId": "{453661B3-88C3-45C4-8877-4C03B6490C33}", "audioMapLeft": 1, "audioMapRight": 2 }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        validate(&parse(src).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn asio_rejects_process_loopback() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "ASIO", "kind": "Audio", "audioDeviceKind": "Asio", "audioCaptureMode": "ProcessLoopback", "audioProcessExe": "app.exe" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("ASIO"), "{}", err.message);
+    }
+
+    #[test]
+    fn scene_rejects_audio_only_layer() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Mic", "kind": "Audio" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("audio-only"), "{}", err.message);
+    }
+
+    #[test]
+    fn rejects_invalid_master_fps() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "settings": { "masterFpsNum": 999999, "masterFpsDen": 1 }
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("master fps"), "{}", err.message);
     }
 }

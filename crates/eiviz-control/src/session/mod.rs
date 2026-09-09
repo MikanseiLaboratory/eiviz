@@ -372,6 +372,13 @@ session_string_enum! {
         NDI,
         UVC,
         Mix,
+        Audio,
+    }
+}
+
+impl InputKind {
+    pub fn has_video(self) -> bool {
+        !matches!(self, InputKind::Audio)
     }
 }
 
@@ -522,6 +529,16 @@ session_string_enum! {
     }
 }
 
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AudioCaptureMode {
+        #[default]
+        Mic,
+        EndpointLoopback,
+        ProcessLoopback,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputDto {
@@ -586,6 +603,20 @@ pub struct InputDto {
     pub mix_target_id: u64,
     #[serde(default)]
     pub mix_audio_bus_id: u64,
+    #[serde(default)]
+    pub audio_capture_mode: AudioCaptureMode,
+    #[serde(default)]
+    pub audio_device_kind: AudioDeviceKind,
+    #[serde(default)]
+    pub audio_device_id: String,
+    #[serde(default)]
+    pub audio_map_left: i32,
+    #[serde(default = "audio_map_right")]
+    pub audio_map_right: i32,
+    #[serde(default)]
+    pub audio_process_exe: String,
+    #[serde(default)]
+    pub audio_process_aumid: String,
 }
 
 session_string_enum! {
@@ -618,6 +649,9 @@ fn one_f32() -> f32 {
 }
 fn tone_level() -> f32 {
     -20.0
+}
+fn audio_map_right() -> i32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,6 +1028,17 @@ pub struct OutputDto {
     pub audio_bus_id: u64,
     #[serde(default = "default_true")]
     pub skip_encode_when_no_receivers: bool,
+    /// 0 follows the Mixing Unit (or session master) width.
+    #[serde(default)]
+    pub width: u32,
+    /// 0 follows the Mixing Unit (or session master) height.
+    #[serde(default)]
+    pub height: u32,
+    /// 0 follows the Mixing Unit (or session master) frame rate.
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1046,8 +1091,6 @@ pub struct BusDto {
     pub map_left: i32,
     #[serde(default = "one_i32")]
     pub map_right: i32,
-    #[serde(default)]
-    pub exclusive: bool,
     #[serde(default)]
     pub bit: u32,
     #[serde(default = "one_f32")]

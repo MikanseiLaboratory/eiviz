@@ -1,7 +1,7 @@
 use crate::live::LiveState;
 use crate::session::{
-    AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind, MixSource,
-    MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind,
+    MixSource, MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
     OutputTransport, SceneDto, VideoPlayWhen,
 };
 use crate::{geometry::MultiviewPane, ids, port::*};
@@ -37,6 +37,7 @@ pub enum ReconcileOp {
     StartVideo(VideoStartApply),
     ConnectOmt(LiveConnectApply),
     ConnectNdi(LiveConnectApply),
+    StartAudioCapture(AudioCaptureApply),
     DestroySource {
         id: u64,
     },
@@ -135,7 +136,6 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             device_id: bus.device_id.clone(),
             map_left: bus.map_left.max(0) as u32,
             map_right: bus.map_right.max(0) as u32,
-            exclusive: bus.exclusive,
             gain: bus.gain,
             mute: bus.mute,
         }));
@@ -397,6 +397,7 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         | ReconcileOp::StartVideo(_)
         | ReconcileOp::ConnectOmt(_)
         | ReconcileOp::ConnectNdi(_)
+        | ReconcileOp::StartAudioCapture(_)
         | ReconcileOp::DestroySource { .. }
         | ReconcileOp::FailInput { .. } => apply_inputs(port, op, statuses),
         ReconcileOp::DefineScene(_)
@@ -465,6 +466,12 @@ fn apply_inputs<P: crate::port::MixerPort + ?Sized>(
         ),
         ReconcileOp::ConnectNdi(spec) => accept_io(
             port.ndi_connect(spec.clone()),
+            statuses,
+            crate::ids::ResourceKind::Input,
+            spec.id,
+        ),
+        ReconcileOp::StartAudioCapture(spec) => accept_io(
+            port.audio_capture_start(spec.clone()),
             statuses,
             crate::ids::ResourceKind::Input,
             spec.id,
@@ -549,6 +556,7 @@ fn apply_settings<P: crate::port::MixerPort + ?Sized>(
     port: &mut P,
     next: &Document,
 ) -> crate::error::ControlResult<()> {
+    port.set_master_fps(next.settings.master_fps_num, next.settings.master_fps_den)?;
     port.set_frame_buffer(next.settings.frame_buffer_frames)?;
     port.set_rebar_optimization(next.settings.rebar_optimization)?;
     port.set_ndi_gpu_upload(next.settings.ndi_gpu_upload)?;
@@ -723,6 +731,29 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 audio_bus_id: input.mix_audio_bus_id,
             })]
         }
+        InputKind::Audio => vec![ReconcileOp::StartAudioCapture(AudioCaptureApply {
+            id: input.id,
+            kind: match input.audio_device_kind {
+                AudioDeviceKind::Wasapi => 1,
+                AudioDeviceKind::Asio => 2,
+                AudioDeviceKind::CoreAudio => 3,
+                AudioDeviceKind::None => 0,
+            },
+            device_id: if input.audio_device_id.is_empty() {
+                input.path_or_address.clone().unwrap_or_default()
+            } else {
+                input.audio_device_id.clone()
+            },
+            mode: match input.audio_capture_mode {
+                AudioCaptureMode::Mic => 0,
+                AudioCaptureMode::EndpointLoopback => 1,
+                AudioCaptureMode::ProcessLoopback => 2,
+            },
+            map_left: input.audio_map_left,
+            map_right: input.audio_map_right,
+            process_exe: input.audio_process_exe.clone(),
+            process_aumid: input.audio_process_aumid.clone(),
+        })],
     }
 }
 
@@ -936,6 +967,10 @@ fn output_apply(output: &OutputDto) -> OutputApply {
             output.audio_bus_id
         },
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     }
 }
 
@@ -966,6 +1001,10 @@ fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
         && a.enabled == b.enabled
         && a.audio_bus_id == b.audio_bus_id
         && a.skip_encode_when_no_receivers == b.skip_encode_when_no_receivers
+        && a.width == b.width
+        && a.height == b.height
+        && a.fps_num == b.fps_num
+        && a.fps_den == b.fps_den
 }
 
 #[cfg(test)]

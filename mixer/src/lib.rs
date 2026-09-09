@@ -2,6 +2,7 @@
 
 mod abi;
 mod audio;
+mod clock;
 mod compose;
 #[cfg(windows)]
 mod convert;
@@ -10,6 +11,7 @@ mod device;
 mod diag;
 #[cfg(windows)]
 mod dxgi;
+mod frame_hub;
 mod generator_audio;
 mod labels;
 mod lifecycle;
@@ -212,10 +214,16 @@ pub(crate) struct LiveOutput {
     source_id: u64,
     unit_id: u64,
     audio_bus_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
-    tx: mpsc::Sender<SendCmd>,
+    tx: crate::frame_hub::OutputTx,
+    pace: Arc<crate::frame_hub::OutputPace>,
+    audio_send: Option<Arc<dyn Fn(AudioPacket) + Send + Sync>>,
 }
 
 #[derive(Clone)]
@@ -225,15 +233,20 @@ pub(crate) struct OutputSnap {
     source_id: u64,
     unit_id: u64,
     audio_bus_id: u64,
+    width: u32,
+    height: u32,
     fps_n: u32,
     fps_d: u32,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
-    tx: mpsc::Sender<SendCmd>,
+    tx: crate::frame_hub::OutputTx,
+    pace: Arc<crate::frame_hub::OutputPace>,
+    audio_send: Option<Arc<dyn Fn(AudioPacket) + Send + Sync>>,
 }
 
 impl OutputSnap {
+    #[allow(dead_code)]
     fn visual_key(&self) -> u64 {
         pack_copy_key(self.source_kind, self.source_id, self.unit_id)
     }
@@ -248,6 +261,16 @@ impl OutputSnap {
 
     fn gpu_video(&self) -> bool {
         self.use_gpu && self.wants_video()
+    }
+
+    fn video_size(&self, src_w: u32, src_h: u32) -> (u32, u32) {
+        let width = if self.width > 0 { self.width } else { src_w };
+        let height = if self.height > 0 { self.height } else { src_h };
+        (width.max(2), height.max(1))
+    }
+
+    fn has_custom_size(&self) -> bool {
+        self.width > 0 && self.height > 0
     }
 }
 
@@ -327,6 +350,7 @@ pub(crate) struct Shared {
     thumbs: HashMap<u64, crate::thumb::ThumbSub>,
     mix_inputs: HashMap<u64, MixInputSpec>,
     audio_snap: Arc<Mutex<audio::AudioMixSnapshot>>,
+    clock: crate::clock::SharedMediaClock,
     frame_buffer_frames: u32,
     rebar: crate::rebar::RebarSnapshot,
     rebar_optimization: bool,
@@ -493,7 +517,7 @@ pub(crate) enum SendCmd {
 }
 
 pub(crate) struct GpuEncodeCopy {
-    tx: mpsc::Sender<SendCmd>,
+    tx: crate::frame_hub::OutputTx,
     texture: wgpu::Texture,
     width: u32,
     height: u32,
@@ -503,7 +527,7 @@ pub(crate) struct GpuEncodeCopy {
 }
 
 pub(crate) struct OutputWorker {
-    tx: mpsc::Sender<SendCmd>,
+    tx: crate::frame_hub::OutputTx,
     join: JoinHandle<()>,
 }
 
@@ -579,6 +603,7 @@ pub(crate) struct Mixer {
     thumb_pixels: Arc<Mutex<HashMap<u64, crate::thumb::ThumbPixels>>>,
     render: Option<JoinHandle<()>>,
     audio_sched: Option<audio::AudioScheduler>,
+    audio_captures: Arc<Mutex<audio::AudioCaptureStore>>,
     stop: Arc<AtomicBool>,
     backend: u32,
     #[cfg(target_os = "macos")]
@@ -821,7 +846,7 @@ pub extern "C" fn mixer_create_with_backend(
     crate::diag::init();
     crate::diag::info(&format!("mixer_create backend={backend}"));
     let _ = crate::diag::profile_send();
-    if fps_num == 0 || fps_den == 0 {
+    if crate::clock::Rate::new(fps_num, fps_den).is_err() {
         return ERR_INVALID_ARGUMENT;
     }
     let Some(request) = crate::device::BackendRequest::from_abi(backend) else {
@@ -911,6 +936,7 @@ pub(crate) fn start_mixer(
         scene_usage: Vec::new(),
     }));
     let audio = audio::AudioEngine::new();
+    let clock = crate::clock::SharedMediaClock::new();
     let shared = Arc::new(Mutex::new(Shared {
         master_fps_num: fps_num,
         master_fps_den: fps_den,
@@ -942,6 +968,7 @@ pub(crate) fn start_mixer(
         thumbs: HashMap::new(),
         mix_inputs: HashMap::new(),
         audio_snap: Arc::new(Mutex::new(audio::AudioMixSnapshot::default())),
+        clock,
     }));
     let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
@@ -976,6 +1003,7 @@ pub(crate) fn start_mixer(
         audio_snap,
         monitor.pcm,
         monitor.primed,
+        clock,
     ));
     Ok(Mixer {
         shared,
@@ -987,6 +1015,7 @@ pub(crate) fn start_mixer(
         thumb_pixels,
         render: Some(render),
         audio_sched,
+        audio_captures: Arc::new(Mutex::new(audio::AudioCaptureStore::default())),
         stop,
         backend,
         #[cfg(target_os = "macos")]
@@ -1108,6 +1137,11 @@ pub(crate) fn mixer_destroy_inner() {
     if let Some(mut sched) = mixer.audio_sched.take() {
         sched.stop();
     }
+    mixer
+        .audio_captures
+        .lock()
+        .expect("audio captures")
+        .stop_all();
     audio.shutdown();
     crate::diag::info("mixer_destroy drop receivers");
     drop(receivers);
@@ -1860,7 +1894,7 @@ pub extern "C" fn mixer_unit_configure(
     fps_num: u32,
     fps_den: u32,
 ) -> i32 {
-    if width == 0 || height == 0 || fps_num == 0 || fps_den == 0 {
+    if width == 0 || height == 0 || crate::clock::Rate::new(fps_num, fps_den).is_err() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
@@ -2635,6 +2669,10 @@ pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char)
             0,
             0,
             1,
+            0,
+            0,
+            0,
+            0,
         )
     }
 }
@@ -2650,8 +2688,21 @@ pub unsafe extern "C" fn mixer_output_add(
     use_gpu: u32,
     audio_bus_id: u64,
     skip_idle_encode: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
 ) -> i32 {
     if name.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if fps_num > 0 && crate::clock::Rate::new(fps_num, fps_den).is_err() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if width != 0 && (width < 16 || height < 16 || width % 2 != 0) {
         return ERR_INVALID_ARGUMENT;
     }
     let name = unsafe { CStr::from_ptr(name) }
@@ -2704,12 +2755,7 @@ pub unsafe extern "C" fn mixer_output_add(
         OUT_OMT => {
             let started = panic::catch_unwind(AssertUnwindSafe(|| ProgramSender::start(&name)));
             match started {
-                Ok(Ok(mut sender)) => {
-                    // Render posts video then PCM. Immediate audio follows that
-                    // video; holding until the next video slipped A/V by a frame.
-                    sender.set_pair_after_video(false);
-                    OutputHandle::Omt(sender)
-                }
+                Ok(Ok(sender)) => OutputHandle::Omt(sender),
                 Ok(Err(error)) => {
                     let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
@@ -2734,13 +2780,37 @@ pub unsafe extern "C" fn mixer_output_add(
         if let Some(old) = mixer.send_workers.remove(&output_id) {
             shutdown_output_worker(old);
         }
+        let audio_send = match &handle {
+            OutputHandle::Omt(sender) => Some(omt::omt_audio_send(sender.audio_ingress())),
+            #[cfg(any(windows, target_os = "macos"))]
+            OutputHandle::Ndi(_) => None,
+        };
         let video_sub = Arc::new(AtomicBool::new(false));
+        let clock = mixer.shared.lock().expect("shared").clock;
+        let inherited = {
+            let shared = mixer.shared.lock().expect("shared");
+            if fps_num > 0 && fps_den > 0 {
+                (fps_num, fps_den)
+            } else {
+                shared
+                    .units
+                    .get(&unit_id)
+                    .map(|unit| (unit.fps_num, unit.fps_den))
+                    .unwrap_or((shared.master_fps_num, shared.master_fps_den))
+            }
+        };
+        if crate::clock::Rate::new(inherited.0, inherited.1).is_err() {
+            return ERR_INVALID_ARGUMENT;
+        }
         let worker = spawn_output_worker(
             output_id,
             handle,
             Arc::clone(&video_sub),
             mixer.omt_gpu.clone(),
             Arc::clone(&mixer.stop),
+            clock,
+            inherited.0,
+            inherited.1,
         );
         mixer.shared.lock().expect("shared").outputs.insert(
             output_id,
@@ -2749,10 +2819,16 @@ pub unsafe extern "C" fn mixer_output_add(
                 source_id,
                 unit_id,
                 audio_bus_id,
+                width,
+                height,
+                fps_num: inherited.0,
+                fps_den: inherited.1,
                 video_sub,
                 use_gpu,
                 skip_idle_encode,
                 tx: worker.tx.clone(),
+                pace: Arc::clone(&worker.tx.pace),
+                audio_send,
             },
         );
         mixer.send_workers.insert(output_id, worker);
@@ -3280,6 +3356,14 @@ pub unsafe extern "C" fn mixer_source_copy_error(id: u64, out: *mut u8, cap: usi
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
     crate::diag::info(&format!("destroy_source id={id}"));
+    let _ = with_mixer(|mixer| {
+        mixer
+            .audio_captures
+            .lock()
+            .expect("audio captures")
+            .stop(id);
+        OK
+    });
     match detach_source(id) {
         Ok(taken) => {
             drop(taken.receiver);
@@ -3311,7 +3395,6 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
     device_id: *const c_char,
     map_left: i32,
     map_right: i32,
-    exclusive: u32,
 ) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
@@ -3328,7 +3411,6 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
             &device_id,
             map_left,
             map_right,
-            exclusive,
         );
         OK
     })
@@ -3380,7 +3462,6 @@ pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo)
                 device_kind: bus.device_kind,
                 map_left: bus.map_left,
                 map_right: bus.map_right,
-                exclusive: u32::from(bus.exclusive),
                 bit: bus.bit,
                 name: write_fixed::<64>(&bus.name),
                 device_id: write_fixed::<256>(&bus.device_id),
@@ -3477,6 +3558,95 @@ pub unsafe extern "C" fn mixer_audio_enum_devices(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_device_channels(kind: u32, device_id: *const c_char) -> i32 {
     audio::device_channels(kind, &read_cstr(device_id))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_device_io_channels(
+    kind: u32,
+    device_id: *const c_char,
+    inputs: *mut i32,
+    outputs: *mut i32,
+) -> i32 {
+    if inputs.is_null() || outputs.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let (ins, outs) = audio::device_io_channels(kind, &read_cstr(device_id));
+    unsafe {
+        *inputs = ins;
+        *outputs = outs;
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_process_list(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let json = audio::processes_json();
+    let bytes = json.as_bytes();
+    if bytes.len() > cap {
+        return -(bytes.len() as i32);
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+    }
+    bytes.len() as i32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_capture_start(
+    id: u64,
+    kind: u32,
+    device_id: *const c_char,
+    mode: u32,
+    map_left: i32,
+    map_right: i32,
+    process_exe: *const c_char,
+    process_aumid: *const c_char,
+) -> i32 {
+    if id == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let spec = audio::AudioCaptureSpec {
+        id,
+        kind,
+        device_id: read_cstr(device_id),
+        mode,
+        map_left,
+        map_right,
+        process_exe: read_cstr(process_exe),
+        process_aumid: read_cstr(process_aumid),
+    };
+    with_mixer(|mixer| {
+        let uploads = mixer.uploads.lock().expect("uploads").audio_store();
+        match mixer
+            .audio_captures
+            .lock()
+            .expect("audio captures")
+            .start(spec, uploads)
+        {
+            Ok(()) => OK,
+            Err(error) => {
+                set_error(&mixer.telemetry, error);
+                ERR_IO
+            }
+        }
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_capture_stop(id: u64) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .audio_captures
+            .lock()
+            .expect("audio captures")
+            .stop(id);
+        OK
+    })
+    .unwrap_or_else(|code| code)
 }
 
 pub(crate) fn read_cstr(ptr: *const c_char) -> String {
@@ -3836,6 +4006,20 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_set_master_fps(fps_num: u32, fps_den: u32) -> i32 {
+    let Ok(rate) = crate::clock::Rate::new(fps_num, fps_den) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock().expect("shared");
+        shared.master_fps_num = rate.num;
+        shared.master_fps_den = rate.den;
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -3989,19 +4173,22 @@ mod tests {
 
     #[test]
     fn skip_idle_encode_gates_video() {
-        let (tx, _) = mpsc::channel();
         let idle = OutputSnap {
             output_id: 1,
             source_kind: SRC_KIND_MU_PROGRAM,
             source_id: 1,
             unit_id: 1,
             audio_bus_id: 1,
+            width: 0,
+            height: 0,
             fps_n: 60,
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(false)),
             use_gpu: false,
             skip_idle_encode: true,
-            tx: tx.clone(),
+            tx: crate::frame_hub::OutputTx::stub(),
+            pace: Arc::new(crate::frame_hub::OutputPace::new(60, 1)),
+            audio_send: None,
         };
         assert!(!idle.wants_video());
         assert!(!idle.cpu_video());
@@ -4091,12 +4278,16 @@ mod tests {
             source_id: mv,
             unit_id: 1,
             audio_bus_id: 1,
+            width: 0,
+            height: 0,
             fps_n: 60,
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(true)),
             use_gpu: false,
             skip_idle_encode: true,
-            tx: mpsc::channel().0,
+            tx: crate::frame_hub::OutputTx::stub(),
+            pace: Arc::new(crate::frame_hub::OutputPace::new(60, 1)),
+            audio_send: None,
         }];
         let (scenes, uploads) = collect_live_ids(&specs, &[], &[], &outputs, &HashMap::new());
         assert!(scenes.contains(&mv));

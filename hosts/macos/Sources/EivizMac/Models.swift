@@ -11,6 +11,7 @@ enum InputKind: String, Codable, CaseIterable {
     case ndi = "NDI"
     case uvc = "UVC"
     case mix = "Mix"
+    case audio = "Audio"
 
     var category: String {
         switch self {
@@ -21,6 +22,7 @@ enum InputKind: String, Codable, CaseIterable {
         case .ndi: return "NDI®"
         case .uvc: return "UVC"
         case .mix: return "Mix"
+        case .audio: return "Audio"
         }
     }
 
@@ -45,7 +47,9 @@ enum InputKind: String, Codable, CaseIterable {
         try container.encode(rawValue)
     }
 
-    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix]
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix, .audio]
+
+    var hasVideo: Bool { self != .audio }
 
     func sameCategory(as other: InputKind) -> Bool {
         self == other || (isColour && other.isColour)
@@ -171,7 +175,20 @@ enum AudioBusRole: String, Codable {
     }
 }
 
-enum AudioDeviceKind: String, Codable {
+enum AudioCaptureMode: String, Codable, Hashable {
+    case mic = "Mic"
+    case endpointLoopback = "EndpointLoopback"
+    case processLoopback = "ProcessLoopback"
+    var rawUInt: UInt32 {
+        switch self {
+        case .mic: return 0
+        case .endpointLoopback: return 1
+        case .processLoopback: return 2
+        }
+    }
+}
+
+enum AudioDeviceKind: String, Codable, Hashable {
     case none = "None"
     case wasapi = "Wasapi"
     case asio = "Asio"
@@ -270,6 +287,13 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var mixSource: MixSource = .muProgram
     var mixTargetId: UInt64 = 0
     var mixAudioBusId: UInt64 = 0
+    var audioCaptureMode: AudioCaptureMode = .mic
+    var audioDeviceKind: AudioDeviceKind = .coreAudio
+    var audioDeviceId: String = ""
+    var audioMapLeft: Int32 = 0
+    var audioMapRight: Int32 = 1
+    var audioProcessExe: String = ""
+    var audioProcessAumid: String = ""
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -294,6 +318,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
         case mixSource, mixTargetId, mixAudioBusId
+        case audioCaptureMode, audioDeviceKind, audioDeviceId, audioMapLeft, audioMapRight
+        case audioProcessExe, audioProcessAumid
     }
 
     init(
@@ -380,6 +406,13 @@ struct InputEntry: Identifiable, Codable, Hashable {
         mixSource = try container.decodeIfPresent(MixSource.self, forKey: .mixSource) ?? .muProgram
         mixTargetId = try container.decodeIfPresent(UInt64.self, forKey: .mixTargetId) ?? 0
         mixAudioBusId = try container.decodeIfPresent(UInt64.self, forKey: .mixAudioBusId) ?? 0
+        audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .mic
+        audioDeviceKind = try container.decodeIfPresent(AudioDeviceKind.self, forKey: .audioDeviceKind) ?? .coreAudio
+        audioDeviceId = try container.decodeIfPresent(String.self, forKey: .audioDeviceId) ?? ""
+        audioMapLeft = try container.decodeIfPresent(Int32.self, forKey: .audioMapLeft) ?? 0
+        audioMapRight = try container.decodeIfPresent(Int32.self, forKey: .audioMapRight) ?? 1
+        audioProcessExe = try container.decodeIfPresent(String.self, forKey: .audioProcessExe) ?? ""
+        audioProcessAumid = try container.decodeIfPresent(String.self, forKey: .audioProcessAumid) ?? ""
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
@@ -806,7 +839,10 @@ struct MixingUnitEntry: Identifiable, Codable {
         }
     }
     var fpsLabel: String {
+        if fpsNum == 24_000 && fpsDen == 1_001 { return "23.976p" }
+        if fpsNum == 30_000 && fpsDen == 1_001 { return "29.97p" }
         if fpsNum == 60_000 && fpsDen == 1_001 { return "59.94p" }
+        if fpsNum == 120_000 && fpsDen == 1_001 { return "119.88p" }
         if fpsDen == 1 { return "\(fpsNum)p" }
         return "\(fpsNum)/\(fpsDen)"
     }
@@ -866,10 +902,14 @@ struct OutputEntry: Identifiable, Codable {
     var enabled: Bool = true
     var audioBusId: UInt64 = 1
     var skipEncodeWhenNoReceivers: Bool = true
+    var width: UInt32 = 0
+    var height: UInt32 = 0
+    var fpsNum: UInt32 = 0
+    var fpsDen: UInt32 = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioBusId
-        case skipEncodeWhenNoReceivers
+        case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
     }
 
     init(
@@ -882,7 +922,11 @@ struct OutputEntry: Identifiable, Codable {
         useGpu: Bool = true,
         enabled: Bool = true,
         audioBusId: UInt64 = 1,
-        skipEncodeWhenNoReceivers: Bool = true
+        skipEncodeWhenNoReceivers: Bool = true,
+        width: UInt32 = 0,
+        height: UInt32 = 0,
+        fpsNum: UInt32 = 0,
+        fpsDen: UInt32 = 0
     ) {
         self.id = id
         self.name = name
@@ -894,6 +938,10 @@ struct OutputEntry: Identifiable, Codable {
         self.enabled = enabled
         self.audioBusId = audioBusId
         self.skipEncodeWhenNoReceivers = skipEncodeWhenNoReceivers
+        self.width = width
+        self.height = height
+        self.fpsNum = fpsNum
+        self.fpsDen = fpsDen
     }
 
     init(from decoder: Decoder) throws {
@@ -908,6 +956,10 @@ struct OutputEntry: Identifiable, Codable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
         skipEncodeWhenNoReceivers = try container.decodeIfPresent(Bool.self, forKey: .skipEncodeWhenNoReceivers) ?? true
+        width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 0
+        height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 0
+        fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 0
+        fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 0
     }
 }
 
@@ -1218,7 +1270,6 @@ struct AudioBusEntry: Identifiable, Codable {
     var deviceId: String = ""
     var mapLeft: Int32 = 0
     var mapRight: Int32 = 1
-    var exclusive: Bool = false
     var bit: UInt32 = 0
     var gain: Float = 1
     var mute: Bool = false
@@ -1399,7 +1450,16 @@ struct MixerSessionData: Codable {
         session.units[0].previewSceneId = session.scenes[0].id
         session.units[0].programSceneId = session.scenes[1].id
         session.outputs = [
-            OutputEntry(id: session.nextOutputId, name: "eiviz-pgm", transport: .omt, useGpu: true)
+            OutputEntry(
+                id: session.nextOutputId,
+                name: "eiviz-pgm",
+                transport: .omt,
+                useGpu: true,
+                width: session.settings.defaultWidth,
+                height: session.settings.defaultHeight,
+                fpsNum: session.settings.masterFpsNum,
+                fpsDen: session.settings.masterFpsDen
+            )
         ]
         session.nextOutputId += 1
         return session

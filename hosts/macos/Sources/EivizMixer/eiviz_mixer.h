@@ -221,6 +221,8 @@ typedef struct EivizAudioDeviceInfo {
     uint32_t channels;
     uint8_t id[256];
     uint8_t name[256];
+    uint32_t direction;
+    uint32_t caps;
 } EivizAudioDeviceInfo;
 
 typedef struct EivizAudioBusInfo {
@@ -229,7 +231,6 @@ typedef struct EivizAudioBusInfo {
     uint32_t device_kind;
     int32_t map_left;
     int32_t map_right;
-    uint32_t exclusive;
     uint32_t bit;
     uint8_t name[64];
     uint8_t device_id[256];
@@ -280,7 +281,7 @@ int32_t mixer_ndi_connect(uint64_t id, const char *address, uint32_t frame_buffe
 int32_t mixer_set_live_save(uint64_t id, uint32_t mode, uint32_t flags);
 int32_t mixer_omt_set_quality(uint64_t id, uint32_t quality);
 int32_t mixer_omt_start_send(uint64_t unit_id, const char *name);
-int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode);
+int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_snapshot(uint64_t unit_id, uint32_t kind, const char *path);
 int32_t mixer_output_remove(uint64_t output_id);
 int32_t mixer_omt_discover(uint8_t *out, size_t cap);
@@ -325,7 +326,7 @@ int32_t mixer_ws_configure_bind(uint32_t enabled, const char *host, uint32_t por
 int32_t mixer_ws_configure_owned(uint32_t enabled, const char *host, uint32_t port, const char *token, const char *max_role, const char *media_directory);
 int32_t mixer_ws_listen_owner(uint8_t *out, size_t cap);
 int32_t mixer_copy_snapshot(uint8_t *out, size_t cap);
-int32_t mixer_audio_bus_upsert(uint64_t id, const char *name, uint32_t role, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right, uint32_t exclusive);
+int32_t mixer_audio_bus_upsert(uint64_t id, const char *name, uint32_t role, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right);
 int32_t mixer_audio_bus_remove(uint64_t id);
 int32_t mixer_audio_bus_count(void);
 int32_t mixer_audio_bus_get(uint32_t index, EivizAudioBusInfo *out);
@@ -336,6 +337,10 @@ int32_t mixer_audio_set_headphone_cue(uint64_t unit_id);
 int32_t mixer_audio_set_headphone_copy_master(uint32_t enabled);
 int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint32_t cap);
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
+int32_t mixer_audio_device_io_channels(uint32_t kind, const char *device_id, int32_t *inputs, int32_t *outputs);
+int32_t mixer_audio_process_list(uint8_t *out, size_t cap);
+int32_t mixer_audio_capture_start(uint64_t id, uint32_t kind, const char *device_id, uint32_t mode, int32_t map_left, int32_t map_right, const char *process_exe, const char *process_aumid);
+int32_t mixer_audio_capture_stop(uint64_t id);
 
 #ifdef __cplusplus
 }

@@ -47,7 +47,11 @@ internal static class MixerApply
             output.UnitId,
             output.UseGpu ? 1u : 0u,
             audioBusId,
-            output.SkipEncodeWhenNoReceivers ? 1u : 0u);
+            output.SkipEncodeWhenNoReceivers ? 1u : 0u,
+            output.Width,
+            output.Height,
+            output.FpsNum,
+            output.FpsDen);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }
@@ -376,6 +380,30 @@ internal static class MixerApply
         Try(() => MixerNative.ThrowIfFailed(
             MixerNative.DefineMixInput(sourceId, targetId, sourceKind, delay, audioBusId),
             "Define Mix Input"));
+
+    public static void StartAudioCapture(InputEntry input) =>
+        MixerNative.ThrowIfFailed(
+            MixerNative.AudioCaptureStart(
+                input.Id,
+                input.AudioDeviceKind switch
+                {
+                    AudioDeviceKind.Wasapi => 1u,
+                    AudioDeviceKind.Asio => 2u,
+                    AudioDeviceKind.CoreAudio => 3u,
+                    _ => 0u
+                },
+                input.AudioDeviceId,
+                input.AudioCaptureMode switch
+                {
+                    AudioCaptureMode.EndpointLoopback => 1u,
+                    AudioCaptureMode.ProcessLoopback => 2u,
+                    _ => 0u
+                },
+                input.AudioMapLeft,
+                input.AudioMapRight,
+                input.AudioProcessExe,
+                input.AudioProcessAumid),
+            "Audio capture start");
 
     public static bool DropSource(ulong sourceId) => Try(() => MixerNative.DestroySource(sourceId));
 

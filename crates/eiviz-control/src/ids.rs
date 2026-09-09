@@ -227,6 +227,13 @@ mod tests {
             mix_source: Default::default(),
             mix_target_id: 0,
             mix_audio_bus_id: 0,
+            audio_capture_mode: Default::default(),
+            audio_device_kind: Default::default(),
+            audio_device_id: String::new(),
+            audio_map_left: 0,
+            audio_map_right: 1,
+            audio_process_exe: String::new(),
+            audio_process_aumid: String::new(),
         }
     }
 

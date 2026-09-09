@@ -67,7 +67,10 @@ public partial class SettingsWindow : Window
             Buses.Add(CloneBus(bus));
         _nextBusId = Math.Max(_nextBusId, Buses.Count == 0 ? 3 : Buses.Max(item => item.Id) + 1);
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
-        _devices = AudioGraphSync.EnumerateDevices(0);
+        _devices = AudioGraphSync.EnumerateDevices(0)
+            .Where(device => device.Direction != 1)
+            .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
+            .ToList();
         RebuildOutputs();
         RebuildLayouts();
         RebuildBuses();
@@ -311,34 +314,31 @@ public partial class SettingsWindow : Window
                 }
             };
             var device = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var left = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var right = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             FillDeviceBox(device, bus);
+            if (device.SelectedItem is ComboBoxItem selected && selected.Tag is string selectedId)
+                bus.DeviceId = selectedId;
+            FillMapBoxes(left, right, bus);
             device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
             device.SelectionChanged += (_, _) =>
             {
                 if (device.SelectedItem is ComboBoxItem item && item.Tag is string id)
+                {
                     bus.DeviceId = id;
+                    FillMapBoxes(left, right, bus);
+                }
             };
-            var left = new TextBox { Text = bus.MapLeft.ToString(), Margin = new Thickness(0, 0, 8, 6) };
-            left.TextChanged += (_, _) =>
+            left.SelectionChanged += (_, _) =>
             {
-                if (int.TryParse(left.Text, out var value))
+                if (left.SelectedItem is ComboBoxItem { Tag: int value })
                     bus.MapLeft = value;
             };
-            var right = new TextBox { Text = bus.MapRight.ToString(), Margin = new Thickness(0, 0, 8, 6) };
-            right.TextChanged += (_, _) =>
+            right.SelectionChanged += (_, _) =>
             {
-                if (int.TryParse(right.Text, out var value))
+                if (right.SelectedItem is ComboBoxItem { Tag: int value })
                     bus.MapRight = value;
             };
-            var exclusive = new CheckBox
-            {
-                Content = "Exclusive",
-                IsChecked = bus.Exclusive,
-                Foreground = System.Windows.Media.Brushes.White,
-                Margin = new Thickness(0, 0, 8, 0),
-                Visibility = bus.DeviceKind == AudioDeviceKind.Wasapi ? Visibility.Visible : Visibility.Collapsed
-            };
-            exclusive.Click += (_, _) => bus.Exclusive = exclusive.IsChecked == true;
             var remove = new Button { Content = "−", Width = 28, IsEnabled = bus.Role == AudioBusRole.Aux };
             remove.Click += (_, _) =>
             {
@@ -367,8 +367,6 @@ public partial class SettingsWindow : Window
             Grid.SetColumn(rightLabel, 1);
             Grid.SetRow(right, 2);
             Grid.SetColumn(right, 3);
-            Grid.SetColumn(exclusive, 4);
-            Grid.SetRow(exclusive, 2);
 
             grid.Children.Add(name);
             grid.Children.Add(remove);
@@ -378,7 +376,6 @@ public partial class SettingsWindow : Window
             grid.Children.Add(left);
             grid.Children.Add(rightLabel);
             grid.Children.Add(right);
-            grid.Children.Add(exclusive);
             box.Child = grid;
             BusRows.Children.Add(box);
         }
@@ -392,7 +389,7 @@ public partial class SettingsWindow : Window
             || (bus.DeviceKind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
             || (bus.DeviceKind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
         {
-            var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : $"{device.Name}  ({device.Channels}ch)";
+            var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : device.Name;
             box.Items.Add(new ComboBoxItem { Content = label, Tag = device.Id });
         }
         box.SelectedIndex = 0;
@@ -406,6 +403,43 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private static void FillMapBoxes(ComboBox left, ComboBox right, AudioBusEntry bus)
+    {
+        var channels = OutputChannels(bus.DeviceKind, bus.DeviceId ?? "");
+        FillMapBox(left, channels, bus.MapLeft);
+        FillMapBox(right, channels, bus.MapRight);
+        if (left.SelectedItem is ComboBoxItem { Tag: int leftIndex })
+            bus.MapLeft = leftIndex;
+        if (right.SelectedItem is ComboBoxItem { Tag: int rightIndex })
+            bus.MapRight = rightIndex;
+    }
+
+    private static void FillMapBox(ComboBox box, int channels, int selected)
+    {
+        box.Items.Clear();
+        for (var index = 0; index < channels; index++)
+            box.Items.Add(new ComboBoxItem { Content = (index + 1).ToString(), Tag = index });
+        if (box.Items.Count == 0)
+            return;
+        foreach (ComboBoxItem item in box.Items)
+        {
+            if (item.Tag is int value && value == selected)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+        box.SelectedIndex = 0;
+    }
+
+    private static int OutputChannels(AudioDeviceKind kind, string deviceId)
+    {
+        if (kind is AudioDeviceKind.None)
+            return 0;
+        MixerNative.AudioDeviceIoChannels((uint)kind, deviceId ?? "", out _, out var outputs);
+        return outputs;
+    }
+
     private static AudioBusEntry CloneBus(AudioBusEntry bus) => new()
     {
         Id = bus.Id,
@@ -415,7 +449,6 @@ public partial class SettingsWindow : Window
         DeviceId = bus.DeviceId,
         MapLeft = bus.MapLeft,
         MapRight = bus.MapRight,
-        Exclusive = bus.Exclusive,
         Bit = bus.Bit,
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute
@@ -494,7 +527,11 @@ public partial class SettingsWindow : Window
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
             UseGpu = true,
             AudioBusId = 1,
-            SkipEncodeWhenNoReceivers = true
+            SkipEncodeWhenNoReceivers = true,
+            Width = Settings.DefaultWidth,
+            Height = Settings.DefaultHeight,
+            FpsNum = Settings.MasterFpsNum,
+            FpsDen = Settings.MasterFpsDen
         });
         RebuildOutputs();
     }
@@ -519,6 +556,7 @@ public partial class SettingsWindow : Window
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
@@ -596,6 +634,14 @@ public partial class SettingsWindow : Window
             skipIdle.Checked += (_, _) => output.SkipEncodeWhenNoReceivers = true;
             skipIdle.Unchecked += (_, _) => output.SkipEncodeWhenNoReceivers = false;
 
+            var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            FillOutputSize(size, output);
+            size.SelectionChanged += (_, _) => ApplyOutputSize(size, output);
+
+            var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            FillOutputFps(fps, output);
+            fps.SelectionChanged += (_, _) => ApplyOutputFps(fps, output);
+
             var remove = new Button { Content = "−", Width = 28 };
             remove.Click += (_, _) =>
             {
@@ -618,7 +664,10 @@ public partial class SettingsWindow : Window
             Grid.SetColumnSpan(pick, 3);
             Grid.SetRow(audio, 4);
             Grid.SetColumnSpan(audio, 3);
-            Grid.SetRow(skipIdle, 5);
+            Grid.SetRow(size, 5);
+            Grid.SetRow(fps, 5);
+            Grid.SetColumn(fps, 1);
+            Grid.SetRow(skipIdle, 6);
             Grid.SetColumnSpan(skipIdle, 4);
             grid.Children.Add(name);
             grid.Children.Add(remove);
@@ -628,6 +677,8 @@ public partial class SettingsWindow : Window
             grid.Children.Add(kinds);
             grid.Children.Add(pick);
             grid.Children.Add(audio);
+            grid.Children.Add(size);
+            grid.Children.Add(fps);
             grid.Children.Add(skipIdle);
             box.Child = grid;
             OutputRows.Children.Add(box);
@@ -812,6 +863,71 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private static void FillOutputSize(ComboBox box, OutputEntry output)
+    {
+        box.Items.Add(new ComboBoxItem { Content = Loc.T("settings.followSessionSettings"), Tag = "0x0" });
+        box.Items.Add(new ComboBoxItem { Content = "1920x1080", Tag = "1920x1080" });
+        box.Items.Add(new ComboBoxItem { Content = "1280x720", Tag = "1280x720" });
+        box.Items.Add(new ComboBoxItem { Content = "3840x2160", Tag = "3840x2160" });
+        var tag = output.Width == 0 || output.Height == 0 ? "0x0" : $"{output.Width}x{output.Height}";
+        if (box.Items.Cast<ComboBoxItem>().All(item => !Equals(item.Tag, tag)))
+            box.Items.Add(new ComboBoxItem { Content = tag, Tag = tag });
+        SelectTag(box, tag);
+    }
+
+    private static void ApplyOutputSize(ComboBox box, OutputEntry output)
+    {
+        if (box.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+            return;
+        if (tag == "0x0")
+        {
+            output.Width = 0;
+            output.Height = 0;
+            return;
+        }
+        var parts = tag.Split('x');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var width)
+            && uint.TryParse(parts[1], out var height))
+        {
+            output.Width = width;
+            output.Height = height;
+        }
+    }
+
+    private static void FillOutputFps(ComboBox box, OutputEntry output)
+    {
+        box.Items.Add(new ComboBoxItem { Content = Loc.T("settings.followSessionSettings"), Tag = "0/0" });
+        box.Items.Add(new ComboBoxItem { Content = "23.976p", Tag = "24000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "24p", Tag = "24/1" });
+        box.Items.Add(new ComboBoxItem { Content = "25p", Tag = "25/1" });
+        box.Items.Add(new ComboBoxItem { Content = "29.97p", Tag = "30000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "30p", Tag = "30/1" });
+        box.Items.Add(new ComboBoxItem { Content = "50p", Tag = "50/1" });
+        box.Items.Add(new ComboBoxItem { Content = "NTSC 59.94p", Tag = "60000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "60p", Tag = "60/1" });
+        box.Items.Add(new ComboBoxItem { Content = "119.88p", Tag = "120000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "120p", Tag = "120/1" });
+        var tag = output.FpsNum == 0 || output.FpsDen == 0 ? "0/0" : $"{output.FpsNum}/{output.FpsDen}";
+        if (box.Items.Cast<ComboBoxItem>().All(item => !Equals(item.Tag, tag)))
+            box.Items.Add(new ComboBoxItem { Content = tag, Tag = tag });
+        SelectTag(box, tag);
+    }
+
+    private static void ApplyOutputFps(ComboBox box, OutputEntry output)
+    {
+        if (box.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+            return;
+        var parts = tag.Split('/');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var num)
+            && uint.TryParse(parts[1], out var den))
+        {
+            output.FpsNum = num;
+            output.FpsDen = den;
+        }
+    }
+
     private string NextOutputName()
     {
         const string prefix = "eiviz-out";
@@ -838,7 +954,11 @@ public partial class SettingsWindow : Window
         UseGpu = output.UseGpu,
         Enabled = output.Enabled,
         AudioBusId = output.AudioBusId,
-        SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers
+        SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
+        Width = output.Width,
+        Height = output.Height,
+        FpsNum = output.FpsNum,
+        FpsDen = output.FpsDen
     };
 
     private static void SelectTag(ComboBox box, string tag)

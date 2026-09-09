@@ -24,7 +24,7 @@ public partial class MainWindow
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
             return;
         var id = _session.NextInputId++;
         var input = new InputEntry
@@ -53,20 +53,28 @@ public partial class MainWindow
                 RebuildMeters();
                 return;
             }
+            if (App.IsRemote)
+            {
+                ApplyInputSource(input, dialog, replacing: false);
+                RefreshInputList();
+                RebuildMeters();
+                return;
+            }
+            _session.Inputs.Add(input);
             ApplyInputSource(input, dialog, replacing: false);
         }
         catch (Exception ex)
         {
+            _session.Inputs.Remove(input);
+            if (!App.IsRemote)
+            {
+                MixerApply.DropSource(input.Id);
+                MixerNative.FlushAudio(input.Id);
+            }
+            RefreshInputList();
             MessageBox.Show(this, ex.Message, Loc.T("msg.addInput"));
             return;
         }
-        if (App.IsRemote)
-        {
-            RefreshInputList();
-            RebuildMeters();
-            return;
-        }
-        _session.Inputs.Add(input);
         MixerNative.AudioSetInput(input.Id, input.BusMask, 1, 0);
         RefreshInputList();
         RebuildMeters();
@@ -86,7 +94,7 @@ public partial class MainWindow
         dialog.Load(input);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
             return;
         try
         {
@@ -207,6 +215,16 @@ public partial class MainWindow
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
         input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
+        if (dialog.Kind == InputKind.Audio)
+        {
+            input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
+            input.AudioDeviceKind = dialog.ResultAudioDeviceKind;
+            input.AudioDeviceId = dialog.ResultAudioDeviceId ?? "";
+            input.AudioMapLeft = dialog.ResultAudioMapLeft;
+            input.AudioMapRight = dialog.ResultAudioMapRight;
+            input.AudioProcessExe = dialog.ResultAudioProcessExe ?? "";
+            input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
+        }
         if (dialog.Kind == InputKind.Mix)
             input.BusMask = 0;
         input.BandwidthSave = dialog.Kind == InputKind.OMT
@@ -306,6 +324,16 @@ public partial class MainWindow
                     dialog.ResultFrameBufferFrames,
                     dialog.ResultMixAudioBusId);
                 break;
+            case InputKind.Audio:
+                input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
+                input.AudioDeviceKind = dialog.ResultAudioDeviceKind;
+                input.AudioDeviceId = dialog.ResultAudioDeviceId ?? "";
+                input.AudioMapLeft = dialog.ResultAudioMapLeft;
+                input.AudioMapRight = dialog.ResultAudioMapRight;
+                input.AudioProcessExe = dialog.ResultAudioProcessExe ?? "";
+                input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
+                MixerApply.StartAudioCapture(input);
+                break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
         }
@@ -327,6 +355,7 @@ public partial class MainWindow
         if (TryRemoteMutate(MutationJson.DeleteInput(input.Id), Loc.T("msg.selectInputDelete")))
             return;
         CloseInputPreview(input.Id);
+        CloseAudioInput(input.Id);
         MixerApply.DropSource(input.Id);
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
@@ -918,6 +947,8 @@ public partial class MainWindow
             window.Close();
         foreach (var preview in _inputPreviews.Values.ToArray())
             preview.Close();
+        foreach (var audio in _audioInputs.Values.ToArray())
+            audio.Close();
         PreviewHost.AutoAttach = false;
         ProgramHost.AutoAttach = false;
         MainMultiviewHost.AutoAttach = false;
@@ -1135,5 +1166,9 @@ public partial class MainWindow
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled
         && left.AudioBusId == right.AudioBusId
-        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
+        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers
+        && left.Width == right.Width
+        && left.Height == right.Height
+        && left.FpsNum == right.FpsNum
+        && left.FpsDen == right.FpsDen;
 }

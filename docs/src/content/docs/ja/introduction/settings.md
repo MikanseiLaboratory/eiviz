@@ -17,7 +17,7 @@ Preview色、Program色、非アクティブ色は、ボタンやシーンタイ
 
 ### マスターフレームレート
 
-セッションで共通で使われるフレームレートです。既定はNTSC 59.94pで、50p、30p、24p、60pも選べます。  
+セッションで共通で使われるフレームレートです。既定はNTSC 59.94pです。23.976p、24p、25p、29.97p、30p、50p、60p、119.88p、120pも選べます。  
 この値はMixer生成時に渡すので、変えたあとはセッションを保存して開き直すか、アプリを再起動してください。  
 各Mixing Unitは、ユニットのダイアログから出力フレームレートを上書きできます。
 
@@ -65,11 +65,12 @@ macOS（Apple Silicon）ではUnified Memory向けの最適化を導入してい
 
 <img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-各行は名前、転送方式、On/Off切り替え、映像ソース、音声です。  
+各行は名前、転送方式、On/Off切り替え、映像ソース、音声、解像度、フレームレートです。  
 転送方式にはOMTとNDIに対応しています。Decklinkなどのハードウェア出力は現在実装中です。  
 映像ソースはInput、Scene、MU PRV、MU PGM、Multiviewから選択が可能です。  
 音声はMaster, Headphone, 各Audio Aux、またはNone(音声なし)から選択可能です。  
-Multiviewを映像ソースに選択した場合、音声の送出は出来ません。
+Multiviewを映像ソースに選択した場合、音声の送出は出来ません。  
+解像度とフレームレートは出力ごとに選べます。「セッション設定を使用」はMixing Unit（無ければセッションのマスターフレームレートと既定サイズ）を使います。映像は、描画完了のたびに送らず、そのフレームレートで送ります。
 
 OMTはエンコード方式を選択可能です。GPU encodeはフレームをGPUに載せたままVMXコーデックに変換し送信します。CPU encodeを選択した場合、UYVY形式で読み出し、CPU上の送出専用スレッドでVMXコーデックへの変換・送信を行います。  
 NDIは常にCPU encodeです。
@@ -100,7 +101,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 内部ミックスは48 kHzステレオです。A〜HのAudio AUXを最大8本足せます。  
 [Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。
 
-Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。
+Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。実機へ出すときはWASAPI共有かASIOです。
 
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
 

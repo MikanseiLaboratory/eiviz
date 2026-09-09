@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Eiviz.Host.I18n;
 
 namespace Eiviz.Host.Preview;
 
@@ -18,6 +20,7 @@ internal sealed class MeterStrip : StackPanel
     private const string IconSpeaker = "\uE767";
     private const string IconMute = "\uE74F";
     private const string IconHeadphone = "\uE7F6";
+    private const string IconSettings = "\uE713";
 
     private readonly Rectangle _left = MakeBar();
     private readonly Rectangle _right = MakeBar();
@@ -30,10 +33,12 @@ internal sealed class MeterStrip : StackPanel
         HorizontalAlignment = HorizontalAlignment.Center,
         ItemHeight = 22
     };
+    private readonly bool _showRoutes;
     private float _leftPeak;
     private float _rightPeak;
     private float _leftDb = float.NegativeInfinity;
     private float _rightDb = float.NegativeInfinity;
+    private bool _syncing;
     private const double BarHeight = 88;
 
     public MeterKind Kind { get; }
@@ -43,26 +48,53 @@ internal sealed class MeterStrip : StackPanel
     public bool Mute { get; private set; }
     public event Action<ulong, uint>? BusMaskChanged;
     public event Action<ulong, float, bool>? FaderChanged;
+    public event Action<ulong>? OpenRequested;
 
-    public MeterStrip(MeterKind kind, ulong targetId, string name, float gain, bool mute)
+    public MeterStrip(
+        MeterKind kind,
+        ulong targetId,
+        string name,
+        float gain,
+        bool mute,
+        bool showFader = true,
+        bool showOpen = false,
+        bool showRoutes = true)
     {
         Kind = kind;
         TargetId = targetId;
         Gain = gain < 0 ? 1 : gain;
         Mute = mute;
+        _showRoutes = showRoutes;
         Width = 108;
         Margin = new Thickness(0, 0, 10, 0);
         Orientation = Orientation.Vertical;
         VerticalAlignment = VerticalAlignment.Top;
-        Children.Add(new TextBlock
+        var title = new DockPanel { Margin = new Thickness(0, 0, 0, 4), Height = 16 };
+        if (showOpen)
+        {
+            var gear = new Button
+            {
+                Content = IconSettings,
+                FontFamily = IconFont,
+                FontSize = 11,
+                Width = 20,
+                Height = 16,
+                Padding = new Thickness(0),
+                ToolTip = Loc.T("audio.settings")
+            };
+            gear.Click += (_, _) => OpenRequested?.Invoke(TargetId);
+            DockPanel.SetDock(gear, Dock.Right);
+            title.Children.Add(gear);
+        }
+        title.Children.Add(new TextBlock
         {
             Text = name,
             FontSize = 11,
-            Height = 16,
             TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = Brushes.Silver,
-            Margin = new Thickness(0, 0, 0, 4)
+            VerticalAlignment = VerticalAlignment.Center
         });
+        Children.Add(title);
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         row.Children.Add(Scale());
         row.Children.Add(Track(_left));
@@ -80,10 +112,13 @@ internal sealed class MeterStrip : StackPanel
         };
         _fader.ValueChanged += (_, _) =>
         {
+            if (_syncing)
+                return;
             Gain = SliderToGain(_fader.Value);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
-        row.Children.Add(_fader);
+        if (showFader)
+            row.Children.Add(_fader);
         Children.Add(row);
         _dbText = new TextBlock
         {
@@ -107,12 +142,44 @@ internal sealed class MeterStrip : StackPanel
         };
         _mute.Click += (_, _) =>
         {
+            if (_syncing)
+                return;
             Mute = _mute.IsChecked == true;
             _mute.Content = MuteGlyph(Mute);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
-        Children.Add(_routes);
-        _routes.Children.Add(_mute);
+        if (showRoutes)
+        {
+            Children.Add(_routes);
+            _routes.Children.Add(_mute);
+        }
+        if (showOpen)
+        {
+            MouseLeftButtonDown += (_, e) =>
+            {
+                if (e.ClickCount == 2)
+                    OpenRequested?.Invoke(TargetId);
+            };
+        }
+    }
+
+    public static (float L, float R) PostPeak(float left, float right, float gain, bool mute)
+    {
+        if (mute)
+            return (0, 0);
+        var scale = gain < 0 ? 1 : gain;
+        return (left * scale, right * scale);
+    }
+
+    public void SyncFrom(float gain, bool mute)
+    {
+        _syncing = true;
+        Gain = gain < 0 ? 1 : gain;
+        Mute = mute;
+        _fader.Value = GainToSlider(Gain);
+        _mute.IsChecked = mute;
+        _mute.Content = MuteGlyph(mute);
+        _syncing = false;
     }
 
     public void SetLevels(float left, float right)
@@ -159,6 +226,8 @@ internal sealed class MeterStrip : StackPanel
     public void SetBuses(IReadOnlyList<AudioBusEntry> buses, uint mask)
     {
         BusMask = mask;
+        if (!_showRoutes)
+            return;
         _routes.Children.Clear();
         if (Kind == MeterKind.Input)
         {

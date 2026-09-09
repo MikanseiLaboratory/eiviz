@@ -482,6 +482,7 @@ extension MixerController {
 
     func replaceSession(_ loaded: MixerSessionData) {
         closeAllInputPreviews()
+        closeAllAudioInputs()
         closeAllSwitchers()
         closeAllMultiviews()
         FlipBudget.reset()
@@ -708,6 +709,27 @@ extension MixerController {
                     ),
                     "Define Mix Input"
                 )
+            }
+        case .audio:
+            let deviceId = input.audioDeviceId.isEmpty ? (input.pathOrAddress ?? "") : input.audioDeviceId
+            MixerFFI.withCString(deviceId) { device in
+                MixerFFI.withCString(input.audioProcessExe) { exe in
+                    MixerFFI.withCString(input.audioProcessAumid) { aumid in
+                        fail(
+                            mixer_audio_capture_start(
+                                input.id,
+                                input.audioDeviceKind.rawUInt,
+                                device,
+                                input.audioCaptureMode.rawUInt,
+                                input.audioMapLeft,
+                                input.audioMapRight,
+                                exe,
+                                aumid
+                            ),
+                            "Audio capture start"
+                        )
+                    }
+                }
             }
         }
         _ = mixer_audio_set_input(input.id, audioMask(input), input.gain, input.mute ? 1 : 0)

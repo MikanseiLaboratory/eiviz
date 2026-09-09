@@ -127,6 +127,13 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 mix_source: crate::session::MixSource::MuProgram,
                 mix_target_id: 0,
                 mix_audio_bus_id: 0,
+                audio_capture_mode: crate::session::AudioCaptureMode::Mic,
+                audio_device_kind: crate::session::AudioDeviceKind::None,
+                audio_device_id: String::new(),
+                audio_map_left: 0,
+                audio_map_right: 1,
+                audio_process_exe: String::new(),
+                audio_process_aumid: String::new(),
             });
             document.next_input_id = id.saturating_add(1);
             Ok(())
@@ -423,6 +430,10 @@ mod tests {
             enabled: true,
             audio_bus_id: 1,
             skip_encode_when_no_receivers: true,
+            width: 0,
+            height: 0,
+            fps_num: 0,
+            fps_den: 0,
         });
         doc.outputs.push(crate::session::OutputDto {
             id: 101,
@@ -435,6 +446,10 @@ mod tests {
             enabled: true,
             audio_bus_id: 1,
             skip_encode_when_no_receivers: true,
+            width: 0,
+            height: 0,
+            fps_num: 0,
+            fps_den: 0,
         });
         let published = doc.published_video_outputs();
         assert_eq!(published.len(), 1);
@@ -465,6 +480,10 @@ mod tests {
                     enabled: true,
                     audio_bus_id: 1,
                     skip_encode_when_no_receivers: true,
+                    width: 0,
+                    height: 0,
+                    fps_num: 0,
+                    fps_den: 0,
                 }],
                 buses: vec![],
                 headphone_copy_master: Some(true),

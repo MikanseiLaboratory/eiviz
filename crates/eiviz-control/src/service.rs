@@ -313,7 +313,7 @@ impl ControlService {
                 let payload = match kind {
                     crate::command::DiscoverKind::Omt => self.port.discover_omt()?,
                     crate::command::DiscoverKind::Ndi => self.port.discover_ndi()?,
-                    crate::command::DiscoverKind::Audio => String::new(),
+                    crate::command::DiscoverKind::Audio => self.port.discover_audio()?,
                     crate::command::DiscoverKind::Uvc => self.port.discover_uvc()?,
                     crate::command::DiscoverKind::UvcModes => {
                         self.port.discover_uvc_modes(&query)?
@@ -841,6 +841,10 @@ mod tests {
             self.push_op(format!("ndi {}", spec.id));
             Ok(())
         }
+        fn audio_capture_start(&mut self, spec: AudioCaptureApply) -> ControlResult<()> {
+            self.push_op(format!("audio {}", spec.id));
+            Ok(())
+        }
         fn destroy_source(&mut self, id: u64) -> ControlResult<()> {
             self.push_op(format!("destroy_source {id}"));
             Ok(())
@@ -885,6 +889,9 @@ mod tests {
             Ok(())
         }
         fn set_frame_buffer(&mut self, _f: u32) -> ControlResult<()> {
+            Ok(())
+        }
+        fn set_master_fps(&mut self, _n: u32, _d: u32) -> ControlResult<()> {
             Ok(())
         }
         fn set_rebar_optimization(&mut self, _e: bool) -> ControlResult<()> {

@@ -123,7 +123,19 @@ mod tests {
         assert_pair("OMT", "omt", InputKind::OMT);
         assert_pair("NDI", "ndi", InputKind::NDI);
         assert_pair("UVC", "uvc", InputKind::UVC);
+        assert_pair("Audio", "audio", InputKind::Audio);
         assert_pair("Bars", "bars", InputKind::Bars);
+        assert_pair("Mic", "mic", crate::session::AudioCaptureMode::Mic);
+        assert_pair(
+            "EndpointLoopback",
+            "endpointLoopback",
+            crate::session::AudioCaptureMode::EndpointLoopback,
+        );
+        assert_pair(
+            "ProcessLoopback",
+            "processLoopback",
+            crate::session::AudioCaptureMode::ProcessLoopback,
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub trait MixerPort: Send {
     fn video_start(&mut self, spec: VideoStartApply) -> ControlResult<()>;
     fn omt_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()>;
     fn ndi_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()>;
+    fn audio_capture_start(&mut self, spec: AudioCaptureApply) -> ControlResult<()>;
     fn destroy_source(&mut self, id: u64) -> ControlResult<()>;
     fn set_live_save(&mut self, id: u64, mode: u32, flags: u32) -> ControlResult<()>;
     fn set_omt_quality(&mut self, id: u64, quality: u32) -> ControlResult<()>;
@@ -57,6 +58,7 @@ pub trait MixerPort: Send {
     fn audio_set_headphone_copy_master(&mut self, enabled: bool) -> ControlResult<()>;
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()>;
+    fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()>;
     fn set_rebar_optimization(&mut self, enabled: bool) -> ControlResult<()>;
     fn set_ndi_gpu_upload(&mut self, enabled: bool) -> ControlResult<()>;
     fn set_bus_colors(
@@ -126,6 +128,9 @@ pub trait MixerPort: Send {
     }
     fn discover_uvc_modes(&self, device_id: &str) -> ControlResult<String> {
         let _ = device_id;
+        Ok("[]".into())
+    }
+    fn discover_audio(&self) -> ControlResult<String> {
         Ok("[]".into())
     }
 
@@ -202,6 +207,18 @@ pub struct VideoStartApply {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AudioCaptureApply {
+    pub id: u64,
+    pub kind: u32,
+    pub device_id: String,
+    pub mode: u32,
+    pub map_left: i32,
+    pub map_right: i32,
+    pub process_exe: String,
+    pub process_aumid: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LiveConnectApply {
     pub id: u64,
     pub address: String,
@@ -223,6 +240,10 @@ pub struct OutputApply {
     pub use_gpu: bool,
     pub audio_bus_id: u64,
     pub skip_encode_when_no_receivers: bool,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -234,7 +255,6 @@ pub struct BusApply {
     pub device_id: String,
     pub map_left: u32,
     pub map_right: u32,
-    pub exclusive: bool,
     pub gain: f32,
     pub mute: bool,
 }
@@ -340,6 +360,9 @@ impl MixerPort for NullMixer {
     fn ndi_connect(&mut self, _spec: LiveConnectApply) -> ControlResult<()> {
         Ok(())
     }
+    fn audio_capture_start(&mut self, _spec: AudioCaptureApply) -> ControlResult<()> {
+        Ok(())
+    }
     fn destroy_source(&mut self, _id: u64) -> ControlResult<()> {
         Ok(())
     }
@@ -385,6 +408,9 @@ impl MixerPort for NullMixer {
         Ok(())
     }
     fn set_frame_buffer(&mut self, _frames: u32) -> ControlResult<()> {
+        Ok(())
+    }
+    fn set_master_fps(&mut self, _fps_num: u32, _fps_den: u32) -> ControlResult<()> {
         Ok(())
     }
     fn set_rebar_optimization(&mut self, _enabled: bool) -> ControlResult<()> {

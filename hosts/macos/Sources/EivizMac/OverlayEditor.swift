@@ -85,7 +85,7 @@ struct OverlayView: View {
                         Text(scene.name).tag(scene.gpuId)
                     }
                 } else {
-                    ForEach(mixer.session.inputs) { input in
+                    ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
                         Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                     }
                 }
@@ -191,7 +191,7 @@ struct OverlayView: View {
             }
         )) {
             if slot.sourceKind == .input {
-                ForEach(mixer.session.inputs) { input in
+                ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
                     Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                 }
             } else {

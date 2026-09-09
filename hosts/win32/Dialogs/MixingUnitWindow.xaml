@@ -27,11 +27,16 @@
         <TextBox x:Name="HeightBox" Grid.Row="2" Grid.Column="1" Margin="0,0,0,8" Text="1080"/>
         <TextBlock Grid.Row="3" Text="Frame rate" VerticalAlignment="Center"/>
         <ComboBox x:Name="FpsBox" Grid.Row="3" Grid.Column="1" Margin="0,0,0,8">
-            <ComboBoxItem Content="59.94p" Tag="60000/1001" IsSelected="True"/>
-            <ComboBoxItem Content="50p" Tag="50/1"/>
-            <ComboBoxItem Content="30p" Tag="30/1"/>
+            <ComboBoxItem Content="23.976p" Tag="24000/1001"/>
             <ComboBoxItem Content="24p" Tag="24/1"/>
+            <ComboBoxItem Content="25p" Tag="25/1"/>
+            <ComboBoxItem Content="29.97p" Tag="30000/1001"/>
+            <ComboBoxItem Content="30p" Tag="30/1"/>
+            <ComboBoxItem Content="50p" Tag="50/1"/>
+            <ComboBoxItem Content="59.94p" Tag="60000/1001" IsSelected="True"/>
             <ComboBoxItem Content="60p" Tag="60/1"/>
+            <ComboBoxItem Content="119.88p" Tag="120000/1001"/>
+            <ComboBoxItem Content="120p" Tag="120/1"/>
         </ComboBox>
         <TextBlock Grid.Row="4" Text="Audio bus" VerticalAlignment="Center"/>
         <ComboBox x:Name="BusBox" Grid.Row="4" Grid.Column="1" Margin="0,0,0,8" DisplayMemberPath="Name"/>

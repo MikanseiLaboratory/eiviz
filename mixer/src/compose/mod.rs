@@ -151,6 +151,8 @@ pub struct Composer {
     generators: HashMap<u64, Generator>,
     generator_bake: HashMap<u64, Generator>,
     input_packed: HashMap<u64, wgpu::Texture>,
+    output_scaled: HashMap<u64, wgpu::Texture>,
+    output_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
     scroll_phase_y: f32,
     tally_red: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -373,6 +375,8 @@ impl Composer {
             generators: HashMap::new(),
             generator_bake: HashMap::new(),
             input_packed: HashMap::new(),
+            output_scaled: HashMap::new(),
+            output_packed: HashMap::new(),
             scroll_phase: 0.0,
             scroll_phase_y: 0.0,
             tally_red: None,
@@ -405,9 +409,9 @@ impl Composer {
         })
     }
 
-    pub fn begin_frame(&mut self) {
+    pub fn begin_frame(&mut self, dt: f32) {
         self.pool.reset();
-        self.mix_time = self.mix_time + 1.0 / 60.0;
+        self.mix_time += dt;
     }
 
     pub fn gpu_epoch(&self) -> u64 {
@@ -2310,6 +2314,12 @@ impl Composer {
         for texture in self.input_packed.values() {
             total += texture_bytes(texture);
         }
+        for texture in self.output_scaled.values() {
+            total += texture_bytes(texture);
+        }
+        for texture in self.output_packed.values() {
+            total += texture_bytes(texture);
+        }
         for (texture, _) in self.label_cache.values() {
             total += texture_bytes(texture);
         }
@@ -2362,6 +2372,109 @@ impl Composer {
             }
         };
         self.pack_to(device, encoder, mixing_unit_preview(unit_id), &src, &dest);
+    }
+
+    pub fn scale_rgba(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        output_id: u64,
+        src: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        packed_src: bool,
+    ) -> Option<&wgpu::Texture> {
+        let width = width.max(2);
+        let height = height.max(1);
+        if src.size().width == width && src.size().height == height {
+            return None;
+        }
+        let key = 0x5100_0000_0000_0000 | output_id;
+        let reuse = self
+            .output_scaled
+            .get(&output_id)
+            .is_some_and(|tex| tex.size().width == width && tex.size().height == height);
+        if !reuse {
+            let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC;
+            self.output_scaled
+                .insert(output_id, make_texture(device, width, height, usage));
+            self.blit_groups.remove(&key);
+            self.uyvy_groups.remove(&key);
+        }
+        let src_view = src.create_view(&Default::default());
+        let dest_view = self
+            .output_scaled
+            .get(&output_id)?
+            .create_view(&Default::default());
+        self.blit_groups.remove(&key);
+        self.uyvy_groups.remove(&key);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("output scale"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dest_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            self.blit_pass(
+                device,
+                &mut pass,
+                key,
+                &src_view,
+                [0.0, 0.0, 1.0, 1.0],
+                1.0,
+                packed_src,
+            );
+        }
+        self.output_scaled.get(&output_id)
+    }
+
+    pub fn pack_rgba_sized(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        output_id: u64,
+        src: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Option<&wgpu::Texture> {
+        let packed_w = (width / 2).max(1);
+        let packed_h = height.max(1);
+        let key = 0x5200_0000_0000_0000 | output_id;
+        let reuse = self
+            .output_packed
+            .get(&output_id)
+            .is_some_and(|tex| tex.size().width == packed_w && tex.size().height == packed_h);
+        if !reuse {
+            let packed = make_texture(
+                device,
+                packed_w,
+                packed_h,
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+            );
+            self.output_packed.insert(output_id, packed);
+            self.pack_groups.remove(&key);
+        }
+        let dest = self
+            .output_packed
+            .get(&output_id)?
+            .create_view(&Default::default());
+        self.pack_groups.remove(&key);
+        self.pack_to(device, encoder, key, src, &dest);
+        self.output_packed.get(&output_id)
     }
 
     pub fn pack_source(

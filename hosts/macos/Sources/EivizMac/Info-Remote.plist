@@ -18,6 +18,8 @@
 	<string>14.0</string>
 	<key>NSCameraUsageDescription</key>
 	<string>eiviz captures cameras as mixer video inputs.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>eiviz captures microphones as mixer audio inputs.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>eiviz discovers and sends NDI and OMT on the local network.</string>
 	<key>NSBonjourServices</key>

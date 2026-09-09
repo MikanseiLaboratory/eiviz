@@ -227,7 +227,11 @@ internal static class SessionStore
                 UseGpu = output.UseGpu,
                 Enabled = output.Enabled,
                 AudioBusId = output.AudioBusId,
-                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers
+                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
+                Width = output.Width,
+                Height = output.Height,
+                FpsNum = output.FpsNum,
+                FpsDen = output.FpsDen
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),
@@ -349,6 +353,13 @@ internal static class SessionStore
         public MixSource MixSource { get; set; } = MixSource.MuProgram;
         public ulong MixTargetId { get; set; }
         public ulong MixAudioBusId { get; set; }
+        public AudioCaptureMode AudioCaptureMode { get; set; } = AudioCaptureMode.Mic;
+        public AudioDeviceKind AudioDeviceKind { get; set; } = AudioDeviceKind.None;
+        public string AudioDeviceId { get; set; } = "";
+        public int AudioMapLeft { get; set; }
+        public int AudioMapRight { get; set; } = 1;
+        public string AudioProcessExe { get; set; } = "";
+        public string AudioProcessAumid { get; set; } = "";
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -383,7 +394,14 @@ internal static class SessionStore
             Tags = [.. input.Tags],
             MixSource = input.Kind == InputKind.Mix ? input.MixSource : MixSource.MuProgram,
             MixTargetId = input.Kind == InputKind.Mix ? input.MixTargetId : 0,
-            MixAudioBusId = input.Kind == InputKind.Mix ? input.MixAudioBusId : 0
+            MixAudioBusId = input.Kind == InputKind.Mix ? input.MixAudioBusId : 0,
+            AudioCaptureMode = input.Kind == InputKind.Audio ? input.AudioCaptureMode : AudioCaptureMode.Mic,
+            AudioDeviceKind = input.Kind == InputKind.Audio ? input.AudioDeviceKind : AudioDeviceKind.None,
+            AudioDeviceId = input.Kind == InputKind.Audio ? input.AudioDeviceId : "",
+            AudioMapLeft = input.Kind == InputKind.Audio ? input.AudioMapLeft : 0,
+            AudioMapRight = input.Kind == InputKind.Audio ? input.AudioMapRight : 1,
+            AudioProcessExe = input.Kind == InputKind.Audio ? input.AudioProcessExe : "",
+            AudioProcessAumid = input.Kind == InputKind.Audio ? input.AudioProcessAumid : ""
         };
 
         public InputEntry ToEntry() => new()
@@ -419,7 +437,14 @@ internal static class SessionStore
             Tags = TagCatalog.NormalizeList(Tags),
             MixSource = Kind == InputKind.Mix ? MixSource : MixSource.MuProgram,
             MixTargetId = Kind == InputKind.Mix ? MixTargetId : 0,
-            MixAudioBusId = Kind == InputKind.Mix ? MixAudioBusId : 0
+            MixAudioBusId = Kind == InputKind.Mix ? MixAudioBusId : 0,
+            AudioCaptureMode = Kind == InputKind.Audio ? AudioCaptureMode : AudioCaptureMode.Mic,
+            AudioDeviceKind = Kind == InputKind.Audio ? AudioDeviceKind : AudioDeviceKind.None,
+            AudioDeviceId = Kind == InputKind.Audio ? AudioDeviceId : "",
+            AudioMapLeft = Kind == InputKind.Audio ? AudioMapLeft : 0,
+            AudioMapRight = Kind == InputKind.Audio ? AudioMapRight : 1,
+            AudioProcessExe = Kind == InputKind.Audio ? AudioProcessExe : "",
+            AudioProcessAumid = Kind == InputKind.Audio ? AudioProcessAumid : ""
         };
     }
 
@@ -597,7 +622,6 @@ internal static class SessionStore
         DeviceId = bus.DeviceId,
         MapLeft = bus.MapLeft,
         MapRight = bus.MapRight,
-        Exclusive = bus.Exclusive,
         Bit = bus.Bit,
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute
@@ -620,6 +644,7 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             "Still" or "still" => InputKind.Still,
             "Video" or "video" => InputKind.Video,
             "Mix" or "mix" => InputKind.Mix,
+            "Audio" or "audio" => InputKind.Audio,
             _ => throw new JsonException($"Unknown InputKind '{text}'.")
         };
     }
@@ -630,6 +655,7 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             InputKind.OMT => "OMT",
             InputKind.NDI => "NDI",
             InputKind.UVC => "UVC",
+            InputKind.Audio => "Audio",
             _ => value.ToString()
         });
 }

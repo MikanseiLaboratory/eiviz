@@ -17,7 +17,7 @@ Preview, Program, and Inactive colours paint button and scene-tile chrome. Colla
 
 ### Master frame rate
 
-The frame rate shared by the session. Default is NTSC 59.94p; 50p, 30p, 24p, and 60p are also listed.  
+The frame rate shared by the session. Default is NTSC 59.94p; 23.976p, 24p, 25p, 29.97p, 30p, 50p, 60p, 119.88p, and 120p are also listed.  
 The mixer takes this value at create time, so save the session and reopen it, or restart the app, after a change.  
 Each Mixing Unit can override output frame rate from its own dialog.
 
@@ -64,11 +64,12 @@ Where pictures leave the mixer.
 
 <img src="/eiviz/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
 
-Each row is a name, a transport, an On/Off switch, a video source, and audio.  
+Each row is a name, a transport, an On/Off switch, a video source, audio, resolution, and frame rate.  
 Transport is OMT or NDI. Hardware outputs such as DeckLink are still in progress.  
 Source can be Input, Scene, MU PRV, MU PGM, or Multiview.  
 Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
-When Multiview is selected as the video source, audio cannot be sent.
+When Multiview is selected as the video source, audio cannot be sent.  
+Resolution and frame rate are per output. Follow session settings uses the Mixing Unit (or the session master frame rate and default size). Video is sent at that rate, not as soon as compose finishes.
 
 OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to the VMX codec for send. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
 NDI is always CPU encode.
@@ -99,7 +100,7 @@ Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 The internal mix is 48 kHz stereo. You can add up to eight Audio AUX buses, A–H.  
 Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
 
-Enabled keeps the bus mixing internally with no output device.
+Enabled keeps the bus mixing internally with no output device. Hardware output is WASAPI shared or ASIO.
 
 Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it off if you want a cue mix.
 

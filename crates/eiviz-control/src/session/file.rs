@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioBusRole, AudioDeviceKind, AudioLinkMode, BandwidthSave, BusDto, Document, InputDto,
-    InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate, MvLabelAnchor,
-    MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
-    OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
+    AudioBusRole, AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BusDto,
+    Document, InputDto, InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate,
+    MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto,
+    OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
     SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset, UnitDto,
     VideoPlayWhen, VideoTriggerWhen,
 };
@@ -526,6 +526,13 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         mix_source: mix_source_to_pb(input.mix_source).into(),
         mix_target_id: input.mix_target_id,
         mix_audio_bus_id: input.mix_audio_bus_id,
+        audio_capture_mode: audio_capture_mode_to_pb(input.audio_capture_mode).into(),
+        audio_device_kind: device_kind_to_pb(input.audio_device_kind).into(),
+        audio_device_id: input.audio_device_id.clone(),
+        audio_map_left: input.audio_map_left,
+        audio_map_right: input.audio_map_right,
+        audio_process_exe: input.audio_process_exe.clone(),
+        audio_process_aumid: input.audio_process_aumid.clone(),
     }
 }
 
@@ -567,6 +574,13 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         mix_source: mix_source_from_pb(input.mix_source)?,
         mix_target_id: input.mix_target_id,
         mix_audio_bus_id: input.mix_audio_bus_id,
+        audio_capture_mode: audio_capture_mode_from_pb(input.audio_capture_mode)?,
+        audio_device_kind: device_kind_from_pb(input.audio_device_kind)?,
+        audio_device_id: input.audio_device_id,
+        audio_map_left: input.audio_map_left,
+        audio_map_right: input.audio_map_right,
+        audio_process_exe: input.audio_process_exe,
+        audio_process_aumid: input.audio_process_aumid,
     })
 }
 
@@ -846,6 +860,10 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         enabled: output.enabled,
         audio_bus_id: output.audio_bus_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     }
 }
 
@@ -861,6 +879,10 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         enabled: output.enabled,
         audio_bus_id: output.audio_bus_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     })
 }
 
@@ -945,7 +967,6 @@ fn bus_to_pb(bus: &BusDto) -> pb::Bus {
         device_id: bus.device_id.clone(),
         map_left: bus.map_left,
         map_right: bus.map_right,
-        exclusive: bus.exclusive,
         bit: bus.bit,
         gain: bus.gain,
         mute: bus.mute,
@@ -961,7 +982,6 @@ fn bus_from_pb(bus: pb::Bus) -> Result<BusDto, String> {
         device_id: bus.device_id,
         map_left: bus.map_left,
         map_right: if bus.map_right == 0 { 1 } else { bus.map_right },
-        exclusive: bus.exclusive,
         bit: bus.bit,
         gain: bus.gain,
         mute: bus.mute,
@@ -1138,6 +1158,14 @@ proto_enum!(
     { None => None, Wasapi => Wasapi, Asio => Asio, CoreAudio => CoreAudio }
 );
 proto_enum!(
+    audio_capture_mode_to_pb,
+    audio_capture_mode_from_pb,
+    AudioCaptureMode,
+    pb::AudioCaptureMode,
+    "audio capture mode",
+    { Mic => Mic, EndpointLoopback => EndpointLoopback, ProcessLoopback => ProcessLoopback }
+);
+proto_enum!(
     audio_link_to_pb,
     audio_link_from_pb,
     AudioLinkMode,
@@ -1165,6 +1193,7 @@ fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
         InputKind::NDI => pb::InputKind::Ndi,
         InputKind::UVC => pb::InputKind::Uvc,
         InputKind::Mix => pb::InputKind::Mix,
+        InputKind::Audio => pb::InputKind::Audio,
     }
 }
 
@@ -1180,6 +1209,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
         Ok(pb::InputKind::Ndi) => Ok(InputKind::NDI),
         Ok(pb::InputKind::Uvc) => Ok(InputKind::UVC),
         Ok(pb::InputKind::Mix) => Ok(InputKind::Mix),
+        Ok(pb::InputKind::Audio) => Ok(InputKind::Audio),
         Err(_) => Err(unknown("input kind", value)),
     }
 }
@@ -1237,7 +1267,11 @@ mod tests {
     "name": "eiviz-pgm",
     "transport": "Omt",
     "sourceKind": "MuProgram",
-    "skipEncodeWhenNoReceivers": false
+    "skipEncodeWhenNoReceivers": false,
+    "width": 1280,
+    "height": 720,
+    "fpsNum": 30,
+    "fpsDen": 1
   }],
   "buses": [
     { "id": 1, "name": "Master", "role": "Master", "deviceKind": "Wasapi", "mapRight": 1 }
@@ -1265,6 +1299,10 @@ mod tests {
         assert!(!decoded.units[0].overlays[0].size_linked);
         assert!((decoded.units[0].overlays[0].crop_y - 0.2).abs() < f32::EPSILON);
         assert!(!decoded.outputs[0].skip_encode_when_no_receivers);
+        assert_eq!(decoded.outputs[0].width, 1280);
+        assert_eq!(decoded.outputs[0].height, 720);
+        assert_eq!(decoded.outputs[0].fps_num, 30);
+        assert_eq!(decoded.outputs[0].fps_den, 1);
         assert!(!decoded.settings.rebar_optimization);
         assert_eq!(decoded.settings.renderer, Renderer::Auto);
         assert_eq!(decoded.settings.last_session_path, None);

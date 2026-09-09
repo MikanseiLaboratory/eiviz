@@ -10,6 +10,7 @@ struct Slot {
     pending: bool,
     waiting: bool,
     ready: Option<Receiver<()>>,
+    pts: i64,
 }
 
 pub struct UnitReadback {
@@ -18,7 +19,7 @@ pub struct UnitReadback {
     pub stride: u32,
     slots: [Slot; SLOTS],
     write: usize,
-    mapped: Option<Vec<u8>>,
+    mapped: Option<(Vec<u8>, i64)>,
 }
 
 impl UnitReadback {
@@ -35,6 +36,7 @@ impl UnitReadback {
             pending: false,
             waiting: false,
             ready: None,
+            pts: 0,
         });
         Self {
             width,
@@ -46,10 +48,16 @@ impl UnitReadback {
         }
     }
 
-    pub fn copy_from(&mut self, encoder: &mut wgpu::CommandEncoder, packed: &wgpu::Texture) {
+    pub fn copy_from(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        packed: &wgpu::Texture,
+        pts: i64,
+    ) {
         if self.slots[self.write].waiting {
             return;
         }
+        self.slots[self.write].pts = pts;
         let size = packed.size();
         let packed_w = (self.width / 2).max(1);
         if size.width != packed_w || size.height != self.height {
@@ -99,7 +107,7 @@ impl UnitReadback {
                 }
                 drop(view);
                 self.slots[i].buffer.unmap();
-                self.mapped = Some(packed);
+                self.mapped = Some((packed, self.slots[i].pts));
             }
             self.slots[i].pending = false;
             self.slots[i].waiting = false;
@@ -121,8 +129,10 @@ impl UnitReadback {
         }
     }
 
-    pub fn latest(&self) -> Option<&[u8]> {
-        self.mapped.as_deref()
+    pub fn latest(&self) -> Option<(&[u8], i64)> {
+        self.mapped
+            .as_ref()
+            .map(|(data, pts)| (data.as_slice(), *pts))
     }
 }
 

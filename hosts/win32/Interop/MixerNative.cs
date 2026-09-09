@@ -203,7 +203,7 @@ internal static partial class MixerNative
     internal static partial int FlushAudio(ulong id);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_upsert", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int AudioBusUpsert(ulong id, string name, uint role, uint deviceKind, string deviceId, int mapLeft, int mapRight, uint exclusive);
+    internal static partial int AudioBusUpsert(ulong id, string name, uint role, uint deviceKind, string deviceId, int mapLeft, int mapRight);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_remove")]
     internal static partial int AudioBusRemove(ulong id);
@@ -234,6 +234,26 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_channels", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int AudioDeviceChannels(uint kind, string deviceId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_io_channels", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioDeviceIoChannels(uint kind, string deviceId, out int inputs, out int outputs);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_process_list")]
+    internal static unsafe partial int AudioProcessList(byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_capture_start", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioCaptureStart(
+        ulong id,
+        uint kind,
+        string deviceId,
+        uint mode,
+        int mapLeft,
+        int mapRight,
+        string processExe,
+        string processAumid);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_capture_stop")]
+    internal static partial int AudioCaptureStop(ulong id);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_bind_multiview")]
     internal static partial int BindMultiview(ulong sceneId, ulong previewUnit, ulong programUnit);
@@ -302,7 +322,7 @@ internal static partial class MixerNative
     internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode);
+    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode, uint width, uint height, uint fpsNum, uint fpsDen);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Snapshot(ulong unitId, uint kind, string path);
@@ -654,6 +674,9 @@ internal static partial class MixerNative
         }
     }
 
+    internal static unsafe string AudioProcessListText() =>
+        CopyUtf8(AudioProcessList, 1 << 16);
+
     internal static List<(string Name, string Id)> EnumVideoCaptures()
     {
         var list = new List<(string, string)>();
@@ -875,7 +898,6 @@ internal unsafe struct MixerAudioBusInfo
     public uint DeviceKind;
     public int MapLeft;
     public int MapRight;
-    public uint Exclusive;
     public uint Bit;
     public fixed byte Name[64];
     public fixed byte DeviceId[256];
@@ -888,4 +910,6 @@ internal unsafe struct MixerAudioDeviceInfo
     public uint Channels;
     public fixed byte Id[256];
     public fixed byte Name[256];
+    public uint Direction;
+    public uint Caps;
 }

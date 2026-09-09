@@ -14,7 +14,7 @@ Follow tracks Preview/Program and the T-bar mix. Independent ignores the video s
 ## Device assignment
 
 Hardware assignment is Audio Auxiliary in [Settings](/eiviz/en/introduction/settings/).  
-Enabled keeps the bus mixing internally with no output device.  
+Enabled keeps the bus mixing internally with no output device. Hardware output is WASAPI shared or ASIO.  
 Headphone copies Master makes the Headphone bus a duplicate of Master.
 
 Device detail is in [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).

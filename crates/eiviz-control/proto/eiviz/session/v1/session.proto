@@ -115,6 +115,13 @@ message Input {
   MixSource mix_source = 30;
   uint64 mix_target_id = 31;
   uint64 mix_audio_bus_id = 32;
+  AudioCaptureMode audio_capture_mode = 33;
+  AudioDeviceKind audio_device_kind = 34;
+  string audio_device_id = 35;
+  int32 audio_map_left = 36;
+  int32 audio_map_right = 37;
+  string audio_process_exe = 38;
+  string audio_process_aumid = 39;
 }
 
 message SceneLayer {
@@ -232,6 +239,11 @@ message Output {
   bool enabled = 8;
   uint64 audio_bus_id = 9;
   bool skip_encode_when_no_receivers = 10;
+  // 0/0 follow the Mixing Unit (or session master) size and frame rate.
+  uint32 width = 11;
+  uint32 height = 12;
+  uint32 fps_num = 13;
+  uint32 fps_den = 14;
 }
 
 message MvSlot {
@@ -267,7 +279,7 @@ message Bus {
   string device_id = 5;
   int32 map_left = 6;
   int32 map_right = 7;
-  bool exclusive = 8;
+  reserved 8;
   uint32 bit = 9;
   float gain = 10;
   bool mute = 11;
@@ -302,6 +314,7 @@ enum InputKind {
   INPUT_KIND_NDI = 7;
   INPUT_KIND_UVC = 8;
   INPUT_KIND_MIX = 9;
+  INPUT_KIND_AUDIO = 10;
 }
 
 enum MixSource {
@@ -407,6 +420,13 @@ enum AudioDeviceKind {
   AUDIO_DEVICE_KIND_WASAPI = 2;
   AUDIO_DEVICE_KIND_ASIO = 3;
   AUDIO_DEVICE_KIND_CORE_AUDIO = 4;
+}
+
+enum AudioCaptureMode {
+  AUDIO_CAPTURE_MODE_UNSPECIFIED = 0;
+  AUDIO_CAPTURE_MODE_MIC = 1;
+  AUDIO_CAPTURE_MODE_ENDPOINT_LOOPBACK = 2;
+  AUDIO_CAPTURE_MODE_PROCESS_LOOPBACK = 3;
 }
 
 enum AudioLinkMode {

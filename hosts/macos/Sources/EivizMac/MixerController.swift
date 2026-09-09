@@ -86,6 +86,9 @@ final class MixerController: ObservableObject {
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
     var inputPreviewControllers: [UInt64: NSWindowController] = [:]
     let inputPreviewCloser = InputPreviewCloser()
+    var audioInputWindows: [UInt64: NSWindow] = [:]
+    var audioInputControllers: [UInt64: NSWindowController] = [:]
+    let audioInputCloser = AudioInputCloser()
     var switcherWindows: [UInt64: NSWindow] = [:]
     let switcherCloser = SwitcherCloser()
     var multiviewWindows: [UInt64: NSWindow] = [:]
@@ -432,6 +435,7 @@ final class MixerController: ObservableObject {
         meterTimer?.invalidate()
         meterTimer = nil
         closeAllInputPreviews()
+        closeAllAudioInputs()
         closeAllSwitchers()
         if remoteHandle != 0 {
             _ = mixer_remote_close(remoteHandle)
@@ -557,6 +561,84 @@ final class MixerController: ObservableObject {
         inputPreviewControllers.removeValue(forKey: inputId)
     }
 
+    func openAudioInput(_ input: InputEntry) {
+        if let existing = audioInputWindows[input.id] {
+            presentAudioInput(existing)
+            return
+        }
+        let view = AudioInputSettingsView(inputId: input.id, mixer: self)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 380, height: 220)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = L10n.format("audio.inputTitle", input.listLabel(in: session, localFiles: !isRemote))
+        window.identifier = NSUserInterfaceItemIdentifier("audio-input-\(input.id)")
+        window.contentView = hosting
+        window.isReleasedWhenClosed = false
+        window.appearance = NSApp.appearance
+        window.backgroundColor = EivizTheme.nsStatusBar
+        window.tabbingMode = .disallowed
+        window.center()
+        audioInputCloser.onClose = { [weak self] closedId in
+            Task { @MainActor in
+                self?.audioInputDidClose(closedId)
+            }
+        }
+        window.delegate = audioInputCloser
+        let controller = NSWindowController(window: window)
+        audioInputControllers[input.id] = controller
+        audioInputWindows[input.id] = window
+        presentAudioInput(window)
+    }
+
+    private func presentAudioInput(_ window: NSWindow) {
+        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func closeAudioInput(_ inputId: UInt64) {
+        let window = audioInputWindows.removeValue(forKey: inputId)
+        audioInputControllers.removeValue(forKey: inputId)
+        window?.delegate = nil
+        window?.close()
+    }
+
+    func closeAllAudioInputs() {
+        for id in Array(audioInputWindows.keys) {
+            closeAudioInput(id)
+        }
+    }
+
+    private func audioInputDidClose(_ inputId: UInt64) {
+        audioInputWindows.removeValue(forKey: inputId)
+        audioInputControllers.removeValue(forKey: inputId)
+    }
+
+    func applyInputAudio(id: UInt64, mask: UInt32, gain: Float, mute: Bool) {
+        guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { return }
+        session.inputs[index].busMask = session.inputs[index].kind == .mix ? 0 : (mask == 0 ? 1 : mask)
+        session.inputs[index].gain = max(0, gain)
+        session.inputs[index].mute = mute
+        let input = session.inputs[index]
+        let applied = audioMask(input)
+        if isRemote {
+            _ = mixer_remote_audio_set_input(remoteHandle, input.id, applied, input.gain, mute ? 1 : 0)
+        } else {
+            _ = mixer_audio_set_input(input.id, applied, input.gain, mute ? 1 : 0)
+        }
+        if let window = audioInputWindows[id] {
+            window.title = L10n.format("audio.inputTitle", input.listLabel(in: session, localFiles: !isRemote))
+        }
+        objectWillChange.send()
+    }
+
     func applySession() {
         if isRemote { return }
         session.mergeTagCatalogs()
@@ -628,8 +710,7 @@ final class MixerController: ObservableObject {
                         bus.deviceKind.rawUInt,
                         device,
                         bus.mapLeft,
-                        bus.mapRight,
-                        bus.exclusive ? 1 : 0
+                        bus.mapRight
                     )
                 }
             }
@@ -647,6 +728,19 @@ final class MixerController: ObservableObject {
 
 }
 
+
+final class AudioInputCloser: NSObject, NSWindowDelegate {
+    var onClose: ((UInt64) -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let raw = window.identifier?.rawValue,
+              raw.hasPrefix("audio-input-"),
+              let inputId = UInt64(raw.dropFirst("audio-input-".count))
+        else { return }
+        onClose?(inputId)
+    }
+}
 
 final class InputPreviewCloser: NSObject, NSWindowDelegate {
     var onClose: ((UInt64) -> Void)?
