@@ -709,6 +709,26 @@ extension MixerController {
                     "Define Mix Input"
                 )
             }
+        case .audio:
+            MixerFFI.withCString(input.pathOrAddress ?? "") { device in
+                MixerFFI.withCString("") { exe in
+                    MixerFFI.withCString("") { aumid in
+                        fail(
+                            mixer_audio_capture_start(
+                                input.id,
+                                3,
+                                device,
+                                0,
+                                0,
+                                1,
+                                exe,
+                                aumid
+                            ),
+                            "Audio capture start"
+                        )
+                    }
+                }
+            }
         }
         _ = mixer_audio_set_input(input.id, audioMask(input), input.gain, input.mute ? 1 : 0)
     }
