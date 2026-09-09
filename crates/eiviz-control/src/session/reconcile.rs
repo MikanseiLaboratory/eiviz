@@ -556,6 +556,7 @@ fn apply_settings<P: crate::port::MixerPort + ?Sized>(
     port: &mut P,
     next: &Document,
 ) -> crate::error::ControlResult<()> {
+    port.set_master_fps(next.settings.master_fps_num, next.settings.master_fps_den)?;
     port.set_frame_buffer(next.settings.frame_buffer_frames)?;
     port.set_rebar_optimization(next.settings.rebar_optimization)?;
     port.set_ndi_gpu_upload(next.settings.ndi_gpu_upload)?;

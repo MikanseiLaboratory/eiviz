@@ -58,6 +58,7 @@ pub trait MixerPort: Send {
     fn audio_set_headphone_copy_master(&mut self, enabled: bool) -> ControlResult<()>;
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()>;
+    fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()>;
     fn set_rebar_optimization(&mut self, enabled: bool) -> ControlResult<()>;
     fn set_ndi_gpu_upload(&mut self, enabled: bool) -> ControlResult<()>;
     fn set_bus_colors(
@@ -407,6 +408,9 @@ impl MixerPort for NullMixer {
         Ok(())
     }
     fn set_frame_buffer(&mut self, _frames: u32) -> ControlResult<()> {
+        Ok(())
+    }
+    fn set_master_fps(&mut self, _fps_num: u32, _fps_den: u32) -> ControlResult<()> {
         Ok(())
     }
     fn set_rebar_optimization(&mut self, _enabled: bool) -> ControlResult<()> {

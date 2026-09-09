@@ -409,9 +409,9 @@ impl Composer {
         })
     }
 
-    pub fn begin_frame(&mut self) {
+    pub fn begin_frame(&mut self, dt: f32) {
         self.pool.reset();
-        self.mix_time = self.mix_time + 1.0 / 60.0;
+        self.mix_time += dt;
     }
 
     pub fn gpu_epoch(&self) -> u64 {

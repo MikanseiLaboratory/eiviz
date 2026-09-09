@@ -540,6 +540,10 @@ extension MixerController {
         let useGpu: UInt32 = entry.useGpu ? 1 : 0
         let audioBusId = entry.sourceKind == .multiview ? 0 : entry.audioBusId
         let skipIdle: UInt32 = entry.transport == .omt && entry.skipEncodeWhenNoReceivers ? 1 : 0
+        let width = entry.width
+        let height = entry.height
+        let fpsNum = entry.fpsNum
+        let fpsDen = entry.fpsDen
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
                 let code = mixer_output_add(
@@ -552,10 +556,10 @@ extension MixerController {
                     useGpu,
                     audioBusId,
                     skipIdle,
-                    entry.width,
-                    entry.height,
-                    entry.fpsNum,
-                    entry.fpsDen
+                    width,
+                    height,
+                    fpsNum,
+                    fpsDen
                 )
                 if code != 0 {
                     DispatchQueue.main.async {

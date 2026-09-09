@@ -5,6 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::abi::{MixInputSpec, OverlayDesc, SRC_KIND_MU_MULTIVIEW, UnitSnap};
+use crate::clock::SharedMediaClock;
 use crate::generator_audio;
 use crate::upload::{AUDIO_RATE, AudioInputStore, AudioPacket};
 
@@ -58,13 +59,22 @@ impl AudioScheduler {
         snapshot: Arc<Mutex<AudioMixSnapshot>>,
         monitor_pcm: Arc<Mutex<std::collections::VecDeque<f32>>>,
         follow_primed: Arc<AtomicBool>,
+        clock: SharedMediaClock,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
         let join = thread::Builder::new()
             .name("eiviz-audio".into())
             .spawn(move || {
-                run_scheduler(audio, uploads, snapshot, monitor_pcm, follow_primed, stop_t)
+                run_scheduler(
+                    audio,
+                    uploads,
+                    snapshot,
+                    monitor_pcm,
+                    follow_primed,
+                    clock,
+                    stop_t,
+                )
             })
             .ok();
         Self { stop, join }
@@ -90,16 +100,15 @@ fn run_scheduler(
     snapshot: Arc<Mutex<AudioMixSnapshot>>,
     monitor_pcm: Arc<Mutex<std::collections::VecDeque<f32>>>,
     follow_primed: Arc<AtomicBool>,
+    clock: SharedMediaClock,
     stop: Arc<AtomicBool>,
 ) {
     let mut produced = 0u64;
-    let origin = Instant::now();
     let mut tone_phase: HashMap<u64, f64> = HashMap::new();
     let mut last_buffer = 0u32;
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         produced = produced.saturating_add(AUDIO_BLOCK_FRAMES as u64);
-        let deadline =
-            origin + Duration::from_secs_f64(produced as f64 / f64::from(AUDIO_RATE.max(1)));
+        let deadline = clock.audio_deadline(produced, AUDIO_RATE as u32);
         let now = Instant::now();
         if deadline > now {
             thread::sleep(deadline.saturating_duration_since(now));
@@ -108,11 +117,13 @@ fn run_scheduler(
             let late_frames = (late.as_secs_f64() * f64::from(AUDIO_RATE.max(1))).floor() as usize;
             if late_frames > AUDIO_BLOCK_FRAMES * 2 {
                 crate::diag::warn(&format!(
-                    "audio scheduler late {late:?}; resync without dropping the current block"
+                    "audio scheduler late {late:?}; skip to the current media-clock slot"
                 ));
-                produced = (now.saturating_duration_since(origin).as_secs_f64()
-                    * f64::from(AUDIO_RATE.max(1)))
-                .floor() as u64;
+                let elapsed = now.saturating_duration_since(clock.epoch());
+                produced = (elapsed.as_secs_f64() * f64::from(AUDIO_RATE.max(1))).floor() as u64;
+                produced = produced.saturating_add(AUDIO_BLOCK_FRAMES as u64 - 1)
+                    / AUDIO_BLOCK_FRAMES as u64
+                    * AUDIO_BLOCK_FRAMES as u64;
             }
         }
         let snap = snapshot.lock().expect("audio snap").clone();
@@ -120,7 +131,7 @@ fn run_scheduler(
             audio.set_video_delay(snap.buffer_frames, snap.fps_num, snap.fps_den);
             last_buffer = snap.buffer_frames;
         }
-        let pts = produced as i64 * 10_000_000 / i64::from(AUDIO_RATE.max(1));
+        let pts = clock.audio_pts(produced, AUDIO_RATE as u32);
         let mut tones = Vec::new();
         for (id, (hz, level)) in &snap.generators {
             if *hz <= 0.0 {
@@ -246,6 +257,7 @@ mod tests {
             snapshot,
             Arc::clone(&pcm),
             Arc::clone(&primed),
+            crate::clock::SharedMediaClock::new(),
         );
         thread::sleep(Duration::from_millis(250));
         sched.stop();

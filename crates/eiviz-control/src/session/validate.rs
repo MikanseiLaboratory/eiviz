@@ -58,6 +58,12 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 unit.id, unit.program_scene_id
             )));
         }
+        if !valid_rate(unit.fps_num, unit.fps_den) {
+            return Err(ValidationError::new(format!(
+                "mixing unit {} frame rate {}/{} is invalid",
+                unit.id, unit.fps_num, unit.fps_den
+            )));
+        }
     }
 
     for scene in &doc.scenes {
@@ -195,11 +201,24 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 output.id
             )));
         }
+        if output.fps_num > 0 && !valid_rate(output.fps_num, output.fps_den) {
+            return Err(ValidationError::new(format!(
+                "output {} frame rate {}/{} is invalid",
+                output.id, output.fps_num, output.fps_den
+            )));
+        }
     }
-    if doc.settings.master_fps_num == 0 || doc.settings.master_fps_den == 0 {
-        return Err(ValidationError::new("master fps is zero"));
+    if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
+        return Err(ValidationError::new("master fps is invalid"));
     }
     Ok(())
+}
+
+fn valid_rate(num: u32, den: u32) -> bool {
+    if num == 0 || den == 0 || num > 240_000 || den > 100_000 {
+        return false;
+    }
+    (u64::from(den).saturating_mul(10_000_000) / u64::from(num)) > 0
 }
 
 pub fn validate_for_apply(doc: &Document) -> Result<(), ValidationError> {
@@ -421,5 +440,18 @@ mod tests {
         }"#;
         let err = validate(&parse(src).unwrap()).unwrap_err();
         assert!(err.message.contains("audio-only"), "{}", err.message);
+    }
+
+    #[test]
+    fn rejects_invalid_master_fps() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "settings": { "masterFpsNum": 999999, "masterFpsDen": 1 }
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("master fps"), "{}", err.message);
     }
 }

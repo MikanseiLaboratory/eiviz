@@ -18,9 +18,10 @@ use crate::{
     mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
     mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
-    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_unit_get_state,
-    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
+    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label,
+    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure,
+    mixer_unit_get_state, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -349,6 +350,10 @@ impl MixerPort for ProcessMixer {
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()> {
         map_abi(mixer_set_frame_buffer(frames))
+    }
+
+    fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()> {
+        map_abi(mixer_set_master_fps(fps_num, fps_den))
     }
 
     fn set_rebar_optimization(&mut self, enabled: bool) -> ControlResult<()> {

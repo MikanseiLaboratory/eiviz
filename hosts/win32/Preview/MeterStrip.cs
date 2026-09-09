@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Eiviz.Host.I18n;
@@ -153,7 +154,11 @@ internal sealed class MeterStrip : StackPanel
             _routes.Children.Add(_mute);
         }
         if (showOpen)
-            MouseDoubleClick += (_, _) => OpenRequested?.Invoke(TargetId);
+        {
+            AddHandler(
+                MouseDoubleClickEvent,
+                new MouseButtonEventHandler((_, _) => OpenRequested?.Invoke(TargetId)));
+        }
     }
 
     public static (float L, float R) PostPeak(float left, float right, float gain, bool mute)

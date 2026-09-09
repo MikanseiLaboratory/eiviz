@@ -891,6 +891,9 @@ mod tests {
         fn set_frame_buffer(&mut self, _f: u32) -> ControlResult<()> {
             Ok(())
         }
+        fn set_master_fps(&mut self, _n: u32, _d: u32) -> ControlResult<()> {
+            Ok(())
+        }
         fn set_rebar_optimization(&mut self, _e: bool) -> ControlResult<()> {
             Ok(())
         }
