@@ -3329,7 +3329,6 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
     device_id: *const c_char,
     map_left: i32,
     map_right: i32,
-    exclusive: u32,
 ) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
@@ -3346,7 +3345,6 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
             &device_id,
             map_left,
             map_right,
-            exclusive,
         );
         OK
     })
@@ -3398,7 +3396,6 @@ pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo)
                 device_kind: bus.device_kind,
                 map_left: bus.map_left,
                 map_right: bus.map_right,
-                exclusive: u32::from(bus.exclusive),
                 bit: bus.bit,
                 name: write_fixed::<64>(&bus.name),
                 device_id: write_fixed::<256>(&bus.device_id),
@@ -3495,6 +3492,24 @@ pub unsafe extern "C" fn mixer_audio_enum_devices(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_device_channels(kind: u32, device_id: *const c_char) -> i32 {
     audio::device_channels(kind, &read_cstr(device_id))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_device_io_channels(
+    kind: u32,
+    device_id: *const c_char,
+    inputs: *mut i32,
+    outputs: *mut i32,
+) -> i32 {
+    if inputs.is_null() || outputs.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let (ins, outs) = audio::device_io_channels(kind, &read_cstr(device_id));
+    unsafe {
+        *inputs = ins;
+        *outputs = outs;
+    }
+    OK
 }
 
 #[unsafe(no_mangle)]

@@ -25,7 +25,6 @@ pub fn run_capture(
     if spec.mode != CAPTURE_MODE_MIC && spec.mode != CAPTURE_MODE_ENDPOINT_LOOPBACK {
         return Err(format!("unknown capture mode {}", spec.mode));
     }
-    init_com();
     let loopback = spec.mode == CAPTURE_MODE_ENDPOINT_LOOPBACK;
     let follow_default = spec.device_id.is_empty();
     let host = platform_host()?;
@@ -67,7 +66,6 @@ pub fn run_output(
     maps: &[(Arc<BusRing>, i32, i32)],
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    init_com();
     let follow_default = device_id.is_empty();
     let host = platform_host()?;
     let maps = maps.to_vec();
@@ -96,6 +94,9 @@ pub fn run_output(
     Ok(())
 }
 
+// cpal WASAPI initialises COM as STA on the stream thread. Do not
+// CoInitializeEx(MTA) here: RPC_E_CHANGED_MODE leaves capture events silent
+// until another WASAPI client (for example output loopback) starts the engine.
 fn platform_host() -> Result<cpal::Host, String> {
     cpal::host_from_id(platform_host_id()).map_err(|error| format!("cpal host: {error}"))
 }
@@ -108,18 +109,6 @@ fn platform_host_id() -> HostId {
     #[cfg(target_os = "macos")]
     {
         HostId::CoreAudio
-    }
-}
-
-fn init_com() {
-    #[cfg(windows)]
-    {
-        let _ = unsafe {
-            windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_MULTITHREADED,
-            )
-        };
     }
 }
 

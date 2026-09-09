@@ -949,7 +949,6 @@ public sealed class AudioBusEntry
     public string DeviceId { get; set; } = "";
     public int MapLeft { get; set; }
     public int MapRight { get; set; } = 1;
-    public bool Exclusive { get; set; }
     public uint Bit { get; set; }
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }

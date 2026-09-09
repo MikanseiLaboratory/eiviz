@@ -8,8 +8,8 @@ use eiviz_control::service::{ControlService, RequestKey};
 use eiviz_control::{Command, Incoming};
 
 use crate::abi::{
-    ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect,
-    UnitState,
+    OverlayDesc, Rect, UnitState, ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID,
+    OK,
 };
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_capture_start,
@@ -308,7 +308,6 @@ impl MixerPort for ProcessMixer {
                 device.as_ptr(),
                 spec.map_left as i32,
                 spec.map_right as i32,
-                u32::from(spec.exclusive),
             )
         })?;
         map_abi(mixer_audio_set_bus_gain(

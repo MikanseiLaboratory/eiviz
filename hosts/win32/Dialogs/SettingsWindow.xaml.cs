@@ -314,23 +314,27 @@ public partial class SettingsWindow : Window
                 }
             };
             var device = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var left = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var right = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             FillDeviceBox(device, bus);
+            FillMapBoxes(left, right, bus);
             device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
             device.SelectionChanged += (_, _) =>
             {
                 if (device.SelectedItem is ComboBoxItem item && item.Tag is string id)
+                {
                     bus.DeviceId = id;
+                    FillMapBoxes(left, right, bus);
+                }
             };
-            var left = new TextBox { Text = bus.MapLeft.ToString(), Margin = new Thickness(0, 0, 8, 6) };
-            left.TextChanged += (_, _) =>
+            left.SelectionChanged += (_, _) =>
             {
-                if (int.TryParse(left.Text, out var value))
+                if (left.SelectedItem is ComboBoxItem { Tag: int value })
                     bus.MapLeft = value;
             };
-            var right = new TextBox { Text = bus.MapRight.ToString(), Margin = new Thickness(0, 0, 8, 6) };
-            right.TextChanged += (_, _) =>
+            right.SelectionChanged += (_, _) =>
             {
-                if (int.TryParse(right.Text, out var value))
+                if (right.SelectedItem is ComboBoxItem { Tag: int value })
                     bus.MapRight = value;
             };
             var remove = new Button { Content = "−", Width = 28, IsEnabled = bus.Role == AudioBusRole.Aux };
@@ -383,7 +387,12 @@ public partial class SettingsWindow : Window
             || (bus.DeviceKind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
             || (bus.DeviceKind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
         {
-            var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : $"{device.Name}  ({device.Channels}ch)";
+            var channels = device.Kind == (uint)AudioDeviceKind.Asio
+                ? OutputChannels(AudioDeviceKind.Asio, device.Id)
+                : (int)device.Channels;
+            var label = string.IsNullOrWhiteSpace(device.Name)
+                ? device.Id
+                : channels > 0 ? $"{device.Name}  ({channels}ch)" : device.Name;
             box.Items.Add(new ComboBoxItem { Content = label, Tag = device.Id });
         }
         box.SelectedIndex = 0;
@@ -397,6 +406,43 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private static void FillMapBoxes(ComboBox left, ComboBox right, AudioBusEntry bus)
+    {
+        var channels = OutputChannels(bus.DeviceKind, bus.DeviceId ?? "");
+        FillMapBox(left, channels, bus.MapLeft);
+        FillMapBox(right, channels, bus.MapRight);
+        if (left.SelectedItem is ComboBoxItem { Tag: int leftIndex })
+            bus.MapLeft = leftIndex;
+        if (right.SelectedItem is ComboBoxItem { Tag: int rightIndex })
+            bus.MapRight = rightIndex;
+    }
+
+    private static void FillMapBox(ComboBox box, int channels, int selected)
+    {
+        box.Items.Clear();
+        for (var index = 0; index < channels; index++)
+            box.Items.Add(new ComboBoxItem { Content = (index + 1).ToString(), Tag = index });
+        if (box.Items.Count == 0)
+            return;
+        foreach (ComboBoxItem item in box.Items)
+        {
+            if (item.Tag is int value && value == selected)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+        box.SelectedIndex = 0;
+    }
+
+    private static int OutputChannels(AudioDeviceKind kind, string deviceId)
+    {
+        if (kind is AudioDeviceKind.None)
+            return 0;
+        MixerNative.AudioDeviceIoChannels((uint)kind, deviceId ?? "", out _, out var outputs);
+        return outputs;
+    }
+
     private static AudioBusEntry CloneBus(AudioBusEntry bus) => new()
     {
         Id = bus.Id,
@@ -406,7 +452,6 @@ public partial class SettingsWindow : Window
         DeviceId = bus.DeviceId,
         MapLeft = bus.MapLeft,
         MapRight = bus.MapRight,
-        Exclusive = false,
         Bit = bus.Bit,
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute

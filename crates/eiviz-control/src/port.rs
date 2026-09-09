@@ -250,7 +250,6 @@ pub struct BusApply {
     pub device_id: String,
     pub map_left: u32,
     pub map_right: u32,
-    pub exclusive: bool,
     pub gain: f32,
     pub mute: bool,
 }

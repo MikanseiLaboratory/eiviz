@@ -628,8 +628,7 @@ final class MixerController: ObservableObject {
                         bus.deviceKind.rawUInt,
                         device,
                         bus.mapLeft,
-                        bus.mapRight,
-                        0
+                        bus.mapRight
                     )
                 }
             }

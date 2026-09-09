@@ -302,6 +302,57 @@ pub fn shutdown() {
     }
 }
 
+pub fn probe_io_channels(device_id: &str) -> Result<(i32, i32), String> {
+    let key = norm(device_id);
+    if key.is_empty() {
+        return Err("ASIO device id is empty".into());
+    }
+    if let Some((ins, outs)) = snapshot_io(&key) {
+        if ins > 0 || outs > 0 {
+            return Ok((ins, outs));
+        }
+    }
+    if let Some(error) = snapshot_error(&key) {
+        return Err(error);
+    }
+    let id = device_id.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let join = thread::Builder::new()
+        .name("eiviz-asio-probe".into())
+        .spawn(move || {
+            let _ = tx.send(probe_io_on_thread(&id));
+        })
+        .map_err(|error| error.to_string())?;
+    let result = match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(value) => value,
+        Err(_) => Err("ASIO channel probe timed out".into()),
+    };
+    let _ = join.join();
+    result
+}
+
+fn probe_io_on_thread(device_id: &str) -> Result<(i32, i32), String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let clsid = parse_guid(device_id).ok_or_else(|| "invalid ASIO CLSID".to_string())?;
+        let unk: IUnknown = CoCreateInstance(&clsid, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("CoCreateInstance ASIO: {error}"))?;
+        let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
+        unk.query(&IID_IASIO, &mut raw)
+            .ok()
+            .map_err(|error| format!("IASIO QueryInterface: {error}"))?;
+        if raw.is_null() {
+            return Err("IASIO pointer null".into());
+        }
+        let asio = raw as *mut Iasio;
+        let vtbl = &*(*asio).vtbl;
+        let io = asio_init_channels(vtbl, asio);
+        let _ = (vtbl.release)(asio);
+        let _ = unk;
+        io
+    }
+}
+
 pub fn io_channels(device_id: &str) -> Result<(i32, i32), String> {
     let key = norm(device_id);
     if key.is_empty() {
@@ -806,7 +857,13 @@ fn norm(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_guid;
+    use super::{parse_guid, probe_io_channels};
+
+    #[test]
+    fn probe_empty_id_is_error() {
+        assert!(probe_io_channels("").is_err());
+        assert!(probe_io_channels("   ").is_err());
+    }
 
     #[test]
     fn parse_guid_accepts_braces() {

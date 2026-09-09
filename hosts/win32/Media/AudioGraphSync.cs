@@ -35,8 +35,7 @@ internal static class AudioGraphSync
                 (uint)bus.DeviceKind,
                 bus.DeviceId ?? "",
                 bus.MapLeft,
-                bus.MapRight,
-                0u);
+                bus.MapRight);
             MixerNative.AudioSetBusGain(bus.Id, MixerNative.MixerGain(bus.Gain), bus.Mute ? 1u : 0u);
         }
         unsafe

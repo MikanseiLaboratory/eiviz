@@ -197,7 +197,6 @@ impl AudioEngine {
         device_id: &str,
         map_left: i32,
         map_right: i32,
-        _exclusive: u32,
     ) {
         self.graph.lock().expect("audio").upsert_bus(
             id,
@@ -207,7 +206,6 @@ impl AudioEngine {
             device_id,
             map_left,
             map_right,
-            false,
         );
         self.sync_outputs();
     }
@@ -469,18 +467,26 @@ pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
 }
 
 pub fn device_channels(kind: u32, device_id: &str) -> i32 {
+    device_io_channels(kind, device_id).0
+}
+
+pub fn device_io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     #[cfg(windows)]
     {
-        device::channel_count(kind, device_id)
+        device::io_channels(kind, device_id)
     }
     #[cfg(target_os = "macos")]
     {
-        let _ = kind;
-        coreaudio::channel_count(device_id)
+        let n = if kind == DEVICE_ASIO {
+            0
+        } else {
+            coreaudio::channel_count(device_id)
+        };
+        (n, n)
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (kind, device_id);
-        0
+        (0, 0)
     }
 }

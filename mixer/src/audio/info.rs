@@ -27,7 +27,6 @@ pub struct AudioBusInfo {
     pub device_kind: u32,
     pub map_left: i32,
     pub map_right: i32,
-    pub exclusive: u32,
     pub bit: u32,
     pub name: [u8; 64],
     pub device_id: [u8; 256],

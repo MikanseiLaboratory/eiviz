@@ -453,7 +453,7 @@ public partial class AddInputWindow : Window
                     {
                         MessageBox.Show(
                             this,
-                            "ASIO driver reported no input channels. Confirm the driver is selected for output or input and try again.",
+                            "ASIO driver reported no input channels.",
                             "Audio Input");
                         return;
                     }
@@ -720,7 +720,8 @@ public partial class AddInputWindow : Window
             return;
         if (AudioDeviceBox.SelectedItem is not AudioDeviceItem device || string.IsNullOrWhiteSpace(device.Id))
             return;
-        var channels = MixerNative.AudioDeviceChannels(2, device.Id);
+        MixerNative.AudioDeviceIoChannels(2, device.Id, out var inputs, out _);
+        var channels = inputs;
         for (var index = 0; index < channels; index++)
         {
             AudioMapLeftBox.Items.Add(new AudioChannelItem(index));

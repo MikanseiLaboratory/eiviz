@@ -136,7 +136,6 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             device_id: bus.device_id.clone(),
             map_left: bus.map_left.max(0) as u32,
             map_right: bus.map_right.max(0) as u32,
-            exclusive: bus.exclusive,
             gain: bus.gain,
             mute: bus.mute,
         }));

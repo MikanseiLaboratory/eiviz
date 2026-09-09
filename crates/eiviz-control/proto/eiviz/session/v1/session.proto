@@ -274,7 +274,7 @@ message Bus {
   string device_id = 5;
   int32 map_left = 6;
   int32 map_right = 7;
-  bool exclusive = 8;
+  reserved 8;
   uint32 bit = 9;
   float gain = 10;
   bool mute = 11;

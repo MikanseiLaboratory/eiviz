@@ -203,7 +203,7 @@ internal static partial class MixerNative
     internal static partial int FlushAudio(ulong id);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_upsert", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int AudioBusUpsert(ulong id, string name, uint role, uint deviceKind, string deviceId, int mapLeft, int mapRight, uint exclusive);
+    internal static partial int AudioBusUpsert(ulong id, string name, uint role, uint deviceKind, string deviceId, int mapLeft, int mapRight);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_bus_remove")]
     internal static partial int AudioBusRemove(ulong id);
@@ -234,6 +234,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_channels", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int AudioDeviceChannels(uint kind, string deviceId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_io_channels", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioDeviceIoChannels(uint kind, string deviceId, out int inputs, out int outputs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_process_list")]
     internal static unsafe partial int AudioProcessList(byte* buffer, nuint capacity);
@@ -895,7 +898,6 @@ internal unsafe struct MixerAudioBusInfo
     public uint DeviceKind;
     public int MapLeft;
     public int MapRight;
-    public uint Exclusive;
     public uint Bit;
     public fixed byte Name[64];
     public fixed byte DeviceId[256];

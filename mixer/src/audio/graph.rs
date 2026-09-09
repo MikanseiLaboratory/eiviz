@@ -121,7 +121,6 @@ pub struct AudioBus {
     pub device_id: String,
     pub map_left: i32,
     pub map_right: i32,
-    pub exclusive: bool,
     pub gain: f32,
     pub mute: bool,
     pub peak: (f32, f32),
@@ -175,16 +174,7 @@ impl AudioGraph {
         // Default Master is Enabled (no device). Opening WASAPI/HAL here
         // grabbed the machine output before the host could apply session buses.
         let master_kind = DEVICE_NONE;
-        graph.upsert_bus(
-            MASTER_BUS,
-            "Master",
-            ROLE_MASTER,
-            master_kind,
-            "",
-            0,
-            1,
-            false,
-        );
+        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, master_kind, "", 0, 1);
         graph.upsert_bus(
             HEADPHONE_BUS,
             "Headphone",
@@ -193,7 +183,6 @@ impl AudioGraph {
             "",
             0,
             1,
-            false,
         );
         graph
     }
@@ -207,7 +196,6 @@ impl AudioGraph {
         device_id: &str,
         map_left: i32,
         map_right: i32,
-        exclusive: bool,
     ) {
         if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == id) {
             bus.name = name.to_string();
@@ -216,8 +204,6 @@ impl AudioGraph {
             bus.device_id = device_id.to_string();
             bus.map_left = map_left;
             bus.map_right = map_right;
-            let _ = exclusive;
-            bus.exclusive = false;
             return;
         }
         let bit = if role == ROLE_MASTER {
@@ -238,7 +224,6 @@ impl AudioGraph {
             device_id: device_id.to_string(),
             map_left,
             map_right,
-            exclusive: false,
             gain: 1.0,
             mute: false,
             peak: (0.0, 0.0),

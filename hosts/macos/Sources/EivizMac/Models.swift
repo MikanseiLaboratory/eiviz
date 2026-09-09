@@ -1251,7 +1251,6 @@ struct AudioBusEntry: Identifiable, Codable {
     var deviceId: String = ""
     var mapLeft: Int32 = 0
     var mapRight: Int32 = 1
-    var exclusive: Bool = false
     var bit: UInt32 = 0
     var gain: Float = 1
     var mute: Bool = false

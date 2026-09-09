@@ -27,18 +27,16 @@ pub fn enumerate(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
     n
 }
 
-pub fn channel_count(kind: u32, device_id: &str) -> i32 {
+pub fn io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     if kind == DEVICE_ASIO {
-        return super::asio::io_channels(device_id)
-            .map(|(ins, _)| ins)
-            .unwrap_or(0);
+        return super::asio::probe_io_channels(device_id).unwrap_or((0, 0));
     }
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let Ok(enumerator) =
             CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
         else {
-            return 2;
+            return (0, 0);
         };
         let device = if device_id.is_empty() {
             enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
@@ -47,9 +45,10 @@ pub fn channel_count(kind: u32, device_id: &str) -> i32 {
             enumerator.GetDevice(PCWSTR(wide.as_ptr()))
         };
         let Ok(device) = device else {
-            return 2;
+            return (0, 0);
         };
-        mix_channels(&device).unwrap_or(2) as i32
+        let n = mix_channels(&device).unwrap_or(0) as i32;
+        (n, n)
     }
 }
 
@@ -171,7 +170,7 @@ pub fn enumerate_asio_registry(dest: &mut [AudioDeviceInfo]) -> usize {
             }
             dest[n] = AudioDeviceInfo {
                 kind: DEVICE_ASIO,
-                channels: 2,
+                channels: 0,
                 id: cbuf(&clsid),
                 name: cbuf(&driver),
                 direction: super::info::AUDIO_DIR_BOTH,

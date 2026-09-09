@@ -618,7 +618,6 @@ internal static class SessionStore
         DeviceId = bus.DeviceId,
         MapLeft = bus.MapLeft,
         MapRight = bus.MapRight,
-        Exclusive = false,
         Bit = bus.Bit,
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute

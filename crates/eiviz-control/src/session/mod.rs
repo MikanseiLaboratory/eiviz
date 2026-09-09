@@ -1081,8 +1081,6 @@ pub struct BusDto {
     #[serde(default = "one_i32")]
     pub map_right: i32,
     #[serde(default)]
-    pub exclusive: bool,
-    #[serde(default)]
     pub bit: u32,
     #[serde(default = "one_f32")]
     pub gain: f32,
