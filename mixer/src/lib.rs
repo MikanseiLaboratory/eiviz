@@ -148,10 +148,12 @@ use lifecycle::{
     MixerSlot, abort_mixer_create, commit_mixer_create, mixer_slot, reserve_mixer_create,
     with_mixer,
 };
-use output::{
-    coalesce_latest_video, shutdown_output_worker, spawn_output_worker, take_audio_first,
-};
-use render::{collect_frame_live_ids, collect_live_ids, render_loop, unit_uses_mix_cycle};
+#[cfg(test)]
+use output::{coalesce_latest_video, take_audio_first};
+use output::{shutdown_output_worker, spawn_output_worker};
+#[cfg(test)]
+use render::{collect_frame_live_ids, collect_live_ids};
+use render::{render_loop, unit_uses_mix_cycle};
 
 use abi::{MixInputSpec, NativeSurface};
 use compose::{Composer, Generator};

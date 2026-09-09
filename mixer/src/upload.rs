@@ -989,6 +989,7 @@ impl UploadStore {
         );
     }
 
+    #[cfg(test)]
     pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
         self.audio.lock().expect("audio").ingest_audio(id, packet);
     }
