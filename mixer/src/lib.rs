@@ -2727,6 +2727,25 @@ pub unsafe extern "C" fn mixer_output_add(
     } else {
         audio_bus_id
     };
+    // Withdraw the previous OMT advertisement before creating the next
+    // sender. openmediatransport-rs keys DNS-SD by instance name, so Drop of
+    // the old sender would otherwise unregister the new one too. Settings
+    // ApplyOutputs + session publish hits this replace path for every enable.
+    let old = match with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .outputs
+            .remove(&output_id);
+        mixer.send_workers.remove(&output_id)
+    }) {
+        Ok(old) => old,
+        Err(code) => return code,
+    };
+    if let Some(old) = old {
+        shutdown_output_worker(old);
+    }
     let handle = match transport {
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
@@ -2771,15 +2790,6 @@ pub unsafe extern "C" fn mixer_output_add(
         _ => return ERR_INVALID_ARGUMENT,
     };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .outputs
-            .remove(&output_id);
-        if let Some(old) = mixer.send_workers.remove(&output_id) {
-            shutdown_output_worker(old);
-        }
         let audio_send = match &handle {
             OutputHandle::Omt(sender) => Some(omt::omt_audio_send(sender.audio_ingress())),
             #[cfg(any(windows, target_os = "macos"))]

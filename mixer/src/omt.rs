@@ -297,14 +297,21 @@ impl ProgramSender {
             .map_err(|error| error.to_string())?;
         let port = sender.port();
         let advertised = name.to_string();
-        let discovery = panic::catch_unwind(AssertUnwindSafe(|| {
-            Discovery::new().ok().and_then(|mut discovery| {
-                discovery.register(&advertised, port).ok()?;
+        let discovery = match Discovery::new().and_then(|mut discovery| {
+            discovery.register(&advertised, port)?;
+            Ok(discovery)
+        }) {
+            Ok(discovery) => {
+                crate::diag::info(&format!("omt advertise name={advertised} port={port}"));
                 Some(discovery)
-            })
-        }))
-        .ok()
-        .flatten();
+            }
+            Err(error) => {
+                crate::diag::error(&format!(
+                    "omt advertise name={advertised} port={port}: {error}"
+                ));
+                None
+            }
+        };
         let audio_ingress = sender.audio_ingress();
         Ok(Self {
             sender,
@@ -313,6 +320,11 @@ impl ProgramSender {
             name: name.to_string(),
             discovery,
         })
+    }
+
+    #[cfg(test)]
+    pub fn advertised(&self) -> bool {
+        self.discovery.is_some()
     }
 
     pub fn audio_ingress(&self) -> AudioIngress {
@@ -906,7 +918,8 @@ impl VmxEncoder {
 mod tests {
     use super::{ProgramSender, audio_packet_to_frame, omt_query_matches, send_audio_via_ingress};
     use crate::upload::AudioPacket;
-    use openmediatransport::Codec;
+    use openmediatransport::{Codec, Discovery};
+    use std::thread;
     use std::time::{Duration, Instant};
 
     fn pkt(ts: i64) -> AudioPacket {
@@ -944,6 +957,56 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn program_sender_registers_discovery() {
+        let name = format!("eiviz-omt-adv-{}", std::process::id());
+        let sender = ProgramSender::start(&name).expect("omt sender");
+        assert!(
+            sender.advertised(),
+            "OMT output must keep the Discovery handle after register"
+        );
+        assert!(
+            wait_omt_name(&name, Duration::from_secs(4)),
+            "registered OMT sender must be browsable"
+        );
+        drop(sender);
+    }
+
+    #[test]
+    fn program_sender_reregister_after_drop_is_discoverable() {
+        let name = format!("eiviz-omt-rereg-{}", std::process::id());
+        let first = ProgramSender::start(&name).expect("first");
+        drop(first);
+        let second = ProgramSender::start(&name).expect("second");
+        assert!(
+            second.advertised(),
+            "replacement sender must register discovery"
+        );
+        assert!(
+            wait_omt_name(&name, Duration::from_secs(4)),
+            "restarted OMT sender must be browsable"
+        );
+        drop(second);
+    }
+
+    fn wait_omt_name(name: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok(mut discovery) = Discovery::new()
+                && discovery.refresh_for(Duration::from_millis(250)).is_ok()
+                && discovery.sources().iter().any(|source| {
+                    source.instance_name().contains(name)
+                        || source.to_url().contains(name)
+                        || source.name.contains(name)
+                })
+            {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        false
     }
 
     #[test]

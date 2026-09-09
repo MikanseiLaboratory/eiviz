@@ -607,6 +607,38 @@ fn omt_program_sends_master_audio() {
     mixer_destroy();
 }
 
+/// Settings Enable + session publish calls `mixer_output_add` again for the
+/// same id. The previous sender must be withdrawn before the next advertise,
+/// or DNS-SD unregisters the live instance name.
+#[test]
+fn omt_output_replace_stays_discoverable() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let name = format!("eiviz-omt-replace-{}", std::process::id());
+    let add = || unsafe {
+        mixer_output_add(
+            701,
+            OUT_OMT,
+            CString::new(name.as_str()).unwrap().as_ptr(),
+            SRC_KIND_MU_PROGRAM,
+            0,
+            1,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    assert_eq!(add(), OK);
+    assert_eq!(add(), OK);
+    let _ = connect_omt_named(&name);
+    mixer_destroy();
+}
+
 #[test]
 fn omt_gpu_in_and_out() {
     mixer_destroy();
