@@ -67,10 +67,12 @@ final class MetalSurfaceView: NSView {
     }
 
     deinit {
-        if attached || budgeted {
+        let wasAttached = attached
+        let wasBudgeted = budgeted
+        if wasAttached || wasBudgeted {
             _ = detachMixerOnly()
         }
-        if budgeted {
+        if wasBudgeted {
             FlipBudget.end(self)
         }
     }
