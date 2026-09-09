@@ -20,7 +20,7 @@ public partial class InputPreviewWindow : Window
     public ulong SourceId => _sourceId;
 
     public InputPreviewWindow(InputEntry input, uint ratioWidth, uint ratioHeight)
-        : this(input.Name, input.Id, ratioWidth, ratioHeight)
+        : this(input.ListLabel, input.Id, ratioWidth, ratioHeight)
     {
     }
 

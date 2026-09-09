@@ -43,7 +43,7 @@ public partial class MainWindow
 
     private void AddInputMeter(InputEntry input)
     {
-        var strip = new MeterStrip(MeterKind.Input, input.Id, input.Name, input.Gain, input.Mute);
+        var strip = new MeterStrip(MeterKind.Input, input.Id, input.ListLabel, input.Gain, input.Mute);
         strip.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
         strip.BusMaskChanged += (_, mask) =>
         {

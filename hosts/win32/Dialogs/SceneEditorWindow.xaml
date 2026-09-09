@@ -105,7 +105,7 @@
                     <TextBox x:Name="OpBox" Grid.Row="6" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
                     <TextBlock Grid.Row="7" Text="Input" VerticalAlignment="Center"/>
                     <ComboBox x:Name="LayerInputBox" Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="4"
-                              Margin="0,0,0,6" DisplayMemberPath="Name"
+                              Margin="0,0,0,6"
                               SelectionChanged="LayerInput_SelectionChanged"/>
                     <Button Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
                             Height="26" Margin="0,8,0,0" Click="ResetLayer_Click"/>

@@ -369,7 +369,7 @@ struct SettingsView: View {
         case .input:
             Picker("", selection: output.sourceId) {
                 ForEach(mixer.session.inputs) { input in
-                    Text(input.name).tag(input.id)
+                    Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                 }
             }
         case .multiview:
@@ -1472,7 +1472,7 @@ struct MultiviewSlotsView: View {
                     set: { tiles[index].sourceId = $0 }
                 )) {
                     ForEach(mixer.session.inputs) { input in
-                        Text(input.name).tag(input.id)
+                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote)).tag(input.id)
                     }
                 }
             } else if tiles[index].kind == .scene {
@@ -1659,7 +1659,7 @@ struct ResourcesView: View {
             let live = input.kind == .omt || input.kind == .ndi || input.kind == .uvc || input.kind == .video
             return ResourceRow(
                 id: input.id,
-                name: input.name,
+                name: input.listLabel(in: mixer.session, localFiles: !mixer.isRemote),
                 kind: input.kind.rawValue,
                 size: width == 0 ? "—" : "\(width)x\(height)",
                 cpu: live ? "live" : "—",

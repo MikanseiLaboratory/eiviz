@@ -102,7 +102,7 @@ public partial class MainWindow
         TickVideo();
         RefreshMultiviewLabels();
         if (_inputPreviews.TryGetValue(input.Id, out var preview))
-            preview.SetTitle(input.Name);
+            preview.SetTitle(input.ListLabel);
     }
 
     private void PreviewInput_Click(object sender, RoutedEventArgs e)
@@ -130,7 +130,7 @@ public partial class MainWindow
         SnapshotInput(input);
     }
 
-    private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.Name);
+    private void OpenInputPreview(InputEntry input) => OpenSourcePreview(input.Id, input.ListLabel);
 
     private void OpenSourcePreview(ulong sourceId, string name)
     {

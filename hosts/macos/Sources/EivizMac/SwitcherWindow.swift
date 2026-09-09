@@ -214,7 +214,7 @@ struct SwitcherView: View {
 
     private func overlayName(_ slot: OverlaySlot) -> String {
         if slot.sourceKind == .input {
-            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.listLabel(in: mixer.session, localFiles: !mixer.isRemote) ?? "Input"
         }
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }

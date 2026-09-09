@@ -419,7 +419,7 @@ struct ContentView: View {
                     Text("Inputs").fontWeight(.bold)
                     CatalogTabBar(input: true)
                     List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
-                        Text(input.listLabel(localFiles: !mixer.isRemote))
+                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
                             .tag(input.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
@@ -585,7 +585,7 @@ struct ContentView: View {
 
     private func overlayName(_ slot: OverlaySlot) -> String {
         if slot.sourceKind == .input {
-            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.name ?? "Input"
+            return mixer.session.inputs.first { $0.id == slot.sceneGpuId }?.listLabel(in: mixer.session, localFiles: !mixer.isRemote) ?? "Input"
         }
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }

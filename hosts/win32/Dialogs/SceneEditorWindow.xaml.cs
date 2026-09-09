@@ -234,7 +234,7 @@ public partial class SceneEditorWindow : Window
     {
         var input = _session.Inputs.FirstOrDefault(item => item.Id == layer.InputId);
         var order = _scene.Layers.IndexOf(layer) + 1;
-        return $"{order}. {input?.Name ?? layer.InputId.ToString()}";
+        return $"{order}. {input?.ListLabel ?? layer.InputId.ToString()}";
     }
 
     private void DrawWireframe()

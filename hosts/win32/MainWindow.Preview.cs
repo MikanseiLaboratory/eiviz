@@ -186,7 +186,7 @@ public partial class MainWindow
             return;
         }
         VideoBar.Visibility = Visibility.Visible;
-        VideoTitle.Text = input.Name;
+        VideoTitle.Text = input.ListLabel;
         var duration = info.DurationHns;
         var position = Math.Max(0, info.PositionHns);
         if (duration > 0)

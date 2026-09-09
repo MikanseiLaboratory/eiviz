@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
@@ -344,11 +345,26 @@ public sealed class InputEntry
         Kind is InputKind.Still or InputKind.Video
         && (string.IsNullOrWhiteSpace(PathOrAddress) || !File.Exists(PathOrAddress));
 
-    public override string ToString()
+    public string ListLabel
     {
-        if (!HostRole.IsRemote && IsMissingMedia())
-            return $"{Name} ({Loc.T("input.invalid")})";
-        return Name;
+        get
+        {
+            var name = !HostRole.IsRemote && IsMissingMedia()
+                ? $"{Name} ({Loc.T("input.invalid")})"
+                : Name;
+            var number = ListNumber();
+            return number > 0 ? $"{number}. {name}" : name;
+        }
+    }
+
+    public override string ToString() => ListLabel;
+
+    private int ListNumber()
+    {
+        if (Application.Current is not App app)
+            return 0;
+        var index = app.Session.Inputs.FindIndex(item => item.Id == Id);
+        return index >= 0 ? index + 1 : 0;
     }
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
 }
@@ -622,7 +638,7 @@ public sealed class OverlaySlot
 
     public string DisplayName(Session session) =>
         SourceKind == OverlaySourceKind.Input
-            ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.Name ?? "Input"
+            ? session.Inputs.FirstOrDefault(item => item.Id == SceneGpuId)?.ListLabel ?? "Input"
             : session.Scenes.FirstOrDefault(item => item.GpuId == SceneGpuId)?.Name ?? "Scene";
 
     public void SetCropInset(CropEdit edit, float value)

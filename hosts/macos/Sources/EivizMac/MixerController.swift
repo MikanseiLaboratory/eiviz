@@ -481,7 +481,7 @@ final class MixerController: ObservableObject {
             alert.runModal()
             return
         }
-        openInputPreview(inputId: input.id, name: input.name)
+        openInputPreview(inputId: input.id, name: input.listLabel(in: session, localFiles: !isRemote))
     }
 
     func openInputPreview(inputId: UInt64, name: String) {

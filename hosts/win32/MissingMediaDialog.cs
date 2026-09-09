@@ -111,6 +111,6 @@ internal sealed class MissingMediaDialog : Window
     private sealed class Row(InputEntry input)
     {
         public InputEntry Input { get; } = input;
-        public override string ToString() => $"{Input.Name} — {Input.PathOrAddress}";
+        public override string ToString() => $"{Input.ListLabel} — {Input.PathOrAddress}";
     }
 }

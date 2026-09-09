@@ -385,7 +385,7 @@ extension MixerController {
         alert.messageText = L10n.t("input.relinkFile")
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24), pullsDown: false)
         for input in leftover {
-            popup.addItem(withTitle: "\(input.name) — \(input.pathOrAddress ?? "")")
+            popup.addItem(withTitle: "\(input.listLabel(in: session, localFiles: true)) — \(input.pathOrAddress ?? "")")
         }
         alert.accessoryView = popup
         alert.addButton(withTitle: L10n.t("dialog.ok"))
@@ -655,7 +655,7 @@ extension MixerController {
                     playing: input.videoStartsPlaying,
                     frameBuffer: input.frameBufferFrames
                 )
-                videoTitle = input.name
+                videoTitle = input.listLabel(in: session, localFiles: !isRemote)
                 videoPlaying = input.videoStartsPlaying
             }
         case .omt:
@@ -878,7 +878,7 @@ extension MixerController {
         }
         if let id = fileVideoId, let info = copyVideoInfo(id) {
             videoPlaying = info.playing != 0
-            videoTitle = session.inputs.first { $0.id == id }?.name ?? videoTitle
+            videoTitle = session.inputs.first { $0.id == id }?.listLabel(in: session, localFiles: !isRemote) ?? videoTitle
             if info.duration_hns > 0 {
                 videoFraction = Double(info.position_hns) / Double(info.duration_hns)
             }

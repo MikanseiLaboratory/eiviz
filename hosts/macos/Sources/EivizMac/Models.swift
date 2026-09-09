@@ -279,11 +279,12 @@ struct InputEntry: Identifiable, Codable, Hashable {
         return !FileManager.default.fileExists(atPath: path)
     }
 
-    func listLabel(localFiles: Bool) -> String {
-        if localFiles && isMissingMedia {
-            return "\(name) (\(L10n.t("input.invalid")))"
-        }
-        return name
+    func listLabel(in session: MixerSessionData, localFiles: Bool = false) -> String {
+        let name = localFiles && isMissingMedia
+            ? "\(name) (\(L10n.t("input.invalid")))"
+            : name
+        let number = (session.inputs.firstIndex(where: { $0.id == id }) ?? 0) + 1
+        return "\(number). \(name)"
     }
 
     enum CodingKeys: String, CodingKey {
