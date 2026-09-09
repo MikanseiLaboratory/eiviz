@@ -578,11 +578,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         audio_device_kind: device_kind_from_pb(input.audio_device_kind)?,
         audio_device_id: input.audio_device_id,
         audio_map_left: input.audio_map_left,
-        audio_map_right: if input.audio_map_right == 0 && input.audio_map_left == 0 {
-            1
-        } else {
-            input.audio_map_right
-        },
+        audio_map_right: input.audio_map_right,
         audio_process_exe: input.audio_process_exe,
         audio_process_aumid: input.audio_process_aumid,
     })

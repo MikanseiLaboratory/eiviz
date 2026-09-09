@@ -106,7 +106,7 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
             && (input.audio_map_left < 0 || input.audio_map_right < 0)
         {
             return Err(ValidationError::new(format!(
-                "audio input {} ASIO pair is invalid",
+                "audio input {} ASIO L/R map is invalid",
                 input.id
             )));
         }
@@ -363,6 +363,20 @@ mod tests {
           "units": [{ "id": 1, "name": "MU 1" }]
         }"#;
         validate(&parse(ok).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn asio_accepts_independent_lr_maps() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Mono", "kind": "Audio", "audioDeviceKind": "Asio", "audioDeviceId": "{453661B3-88C3-45C4-8877-4C03B6490C33}", "audioMapLeft": 0, "audioMapRight": 0 },
+            { "id": 3, "name": "Cross", "kind": "Audio", "audioDeviceKind": "Asio", "audioDeviceId": "{453661B3-88C3-45C4-8877-4C03B6490C33}", "audioMapLeft": 1, "audioMapRight": 2 }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        validate(&parse(src).unwrap()).unwrap();
     }
 
     #[test]

@@ -148,17 +148,6 @@ fn hub() -> &'static Mutex<AsioHub> {
     })
 }
 
-pub fn stereo_pairs(channels: i32) -> Vec<(i32, i32)> {
-    let n = channels.max(0);
-    (0..n)
-        .step_by(2)
-        .filter_map(|left| {
-            let right = left + 1;
-            (right < n).then_some((left, right))
-        })
-        .collect()
-}
-
 pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
     let key = norm(device_id);
     if key.is_empty() {
@@ -229,18 +218,7 @@ pub fn start_capture(
     if spec.map_left < 0 || spec.map_right < 0 || spec.map_left >= ins || spec.map_right >= ins {
         reap_idle(&key);
         return Err(format!(
-            "ASIO input pair {}+{} is outside {ins} input channels",
-            spec.map_left + 1,
-            spec.map_right + 1
-        ));
-    }
-    if stereo_pairs(ins)
-        .into_iter()
-        .all(|(left, right)| left != spec.map_left || right != spec.map_right)
-    {
-        reap_idle(&key);
-        return Err(format!(
-            "ASIO input needs a stereo pair (1+2, 3+4, …); got {}+{}",
+            "ASIO input L{} R{} is outside {ins} input channels",
             spec.map_left + 1,
             spec.map_right + 1
         ));
@@ -771,16 +749,7 @@ fn norm(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_guid, stereo_pairs};
-
-    #[test]
-    fn stereo_pairs_are_adjacent_even_groups() {
-        assert_eq!(stereo_pairs(0), vec![]);
-        assert_eq!(stereo_pairs(1), vec![]);
-        assert_eq!(stereo_pairs(2), vec![(0, 1)]);
-        assert_eq!(stereo_pairs(5), vec![(0, 1), (2, 3)]);
-        assert_eq!(stereo_pairs(8), vec![(0, 1), (2, 3), (4, 5), (6, 7)]);
-    }
+    use super::parse_guid;
 
     #[test]
     fn parse_guid_accepts_braces() {

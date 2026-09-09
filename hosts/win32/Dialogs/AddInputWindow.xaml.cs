@@ -171,7 +171,7 @@ public partial class AddInputWindow : Window
                     break;
                 }
             }
-            RefreshAudioPairs(input.AudioMapLeft, input.AudioMapRight);
+            RefreshAudioMaps(input.AudioMapLeft, input.AudioMapRight);
             _ = RefreshAudioProcesses(input.AudioProcessExe, input.AudioProcessAumid);
         }
         if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
@@ -447,17 +447,18 @@ public partial class AddInputWindow : Window
                 {
                     if (AudioDeviceBox.SelectedItem is not AudioDeviceItem asio
                         || string.IsNullOrWhiteSpace(asio.Id)
-                        || AudioPairBox.SelectedItem is not AudioPairItem pair)
+                        || AudioMapLeftBox.SelectedItem is not AudioChannelItem left
+                        || AudioMapRightBox.SelectedItem is not AudioChannelItem right)
                         return;
                     ResultAudioCaptureMode = AudioCaptureMode.Mic;
                     ResultAudioDeviceKind = AudioDeviceKind.Asio;
                     ResultAudioDeviceId = asio.Id;
                     ResultAudioProcessExe = "";
                     ResultAudioProcessAumid = "";
-                    ResultAudioMapLeft = pair.Left;
-                    ResultAudioMapRight = pair.Right;
+                    ResultAudioMapLeft = left.Index;
+                    ResultAudioMapRight = right.Index;
                     ResultPath = asio.Id;
-                    ResultName = $"{asio.Name} {pair}";
+                    ResultName = $"{asio.Name} L{left.Index + 1} R{right.Index + 1}";
                     break;
                 }
                 if (AudioModeBox.SelectedItem is ComboBoxItem { Tag: "process" })
@@ -617,12 +618,12 @@ public partial class AddInputWindow : Window
         else
         {
             RefreshAudioDevices();
-            RefreshAudioPairs();
+            RefreshAudioMaps();
         }
     }
 
     private void AudioDevice_Changed(object sender, SelectionChangedEventArgs e) =>
-        RefreshAudioPairs();
+        RefreshAudioMaps();
 
     private void UpdateAudioModePanels()
     {
@@ -632,8 +633,8 @@ public partial class AddInputWindow : Window
             AudioDevicePanel.Visibility = process ? Visibility.Collapsed : Visibility.Visible;
         if (AudioProcessPanel is not null)
             AudioProcessPanel.Visibility = process ? Visibility.Visible : Visibility.Collapsed;
-        if (AudioPairPanel is not null)
-            AudioPairPanel.Visibility = asio ? Visibility.Visible : Visibility.Collapsed;
+        if (AudioMapPanel is not null)
+            AudioMapPanel.Visibility = asio ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RefreshAudioProcesses_Click(object sender, RoutedEventArgs e) =>
@@ -702,32 +703,39 @@ public partial class AddInputWindow : Window
             AudioDeviceBox.SelectedIndex = 0;
     }
 
-    private void RefreshAudioPairs(int selectedLeft = 0, int selectedRight = 1)
+    private void RefreshAudioMaps(int selectedLeft = 0, int selectedRight = 1)
     {
-        if (AudioPairBox is null)
+        if (AudioMapLeftBox is null || AudioMapRightBox is null)
             return;
-        AudioPairBox.Items.Clear();
+        AudioMapLeftBox.Items.Clear();
+        AudioMapRightBox.Items.Clear();
         if (AudioModeBox?.SelectedItem is not ComboBoxItem { Tag: "asio" })
             return;
         if (AudioDeviceBox.SelectedItem is not AudioDeviceItem device || string.IsNullOrWhiteSpace(device.Id))
             return;
         var channels = MixerNative.AudioDeviceChannels(2, device.Id);
-        for (var left = 0; left + 1 < channels; left += 2)
+        for (var index = 0; index < channels; index++)
         {
-            var right = left + 1;
-            AudioPairBox.Items.Add(new AudioPairItem(left, right));
+            AudioMapLeftBox.Items.Add(new AudioChannelItem(index));
+            AudioMapRightBox.Items.Add(new AudioChannelItem(index));
         }
-        if (AudioPairBox.Items.Count == 0)
+        if (AudioMapLeftBox.Items.Count == 0)
             return;
-        foreach (AudioPairItem item in AudioPairBox.Items)
+        SelectAudioChannel(AudioMapLeftBox, selectedLeft);
+        SelectAudioChannel(AudioMapRightBox, selectedRight < channels ? selectedRight : 0);
+    }
+
+    private static void SelectAudioChannel(ComboBox box, int index)
+    {
+        foreach (AudioChannelItem item in box.Items)
         {
-            if (item.Left == selectedLeft && item.Right == selectedRight)
+            if (item.Index == index)
             {
-                AudioPairBox.SelectedItem = item;
+                box.SelectedItem = item;
                 return;
             }
         }
-        AudioPairBox.SelectedIndex = 0;
+        box.SelectedIndex = 0;
     }
 
     private sealed record AudioDeviceItem(string Name, string Id, uint Kind)
@@ -735,9 +743,9 @@ public partial class AddInputWindow : Window
         public override string ToString() => Name;
     }
 
-    private sealed record AudioPairItem(int Left, int Right)
+    private sealed record AudioChannelItem(int Index)
     {
-        public override string ToString() => $"{Left + 1}+{Right + 1}";
+        public override string ToString() => (Index + 1).ToString();
     }
 
     private sealed record AudioProcessItem(string Name, string Exe, string Aumid)
