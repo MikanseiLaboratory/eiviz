@@ -1,13 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-};
-use windows::core::{GUID, HRESULT, IUnknown, Interface};
 
 use super::AudioCaptureSpec;
 use super::graph::{BusRing, DEVICE_ASIO};
@@ -15,91 +10,7 @@ use super::info::{
     CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_MIC, CAPTURE_MODE_PROCESS_LOOPBACK,
 };
 use super::pop_stereo_rate;
-use crate::upload::{AudioInputStore, AudioPacket};
-
-const IID_IASIO: GUID = GUID::from_u128(0x4533_a902_d579_11d0_89f4_00a0_c905_425c);
-const ASIO_OK: i32 = 0;
-const ASIOST_INT16_LSB: i32 = 16;
-const ASIOST_INT24_LSB: i32 = 17;
-const ASIOST_INT32_LSB: i32 = 18;
-const ASIOST_FLOAT32_LSB: i32 = 19;
-const ASIOST_FLOAT64_LSB: i32 = 20;
-
-#[repr(C)]
-struct Iasio {
-    vtbl: *const IasioVtbl,
-}
-
-#[repr(C)]
-struct IasioVtbl {
-    query_interface:
-        unsafe extern "system" fn(*mut Iasio, *const GUID, *mut *mut core::ffi::c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut Iasio) -> u32,
-    release: unsafe extern "system" fn(*mut Iasio) -> u32,
-    init: unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void) -> i32,
-    get_driver_name: unsafe extern "system" fn(*mut Iasio, *mut i8),
-    get_driver_version: unsafe extern "system" fn(*mut Iasio) -> i32,
-    get_error_message: unsafe extern "system" fn(*mut Iasio, *mut i8),
-    start: unsafe extern "system" fn(*mut Iasio) -> i32,
-    stop: unsafe extern "system" fn(*mut Iasio) -> i32,
-    get_channels: unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32) -> i32,
-    get_latencies: unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32) -> i32,
-    get_buffer_size:
-        unsafe extern "system" fn(*mut Iasio, *mut i32, *mut i32, *mut i32, *mut i32) -> i32,
-    can_sample_rate: unsafe extern "system" fn(*mut Iasio, f64) -> i32,
-    get_sample_rate: unsafe extern "system" fn(*mut Iasio, *mut f64) -> i32,
-    set_sample_rate: unsafe extern "system" fn(*mut Iasio, f64) -> i32,
-    get_clock_sources:
-        unsafe extern "system" fn(*mut Iasio, *mut core::ffi::c_void, *mut i32) -> i32,
-    set_clock_source: unsafe extern "system" fn(*mut Iasio, i32) -> i32,
-    get_sample_position: unsafe extern "system" fn(
-        *mut Iasio,
-        *mut core::ffi::c_void,
-        *mut core::ffi::c_void,
-    ) -> i32,
-    get_channel_info: unsafe extern "system" fn(*mut Iasio, *mut AsioChannelInfo) -> i32,
-    create_buffers: unsafe extern "system" fn(
-        *mut Iasio,
-        *mut AsioBufferInfo,
-        i32,
-        i32,
-        *mut AsioCallbacks,
-    ) -> i32,
-    dispose_buffers: unsafe extern "system" fn(*mut Iasio) -> i32,
-    control_panel: unsafe extern "system" fn(*mut Iasio) -> i32,
-    future: unsafe extern "system" fn(*mut Iasio, i32, *mut core::ffi::c_void) -> i32,
-    output_ready: unsafe extern "system" fn(*mut Iasio) -> i32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AsioBufferInfo {
-    is_input: i32,
-    channel_num: i32,
-    buffers: [*mut core::ffi::c_void; 2],
-}
-
-unsafe impl Send for AsioBufferInfo {}
-unsafe impl Sync for AsioBufferInfo {}
-
-#[repr(C)]
-struct AsioChannelInfo {
-    channel: i32,
-    is_input: i32,
-    is_active: i32,
-    channel_group: i32,
-    sample_type: i32,
-    name: [i8; 32],
-}
-
-#[repr(C)]
-struct AsioCallbacks {
-    buffer_switch: Option<unsafe extern "C" fn(i32, i32)>,
-    sample_rate_did_change: Option<unsafe extern "C" fn(f64)>,
-    asio_message: Option<unsafe extern "C" fn(i32, i32, *mut core::ffi::c_void, *mut f64) -> i32>,
-    buffer_switch_time_info:
-        Option<unsafe extern "C" fn(*mut core::ffi::c_void, i32, i32) -> *mut core::ffi::c_void>,
-}
+use crate::upload::AudioInputStore;
 
 struct AsioCapture {
     id: u64,
@@ -107,17 +18,6 @@ struct AsioCapture {
     map_right: i32,
     uploads: Arc<Mutex<AudioInputStore>>,
     pts: AtomicI64,
-}
-
-struct AsioRt {
-    maps: Vec<(Arc<BusRing>, i32, i32)>,
-    captures: Vec<Arc<AsioCapture>>,
-    infos: Vec<AsioBufferInfo>,
-    sample_types: Vec<i32>,
-    buffer_size: i32,
-    rate: f64,
-    asio: usize,
-    output_ready: Option<unsafe extern "system" fn(*mut Iasio) -> i32>,
 }
 
 struct AsioShared {
@@ -141,7 +41,6 @@ struct AsioHub {
 }
 
 static HUB: std::sync::OnceLock<Mutex<AsioHub>> = std::sync::OnceLock::new();
-static SYS_HANDLE: AtomicIsize = AtomicIsize::new(0);
 static IO_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (i32, i32)>>> = std::sync::OnceLock::new();
 
 fn hub() -> &'static Mutex<AsioHub> {
@@ -150,24 +49,6 @@ fn hub() -> &'static Mutex<AsioHub> {
             devices: HashMap::new(),
         })
     })
-}
-
-pub fn remember_sys_handle(handle: isize) {
-    if handle == 0 {
-        return;
-    }
-    let root = unsafe {
-        windows::Win32::UI::WindowsAndMessaging::GetAncestor(
-            windows::Win32::Foundation::HWND(handle as *mut core::ffi::c_void),
-            windows::Win32::UI::WindowsAndMessaging::GA_ROOT,
-        )
-    };
-    let value = if root.0.is_null() {
-        handle
-    } else {
-        root.0 as isize
-    };
-    SYS_HANDLE.store(value, Ordering::Relaxed);
 }
 
 fn io_cache() -> &'static Mutex<HashMap<String, (i32, i32)>> {
@@ -367,91 +248,6 @@ fn read_reg_sz(key: windows::Win32::System::Registry::HKEY, name: &str) -> Optio
     }
 }
 
-struct AsioHostWindow {
-    hwnd: windows::Win32::Foundation::HWND,
-}
-
-impl AsioHostWindow {
-    fn create() -> Result<Self, String> {
-        unsafe {
-            use windows::Win32::Foundation::HINSTANCE;
-            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-            use windows::Win32::UI::WindowsAndMessaging::{
-                CreateWindowExW, RegisterClassW, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-                WS_POPUP,
-            };
-            use windows::core::w;
-
-            let instance = GetModuleHandleW(None)
-                .map_err(|error| format!("ASIO host module: {error}"))?;
-            let class = w!("eiviz_asio_host");
-            let wnd = WNDCLASSW {
-                lpfnWndProc: Some(asio_host_wnd_proc),
-                hInstance: HINSTANCE(instance.0),
-                lpszClassName: class,
-                ..Default::default()
-            };
-            let _ = RegisterClassW(&wnd);
-            let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                class,
-                w!("eiviz asio"),
-                WS_POPUP,
-                -32000,
-                -32000,
-                64,
-                64,
-                None,
-                None,
-                Some(HINSTANCE(instance.0)),
-                None,
-            )
-            .map_err(|error| format!("ASIO host window: {error}"))?;
-            if hwnd.0.is_null() {
-                return Err("ASIO host window is null".into());
-            }
-            Ok(Self { hwnd })
-        }
-    }
-
-    fn as_sys(&self) -> *mut core::ffi::c_void {
-        self.hwnd.0
-    }
-}
-
-impl Drop for AsioHostWindow {
-    fn drop(&mut self) {
-        if !self.hwnd.0.is_null() {
-            unsafe {
-                let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
-            }
-            self.hwnd.0 = std::ptr::null_mut();
-        }
-    }
-}
-
-unsafe extern "system" fn asio_host_wnd_proc(
-    hwnd: windows::Win32::Foundation::HWND,
-    msg: u32,
-    wparam: windows::Win32::Foundation::WPARAM,
-    lparam: windows::Win32::Foundation::LPARAM,
-) -> windows::Win32::Foundation::LRESULT {
-    unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wparam, lparam) }
-}
-
-fn pump_messages() {
-    unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
-        };
-        let mut msg = MSG::default();
-        while PeekMessageW(std::ptr::addr_of_mut!(msg), None, 0, 0, PM_REMOVE).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-}
-
 pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
     let key = norm(device_id);
     if key.is_empty() {
@@ -596,83 +392,7 @@ pub fn probe_io_channels(device_id: &str) -> Result<(i32, i32), String> {
     if hub_owns(&key) {
         return wait_live_io(&key);
     }
-    let id = device_id.to_string();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let join = thread::Builder::new()
-        .name("eiviz-asio-probe".into())
-        .spawn(move || {
-            let _ = tx.send(probe_io_on_thread(&id));
-        })
-        .map_err(|error| error.to_string())?;
-    let result = match rx.recv_timeout(Duration::from_secs(8)) {
-        Ok(value) => value,
-        Err(_) => Err("ASIO channel probe timed out".into()),
-    };
-    let _ = crate::diag::join_timeout(join, Duration::from_secs(1), "asio-probe");
-    match &result {
-        Ok((ins, outs)) => remember_io(&key, *ins, *outs),
-        Err(error) => crate::diag::warn(&format!("asio probe {device_id}: {error}")),
-    }
-    result
-}
-
-fn probe_io_on_thread(device_id: &str) -> Result<(i32, i32), String> {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let host = AsioHostWindow::create()?;
-        let clsid = parse_guid(device_id).ok_or_else(|| "invalid ASIO CLSID".to_string())?;
-        let unk: IUnknown = CoCreateInstance(&clsid, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| format!("CoCreateInstance ASIO: {error}"))?;
-        let mut raw: *mut core::ffi::c_void = std::ptr::null_mut();
-        unk.query(&IID_IASIO, &mut raw)
-            .ok()
-            .map_err(|error| format!("IASIO QueryInterface: {error}"))?;
-        if raw.is_null() {
-            return Err("IASIO pointer null".into());
-        }
-        let asio = raw as *mut Iasio;
-        let vtbl = &*(*asio).vtbl;
-        let io = asio_init_channels(vtbl, asio, host.as_sys());
-        let _ = (vtbl.release)(asio);
-        drop(host);
-        let _ = unk;
-        io
-    }
-}
-
-pub fn io_channels(device_id: &str) -> Result<(i32, i32), String> {
-    let key = norm(device_id);
-    if key.is_empty() {
-        return Err("ASIO device id is empty".into());
-    }
-    {
-        let mut hub = hub().lock().expect("asio hub");
-        hub.ensure(&key, device_id);
-    }
-    for _ in 0..50 {
-        if let Some(error) = snapshot_error(&key) {
-            return Err(error);
-        }
-        if let Some((ins, outs)) = snapshot_io(&key) {
-            if ins > 0 || outs > 0 {
-                return Ok((ins, outs));
-            }
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    if let Some(error) = snapshot_error(&key) {
-        return Err(error);
-    }
-    if let Some((ins, outs)) = snapshot_io(&key) {
-        if ins > 0 || outs > 0 {
-            return Ok((ins, outs));
-        }
-    }
     Err("ASIO driver reported no channels".into())
-}
-
-fn wait_io_channels(device_id: &str) -> Result<(i32, i32), String> {
-    io_channels(device_id)
 }
 
 fn snapshot_io(key: &str) -> Option<(i32, i32)> {
@@ -760,24 +480,13 @@ impl AsioHub {
                 ready: false,
             }))
         };
-        let rt = Arc::new(Mutex::new(AsioRt {
-            maps: Vec::new(),
-            captures: Vec::new(),
-            infos: Vec::new(),
-            sample_types: Vec::new(),
-            buffer_size: 0,
-            rate: 48_000.0,
-            asio: 0,
-            output_ready: None,
-        }));
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
         let shared_t = Arc::clone(&shared);
-        let rt_t = Arc::clone(&rt);
         let id = device_id.to_string();
         let join = thread::Builder::new()
             .name(format!("eiviz-asio-{key}"))
-            .spawn(move || run_device_thread(&id, shared_t, rt_t, &stop_t))
+            .spawn(move || run_device_thread(&id, shared_t, &stop_t))
             .ok();
         self.devices
             .insert(key.to_string(), AsioDevice { shared, stop, join });
@@ -796,14 +505,6 @@ impl AsioDevice {
     }
 }
 
-fn reap_idle(key: &str) {
-    let mut hub = hub().lock().expect("asio hub");
-    let idle = hub.devices.get(key).is_some_and(AsioDevice::is_idle);
-    if idle {
-        stop_device(hub.devices.remove(key));
-    }
-}
-
 fn stop_device(device: Option<AsioDevice>) {
     let Some(mut device) = device else {
         return;
@@ -814,13 +515,8 @@ fn stop_device(device: Option<AsioDevice>) {
     }
 }
 
-fn run_device_thread(
-    device_id: &str,
-    shared: Arc<Mutex<AsioShared>>,
-    rt: Arc<Mutex<AsioRt>>,
-    stop: &AtomicBool,
-) {
-    if let Err(error) = run_driver(device_id, Arc::clone(&shared), rt, stop) {
+fn run_device_thread(device_id: &str, shared: Arc<Mutex<AsioShared>>, stop: &AtomicBool) {
+    if let Err(error) = run_driver(device_id, Arc::clone(&shared), stop) {
         if let Ok(mut guard) = shared.lock() {
             guard.error = Some(error.clone());
         }
@@ -831,27 +527,42 @@ fn run_device_thread(
 fn run_driver(
     device_id: &str,
     shared: Arc<Mutex<AsioShared>>,
-    _rt: Arc<Mutex<AsioRt>>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     let name = registry_name_for_id(device_id)
         .ok_or_else(|| format!("ASIO driver name not found for {device_id}"))?;
     let device = find_cpal_asio_device(&name)?;
-    if let Some((ins, outs)) = cpal_asio_io(device_id) {
-        if let Ok(mut guard) = shared.lock() {
-            guard.ins = ins;
-            guard.outs = outs;
-        }
+    let (ins, outs) = cpal_asio_io(device_id).unwrap_or((0, 0));
+    if let Ok(mut guard) = shared.lock() {
+        guard.ins = ins;
+        guard.outs = outs;
     }
 
     let mut input: Option<cpal::Stream> = None;
     let mut output: Option<cpal::Stream> = None;
+    let mut opened = false;
     while !stop.load(Ordering::Relaxed) {
         let (want_in, want_out) = {
             let guard = shared.lock().expect("asio shared");
             (!guard.captures.is_empty(), !guard.outputs.is_empty())
         };
-        if want_in && input.is_none() {
+        if !want_in && !want_out {
+            drop(output.take());
+            drop(input.take());
+            opened = false;
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        if opened {
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+
+        // ASIO allows one client. Open input, then output, so cpal creates one
+        // duplex buffer set. A later bus route only updates the mix maps.
+        let open_in = want_in || (want_out && ins > 0);
+        let open_out = want_out || (want_in && outs > 0);
+        if open_in {
             match open_cpal_asio_input(&device, Arc::clone(&shared)) {
                 Ok(stream) => {
                     input = Some(stream);
@@ -861,17 +572,21 @@ fn run_driver(
                     }
                 }
                 Err(error) => {
-                    if let Ok(mut guard) = shared.lock() {
-                        guard.error = Some(error.clone());
+                    if want_in {
+                        if let Ok(mut guard) = shared.lock() {
+                            guard.error = Some(error.clone());
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
+                    crate::diag::warn(&format!("asio input {name}: {error}"));
                 }
             }
         }
-        if want_out && output.is_none() {
+        if open_out {
             match open_cpal_asio_output(&device, Arc::clone(&shared)) {
                 Ok(stream) => {
                     output = Some(stream);
+                    crate::diag::info(&format!("asio output started: {name} ({outs} ch)"));
                     if let Ok(mut guard) = shared.lock() {
                         guard.ready = true;
                         guard.error = None;
@@ -879,22 +594,18 @@ fn run_driver(
                 }
                 Err(error) => {
                     crate::diag::error(&format!("asio output {name}: {error}"));
-                    if let Ok(mut guard) = shared.lock() {
-                        if input.is_none() {
+                    if want_out && input.is_none() {
+                        if let Ok(mut guard) = shared.lock() {
                             guard.error = Some(error.clone());
                         }
-                    }
-                    if input.is_none() {
                         return Err(error);
                     }
                 }
             }
         }
-        if !want_in {
-            input = None;
-        }
-        if !want_out {
-            output = None;
+        opened = input.is_some() || output.is_some();
+        if !opened {
+            return Err(format!("ASIO device '{name}' did not start"));
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -979,7 +690,10 @@ fn open_cpal_asio_input(
             device.build_input_stream(
                 config,
                 move |data: &[i16], _| {
-                    let converted: Vec<f32> = data.iter().map(|sample| *sample as f32 / 32768.0).collect();
+                    let converted: Vec<f32> = data
+                        .iter()
+                        .map(|sample| *sample as f32 / 32768.0)
+                        .collect();
                     ingest_asio_input(&shared, &converted, channels, rate);
                 },
                 err_cb,
@@ -994,6 +708,21 @@ fn open_cpal_asio_input(
                     let converted: Vec<f32> = data
                         .iter()
                         .map(|sample| *sample as f32 / 2_147_483_648.0)
+                        .collect();
+                    ingest_asio_input(&shared, &converted, channels, rate);
+                },
+                err_cb,
+                None,
+            )
+        }
+        cpal::SampleFormat::I24 => {
+            let shared = Arc::clone(&shared);
+            device.build_input_stream(
+                config,
+                move |data: &[cpal::I24], _| {
+                    let converted: Vec<f32> = data
+                        .iter()
+                        .map(|sample| sample.inner() as f32 / 8_388_608.0)
                         .collect();
                     ingest_asio_input(&shared, &converted, channels, rate);
                 },
@@ -1061,6 +790,22 @@ fn open_cpal_asio_output(
                 None,
             )
         }
+        cpal::SampleFormat::I24 => {
+            let shared = Arc::clone(&shared);
+            device.build_output_stream(
+                config,
+                move |data: &mut [cpal::I24], _| {
+                    let mut mixed = vec![0.0f32; data.len()];
+                    render_asio_output(&shared, &mut mixed, channels, rate);
+                    for (slot, sample) in data.iter_mut().zip(mixed) {
+                        let code = (sample.clamp(-1.0, 1.0) * 8_388_607.0) as i32;
+                        *slot = cpal::I24::new_unchecked(code);
+                    }
+                },
+                err_cb,
+                None,
+            )
+        }
         other => return Err(format!("ASIO output format {other:?} is not supported")),
     }
     .map_err(|error| format!("ASIO output stream: {error}"))?;
@@ -1115,265 +860,6 @@ fn render_asio_output(shared: &Mutex<AsioShared>, dest: &mut [f32], channels: us
     super::pcm::mix_mapped_f32(dest, channels, &mapped);
 }
 
-fn append_buffers(
-    vtbl: &IasioVtbl,
-    asio: *mut Iasio,
-    is_input: i32,
-    count: i32,
-    infos: &mut Vec<AsioBufferInfo>,
-    types: &mut Vec<i32>,
-) {
-    for ch in 0..count {
-        infos.push(AsioBufferInfo {
-            is_input,
-            channel_num: ch,
-            buffers: [std::ptr::null_mut(), std::ptr::null_mut()],
-        });
-        let mut info = AsioChannelInfo {
-            channel: ch,
-            is_input,
-            is_active: 0,
-            channel_group: 0,
-            sample_type: ASIOST_FLOAT32_LSB,
-            name: [0; 32],
-        };
-        unsafe {
-            let _ = (vtbl.get_channel_info)(asio, &mut info);
-        }
-        types.push(info.sample_type);
-    }
-}
-
-fn sync_rt(shared: &Arc<Mutex<AsioShared>>, rt: &Arc<Mutex<AsioRt>>) {
-    let shared = shared.lock().expect("asio shared");
-    let mut slot = rt.lock().expect("asio rt");
-    slot.maps = shared.outputs.clone();
-    slot.captures = shared.captures.values().cloned().collect();
-}
-
-static RT: Mutex<Option<Arc<Mutex<AsioRt>>>> = Mutex::new(None);
-
-unsafe fn asio_init_channels(
-    vtbl: &IasioVtbl,
-    asio: *mut Iasio,
-    hwnd: *mut core::ffi::c_void,
-) -> Result<(i32, i32), String> {
-    // IASIO::init is ASIOBool (1 = success). Some drivers return ASE_OK (0) on
-    // success, so getChannels is the authority. The HWND must belong to this
-    // thread; Thesycon drivers such as UMC1820 fail or hang if init is given
-    // the UI window from another thread.
-    unsafe {
-        let _ = (vtbl.init)(asio, hwnd);
-        pump_messages();
-        let mut ins = 0i32;
-        let mut outs = 0i32;
-        let mut last = ASIO_OK;
-        for _ in 0..120 {
-            pump_messages();
-            last = (vtbl.get_channels)(asio, &mut ins, &mut outs);
-            if last == ASIO_OK && (ins > 0 || outs > 0) {
-                return Ok((ins, outs));
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
-        if last == ASIO_OK {
-            return Ok((ins, outs));
-        }
-        Err(format!("ASIO init or getChannels failed ({last})"))
-    }
-}
-
-unsafe extern "C" fn buffer_switch(index: i32, _direct: i32) {
-    let Some(rt) = RT.lock().ok().and_then(|guard| guard.clone()) else {
-        return;
-    };
-    let guard = rt.lock().expect("asio rt");
-    let frames = guard.buffer_size.max(1) as usize;
-    let rate = guard.rate.max(1.0) as u32;
-    let mapped = pop_stereo_rate(&guard.maps, frames, rate);
-    let infos = guard.infos.clone();
-    let types = guard.sample_types.clone();
-    let captures = guard.captures.clone();
-    let asio = guard.asio as *mut Iasio;
-    let output_ready = guard.output_ready;
-    drop(guard);
-    let idx = if index == 0 { 0usize } else { 1usize };
-    let mut input_ptrs = HashMap::<i32, (*mut core::ffi::c_void, i32)>::new();
-    for (slot, info) in infos.iter().enumerate() {
-        let ptr = info.buffers[idx];
-        if ptr.is_null() {
-            continue;
-        }
-        let ty = types.get(slot).copied().unwrap_or(ASIOST_FLOAT32_LSB);
-        if info.is_input != 0 {
-            input_ptrs.insert(info.channel_num, (ptr, ty));
-        } else {
-            fill_asio_channel(ptr, ty, frames, &mapped, info.channel_num as usize);
-        }
-    }
-    for capture in captures {
-        let left = read_asio_channel(input_ptrs.get(&capture.map_left).copied(), frames);
-        let right = read_asio_channel(input_ptrs.get(&capture.map_right).copied(), frames);
-        let mut pcm = left;
-        pcm.extend(right);
-        let pts = capture.pts.load(Ordering::Relaxed);
-        capture.uploads.lock().expect("audio").ingest_audio(
-            capture.id,
-            AudioPacket {
-                timestamp: pts,
-                sample_rate: rate as i32,
-                channels: 2,
-                samples_per_channel: frames as i32,
-                pcm_planar_f32: pcm,
-            },
-        );
-        capture.pts.store(
-            pts.saturating_add(i64::from(frames as u32) * 10_000_000 / i64::from(rate.max(1))),
-            Ordering::Relaxed,
-        );
-    }
-    if let Some(output_ready) = output_ready {
-        if !asio.is_null() {
-            let _ = unsafe { output_ready(asio) };
-        }
-    }
-}
-
-fn read_asio_channel(src: Option<(*mut core::ffi::c_void, i32)>, frames: usize) -> Vec<f32> {
-    let Some((ptr, ty)) = src else {
-        return vec![0.0; frames];
-    };
-    if ptr.is_null() {
-        return vec![0.0; frames];
-    }
-    unsafe {
-        match ty {
-            ASIOST_INT16_LSB => std::slice::from_raw_parts(ptr as *const i16, frames)
-                .iter()
-                .map(|sample| *sample as f32 / 32768.0)
-                .collect(),
-            ASIOST_INT24_LSB => {
-                let bytes = std::slice::from_raw_parts(ptr as *const u8, frames * 3);
-                (0..frames)
-                    .map(|i| {
-                        let value = i32::from_le_bytes([
-                            bytes[i * 3],
-                            bytes[i * 3 + 1],
-                            bytes[i * 3 + 2],
-                            0,
-                        ]) << 8
-                            >> 8;
-                        value as f32 / 8_388_608.0
-                    })
-                    .collect()
-            }
-            ASIOST_INT32_LSB => std::slice::from_raw_parts(ptr as *const i32, frames)
-                .iter()
-                .map(|sample| *sample as f32 / 2_147_483_648.0)
-                .collect(),
-            ASIOST_FLOAT64_LSB => std::slice::from_raw_parts(ptr as *const f64, frames)
-                .iter()
-                .map(|sample| *sample as f32)
-                .collect(),
-            _ => std::slice::from_raw_parts(ptr as *const f32, frames).to_vec(),
-        }
-    }
-}
-
-fn fill_asio_channel(
-    ptr: *mut core::ffi::c_void,
-    ty: i32,
-    frames: usize,
-    mapped: &HashMap<(i32, i32), Vec<(f32, f32)>>,
-    channel: usize,
-) {
-    let mut samples = vec![0.0f32; frames];
-    for ((left, right), stereo) in mapped {
-        let use_left = *left as usize == channel;
-        let use_right = *right as usize == channel;
-        if !use_left && !use_right {
-            continue;
-        }
-        for (i, (l, r)) in stereo.iter().enumerate().take(frames) {
-            samples[i] += if use_left { *l } else { *r };
-        }
-    }
-    unsafe {
-        match ty {
-            ASIOST_INT16_LSB => {
-                let dest = std::slice::from_raw_parts_mut(ptr as *mut i16, frames);
-                for (slot, sample) in dest.iter_mut().zip(samples) {
-                    *slot = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
-                }
-            }
-            ASIOST_INT24_LSB => {
-                let dest = std::slice::from_raw_parts_mut(ptr as *mut u8, frames * 3);
-                for i in 0..frames {
-                    let code = (samples[i].clamp(-1.0, 1.0) * 8_388_607.0) as i32;
-                    dest[i * 3] = code as u8;
-                    dest[i * 3 + 1] = (code >> 8) as u8;
-                    dest[i * 3 + 2] = (code >> 16) as u8;
-                }
-            }
-            ASIOST_INT32_LSB => {
-                let dest = std::slice::from_raw_parts_mut(ptr as *mut i32, frames);
-                for (slot, sample) in dest.iter_mut().zip(samples) {
-                    *slot = (sample.clamp(-1.0, 1.0) * 2_147_483_647.0) as i32;
-                }
-            }
-            ASIOST_FLOAT64_LSB => {
-                let dest = std::slice::from_raw_parts_mut(ptr as *mut f64, frames);
-                for (slot, sample) in dest.iter_mut().zip(samples) {
-                    *slot = f64::from(sample);
-                }
-            }
-            _ => {
-                let dest = std::slice::from_raw_parts_mut(ptr as *mut f32, frames);
-                dest.copy_from_slice(&samples);
-            }
-        }
-    }
-}
-
-unsafe extern "C" fn sample_rate_did_change(rate: f64) {
-    if let Some(rt) = RT.lock().ok().and_then(|guard| guard.clone()) {
-        rt.lock().expect("asio rt").rate = rate;
-    }
-}
-
-unsafe extern "C" fn asio_message(
-    selector: i32,
-    value: i32,
-    _message: *mut core::ffi::c_void,
-    _opt: *mut f64,
-) -> i32 {
-    match selector {
-        1 => i32::from(matches!(value, 2 | 6 | 7)),
-        2 => 2,
-        6 | 7 => 1,
-        _ => 0,
-    }
-}
-
-unsafe extern "C" fn buffer_switch_time_info(
-    params: *mut core::ffi::c_void,
-    index: i32,
-    direct: i32,
-) -> *mut core::ffi::c_void {
-    unsafe { buffer_switch(index, direct) };
-    params
-}
-
-pub fn parse_guid(text: &str) -> Option<GUID> {
-    let trimmed = text.trim().trim_matches('{').trim_end_matches('}').trim();
-    let hex: String = trimmed.chars().filter(|ch| *ch != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
-    let value = u128::from_str_radix(&hex, 16).ok()?;
-    Some(GUID::from_u128(value))
-}
-
 fn norm(id: &str) -> String {
     id.trim()
         .trim_matches('{')
@@ -1383,20 +869,11 @@ fn norm(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_guid, probe_io_channels};
+    use super::probe_io_channels;
 
     #[test]
     fn probe_empty_id_is_error() {
         assert!(probe_io_channels("").is_err());
         assert!(probe_io_channels("   ").is_err());
-    }
-
-    #[test]
-    fn parse_guid_accepts_braces() {
-        let guid = parse_guid("{453661B3-88C3-45C4-8877-4C03B6490C33}").unwrap();
-        assert_eq!(
-            guid,
-            windows::core::GUID::from_u128(0x4536_61b3_88c3_45c4_8877_4c03_b649_0c33)
-        );
     }
 }

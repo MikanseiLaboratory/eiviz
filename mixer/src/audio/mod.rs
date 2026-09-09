@@ -32,10 +32,6 @@ pub use graph::{
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;
 
-#[cfg(windows)]
-pub fn remember_asio_sys_handle(handle: isize) {
-    asio::remember_sys_handle(handle);
-}
 pub use scheduler::{AudioMixSnapshot, AudioOutputRoute, AudioScheduler};
 
 #[derive(Clone)]
