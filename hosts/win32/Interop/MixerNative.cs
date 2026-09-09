@@ -235,6 +235,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_channels", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int AudioDeviceChannels(uint kind, string deviceId);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_process_list")]
+    internal static unsafe partial int AudioProcessList(byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_capture_start", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int AudioCaptureStart(
         ulong id,
@@ -667,6 +670,9 @@ internal static partial class MixerNative
             }
         }
     }
+
+    internal static unsafe string AudioProcessListText() =>
+        CopyUtf8(AudioProcessList, 1 << 16);
 
     internal static List<(string Name, string Id)> EnumVideoCaptures()
     {

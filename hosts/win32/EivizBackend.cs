@@ -407,6 +407,7 @@ internal sealed class LocalEivizBackend : IEivizBackend
         "ndi" => MixerNative.DiscoverNdiText(),
         "uvc" => InputHostDiscovery.CapturesJson(MixerNative.EnumVideoCaptures()),
         "uvcModes" => InputHostDiscovery.ModesJson(MixerNative.EnumVideoCaptureModes(query ?? "")),
+        "audio" => MixerNative.AudioProcessListText(),
         _ => MixerNative.DiscoverText()
     };
 
@@ -1263,6 +1264,13 @@ internal static class InputHostDiscovery
         public string Id { get; set; } = "";
     }
 
+    private sealed class AudioProcessDto
+    {
+        public string Name { get; set; } = "";
+        public string Exe { get; set; } = "";
+        public string Aumid { get; set; } = "";
+    }
+
     private sealed class ModeDto
     {
         public uint Width { get; set; }
@@ -1289,6 +1297,26 @@ internal static class InputHostDiscovery
         string.IsNullOrWhiteSpace(payload)
             ? []
             : payload.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public static List<(string Name, string Exe, string Aumid)> AudioProcesses(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload) || payload.Trim() == "[]")
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<AudioProcessDto>>(payload, Json)?
+                .Where(item => !string.IsNullOrWhiteSpace(item.Exe) || !string.IsNullOrWhiteSpace(item.Aumid))
+                .Select(item => (
+                    string.IsNullOrWhiteSpace(item.Name) ? item.Exe : item.Name,
+                    item.Exe,
+                    item.Aumid ?? ""))
+                .ToList() ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
     public static List<(string Name, string Id)> Captures(string payload)
     {

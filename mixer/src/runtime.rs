@@ -8,8 +8,8 @@ use eiviz_control::service::{ControlService, RequestKey};
 use eiviz_control::{Command, Incoming};
 
 use crate::abi::{
-    OverlayDesc, Rect, UnitState, ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID,
-    OK,
+    ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect,
+    UnitState,
 };
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_capture_start,
@@ -585,6 +585,10 @@ impl MixerPort for ProcessMixer {
 
     fn discover_uvc_modes(&self, device_id: &str) -> ControlResult<String> {
         encode_capture_modes(device_id)
+    }
+
+    fn discover_audio(&self) -> ControlResult<String> {
+        Ok(crate::audio::processes_json())
     }
 
     fn apply_reconcile(

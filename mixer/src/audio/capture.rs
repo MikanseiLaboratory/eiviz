@@ -123,27 +123,23 @@ fn wasapi_capture(
     uploads: &Arc<Mutex<AudioInputStore>>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
     use windows::Win32::Media::Audio::{
-        eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice,
-        IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
-        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        WAVE_FORMAT_PCM,
+        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        AUDCLNT_STREAMFLAGS_LOOPBACK, IAudioCaptureClient, IAudioClient, IMMDevice,
+        IMMDeviceEnumerator, MMDeviceEnumerator, WAVE_FORMAT_PCM, eCapture, eConsole, eRender,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
     };
     use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+    use windows::core::PCWSTR;
 
     const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
     const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
 
     if spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
-        return Err(format!(
-            "WASAPI process loopback is not implemented (exe='{}' aumid='{}')",
-            spec.process_exe, spec.process_aumid
-        ));
+        return wasapi_process_loopback(spec, uploads, stop);
     }
     let loopback = spec.mode == CAPTURE_MODE_ENDPOINT_LOOPBACK;
     let follow_default = spec.device_id.is_empty();
@@ -278,6 +274,176 @@ fn wasapi_capture(
             if !reopen {
                 break;
             }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn wasapi_process_loopback(
+    spec: &AudioCaptureSpec,
+    uploads: &Arc<Mutex<AudioInputStore>>,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::Media::Audio::{
+        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        IAudioCaptureClient, WAVE_FORMAT_PCM,
+    };
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree};
+    use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+
+    const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+    const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+
+    if spec.process_exe.trim().is_empty() && spec.process_aumid.trim().is_empty() {
+        return Err("WASAPI process loopback needs a process exe or AUMID".into());
+    }
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let mut missing_logged = false;
+        while !stop.load(Ordering::Relaxed) {
+            let Some(pid) = super::process::resolve_pid(&spec.process_exe, &spec.process_aumid)
+            else {
+                if !missing_logged {
+                    crate::diag::error(&format!(
+                        "audio capture {}: waiting for process exe='{}' aumid='{}'",
+                        spec.id, spec.process_exe, spec.process_aumid
+                    ));
+                    missing_logged = true;
+                }
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            };
+            missing_logged = false;
+            let client = match super::process::activate_process_client(pid) {
+                Ok(client) => client,
+                Err(error) => {
+                    if super::process::activate_is_fatal(&error) {
+                        return Err(error);
+                    }
+                    crate::diag::error(&format!("audio capture {}: {error}", spec.id));
+                    thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+            };
+            let mix = client
+                .GetMixFormat()
+                .map_err(|error| format!("process mix format: {error}"))?;
+            if mix.is_null() {
+                return Err("process mix format null".into());
+            }
+            let format = *mix;
+            let channels = format.nChannels.max(1) as usize;
+            let rate = format.nSamplesPerSec.max(1);
+            let bits = format.wBitsPerSample;
+            let float = format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT
+                || (format.wFormatTag == WAVE_FORMAT_EXTENSIBLE && format.wBitsPerSample == 32);
+            if let Err(error) = client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                200_000,
+                0,
+                mix,
+                None,
+            ) {
+                CoTaskMemFree(Some(mix.cast()));
+                crate::diag::error(&format!(
+                    "audio capture {}: process initialize: {error}",
+                    spec.id
+                ));
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            let event = match CreateEventW(None, false, false, None) {
+                Ok(event) => event,
+                Err(error) => {
+                    CoTaskMemFree(Some(mix.cast()));
+                    return Err(format!("event: {error}"));
+                }
+            };
+            if let Err(error) = client.SetEventHandle(event) {
+                let _ = CloseHandle(HANDLE(event.0));
+                CoTaskMemFree(Some(mix.cast()));
+                return Err(format!("set event: {error}"));
+            }
+            let capture: IAudioCaptureClient = match client.GetService() {
+                Ok(capture) => capture,
+                Err(error) => {
+                    let _ = CloseHandle(HANDLE(event.0));
+                    CoTaskMemFree(Some(mix.cast()));
+                    return Err(format!("capture client: {error}"));
+                }
+            };
+            if let Err(error) = client.Start() {
+                let _ = CloseHandle(HANDLE(event.0));
+                CoTaskMemFree(Some(mix.cast()));
+                return Err(format!("start: {error}"));
+            }
+            let map_left = spec.map_left.max(0) as usize;
+            let map_right = spec.map_right.max(0) as usize;
+            let mut pts = 0i64;
+            let mut follow_check = Instant::now();
+            while !stop.load(Ordering::Relaxed) {
+                if WaitForSingleObject(event, 50) != WAIT_OBJECT_0 && !stop.load(Ordering::Relaxed)
+                {
+                    if follow_check.elapsed() >= Duration::from_millis(250) {
+                        follow_check = Instant::now();
+                        if !super::process::process_alive(pid) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                loop {
+                    let mut data: *mut u8 = std::ptr::null_mut();
+                    let mut frames = 0u32;
+                    let mut flags = 0u32;
+                    if capture
+                        .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if frames == 0 || data.is_null() {
+                        let _ = capture.ReleaseBuffer(0);
+                        break;
+                    }
+                    let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
+                    let packet = if silent {
+                        silent_packet(pts, rate as i32, frames)
+                    } else {
+                        let bytes = frames as usize * format.nBlockAlign as usize;
+                        let src = std::slice::from_raw_parts(data, bytes);
+                        mapped_packet(
+                            pts,
+                            rate as i32,
+                            frames,
+                            src,
+                            channels,
+                            bits,
+                            float,
+                            map_left,
+                            map_right,
+                        )
+                    };
+                    uploads.lock().expect("audio").ingest_audio(spec.id, packet);
+                    pts =
+                        pts.saturating_add(i64::from(frames) * 10_000_000 / i64::from(rate.max(1)));
+                    let _ = capture.ReleaseBuffer(frames);
+                }
+                if follow_check.elapsed() >= Duration::from_millis(250) {
+                    follow_check = Instant::now();
+                    if !super::process::process_alive(pid) {
+                        break;
+                    }
+                }
+            }
+            let _ = client.Stop();
+            CoTaskMemFree(Some(mix.cast()));
+            let _ = CloseHandle(HANDLE(event.0));
+            let _ = WAVE_FORMAT_PCM;
         }
         Ok(())
     }

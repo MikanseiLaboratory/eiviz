@@ -131,6 +131,11 @@ mod tests {
             "endpointLoopback",
             crate::session::AudioCaptureMode::EndpointLoopback,
         );
+        assert_pair(
+            "ProcessLoopback",
+            "processLoopback",
+            crate::session::AudioCaptureMode::ProcessLoopback,
+        );
     }
 
     #[test]

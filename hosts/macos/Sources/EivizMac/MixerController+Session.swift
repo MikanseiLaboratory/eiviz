@@ -710,17 +710,18 @@ extension MixerController {
                 )
             }
         case .audio:
-            MixerFFI.withCString(input.pathOrAddress ?? "") { device in
-                MixerFFI.withCString("") { exe in
-                    MixerFFI.withCString("") { aumid in
+            let deviceId = input.audioDeviceId.isEmpty ? (input.pathOrAddress ?? "") : input.audioDeviceId
+            MixerFFI.withCString(deviceId) { device in
+                MixerFFI.withCString(input.audioProcessExe) { exe in
+                    MixerFFI.withCString(input.audioProcessAumid) { aumid in
                         fail(
                             mixer_audio_capture_start(
                                 input.id,
-                                3,
+                                input.audioDeviceKind.rawUInt,
                                 device,
-                                0,
-                                0,
-                                1,
+                                input.audioCaptureMode.rawUInt,
+                                input.audioMapLeft,
+                                input.audioMapRight,
                                 exe,
                                 aumid
                             ),

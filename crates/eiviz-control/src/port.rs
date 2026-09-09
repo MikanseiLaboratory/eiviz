@@ -129,6 +129,9 @@ pub trait MixerPort: Send {
         let _ = device_id;
         Ok("[]".into())
     }
+    fn discover_audio(&self) -> ControlResult<String> {
+        Ok("[]".into())
+    }
 
     /// Concrete impls forward to `reconcile::apply_one` so the large match is
     /// monomorphized per port type instead of taking `&mut dyn MixerPort`.

@@ -3498,6 +3498,22 @@ pub unsafe extern "C" fn mixer_audio_device_channels(kind: u32, device_id: *cons
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_audio_process_list(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let json = audio::processes_json();
+    let bytes = json.as_bytes();
+    if bytes.len() > cap {
+        return -(bytes.len() as i32);
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+    }
+    bytes.len() as i32
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_capture_start(
     id: u64,
     kind: u32,

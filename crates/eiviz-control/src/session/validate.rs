@@ -328,4 +328,36 @@ mod tests {
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("unit"), "{}", err.message);
     }
+
+    #[test]
+    fn process_loopback_requires_exe_or_aumid() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "App", "kind": "Audio", "audioCaptureMode": "ProcessLoopback" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("process"), "{}", err.message);
+
+        let ok = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "App", "kind": "Audio", "audioCaptureMode": "ProcessLoopback", "audioProcessExe": "Spotify.exe" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        validate(&parse(ok).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn scene_rejects_audio_only_layer() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Mic", "kind": "Audio" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("audio-only"), "{}", err.message);
+    }
 }

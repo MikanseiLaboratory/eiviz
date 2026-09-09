@@ -154,7 +154,12 @@ public partial class AddInputWindow : Window
         }
         if (input.Kind == InputKind.Audio)
         {
-            SelectTag(AudioModeBox, input.AudioCaptureMode == AudioCaptureMode.EndpointLoopback ? "loopback" : "mic");
+            SelectTag(AudioModeBox, input.AudioCaptureMode switch
+            {
+                AudioCaptureMode.EndpointLoopback => "loopback",
+                AudioCaptureMode.ProcessLoopback => "process",
+                _ => "mic"
+            });
             RefreshAudioDevices();
             foreach (AudioDeviceItem item in AudioDeviceBox.Items)
             {
@@ -164,6 +169,7 @@ public partial class AddInputWindow : Window
                     break;
                 }
             }
+            _ = RefreshAudioProcesses(input.AudioProcessExe, input.AudioProcessAumid);
         }
         if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
@@ -203,6 +209,7 @@ public partial class AddInputWindow : Window
         UvcPanel.Visibility = VisibleIf(InputKind.UVC);
         MixPanel.Visibility = VisibleIf(InputKind.Mix);
         AudioPanel.Visibility = VisibleIf(InputKind.Audio);
+        UpdateAudioModePanels();
         MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
         foreach (Button button in CategoryPanel.Children)
             button.Background = Equals(button.Tag, _kind)
@@ -430,6 +437,24 @@ public partial class AddInputWindow : Window
                     : $"{target.Name} {(ResultMixSource == MixSource.MuPreview ? "PRV" : "PGM")}";
                 break;
             case InputKind.Audio:
+                ResultAudioMapLeft = 0;
+                ResultAudioMapRight = 1;
+                ResultAudioDeviceKind = AudioDeviceKind.Wasapi;
+                if (AudioModeBox.SelectedItem is ComboBoxItem { Tag: "process" })
+                {
+                    if (AudioProcessBox.SelectedItem is not AudioProcessItem process
+                        || (string.IsNullOrWhiteSpace(process.Exe) && string.IsNullOrWhiteSpace(process.Aumid)))
+                        return;
+                    ResultAudioCaptureMode = AudioCaptureMode.ProcessLoopback;
+                    ResultAudioDeviceId = "";
+                    ResultAudioProcessExe = process.Exe;
+                    ResultAudioProcessAumid = process.Aumid;
+                    ResultPath = process.Exe;
+                    ResultName = process.Name;
+                    break;
+                }
+                ResultAudioProcessExe = "";
+                ResultAudioProcessAumid = "";
                 ResultAudioCaptureMode = AudioModeBox.SelectedItem is ComboBoxItem { Tag: "loopback" }
                     ? AudioCaptureMode.EndpointLoopback
                     : AudioCaptureMode.Mic;
@@ -441,15 +466,12 @@ public partial class AddInputWindow : Window
                 }
                 else
                 {
-                    ResultAudioDeviceKind = AudioDeviceKind.Wasapi;
                     ResultAudioDeviceId = "";
                     ResultName = ResultAudioCaptureMode == AudioCaptureMode.EndpointLoopback
                         ? "Default output loopback"
                         : "Default microphone";
                 }
                 ResultPath = ResultAudioDeviceId;
-                ResultAudioMapLeft = 0;
-                ResultAudioMapRight = 1;
                 break;
             case InputKind.UVC:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
@@ -567,7 +589,55 @@ public partial class AddInputWindow : Window
             AppPrefs.Current.RememberVideo(path);
     }
 
-    private void AudioMode_Changed(object sender, SelectionChangedEventArgs e) => RefreshAudioDevices();
+    private void AudioMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateAudioModePanels();
+        if (AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "process" })
+            _ = RefreshAudioProcesses();
+        else
+            RefreshAudioDevices();
+    }
+
+    private void UpdateAudioModePanels()
+    {
+        var process = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "process" };
+        if (AudioDevicePanel is not null)
+            AudioDevicePanel.Visibility = process ? Visibility.Collapsed : Visibility.Visible;
+        if (AudioProcessPanel is not null)
+            AudioProcessPanel.Visibility = process ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RefreshAudioProcesses_Click(object sender, RoutedEventArgs e) =>
+        _ = RefreshAudioProcesses();
+
+    private async Task RefreshAudioProcesses(string? selectedExe = null, string? selectedAumid = null)
+    {
+        if (AudioProcessBox is null)
+            return;
+        var payload = await Task.Run(() => DiscoverHost("audio"));
+        if (!Dispatcher.CheckAccess())
+            return;
+        AudioProcessBox.Items.Clear();
+        foreach (var process in InputHostDiscovery.AudioProcesses(payload))
+            AudioProcessBox.Items.Add(new AudioProcessItem(process.Name, process.Exe, process.Aumid));
+        if (AudioProcessBox.Items.Count == 0)
+            return;
+        if (!string.IsNullOrWhiteSpace(selectedExe) || !string.IsNullOrWhiteSpace(selectedAumid))
+        {
+            foreach (AudioProcessItem item in AudioProcessBox.Items)
+            {
+                if ((!string.IsNullOrWhiteSpace(selectedAumid)
+                        && string.Equals(item.Aumid, selectedAumid, StringComparison.OrdinalIgnoreCase))
+                    || (!string.IsNullOrWhiteSpace(selectedExe)
+                        && string.Equals(item.Exe, selectedExe, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AudioProcessBox.SelectedItem = item;
+                    return;
+                }
+            }
+        }
+        AudioProcessBox.SelectedIndex = 0;
+    }
 
     private void RefreshAudioDevices()
     {
@@ -593,6 +663,12 @@ public partial class AddInputWindow : Window
     private sealed record AudioDeviceItem(string Name, string Id, uint Kind)
     {
         public override string ToString() => Name;
+    }
+
+    private sealed record AudioProcessItem(string Name, string Exe, string Aumid)
+    {
+        public override string ToString() =>
+            string.IsNullOrWhiteSpace(Aumid) ? Name : $"{Name} ({Aumid})";
     }
 
     private sealed record CameraItem(string Name, string Link)

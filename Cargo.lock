@@ -526,6 +526,7 @@ dependencies = [
  "vmx",
  "wgpu",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

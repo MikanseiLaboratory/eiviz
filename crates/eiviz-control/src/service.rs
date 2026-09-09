@@ -313,7 +313,7 @@ impl ControlService {
                 let payload = match kind {
                     crate::command::DiscoverKind::Omt => self.port.discover_omt()?,
                     crate::command::DiscoverKind::Ndi => self.port.discover_ndi()?,
-                    crate::command::DiscoverKind::Audio => String::new(),
+                    crate::command::DiscoverKind::Audio => self.port.discover_audio()?,
                     crate::command::DiscoverKind::Uvc => self.port.discover_uvc()?,
                     crate::command::DiscoverKind::UvcModes => {
                         self.port.discover_uvc_modes(&query)?

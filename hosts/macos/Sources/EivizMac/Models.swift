@@ -175,7 +175,20 @@ enum AudioBusRole: String, Codable {
     }
 }
 
-enum AudioDeviceKind: String, Codable {
+enum AudioCaptureMode: String, Codable, Hashable {
+    case mic = "Mic"
+    case endpointLoopback = "EndpointLoopback"
+    case processLoopback = "ProcessLoopback"
+    var rawUInt: UInt32 {
+        switch self {
+        case .mic: return 0
+        case .endpointLoopback: return 1
+        case .processLoopback: return 2
+        }
+    }
+}
+
+enum AudioDeviceKind: String, Codable, Hashable {
     case none = "None"
     case wasapi = "Wasapi"
     case asio = "Asio"
@@ -274,6 +287,13 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var mixSource: MixSource = .muProgram
     var mixTargetId: UInt64 = 0
     var mixAudioBusId: UInt64 = 0
+    var audioCaptureMode: AudioCaptureMode = .mic
+    var audioDeviceKind: AudioDeviceKind = .coreAudio
+    var audioDeviceId: String = ""
+    var audioMapLeft: Int32 = 0
+    var audioMapRight: Int32 = 1
+    var audioProcessExe: String = ""
+    var audioProcessAumid: String = ""
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -298,6 +318,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
         case mixSource, mixTargetId, mixAudioBusId
+        case audioCaptureMode, audioDeviceKind, audioDeviceId, audioMapLeft, audioMapRight
+        case audioProcessExe, audioProcessAumid
     }
 
     init(
@@ -384,6 +406,13 @@ struct InputEntry: Identifiable, Codable, Hashable {
         mixSource = try container.decodeIfPresent(MixSource.self, forKey: .mixSource) ?? .muProgram
         mixTargetId = try container.decodeIfPresent(UInt64.self, forKey: .mixTargetId) ?? 0
         mixAudioBusId = try container.decodeIfPresent(UInt64.self, forKey: .mixAudioBusId) ?? 0
+        audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .mic
+        audioDeviceKind = try container.decodeIfPresent(AudioDeviceKind.self, forKey: .audioDeviceKind) ?? .coreAudio
+        audioDeviceId = try container.decodeIfPresent(String.self, forKey: .audioDeviceId) ?? ""
+        audioMapLeft = try container.decodeIfPresent(Int32.self, forKey: .audioMapLeft) ?? 0
+        audioMapRight = try container.decodeIfPresent(Int32.self, forKey: .audioMapRight) ?? 1
+        audioProcessExe = try container.decodeIfPresent(String.self, forKey: .audioProcessExe) ?? ""
+        audioProcessAumid = try container.decodeIfPresent(String.self, forKey: .audioProcessAumid) ?? ""
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
