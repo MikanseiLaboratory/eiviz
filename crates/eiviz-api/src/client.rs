@@ -16,6 +16,7 @@ use crate::proto::{
     GetSnapshot, OverlayAuto, Request, Response, Role, Subscribe, UploadMediaChunk, envelope,
     request, response,
 };
+use eiviz_control::SessionMutation;
 use eiviz_control::error::{ControlError, ControlResult};
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,10 @@ impl ControlClient {
     }
 
     pub async fn snapshot_json(&self) -> ControlResult<String> {
+        Ok(self.snapshot_document_json().await?.0)
+    }
+
+    pub async fn snapshot_document_json(&self) -> ControlResult<(String, u64)> {
         let response = self
             .roundtrip(Request {
                 request_id: uuid::Uuid::new_v4().to_string(),
@@ -40,12 +45,17 @@ impl ControlClient {
                 payload: Some(request::Payload::GetSnapshot(GetSnapshot {})),
             })
             .await?;
-        if let Some(response::Payload::Snapshot(snapshot)) = response.payload {
-            String::from_utf8(snapshot.document_json)
-                .map_err(|error| ControlError::internal(error.to_string()))
-        } else {
-            Err(ControlError::unavailable("snapshot missing"))
-        }
+        snapshot_document_from_response(response)
+    }
+
+    pub async fn mutate_typed(
+        &self,
+        mutation: &SessionMutation,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        let body = serde_json::to_vec(mutation)
+            .map_err(|error| ControlError::invalid(error.to_string()))?;
+        self.mutate_session(body, expected_revision).await
     }
 
     pub async fn discover(&self, kind: &str, query: &str) -> ControlResult<String> {
@@ -281,13 +291,46 @@ impl ControlSession {
     }
 
     pub async fn snapshot_json(&self) -> ControlResult<String> {
+        let (json, _) = self.snapshot_document_json().await?;
+        Ok(json)
+    }
+
+    pub async fn snapshot_document_json(&self) -> ControlResult<(String, u64)> {
         let response = self.snapshot().await?;
-        if let Some(response::Payload::Snapshot(snapshot)) = response.payload {
-            String::from_utf8(snapshot.document_json)
-                .map_err(|error| ControlError::internal(error.to_string()))
-        } else {
-            Err(ControlError::unavailable("snapshot missing"))
-        }
+        snapshot_document_from_response(response)
+    }
+
+    pub async fn snapshot_document(&self) -> ControlResult<(eiviz_control::Document, u64)> {
+        let (json, revision) = self.snapshot_document_json().await?;
+        let document =
+            eiviz_control::session::parse(json.as_bytes()).map_err(ControlError::invalid)?;
+        Ok((document, revision))
+    }
+
+    pub async fn mutate_typed(
+        &self,
+        mutation: &SessionMutation,
+        expected_revision: u64,
+    ) -> ControlResult<()> {
+        let body = serde_json::to_vec(mutation)
+            .map_err(|error| ControlError::invalid(error.to_string()))?;
+        self.mutate_session(body, expected_revision).await
+    }
+
+    pub async fn snapshot_cmd(&self, unit_id: u64, kind: u32, path: &str) -> ControlResult<()> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::SnapshotCmd(crate::proto::SnapshotCmd {
+                    unit: Some(ref_unit(unit_id)),
+                    kind,
+                    path: path.into(),
+                })),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
     }
 
     pub async fn cut(&self, unit_id: u64, swap: bool) -> ControlResult<()> {
@@ -1007,6 +1050,17 @@ fn ref_input(input_id: u64) -> crate::proto::ResourceRef {
         id: input_id,
         guid: String::new(),
         name: String::new(),
+    }
+}
+
+fn snapshot_document_from_response(response: Response) -> ControlResult<(String, u64)> {
+    status_ok(&response)?;
+    if let Some(response::Payload::Snapshot(snapshot)) = response.payload {
+        let json = String::from_utf8(snapshot.document_json)
+            .map_err(|error| ControlError::internal(error.to_string()))?;
+        Ok((json, snapshot.revision))
+    } else {
+        Err(ControlError::unavailable("snapshot missing"))
     }
 }
 

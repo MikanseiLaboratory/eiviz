@@ -28,7 +28,7 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onCollapse: () -> Void
-    let onSnapshot: () -> Void
+    let onSnapshot: (() -> Void)?
 
     @State private var appeared = false
 
@@ -99,7 +99,11 @@ struct ScenePreviewTile: View, @MainActor Equatable {
                 if showThumb {
                     chip("Prev", action: onOpenPreview)
                 }
-                TileSetButton(title: "Set", onLeft: onEdit, onRight: onSnapshot)
+                if let onSnapshot {
+                    TileSetButton(title: "Set", onLeft: onEdit, onRight: onSnapshot)
+                } else {
+                    chip("Set", action: onEdit)
+                }
             }
             .padding(2)
         }

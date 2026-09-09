@@ -24,11 +24,27 @@ impl Role {
     }
 
     pub fn from_name(name: &str) -> Self {
+        Self::try_from_name(name).unwrap_or(Self::Read)
+    }
+
+    pub fn try_from_name(name: &str) -> Result<Self, String> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "operate" => Self::Operate,
-            "configure" => Self::Configure,
-            "admin" => Self::Admin,
-            _ => Self::Read,
+            "read" => Ok(Self::Read),
+            "operate" => Ok(Self::Operate),
+            "configure" => Ok(Self::Configure),
+            "admin" => Ok(Self::Admin),
+            _ => Err(format!(
+                "unknown role '{name}' (read, operate, configure, admin)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Operate => "operate",
+            Self::Configure => "configure",
+            Self::Admin => "admin",
         }
     }
 

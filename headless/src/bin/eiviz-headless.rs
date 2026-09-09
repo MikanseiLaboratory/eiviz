@@ -69,6 +69,8 @@ enum Cmd {
         session: Option<PathBuf>,
         #[arg(long)]
         bind: Option<String>,
+        #[arg(long, help = "GPU renderer: auto, dx12, vulkan, or metal")]
+        renderer: Option<String>,
         #[arg(
             long,
             env = "EIVIZ_MEDIA_DIRECTORY",
@@ -107,8 +109,9 @@ fn main() -> ExitCode {
         Cmd::Run {
             session,
             bind,
+            renderer,
             media_directory,
-        } => match run_daemon(session, bind, media_directory) {
+        } => match run_daemon(session, bind, renderer, media_directory) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -203,17 +206,18 @@ fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
 fn run_daemon(
     session: Option<PathBuf>,
     bind: Option<String>,
+    renderer: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
-        let _ = (session, bind, media_directory);
+        let _ = (session, bind, renderer, media_directory);
         eprintln!("eiviz-headless error=runtime binary built without mixer runtime");
         Err(EXIT_OTHER)
     }
     #[cfg(feature = "runtime")]
     {
-        run_daemon_runtime(session, bind, media_directory)
+        run_daemon_runtime(session, bind, renderer, media_directory)
     }
 }
 
@@ -221,32 +225,38 @@ fn run_daemon(
 fn run_daemon_runtime(
     session: Option<PathBuf>,
     bind: Option<String>,
+    renderer: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
-    let prefs = eiviz_headless::HeadlessPrefs::load();
+    let prefs = eiviz_headless::HeadlessPrefs::load().map_err(|error| {
+        eprintln!("eiviz-headless error=prefs {error}");
+        EXIT_ARGS
+    })?;
+    let renderer =
+        eiviz_headless::resolve_renderer(renderer.as_deref(), &prefs).map_err(|error| {
+            eprintln!("eiviz-headless error=renderer {error}");
+            EXIT_ARGS
+        })?;
     let bind = bind
         .or(prefs.bind.clone())
         .unwrap_or_else(|| "127.0.0.1:9400".into());
     let media_directory =
         media_directory.or_else(|| prefs.media_directory.as_ref().map(PathBuf::from));
-    let (session, document) = resolve_run_session(session)?;
+    let (session, mut document) = resolve_run_session(session)?;
+    document.settings.renderer = renderer;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
         EXIT_BIND
     })?;
-    let mut auth = AuthConfig::from_env();
-    if auth.token.is_empty() {
-        if let Some(token) = prefs.token.clone().filter(|value| !value.is_empty()) {
-            auth.token = token;
-            auth.require_auth = true;
-            auth.max_role = eiviz_api::Role::Admin;
-        }
-    }
-    if let Some(role) = prefs.max_role.as_deref() {
-        auth.max_role = eiviz_api::Role::from_name(role);
-    }
+    let auth = auth_from_prefs(&prefs).map_err(|error| {
+        eprintln!("eiviz-headless error=auth {error}");
+        EXIT_ARGS
+    })?;
+    let stdin_token = auth.token.clone();
     if !ws_addr.ip().is_loopback() && !auth.require_auth {
-        eprintln!("eiviz-headless error=bind remote bind requires authentication");
+        eprintln!(
+            "eiviz-headless error=bind remote bind requires a token (eivizctl prefs set token)"
+        );
         return Err(EXIT_BIND);
     }
 
@@ -299,12 +309,40 @@ fn run_daemon_runtime(
             media: Some(media),
         };
         let control: Arc<dyn eiviz_control::ControlFacade> = Arc::new(eiviz_mixer::MixerFacade);
-        let (bound, task) = listen(config, control).await.map_err(|error| {
+        let mut handle = listen(config, control).await.map_err(|error| {
             eprintln!("eiviz-headless error=bind {error}");
             EXIT_BIND
         })?;
-        eprintln!("eiviz-headless ready ws={}", bound.ws_addr);
-        shutdown_signal().await;
+        eprintln!("eiviz-headless ready ws={}", handle.bind.ws_addr);
+        let loopback = eiviz_headless::stdin_control::loopback_ws_url(handle.bind.ws_addr);
+        let stdin_session = match eiviz_api::ControlClient::websocket(&loopback, stdin_token)
+            .connect()
+            .await
+        {
+            Ok(session) => Some(session),
+            Err(error) => {
+                eprintln!("eiviz-headless error=stdin {error}");
+                None
+            }
+        };
+        let mut stdin_rx = eiviz_headless::stdin_control::spawn_lines();
+        let mut stdin_open = stdin_session.is_some();
+        loop {
+            tokio::select! {
+                _ = shutdown_signal() => break,
+                _ = handle.wait_shutdown_request() => break,
+                line = stdin_rx.recv(), if stdin_open => {
+                    match (line, stdin_session.as_ref()) {
+                        (Some(line), Some(session)) => {
+                            eiviz_headless::stdin_control::handle_line(session, &line).await;
+                        }
+                        _ => stdin_open = false,
+                    }
+                }
+            }
+        }
+        spawn_exit_watchdog();
+        eprintln!("eiviz-headless stopping");
         {
             if let Ok(mut svc) = eiviz_mixer::control_service().lock() {
                 let _ = svc.execute(
@@ -316,9 +354,49 @@ fn run_daemon_runtime(
                 );
             }
         }
-        task.abort();
+        if let Err(error) = handle.shutdown().await {
+            eprintln!("eiviz-headless error=api {error}");
+        }
+        eprintln!("eiviz-headless exit complete");
         Ok(())
     })
+}
+
+#[cfg(feature = "runtime")]
+fn auth_from_prefs(prefs: &eiviz_headless::HeadlessPrefs) -> Result<AuthConfig, String> {
+    let token = prefs
+        .token
+        .clone()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    let require_auth = !token.is_empty();
+    let max_role = match prefs.max_role.as_deref() {
+        Some(name) => eiviz_api::Role::try_from_name(name)?,
+        None => {
+            if require_auth {
+                eiviz_api::Role::Admin
+            } else {
+                eiviz_api::Role::Read
+            }
+        }
+    };
+    Ok(AuthConfig {
+        token,
+        require_auth,
+        max_role,
+    })
+}
+
+#[cfg(feature = "runtime")]
+fn spawn_exit_watchdog() {
+    std::thread::Builder::new()
+        .name("eiviz-exit-watchdog".into())
+        .spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            eprintln!("eiviz-headless error=shutdown watchdog");
+            std::process::exit(EXIT_OTHER);
+        })
+        .ok();
 }
 
 #[cfg(feature = "runtime")]

@@ -1518,10 +1518,12 @@ final class MixerController: ObservableObject {
     }
 
     func snapshotScene(_ scene: SceneEntry) {
+        if isRemote { return }
         saveSnapshot(sourceId: scene.gpuId, kind: 0, name: scene.name)
     }
 
     func snapshotInput(_ input: InputEntry) {
+        if isRemote { return }
         saveSnapshot(sourceId: input.id, kind: EIVIZ_OUTPUT_SOURCE, name: input.name)
     }
 

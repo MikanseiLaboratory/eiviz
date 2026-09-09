@@ -111,7 +111,7 @@ pub fn log_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn join_timeout(handle: JoinHandle<()>, timeout: Duration, name: &str) {
+pub fn join_timeout(handle: JoinHandle<()>, timeout: Duration, name: &str) -> bool {
     let (tx, rx) = mpsc::channel();
     let join_name = format!("eiviz-join-{name}");
     if thread::Builder::new()
@@ -123,13 +123,16 @@ pub fn join_timeout(handle: JoinHandle<()>, timeout: Duration, name: &str) {
         .is_err()
     {
         warn(&format!("{name} join helper failed to spawn"));
-        return;
+        return false;
     }
     if rx.recv_timeout(timeout).is_err() {
         warn(&format!(
             "{name} join timed out after {}ms",
             timeout.as_millis()
         ));
+        false
+    } else {
+        true
     }
 }
 

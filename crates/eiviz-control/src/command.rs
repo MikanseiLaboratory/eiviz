@@ -252,6 +252,37 @@ pub enum SessionMutation {
     RelinkMedia {
         directories: Vec<String>,
     },
+    CreateInput {
+        input: Box<InputDto>,
+    },
+    CreateScene {
+        scene: Box<SceneDto>,
+    },
+    CreateUnit {
+        unit: Box<UnitDto>,
+    },
+    CreateMultiview {
+        layout: Box<crate::session::MultiviewDto>,
+    },
+    AddCatalogTag {
+        catalog: String,
+        tag: String,
+    },
+    RenameCatalogTag {
+        catalog: String,
+        from: String,
+        to: String,
+    },
+    DeleteCatalogTag {
+        catalog: String,
+        tag: String,
+    },
+    UpsertScenePreset {
+        preset: Box<crate::session::SceneLayoutPreset>,
+    },
+    DeleteScenePreset {
+        name: String,
+    },
 }
 
 impl SessionMutation {
@@ -270,6 +301,15 @@ impl SessionMutation {
             Self::DeleteMultiview { .. } => "DeleteMultiview",
             Self::SetSettings { .. } => "SetSettings",
             Self::RelinkMedia { .. } => "RelinkMedia",
+            Self::CreateInput { .. } => "CreateInput",
+            Self::CreateScene { .. } => "CreateScene",
+            Self::CreateUnit { .. } => "CreateUnit",
+            Self::CreateMultiview { .. } => "CreateMultiview",
+            Self::AddCatalogTag { .. } => "AddCatalogTag",
+            Self::RenameCatalogTag { .. } => "RenameCatalogTag",
+            Self::DeleteCatalogTag { .. } => "DeleteCatalogTag",
+            Self::UpsertScenePreset { .. } => "UpsertScenePreset",
+            Self::DeleteScenePreset { .. } => "DeleteScenePreset",
         }
     }
 }

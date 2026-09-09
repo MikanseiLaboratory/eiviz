@@ -162,6 +162,11 @@ public partial class MainWindow : Window
         MultiviewSourceBox.Visibility = Visibility.Visible;
         PreviewInputButton.Visibility = Visibility.Collapsed;
         SnapshotButton.Visibility = Visibility.Collapsed;
+        SnapshotInputButton.Visibility = Visibility.Collapsed;
+        InputActionsGrid.ColumnDefinitions[3].Width = new GridLength(0);
+        InputActionsGrid.ColumnDefinitions[4].Width = new GridLength(0);
+        InputActionsGrid.ColumnDefinitions[5].Width = new GridLength(0);
+        InputActionsGrid.ColumnDefinitions[6].Width = new GridLength(0);
         RemoteIdleText.Text = Loc.T("msg.remoteIdle");
         FillVideoLayoutBox();
         ApplyVideoLayout();

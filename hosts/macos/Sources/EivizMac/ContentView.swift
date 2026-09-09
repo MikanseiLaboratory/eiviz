@@ -125,8 +125,9 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
-                .disabled(mixer.isRemote)
+            if !mixer.isRemote {
+                Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
+            }
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
@@ -445,12 +446,12 @@ struct ContentView: View {
                         }
                         if !mixer.isRemote {
                             Button("Preview") { mixer.previewSelectedInput() }
-                        }
-                        Button(L10n.t("chrome.screenshot")) {
-                            guard let id = mixer.selectedInputId,
-                                  let input = mixer.session.inputs.first(where: { $0.id == id })
-                            else { return }
-                            mixer.snapshotInput(input)
+                            Button(L10n.t("chrome.screenshot")) {
+                                guard let id = mixer.selectedInputId,
+                                      let input = mixer.session.inputs.first(where: { $0.id == id })
+                                else { return }
+                                mixer.snapshotInput(input)
+                            }
                         }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
@@ -519,7 +520,7 @@ struct ContentView: View {
             onEdit: { mixer.openSceneEditor(scene) },
             onDelete: { mixer.deleteScene(scene) },
             onCollapse: { if !mixer.isRemote { mixer.toggleSceneCollapsed(scene.id) } },
-            onSnapshot: { mixer.snapshotScene(scene) }
+            onSnapshot: mixer.isRemote ? nil : { mixer.snapshotScene(scene) }
         ))
     }
 

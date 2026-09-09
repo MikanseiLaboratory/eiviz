@@ -172,6 +172,36 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             crate::session::relink_missing_media(document, &directories);
             Ok(())
         }
+        SessionMutation::CreateInput { input } => {
+            crate::session::edit::allocate_input(document, *input).map(|_| ())
+        }
+        SessionMutation::CreateScene { scene } => {
+            crate::session::edit::allocate_scene(document, *scene).map(|_| ())
+        }
+        SessionMutation::CreateUnit { unit } => {
+            crate::session::edit::allocate_unit(document, *unit).map(|_| ())
+        }
+        SessionMutation::CreateMultiview { layout } => {
+            crate::session::edit::allocate_multiview(document, *layout).map(|_| ())
+        }
+        SessionMutation::AddCatalogTag { catalog, tag } => {
+            let catalog = crate::session::edit::TagCatalog::parse(&catalog)?;
+            crate::session::edit::add_catalog_tag(document, catalog, tag)
+        }
+        SessionMutation::RenameCatalogTag { catalog, from, to } => {
+            let catalog = crate::session::edit::TagCatalog::parse(&catalog)?;
+            crate::session::edit::rename_catalog_tag(document, catalog, &from, &to)
+        }
+        SessionMutation::DeleteCatalogTag { catalog, tag } => {
+            let catalog = crate::session::edit::TagCatalog::parse(&catalog)?;
+            crate::session::edit::delete_catalog_tag(document, catalog, &tag)
+        }
+        SessionMutation::UpsertScenePreset { preset } => {
+            crate::session::edit::upsert_scene_preset(document, *preset)
+        }
+        SessionMutation::DeleteScenePreset { name } => {
+            crate::session::edit::delete_scene_preset(document, &name)
+        }
     }
 }
 

@@ -141,27 +141,23 @@ fn ws_worker(
         }
     };
     let started = runtime.block_on(listen(config, control));
-    let (bind, task) = match started {
-        Ok(pair) => pair,
+    let handle = match started {
+        Ok(handle) => handle,
         Err(error) => {
             let _ = ready_tx.send(Err(error.to_string()));
             runtime.shutdown_background();
             return;
         }
     };
-    if ready_tx.send(Ok(bind.ws_addr)).is_err() {
-        task.abort();
+    if ready_tx.send(Ok(handle.bind.ws_addr)).is_err() {
+        runtime.block_on(handle.shutdown()).ok();
         runtime.shutdown_background();
         return;
     }
     runtime.block_on(async move {
-        tokio::select! {
-            result = task => {
-                if let Err(error) = result {
-                    crate::diag::http_error(&format!("ws accept: {error}"));
-                }
-            }
-            _ = stop_rx.changed() => {}
+        let _ = stop_rx.changed().await;
+        if let Err(error) = handle.shutdown().await {
+            crate::diag::http_error(&format!("ws accept: {error}"));
         }
     });
     runtime.shutdown_background();

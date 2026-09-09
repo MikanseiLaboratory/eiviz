@@ -61,6 +61,49 @@ jobs:
       - name: Validate sample session
         run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eivz
 
+      - name: Run headless Bars session and confirm process exit
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:TEMP "eiviz-headless-ci.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath ".\target\release\eiviz-headless.exe" -ArgumentList @(
+            "run",
+            "--session", "headless\tests\fixtures\bars.eivz",
+            "--bind", "127.0.0.1:0",
+            "--renderer", "vulkan"
+          ) -RedirectStandardOutput $log -RedirectStandardError $log -PassThru -NoNewWindow
+          $ready = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            if (Test-Path $log) {
+              $text = Get-Content $log -Raw
+              if ($text -match "eiviz-headless ready ws=([^\s]+)") {
+                $ready = $true
+                break
+              }
+            }
+            if ($proc.HasExited) {
+              Get-Content $log -ErrorAction SilentlyContinue
+              throw "headless exited before ready (status=$($proc.ExitCode))"
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            Get-Content $log -ErrorAction SilentlyContinue
+            throw "headless did not become ready"
+          }
+          $ws = ([regex]::Match((Get-Content $log -Raw), "eiviz-headless ready ws=([^\s]+)")).Groups[1].Value
+          & .\target\release\eivizctl.exe --url "ws://$ws" shutdown
+          if (-not $proc.WaitForExit(15000)) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Get-Content $log
+            throw "headless still running after shutdown"
+          }
+          Get-Content $log
+          if ($proc.ExitCode -ne 0) {
+            throw "headless exited with $($proc.ExitCode)"
+          }
+
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
 
@@ -198,9 +241,16 @@ jobs:
           pid=$!
           for _ in $(seq 1 40); do
             if grep -q "eiviz-headless ready ws=" /tmp/eiviz-headless.log; then
-              kill -TERM "$pid" || true
-              wait "$pid" || true
+              kill -TERM "$pid"
+              set +e
+              wait "$pid"
+              status=$?
+              set -e
               cat /tmp/eiviz-headless.log
+              if [ "$status" -ne 0 ]; then
+                echo "headless exited with $status after SIGTERM"
+                exit "$status"
+              fi
               exit 0
             fi
             if ! kill -0 "$pid" 2>/dev/null; then

@@ -1046,19 +1046,25 @@ pub(crate) fn mixer_destroy_inner() {
         let videos = ();
         (audio, receivers, videos)
     };
+    crate::diag::info("mixer_destroy audio");
     audio.shutdown();
+    crate::diag::info("mixer_destroy drop receivers");
     drop(receivers);
     drop(videos);
     let _ = mixer.cmds.send(GpuCmd::Shutdown);
     if let Some(join) = mixer.render.take() {
-        crate::diag::join_timeout(join, Duration::from_secs(2), "render");
+        if !crate::diag::join_timeout(join, Duration::from_secs(2), "render") {
+            crate::diag::warn("render still running after join timeout");
+        }
     }
     for worker in std::mem::take(&mut mixer.send_workers).into_values() {
         shutdown_output_worker(worker);
     }
-    crate::diag::info("mixer_destroy end");
+    crate::diag::info("mixer_destroy drop");
+    drop(mixer);
     crate::diag::reset_generation();
     reset_frame_caches();
+    crate::diag::info("mixer_destroy end");
 }
 
 #[unsafe(no_mangle)]
@@ -3867,11 +3873,13 @@ fn acquired() -> &'static Mutex<HashMap<u64, Acquired>> {
 }
 
 pub(crate) fn reset_frame_caches() {
-    if let Ok(mut slot) = last_frames().lock() {
-        slot.clear();
+    match last_frames().try_lock() {
+        Ok(mut slot) => slot.clear(),
+        Err(_) => crate::diag::warn("last_frames lock busy; skip reset"),
     }
-    if let Ok(mut slot) = acquired().lock() {
-        slot.clear();
+    match acquired().try_lock() {
+        Ok(mut slot) => slot.clear(),
+        Err(_) => crate::diag::warn("acquired lock busy; skip reset"),
     }
 }
 
