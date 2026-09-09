@@ -7,6 +7,6 @@ enum HostVersion {
         {
             return version
         }
-        return "0.2.1-beta.1"
+        return "0.3.0-alpha.1"
     }
 }
