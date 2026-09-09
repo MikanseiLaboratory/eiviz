@@ -43,23 +43,60 @@ public partial class MainWindow
 
     private void AddInputMeter(InputEntry input)
     {
-        var strip = new MeterStrip(MeterKind.Input, input.Id, input.ListLabel, input.Gain, input.Mute);
+        var strip = new MeterStrip(
+            MeterKind.Input, input.Id, input.ListLabel, input.Gain, input.Mute,
+            showFader: false, showOpen: true);
         strip.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
-        strip.BusMaskChanged += (_, mask) =>
-        {
-            input.BusMask = mask;
-            ((App)Application.Current).Backend.SetInputGain(
-                input.Id, mask, MixerNative.MixerGain(input.Gain), input.Mute);
-        };
+        strip.BusMaskChanged += (_, mask) => ApplyInputAudio(input, mask, input.Gain, input.Mute);
         strip.FaderChanged += (_, gain, mute) =>
-        {
-            input.Gain = gain;
-            input.Mute = mute;
-            ((App)Application.Current).Backend.SetInputGain(
-                input.Id, input.BusMask == 0 ? 1u : input.BusMask, gain, mute);
-        };
+            ApplyInputAudio(input, input.BusMask == 0 ? 1u : input.BusMask, gain, mute);
+        strip.OpenRequested += _ => OpenAudioInput(input);
         _meters[input.Id] = strip;
         MeterPanel.Children.Add(strip);
+        if (_audioInputs.TryGetValue(input.Id, out var window))
+        {
+            window.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
+            window.Sync(input.Gain, input.Mute, input.BusMask == 0 ? 1u : input.BusMask);
+        }
+    }
+
+    private void OpenAudioInput(InputEntry input)
+    {
+        if (_audioInputs.TryGetValue(input.Id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var window = new AudioInputWindow(input, _session.Buses) { Owner = this };
+        window.Changed += ApplyInputAudio;
+        window.Closed += (_, _) => _audioInputs.Remove(input.Id);
+        _audioInputs[input.Id] = window;
+        window.Show();
+    }
+
+    private void CloseAudioInput(ulong inputId)
+    {
+        if (!_audioInputs.TryGetValue(inputId, out var window))
+            return;
+        _audioInputs.Remove(inputId);
+        window.Close();
+    }
+
+    private void ApplyInputAudio(InputEntry input, uint mask, float gain, bool mute)
+    {
+        input.BusMask = input.Kind == InputKind.Mix ? 0u : (mask == 0 ? 1u : mask);
+        input.Gain = gain;
+        input.Mute = mute;
+        ((App)Application.Current).Backend.SetInputGain(
+            input.Id, input.BusMask, MixerNative.MixerGain(input.Gain), input.Mute);
+        if (_meters.TryGetValue(input.Id, out var strip))
+        {
+            strip.SyncFrom(input.Gain, input.Mute);
+            if (strip.BusMask != input.BusMask)
+                strip.SetBuses(_session.Buses, input.BusMask);
+        }
+        if (_audioInputs.TryGetValue(input.Id, out var window))
+            window.Sync(input.Gain, input.Mute, input.BusMask);
     }
 
     private void TickMeters()
@@ -94,9 +131,25 @@ public partial class MainWindow
                 continue;
             }
             if (peaks.TryGetValue(key, out var pair))
-                strip.SetLevels(pair.L, pair.R);
+            {
+                if (strip.Kind == MeterKind.Input)
+                {
+                    var post = MeterStrip.PostPeak(pair.L, pair.R, strip.Gain, strip.Mute);
+                    strip.SetLevels(post.L, post.R);
+                    if (_audioInputs.TryGetValue(strip.TargetId, out var window))
+                        window.SetPeaks(pair.L, pair.R);
+                }
+                else
+                {
+                    strip.SetLevels(pair.L, pair.R);
+                }
+            }
             else
+            {
                 strip.Decay();
+                if (strip.Kind == MeterKind.Input && _audioInputs.TryGetValue(strip.TargetId, out var window))
+                    window.SetPeaks(0, 0);
+            }
         }
         MixerStats stats = default;
         unsafe

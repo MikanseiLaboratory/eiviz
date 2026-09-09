@@ -5,6 +5,10 @@ description: Audio output and Audio Inputs
 
 The internal mix is 48 kHz stereo. Hardware assignment lives under Audio Auxiliary in [Settings](/eiviz/en/introduction/settings/).
 
+## Monitor
+
+The Audio bar shows Post for each Input after fader and mute. Double-click a strip or use the gear to open that Input's audio window. The window shows Pre and Post; the fader lives there.
+
 ## Audio Input
 
 Microphone and output-device loopback are regular Inputs with kind `Audio`. There is no separate Audio Input collection. Audio Inputs stay on their bus mask and do not participate in Scene Audio Follow. They are hidden from Scene layers and other video pickers.

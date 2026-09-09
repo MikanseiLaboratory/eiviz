@@ -5,6 +5,10 @@ description: 音声出力とAudio Input
 
 内部ミックスは48 kHzステレオです。出力バスの割当は[設定](/eiviz/ja/introduction/settings/)の音声AUXです。
 
+## モニター
+
+下部の音声バーでは、各InputのメーターはPost（フェーダーとミュートの後）です。ストリップのダブルクリックか歯車で、そのInputの音声ウィンドウを開きます。ウィンドウにはPreとPostがあり、フェーダーはそこにあります。
+
 ## Audio Input
 
 マイクや出力デバイスのループバックは、既存のInput一覧に`Audio`として追加します。別コレクションは作りません。Audio Inputは常時バスへ送られ、SceneのAudio Follow対象にはなりません。Sceneレイヤーや映像ピッカーにも出しません。

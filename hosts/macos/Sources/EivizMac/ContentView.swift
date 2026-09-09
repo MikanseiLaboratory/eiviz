@@ -543,6 +543,9 @@ struct ContentView: View {
                     ForEach(mixer.session.buses) { bus in
                         meter(title: bus.name, id: bus.role == .master ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
                     }
+                    ForEach(mixer.session.inputs) { input in
+                        inputMeter(input)
+                    }
                     Spacer(minLength: 0)
                 }
                 HStack(alignment: .bottom, spacing: 12) {
@@ -599,6 +602,34 @@ struct ContentView: View {
                 Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
             }
             .frame(height: 40, alignment: .bottom)
+        }
+    }
+
+    private func inputMeter(_ input: InputEntry) -> some View {
+        let pre = mixer.peaks[input.id] ?? (0, 0)
+        let peak = AudioMeter.post(left: pre.0, right: pre.1, gain: input.gain, mute: input.mute)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 2) {
+                Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                Button {
+                    mixer.openAudioInput(input)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 9))
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("audio.settings"))
+            }
+            HStack(spacing: 2) {
+                Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.0 * 36))
+                Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
+            }
+            .frame(height: 40, alignment: .bottom)
+        }
+        .onTapGesture(count: 2) {
+            mixer.openAudioInput(input)
         }
     }
 

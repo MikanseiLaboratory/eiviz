@@ -355,6 +355,7 @@ public partial class MainWindow
         if (TryRemoteMutate(MutationJson.DeleteInput(input.Id), Loc.T("msg.selectInputDelete")))
             return;
         CloseInputPreview(input.Id);
+        CloseAudioInput(input.Id);
         MixerApply.DropSource(input.Id);
         MixerNative.FlushAudio(input.Id);
         foreach (var scene in _session.Scenes)
@@ -946,6 +947,8 @@ public partial class MainWindow
             window.Close();
         foreach (var preview in _inputPreviews.Values.ToArray())
             preview.Close();
+        foreach (var audio in _audioInputs.Values.ToArray())
+            audio.Close();
         PreviewHost.AutoAttach = false;
         ProgramHost.AutoAttach = false;
         MainMultiviewHost.AutoAttach = false;

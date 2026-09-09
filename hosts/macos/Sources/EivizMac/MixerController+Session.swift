@@ -482,6 +482,7 @@ extension MixerController {
 
     func replaceSession(_ loaded: MixerSessionData) {
         closeAllInputPreviews()
+        closeAllAudioInputs()
         closeAllSwitchers()
         closeAllMultiviews()
         FlipBudget.reset()

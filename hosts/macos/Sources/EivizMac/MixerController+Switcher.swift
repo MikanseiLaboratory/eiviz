@@ -273,6 +273,7 @@ extension MixerController {
             return
         }
         closeInputPreview(id)
+        closeAudioInput(id)
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)

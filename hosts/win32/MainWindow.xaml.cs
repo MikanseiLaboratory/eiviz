@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private LogWindow? _logWindow;
     private readonly List<MultiviewWindow> _multiviews = [];
     private readonly Dictionary<ulong, InputPreviewWindow> _inputPreviews = [];
+    private readonly Dictionary<ulong, AudioInputWindow> _audioInputs = [];
     private readonly Dictionary<ulong, SwitcherWindow> _switchers = [];
     private readonly HashSet<int> _transitionExpanded = [];
     private readonly Dictionary<int, TransitionGroup> _kindMenuGroup = [];
