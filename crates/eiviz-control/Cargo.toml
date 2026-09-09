@@ -8,7 +8,13 @@ license.workspace = true
 description = "Transport-independent session, command, query, and event contracts for eiviz"
 
 [dependencies]
+prost.workspace = true
+prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"

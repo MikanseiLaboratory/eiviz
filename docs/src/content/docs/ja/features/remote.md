@@ -12,7 +12,7 @@ Windowsは`Eiviz.Host.exe`（Mixer）と`Eiviz.Remote.exe`（操作クライア�
 3. `Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）を起動する
 4. 左上のConnectでIP、ポート、tokenを入れてOKする。接続すると操作画面が開きます
 
-接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションJSONには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。接続先が`eiviz-headless`のときは、待ち受けとtokenは[headless](/eiviz/ja/features/headless/)です。
+接続は信頼できるLANまたはVPN上の認証付き`ws://`です。tokenはWindows Credential Manager/macOS Keychainに保存します。セッションファイルには入れません。ホスト側の待ち受け項目は[設定](/eiviz/ja/introduction/settings/)の環境設定をご確認ください。接続先が`eiviz-headless`のときは、待ち受けとtokenは[headless](/eiviz/ja/features/headless/)です。
 
 Connectの▾から最近使った接続先を選べます。Disconnectで切断します。
 
@@ -31,6 +31,12 @@ Still/Videoの追加は、クライアントでファイルを選び、接続先
 設定ウィンドウの表示、パフォーマンス、出力、音声、Web APIは接続先のセッションへ送ります。Multiviewの追加・タイル編集・削除も設定画面から送ります。言語、テーマ、OMT受信は`Eiviz.Remote.exe`自身の環境設定です。
 
 セッションの変更は`MutateSession`と`expected_revision`です。revisionが一致しない変更は拒否され、最新を読み直してやり直します。
+
+## 保存
+
+Saveボタンはホストの現在セッションファイルへ書き込みます。headlessの`run`は常にそのファイルを持ちます（`--session`、またはOSの`eiviz/sessions`配下の日付付き既定ファイル）。GUIの新規は、最初の保存まで現在ファイルが無く、その要求は`UNAVAILABLE`です。成功時は保存先パスと、ファイル内に残っている履歴件数を表示します。`.eivz`は直前のドキュメントを最大20件残します。書き出し（`.eivzx`）は保存メニューから行い、Still/Videoを同梱し履歴は空です。
+
+`eivizctl save`も同じコマンドです。
 
 ## メディア保存先
 

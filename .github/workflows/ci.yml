@@ -59,7 +59,7 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eiviz.json
+        run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eivz
 
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
@@ -93,7 +93,7 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
+        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
 
       - name: Build Mac host
         run: |
@@ -132,7 +132,9 @@ jobs:
         run: cargo build -p eiviz-headless --locked --bins --no-default-features
 
       - name: Validate sample session
-        run: ./target/debug/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
+        run: |
+          ./target/debug/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
+          ./target/debug/eiviz-headless canonicalize --session headless/tests/fixtures/bars.eivz > /tmp/bars.canonical.json
 
   linux-vulkan:
     name: Headless Vulkan (Ubuntu)
@@ -185,13 +187,13 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eiviz.json
+        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
 
       - name: Run headless Bars session on Vulkan
         run: |
           set -euo pipefail
           ./target/release/eiviz-headless run \
-            --session headless/tests/fixtures/bars.eiviz.json \
+            --session headless/tests/fixtures/bars.eivz \
             --bind 127.0.0.1:0 > /tmp/eiviz-headless.log 2>&1 &
           pid=$!
           for _ in $(seq 1 40); do

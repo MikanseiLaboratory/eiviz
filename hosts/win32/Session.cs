@@ -1,3 +1,5 @@
+using System.IO;
+using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
 namespace Eiviz.Host;
@@ -337,8 +339,18 @@ public sealed class InputEntry
     public ulong MixAudioBusId { get; set; }
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
+
+    internal bool IsMissingMedia() =>
+        Kind is InputKind.Still or InputKind.Video
+        && (string.IsNullOrWhiteSpace(PathOrAddress) || !File.Exists(PathOrAddress));
+
+    public override string ToString()
+    {
+        if (!HostRole.IsRemote && IsMissingMedia())
+            return $"{Name} ({Loc.T("input.invalid")})";
+        return Name;
+    }
     public bool IsBuiltin => Id is MixerNative.Color or MixerNative.Bars or MixerNative.Black or MixerNative.Blue;
-    public override string ToString() => Name;
 }
 
 internal static class InputKindNames
@@ -788,6 +800,8 @@ public sealed class MixingUnitEntry
     public ulong AudioBusId { get; set; } = 1;
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public bool AlwaysOnTop { get; set; } = true;
+    public ulong PreviewSceneId { get; set; }
+    public ulong ProgramSceneId { get; set; }
     public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
     public List<ulong> SwitcherSceneIds { get; } = [];
     public override string ToString() => $"{Name}  {Width}x{Height} {FormatFps()}";
@@ -1013,6 +1027,8 @@ public sealed class Session
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);
         session.AddScene("Scene 2", MixerNative.Color);
+        unit.PreviewSceneId = session.Scenes[0].Id;
+        unit.ProgramSceneId = session.Scenes[1].Id;
         session.Outputs.Add(new OutputEntry
         {
             Id = session.NextOutputId++,

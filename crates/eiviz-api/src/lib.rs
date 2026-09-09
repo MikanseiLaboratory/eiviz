@@ -15,6 +15,6 @@ pub use auth::{AuthConfig, Role};
 pub use client::{ControlClient, ControlSession};
 pub use media::{
     FileMediaStorage, MediaStorage, MediaStorageConfig, default_media_directory,
-    resolve_media_directory,
+    default_sessions_directory, resolve_media_directory,
 };
 pub use server::{ServerBind, ServerConfig, listen, spawn};

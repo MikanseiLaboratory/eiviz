@@ -42,10 +42,31 @@ enum Cmd {
         #[arg(long)]
         session: PathBuf,
     },
+    /// Write a portable `.eivzx` that embeds Still/Video files.
+    Export {
+        #[arg(long)]
+        session: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// List in-file session history (newest first).
+    History {
+        #[arg(long)]
+        session: PathBuf,
+    },
+    /// Write a history entry out as a standalone `.eivz`.
+    Restore {
+        #[arg(long)]
+        session: PathBuf,
+        #[arg(long)]
+        index: u32,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Apply a session, host the control API, and wait until shutdown.
     Run {
         #[arg(long)]
-        session: PathBuf,
+        session: Option<PathBuf>,
         #[arg(long)]
         bind: Option<String>,
         #[arg(
@@ -67,6 +88,22 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
+        Cmd::Export { session, output } => match export(&session, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Cmd::History { session } => match history(&session) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
+        Cmd::Restore {
+            session,
+            index,
+            output,
+        } => match restore(&session, index, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => ExitCode::from(code),
+        },
         Cmd::Run {
             session,
             bind,
@@ -79,19 +116,38 @@ fn main() -> ExitCode {
 }
 
 fn load_valid(path: &PathBuf) -> Result<eiviz_control::Document, u8> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        eprintln!("eiviz-headless error=read {error}");
-        EXIT_ARGS
-    })?;
-    let doc = session::parse(&bytes).map_err(|error| {
-        eprintln!("eiviz-headless error=session {error}");
-        EXIT_SESSION
+    let doc = session::read_document(path).map_err(|error| {
+        let missing = std::fs::metadata(path).is_err();
+        eprintln!(
+            "eiviz-headless error={} {error}",
+            if missing { "read" } else { "session" }
+        );
+        if missing { EXIT_ARGS } else { EXIT_SESSION }
     })?;
     validate_for_apply(&doc).map_err(|error| {
         eprintln!("eiviz-headless error=session {}", error.message);
         EXIT_SESSION
     })?;
     Ok(doc)
+}
+
+#[cfg(feature = "runtime")]
+fn resolve_run_session(session: Option<PathBuf>) -> Result<(PathBuf, eiviz_control::Document), u8> {
+    if let Some(path) = session {
+        return Ok((path.clone(), load_valid(&path)?));
+    }
+    let dir = eiviz_api::default_sessions_directory();
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    let path = dir.join(session::dated_session_filename_now());
+    let document = session::default_document();
+    session::write_document(&path, &document).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    Ok((path, document))
 }
 
 fn canonicalize(path: &PathBuf) -> Result<(), u8> {
@@ -104,8 +160,48 @@ fn canonicalize(path: &PathBuf) -> Result<(), u8> {
     Ok(())
 }
 
+fn export(input: &PathBuf, output: &PathBuf) -> Result<(), u8> {
+    let doc = load_valid(input)?;
+    session::export_document(output, &doc).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    Ok(())
+}
+
+fn history(path: &PathBuf) -> Result<(), u8> {
+    let entries = session::read_history(path).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    if entries.is_empty() {
+        println!("0");
+        return Ok(());
+    }
+    for entry in entries {
+        println!("{}\t{}\t{}", entry.index, entry.unix_ms, entry.revision);
+    }
+    Ok(())
+}
+
+fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
+    let doc = session::extract_history(input, index).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    let bytes = session::encode_file(&doc).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    std::fs::write(output, bytes).map_err(|error| {
+        eprintln!("eiviz-headless error=session {error}");
+        EXIT_SESSION
+    })?;
+    Ok(())
+}
+
 fn run_daemon(
-    session: PathBuf,
+    session: Option<PathBuf>,
     bind: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
@@ -123,7 +219,7 @@ fn run_daemon(
 
 #[cfg(feature = "runtime")]
 fn run_daemon_runtime(
-    session: PathBuf,
+    session: Option<PathBuf>,
     bind: Option<String>,
     media_directory: Option<PathBuf>,
 ) -> Result<(), u8> {
@@ -133,7 +229,7 @@ fn run_daemon_runtime(
         .unwrap_or_else(|| "127.0.0.1:9400".into());
     let media_directory =
         media_directory.or_else(|| prefs.media_directory.as_ref().map(PathBuf::from));
-    let document = load_valid(&session)?;
+    let (session, document) = resolve_run_session(session)?;
     let ws_addr: SocketAddr = bind.parse().map_err(|error| {
         eprintln!("eiviz-headless error=bind {error}");
         EXIT_BIND
@@ -183,6 +279,9 @@ fn run_daemon_runtime(
                 eprintln!("eiviz-headless error=gpu {error}");
                 code
             })?;
+            let path = session.canonicalize().unwrap_or(session);
+            svc.set_session_path(Some(path.clone()));
+            eprintln!("eiviz-headless session={}", path.display());
         }
         let media_path = media_directory.unwrap_or_else(|| eiviz_api::resolve_media_directory(""));
         let media =

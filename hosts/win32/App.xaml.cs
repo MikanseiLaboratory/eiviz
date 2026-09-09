@@ -36,6 +36,11 @@ public partial class App : Application
                 BootRemoteMixer();
             else
             {
+                if (!TryLoadStartupSession(e.Args))
+                {
+                    Shutdown();
+                    return;
+                }
                 Backend = new LocalEivizBackend();
                 BootMixer();
             }
@@ -44,6 +49,37 @@ public partial class App : Application
         {
             HostLog.WriteCrash(ex);
             throw;
+        }
+    }
+
+    private bool TryLoadStartupSession(string[] args)
+    {
+        var path = args.Select(item => item.Trim('"'))
+            .FirstOrDefault(item =>
+                item.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase)
+                || item.EndsWith(".eivzx", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(path))
+            return true;
+        try
+        {
+            if (SessionStore.FileHasAssets(path))
+            {
+                var prompt = new ImportExportDialog(path);
+                if (prompt.ShowDialog() != true)
+                    return true;
+                Session = SessionStore.Import(path, prompt.SessionPath, prompt.MediaDirectory);
+                AppPrefs.Current.RememberSession(prompt.SessionPath);
+                return true;
+            }
+            Session = SessionStore.Load(path);
+            AppPrefs.Current.RememberSession(path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+            MessageBox.Show(ex.Message, Loc.T("msg.loadSession"));
+            return false;
         }
     }
 
@@ -76,6 +112,7 @@ public partial class App : Application
     {
         var previous = MainWindow as MainWindow;
         previous?.CloseOwnedSurfaces();
+        FlipBudget.Reset();
         ReplaceSession(session);
         var next = new MainWindow();
         if (previous is not null)
@@ -118,6 +155,7 @@ public partial class App : Application
         SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
+        MixerApply.ApplySceneBuses(Session);
     }
 
     private void BootRemoteMixer()

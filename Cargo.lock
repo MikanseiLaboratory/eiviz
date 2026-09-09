@@ -473,6 +473,10 @@ dependencies = [
 name = "eiviz-control"
 version = "0.1.0"
 dependencies = [
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protoc-bin-vendored",
  "serde",
  "serde_json",
  "thiserror",

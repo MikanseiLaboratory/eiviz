@@ -81,6 +81,7 @@ pub enum Command {
         query: String,
     },
     Shutdown,
+    SaveSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +249,9 @@ pub enum SessionMutation {
         #[serde(default, alias = "next_bus_id")]
         next_bus_id: u64,
     },
+    RelinkMedia {
+        directories: Vec<String>,
+    },
 }
 
 impl SessionMutation {
@@ -265,6 +269,7 @@ impl SessionMutation {
             Self::UpsertMultiview { .. } => "UpsertMultiview",
             Self::DeleteMultiview { .. } => "DeleteMultiview",
             Self::SetSettings { .. } => "SetSettings",
+            Self::RelinkMedia { .. } => "RelinkMedia",
         }
     }
 }
@@ -548,6 +553,17 @@ mod tests {
             crate::session::VideoTriggerWhen::OnDeactivated
         );
         assert_eq!(input.mix_source, crate::session::MixSource::MuPreview);
+    }
+
+    #[test]
+    fn relink_media_json_uses_camel_case() {
+        let parsed: SessionMutation =
+            serde_json::from_str(r#"{"kind":"relinkMedia","directories":["C:\\media","/shows"]}"#)
+                .expect("relinkMedia JSON");
+        let SessionMutation::RelinkMedia { directories } = parsed else {
+            panic!("expected relinkMedia");
+        };
+        assert_eq!(directories, ["C:\\media", "/shows"]);
     }
 
     #[test]

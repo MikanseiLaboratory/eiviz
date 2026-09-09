@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using Eiviz.Host.Dialogs;
@@ -57,7 +58,11 @@ internal static class MixerApply
         Application.Current is App app ? app.Backend.Cut(unitId, swap) : CutLocal(unitId, swap);
 
     internal static bool CutLocal(ulong unitId, bool swap) => Try(() =>
-        MixerNative.ThrowIfFailed(MixerNative.Cut(unitId, swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT"));
+    {
+        MixerNative.ThrowIfFailed(MixerNative.Cut(unitId, swap ? 1u : 0u, MixerNative.IncomingPreview), "CUT");
+        if (Application.Current is App app)
+            CaptureSceneBuses(app.Session);
+    });
 
     public static bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset) =>
         Application.Current is App app ? app.Backend.Auto(unitId, unit, preset) : AutoLocal(unitId, unit, preset);
@@ -135,7 +140,59 @@ internal static class MixerApply
             current.PreviewSource = sceneGpuId;
             MixerNative.ThrowIfFailed(MixerNative.SetUnitState(unitId, &current), "Preview scene");
         }
+        if (Application.Current is App app)
+            CaptureSceneBuses(app.Session);
     });
+
+    public static void CaptureSceneBuses(Session session)
+    {
+        if (HostRole.IsRemote)
+            return;
+        if (Application.Current is not App app)
+            return;
+        foreach (var unit in session.Units)
+        {
+            app.Backend.BusSources(unit.Id, out var previewGpu, out var programGpu);
+            if (SceneId(session, previewGpu) is ulong preview)
+                unit.PreviewSceneId = preview;
+            if (SceneId(session, programGpu) is ulong program)
+                unit.ProgramSceneId = program;
+        }
+    }
+
+    public static void ApplySceneBuses(Session session)
+    {
+        if (HostRole.IsRemote)
+            return;
+        foreach (var unit in session.Units)
+        {
+            var preview = SceneGpu(session, unit.PreviewSceneId)
+                ?? session.Scenes.FirstOrDefault()?.GpuId
+                ?? 0;
+            var program = SceneGpu(session, unit.ProgramSceneId)
+                ?? session.Scenes.ElementAtOrDefault(1)?.GpuId
+                ?? preview;
+            if (preview == 0 && program == 0)
+                continue;
+            Try(() =>
+            {
+                unsafe
+                {
+                    UnitState current = default;
+                    MixerNative.ThrowIfFailed(MixerNative.GetUnitState(unit.Id, &current), "Get unit");
+                    current.PreviewSource = preview;
+                    current.ProgramSource = program;
+                    MixerNative.ThrowIfFailed(MixerNative.SetUnitState(unit.Id, &current), "Restore buses");
+                }
+            });
+        }
+    }
+
+    private static ulong? SceneId(Session session, ulong gpuId) =>
+        session.Scenes.FirstOrDefault(scene => scene.GpuId == gpuId)?.Id;
+
+    private static ulong? SceneGpu(Session session, ulong sceneId) =>
+        sceneId == 0 ? null : session.Scenes.FirstOrDefault(scene => scene.Id == sceneId)?.GpuId;
 
     public static bool SetMix(ulong unitId, float mix, TransitionPreset? preset = null) =>
         Application.Current is App app ? app.Backend.SetMix(unitId, mix, preset) : SetMixLocal(unitId, mix, preset);

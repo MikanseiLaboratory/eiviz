@@ -257,6 +257,7 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
         | Some(request::Payload::Discover(_)) => Role::Operate,
         Some(request::Payload::ReplaceSession(_))
         | Some(request::Payload::MutateSession(_))
+        | Some(request::Payload::SaveSession(_))
         | Some(request::Payload::BeginMediaUpload(_))
         | Some(request::Payload::UploadMediaChunk(_))
         | Some(request::Payload::CommitMediaUpload(_))
@@ -488,6 +489,9 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                 .snapshot()
                 .map(|snap| proto_snapshot(snap, request_id.clone()))
         }
+        Some(request::Payload::SaveSession(_)) => {
+            exec_cmd(state, instance, &request_id, Command::SaveSession)
+        }
         Some(request::Payload::Shutdown(_)) => {
             exec_cmd(state, instance, &request_id, Command::Shutdown)
         }
@@ -617,7 +621,9 @@ fn exec_cmd(
             command,
         )
         .and_then(|outcome| {
-            if !outcome.discover_kind.is_empty() {
+            if !outcome.saved_path.is_empty() {
+                Ok(saved_session_response(outcome, request_id.into()))
+            } else if !outcome.discover_kind.is_empty() {
                 Ok(discover_response(outcome, request_id.into()))
             } else {
                 state
@@ -626,6 +632,27 @@ fn exec_cmd(
                     .map(|snap| proto_snapshot(snap, request_id.into()))
             }
         })
+}
+
+fn saved_session_response(
+    outcome: eiviz_control::CommandOutcome,
+    request_id: String,
+) -> ProtoResponse {
+    ProtoResponse {
+        request_id,
+        status: Some(Status {
+            code: "OK".into(),
+            message: String::new(),
+        }),
+        revision: outcome.revision,
+        sequence: outcome.sequence,
+        payload: Some(response::Payload::SavedSession(
+            crate::proto::SavedSession {
+                path: outcome.saved_path,
+                history_count: outcome.history_count,
+            },
+        )),
+    }
 }
 
 fn discover_response(outcome: eiviz_control::CommandOutcome, request_id: String) -> ProtoResponse {
@@ -778,6 +805,17 @@ mod tests {
             .unwrap()
             .replace_session(doc, None, "boot")
             .unwrap();
+        Arc::new(svc)
+    }
+
+    fn ready_control_with_path(path: std::path::PathBuf) -> Arc<dyn ControlFacade> {
+        let svc = std::sync::Mutex::new(ControlService::new(NullMixer::default()));
+        let doc = eiviz_control::parse(BARS).unwrap();
+        {
+            let mut inner = svc.lock().unwrap();
+            inner.replace_session(doc, None, "boot").unwrap();
+            inner.set_session_path(Some(path));
+        }
         Arc::new(svc)
     }
 
@@ -951,6 +989,57 @@ mod tests {
                 .iter()
                 .any(|input| input.name == "Logo")
         );
+        task.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn save_session_requires_configure() {
+        let dir = std::env::temp_dir().join(format!("eiviz-save-role-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let control = ready_control_with_path(path);
+        let (bind, task) = listen(
+            config(AuthConfig {
+                token: "secret".into(),
+                require_auth: true,
+                max_role: Role::Operate,
+            }),
+            control,
+        )
+        .await
+        .unwrap();
+        let url = format!("ws://{}", bind.ws_addr);
+        let client = ControlClient::websocket(&url, "secret");
+        assert!(client.save_session().await.is_err());
+        task.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn save_session_writes_path_and_history_count() {
+        let dir = std::env::temp_dir().join(format!("eiviz-save-ok-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("show.eivz");
+        let control = ready_control_with_path(path.clone());
+        let (bind, task) = listen(
+            config(AuthConfig {
+                token: String::new(),
+                require_auth: false,
+                max_role: Role::Admin,
+            }),
+            control,
+        )
+        .await
+        .unwrap();
+        let url = format!("ws://{}", bind.ws_addr);
+        let (saved, count) = ControlClient::websocket(&url, "")
+            .save_session()
+            .await
+            .unwrap();
+        assert_eq!(std::path::Path::new(&saved), path.as_path());
+        assert_eq!(count, 0);
+        assert!(path.is_file());
         task.abort();
         let _ = std::fs::remove_dir_all(dir);
     }

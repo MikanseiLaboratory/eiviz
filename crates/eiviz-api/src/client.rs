@@ -155,6 +155,21 @@ impl ControlClient {
         status_ok(&response)
     }
 
+    pub async fn save_session(&self) -> ControlResult<(String, u32)> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::SaveSession(crate::proto::SaveSession {})),
+            })
+            .await?;
+        status_ok(&response)?;
+        match response.payload {
+            Some(response::Payload::SavedSession(saved)) => Ok((saved.path, saved.history_count)),
+            _ => Err(ControlError::unavailable("save session missing")),
+        }
+    }
+
     pub async fn shutdown(&self) -> ControlResult<()> {
         let response = self
             .roundtrip(Request {
@@ -395,6 +410,22 @@ impl ControlSession {
             .await?;
         apply_response(&self.view, &response);
         status_ok(&response)
+    }
+
+    pub async fn save_session(&self) -> ControlResult<(String, u32)> {
+        let response = self
+            .roundtrip(Request {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: 0,
+                payload: Some(request::Payload::SaveSession(crate::proto::SaveSession {})),
+            })
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)?;
+        match response.payload {
+            Some(response::Payload::SavedSession(saved)) => Ok((saved.path, saved.history_count)),
+            _ => Err(ControlError::unavailable("save session missing")),
+        }
     }
 
     pub async fn shutdown(&self) -> ControlResult<()> {

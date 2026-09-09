@@ -94,6 +94,8 @@ struct ContentView: View {
                 }
                 Button(L10n.t("chrome.disconnect")) { mixer.disconnectRemote() }
                     .disabled(!mixer.remoteConnected)
+                Button(L10n.t("chrome.save")) { mixer.saveRemoteSession() }
+                    .disabled(!mixer.remoteConnected)
                 Picker("", selection: Binding(
                     get: { prefs.remoteVideoLayout },
                     set: { mixer.setRemoteVideoLayout($0) }
@@ -106,7 +108,14 @@ struct ContentView: View {
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
+                Menu {
+                    Button(L10n.t("chrome.saveAs")) { mixer.saveSessionAs() }
+                    Button(L10n.t("chrome.export")) { mixer.exportSession() }
+                } label: {
+                    Text("▾")
+                }
                 Button(L10n.t("chrome.load")) { mixer.loadSession() }
+                Button(L10n.t("chrome.loadLast")) { mixer.loadLastSession() }
                 Menu {
                     ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
                         Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
@@ -409,11 +418,16 @@ struct ContentView: View {
                     Text("Inputs").fontWeight(.bold)
                     CatalogTabBar(input: true)
                     List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
-                        Text(input.name)
+                        Text(input.listLabel(localFiles: !mixer.isRemote))
                             .tag(input.id)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .onTapGesture { mixer.selectedInputId = input.id }
+                            .contextMenu {
+                                Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
+                                Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
+                                Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
+                            }
                     }
                     .scrollContentBackground(.hidden)
                     .background(EivizTheme.list)

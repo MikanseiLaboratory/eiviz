@@ -364,6 +364,35 @@ pub unsafe fn replace(handle: i32, json: *const u8, len: usize, expected_revisio
     .unwrap_or(ERR_NOT_CREATED)
 }
 
+pub unsafe fn save_session(handle: i32, out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let Some(session) = session(handle) else {
+        return -ERR_NOT_CREATED;
+    };
+    let Some(result) = run(handle, async move { session.save_session().await }) else {
+        return -ERR_NOT_CREATED;
+    };
+    match result {
+        Ok((path, history_count)) => {
+            let payload = serde_json::json!({
+                "path": path,
+                "historyCount": history_count,
+            });
+            let bytes = payload.to_string().into_bytes();
+            if bytes.len() > cap {
+                return -1;
+            }
+            if !bytes.is_empty() {
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+            }
+            bytes.len() as i32
+        }
+        Err(error) => -error.to_abi(),
+    }
+}
+
 pub fn video_play(handle: i32, input_id: u64, playing: u32) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
@@ -593,6 +622,11 @@ pub unsafe extern "C" fn mixer_remote_replace(
     expected_revision: u64,
 ) -> i32 {
     unsafe { replace(handle, json, len, expected_revision) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_remote_save_session(handle: i32, out: *mut u8, cap: usize) -> i32 {
+    unsafe { save_session(handle, out, cap) }
 }
 
 #[unsafe(no_mangle)]

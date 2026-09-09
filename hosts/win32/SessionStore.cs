@@ -1,3 +1,4 @@
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,10 +19,41 @@ internal static class SessionStore
 
     public static void Save(Session session, string path)
     {
+        MixerApply.CaptureSceneBuses(session);
         session.Settings.LastSessionPath = null;
         var dto = Document.From(session);
         MixerNative.SessionSaveText(path, JsonSerializer.Serialize(dto, Json));
     }
+
+    public static void Export(Session session, string path)
+    {
+        MixerApply.CaptureSceneBuses(session);
+        session.Settings.LastSessionPath = null;
+        var dto = Document.From(session);
+        MixerNative.SessionExportText(path, JsonSerializer.Serialize(dto, Json));
+    }
+
+    public static Session Import(string exportPath, string sessionDest, string mediaDir)
+    {
+        var json = MixerNative.SessionImportText(exportPath, sessionDest, mediaDir);
+        return FromJson(json);
+    }
+
+    public static bool FileHasAssets(string path) => MixerNative.SessionFileHasAssets(path);
+
+    public static string? CurrentPath()
+    {
+        var path = MixerNative.SessionCurrentPathText();
+        return string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
+    public static bool CanOverwrite(string? path) =>
+        !string.IsNullOrWhiteSpace(path)
+        && path.EndsWith(".eivz", StringComparison.OrdinalIgnoreCase)
+        && !path.EndsWith(".eivzx", StringComparison.OrdinalIgnoreCase);
+
+    public static IReadOnlyList<InputEntry> MissingMedia(Session session) =>
+        [.. session.Inputs.Where(input => input.IsMissingMedia())];
 
     public static Session FromJson(string json)
     {
@@ -41,11 +73,107 @@ internal static class SessionStore
 
     public static void ReplaceRuntime(Session session) => Publish(session);
 
-    public static Session Load(string path)
+    public static bool RelinkInput(InputEntry input, string path)
+    {
+        if (input.Kind is not (InputKind.Still or InputKind.Video))
+            return false;
+        var trimmed = path.Trim();
+        if (trimmed.Length == 0)
+            return false;
+        input.PathOrAddress = trimmed;
+        return true;
+    }
+
+    public static int RelinkMissingMedia(Session session, IReadOnlyList<string> directories)
+    {
+        var unique = UniqueFilenames(directories);
+        var count = 0;
+        foreach (var input in session.Inputs)
+        {
+            if (!input.IsMissingMedia())
+                continue;
+            var name = System.IO.Path.GetFileName(input.PathOrAddress);
+            if (string.IsNullOrEmpty(name))
+                continue;
+            if (!unique.TryGetValue(name, out var found))
+                continue;
+            input.PathOrAddress = found;
+            count++;
+        }
+        return count;
+    }
+
+    private static Dictionary<string, string> UniqueFilenames(IReadOnlyList<string> directories)
+    {
+        var found = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var directory in directories)
+        {
+            var trimmed = directory.Trim();
+            if (trimmed.Length == 0 || !System.IO.Directory.Exists(trimmed))
+                continue;
+            CollectFiles(trimmed, found, 0);
+        }
+        var unique = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, paths) in found)
+        {
+            var distinct = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (distinct.Count == 1)
+                unique[name] = distinct[0];
+        }
+        return unique;
+    }
+
+    private static void CollectFiles(string directory, Dictionary<string, List<string>> found, int depth)
+    {
+        if (depth > 16)
+            return;
+        IEnumerable<string> entries;
+        try
+        {
+            entries = System.IO.Directory.EnumerateFileSystemEntries(directory);
+        }
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        foreach (var path in entries)
+        {
+            try
+            {
+                if (System.IO.Directory.Exists(path))
+                {
+                    CollectFiles(path, found, depth + 1);
+                    continue;
+                }
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            var name = System.IO.Path.GetFileName(path);
+            if (string.IsNullOrEmpty(name))
+                continue;
+            if (!found.TryGetValue(name, out var list))
+            {
+                list = [];
+                found[name] = list;
+            }
+            list.Add(path);
+        }
+    }
+
+    public static Session Load(string path, uint? historyIndex = null)
     {
         try
         {
-            var dto = JsonSerializer.Deserialize<Document>(MixerNative.SessionLoadText(path), Json)
+            var json = historyIndex is uint index
+                ? MixerNative.SessionLoadRevText(path, index)
+                : MixerNative.SessionLoadText(path);
+            var dto = JsonSerializer.Deserialize<Document>(json, Json)
                 ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
             return dto.ToSession();
         }
@@ -344,6 +472,8 @@ internal static class SessionStore
         public ulong AudioBusId { get; set; } = 1;
         public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
         public bool? AlwaysOnTop { get; set; }
+        public ulong PreviewSceneId { get; set; }
+        public ulong ProgramSceneId { get; set; }
         public SwitcherSceneFilter SwitcherSceneFilter { get; set; } = SwitcherSceneFilter.All;
         public List<ulong> SwitcherSceneIds { get; set; } = [];
 
@@ -360,6 +490,8 @@ internal static class SessionStore
             AudioBusId = unit.AudioBusId == 0 ? 1 : unit.AudioBusId,
             AudioLink = unit.AudioLink,
             AlwaysOnTop = unit.AlwaysOnTop,
+            PreviewSceneId = unit.PreviewSceneId,
+            ProgramSceneId = unit.ProgramSceneId,
             SwitcherSceneFilter = unit.SwitcherSceneFilter,
             SwitcherSceneIds = [.. unit.SwitcherSceneIds]
         };
@@ -377,6 +509,8 @@ internal static class SessionStore
                 AudioBusId = AudioBusId == 0 ? 1 : AudioBusId,
                 AudioLink = AudioLink,
                 AlwaysOnTop = AlwaysOnTop ?? true,
+                PreviewSceneId = PreviewSceneId,
+                ProgramSceneId = ProgramSceneId,
                 SwitcherSceneFilter = SwitcherSceneFilter
             };
             foreach (var preset in Transitions)

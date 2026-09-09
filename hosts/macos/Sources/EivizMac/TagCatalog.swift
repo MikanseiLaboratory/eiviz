@@ -144,10 +144,65 @@ enum TextPrompt {
     }
 }
 
+@MainActor
 enum AppKitDialog {
     static func elevate(_ alert: NSAlert) {
         NSApp.activate(ignoringOtherApps: true)
+        alert.window.appearance = NSApp.appearance
         alert.window.level = .modalPanel
+        alert.window.backgroundColor = EivizTheme.nsBackground
+    }
+
+    static func apply(_ panel: NSSavePanel) {
+        panel.appearance = NSApp.appearance
+    }
+
+    static func toast(_ message: String) {
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 48),
+            styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isFloatingPanel = true
+        window.level = .statusBar
+        window.appearance = NSApp.appearance
+        window.backgroundColor = EivizTheme.nsBackground
+        window.isReleasedWhenClosed = false
+        let label = NSTextField(labelWithString: message)
+        label.alignment = .center
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 3
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let wrap = NSView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+        wrap.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -20),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -12)
+        ])
+        window.contentView = wrap
+        if let parent = NSApp.keyWindow ?? NSApp.mainWindow {
+            let parentFrame = parent.frame
+            let size = wrap.fittingSize
+            let width = max(220, min(420, size.width + 40))
+            let height = max(48, size.height)
+            window.setContentSize(NSSize(width: width, height: height))
+            window.setFrameOrigin(NSPoint(
+                x: parentFrame.midX - width / 2,
+                y: parentFrame.midY - height / 2
+            ))
+        } else {
+            window.center()
+        }
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            window.close()
+        }
     }
 }
 

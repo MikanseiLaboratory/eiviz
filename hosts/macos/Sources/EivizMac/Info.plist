@@ -26,5 +26,58 @@
 		<string>_ndi._udp</string>
 		<string>_omt._tcp</string>
 	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>eiviz Session</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>jp.mikanseilaboratory.eiviz.session</string>
+				<string>jp.mikanseilaboratory.eiviz.session-export</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>jp.mikanseilaboratory.eiviz.session</string>
+			<key>UTTypeDescription</key>
+			<string>eiviz Session</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>eivz</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>jp.mikanseilaboratory.eiviz.session-export</string>
+			<key>UTTypeDescription</key>
+			<string>eiviz Session Export</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>eivzx</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

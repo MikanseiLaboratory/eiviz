@@ -1,15 +1,26 @@
-//! Canonical session JSON shared by every host.
-//! Shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
+//! Canonical session document shared by every host.
+//! JSON shape matches `host/SessionStore.cs` (camelCase, string enums, version 2).
+//! On-disk files use the `eivz` Protobuf envelope in `file`.
 
+pub mod default;
+pub mod file;
 pub mod migration;
 pub mod mutate;
 pub mod reconcile;
+pub mod relink;
 pub mod store;
 mod string_enum;
 pub mod validate;
 
 use string_enum::session_string_enum;
 
+pub use default::{dated_session_filename, dated_session_filename_now, default_document};
+pub use file::{
+    CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
+    export_document, extract_history, has_embedded_assets, import_exported_session, read_document,
+    read_history, write_document, write_document_rev,
+};
+pub use relink::{media_file_missing, missing_media_message, relink_missing_media};
 pub use validate::{ValidationError, validate, validate_for_apply};
 
 use serde::{Deserialize, Serialize};
@@ -819,6 +830,43 @@ pub struct OverlaySlot {
     pub locked: bool,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default = "true_bool")]
+    pub size_linked: bool,
+    #[serde(default)]
+    pub crop_x: f32,
+    #[serde(default)]
+    pub crop_y: f32,
+    #[serde(default = "one_f32")]
+    pub crop_width: f32,
+    #[serde(default = "one_f32")]
+    pub crop_height: f32,
+}
+
+impl Default for OverlaySlot {
+    fn default() -> Self {
+        Self {
+            scene_gpu_id: 0,
+            x: overlay_x(),
+            y: overlay_y(),
+            width: overlay_w(),
+            height: overlay_h(),
+            opacity: 1.0,
+            z: 0,
+            enabled: true,
+            transition_kind: fade(),
+            duration_value: fifteen(),
+            duration_unit: 0,
+            audio_follow: true,
+            source_kind: 0,
+            locked: false,
+            hidden: false,
+            size_linked: true,
+            crop_x: 0.0,
+            crop_y: 0.0,
+            crop_width: 1.0,
+            crop_height: 1.0,
+        }
+    }
 }
 
 fn fifteen() -> u32 {
@@ -877,6 +925,12 @@ pub struct UnitDto {
     pub switcher_scene_filter: SwitcherSceneFilter,
     #[serde(default)]
     pub switcher_scene_ids: Vec<u64>,
+    #[serde(default = "true_bool")]
+    pub always_on_top: bool,
+    #[serde(default)]
+    pub preview_scene_id: u64,
+    #[serde(default)]
+    pub program_scene_id: u64,
 }
 
 session_string_enum! {
@@ -1028,6 +1082,16 @@ impl Document {
                 input.mix_audio_bus_id = 0;
             }
         }
+        for scene in &mut doc.scenes {
+            for layer in &mut scene.layers {
+                if layer.crop_width <= 0.0 {
+                    layer.crop_width = 1.0;
+                }
+                if layer.crop_height <= 0.0 {
+                    layer.crop_height = 1.0;
+                }
+            }
+        }
         for unit in &mut doc.units {
             if unit.width == 0 {
                 unit.width = width_1080();
@@ -1043,6 +1107,14 @@ impl Document {
             }
             if unit.audio_bus_id == 0 {
                 unit.audio_bus_id = 1;
+            }
+            for overlay in &mut unit.overlays {
+                if overlay.crop_width <= 0.0 {
+                    overlay.crop_width = 1.0;
+                }
+                if overlay.crop_height <= 0.0 {
+                    overlay.crop_height = 1.0;
+                }
             }
             if unit.transitions.is_empty() {
                 unit.transitions = vec![
@@ -1177,13 +1249,48 @@ pub fn canonicalize_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn save_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    let canonical = canonicalize_bytes(bytes)?;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    write_document(path, &parse(bytes)?).map(|_| ())
+}
+
+pub fn export_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    export_document(path, &parse(bytes)?)
+}
+
+pub fn stamp_live_scene_buses(doc: &mut Document, live: &crate::live::LiveState) {
+    let stamps: Vec<(u64, u64, u64)> = doc
+        .units
+        .iter()
+        .filter_map(|unit| {
+            let state = live.units.get(&unit.id)?;
+            Some((
+                unit.id,
+                scene_id_from_source(doc, state.preview_source),
+                scene_id_from_source(doc, state.program_source),
+            ))
+        })
+        .collect();
+    for (id, preview, program) in stamps {
+        if let Some(unit) = doc.units.iter_mut().find(|unit| unit.id == id) {
+            if preview != 0 {
+                unit.preview_scene_id = preview;
+            }
+            if program != 0 {
+                unit.program_scene_id = program;
+            }
         }
     }
-    std::fs::write(path, canonical).map_err(|error| error.to_string())
+}
+
+fn scene_id_from_source(doc: &Document, source: u64) -> u64 {
+    if source & crate::ids::SCENE_BASE != crate::ids::SCENE_BASE {
+        return 0;
+    }
+    let id = source - crate::ids::SCENE_BASE;
+    if doc.scenes.iter().any(|scene| scene.id == id) {
+        id
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -1239,6 +1346,7 @@ mod tests {
         assert!(!doc.scenes[0].preview_collapsed);
         assert_eq!(doc.units[0].switcher_scene_filter, SwitcherSceneFilter::All);
         assert!(doc.units[0].switcher_scene_ids.is_empty());
+        assert!(doc.units[0].always_on_top);
     }
 
     #[test]
@@ -1632,5 +1740,42 @@ mod tests {
         assert!(doc.units[0].transitions[0].keep_preview);
         assert_eq!(doc.units[0].transitions[0].easing, 3);
         assert!((doc.units[0].transitions[0].dip_g - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stamp_keeps_stored_buses_when_live_is_not_a_scene() {
+        let src = r#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1", "previewSceneId": 2, "programSceneId": 1 }]
+        }"#;
+        let mut doc = parse(src.as_bytes()).unwrap();
+        let mut live = crate::live::LiveState::default();
+        live.units.insert(
+            1,
+            crate::live::UnitLiveState {
+                preview_source: 2,
+                program_source: 2,
+                ..Default::default()
+            },
+        );
+        stamp_live_scene_buses(&mut doc, &live);
+        assert_eq!(doc.units[0].preview_scene_id, 2);
+        assert_eq!(doc.units[0].program_scene_id, 1);
+        live.units.insert(
+            1,
+            crate::live::UnitLiveState {
+                preview_source: crate::ids::scene_gpu_id(1),
+                program_source: crate::ids::scene_gpu_id(2),
+                ..Default::default()
+            },
+        );
+        stamp_live_scene_buses(&mut doc, &live);
+        assert_eq!(doc.units[0].preview_scene_id, 1);
+        assert_eq!(doc.units[0].program_scene_id, 2);
     }
 }

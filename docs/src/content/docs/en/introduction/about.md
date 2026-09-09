@@ -36,7 +36,7 @@ GPU paths drop through wgpu to the native API on that platform and apply extra o
 
 The compositing engine is the mixer (core). It is Rust + wgpu 30, for real-time GPU work on every supported OS.  
 It builds as a `cdylib` and is called from each host (`hosts/win32` and the others) over an internal C ABI.  
-Session files are canonical JSON owned by the mixer, so a file saved on one OS loads as the same session on another.
+Session files are owned by the mixer. Save writes the current `.eivz` (in-file history, no embedded media) when that path is already known; Save As picks a new `.eivz`. Export is under the Save menu and writes `.eivzx` (embedded Still/Video, empty history). Opening an export asks for a media folder and a working `.eivz` path. Load Last opens the most recent existing file. A file saved on one OS loads as the same session on another.
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12
 

@@ -366,8 +366,29 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_load", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionLoad(string path, byte* buffer, nuint capacity);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_has_assets", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int SessionHasAssets(string path);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_import", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionImport(string exportPath, string sessionDest, string mediaDir, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_current_path")]
+    internal static unsafe partial int SessionCurrentPath(byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_load_rev", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionLoadRev(string path, uint index, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_history", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionHistory(string path, byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_clear_current")]
+    internal static partial int SessionClearCurrent();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_save", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int SessionSave(string path, byte* json, nuint length);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_export", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int SessionExport(string path, byte* json, nuint length);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_canonicalize")]
     internal static unsafe partial int SessionCanonicalize(byte* json, nuint length, byte* buffer, nuint capacity);
@@ -497,20 +518,28 @@ internal static partial class MixerNative
         }
     }
 
-    internal static string SessionLoadText(string path)
+    internal static unsafe string SessionLoadText(string path) =>
+        CopyUtf8((ptr, cap) => SessionLoad(path, ptr, cap));
+
+    internal static unsafe string SessionImportText(string exportPath, string sessionDest, string mediaDir) =>
+        CopyUtf8((ptr, cap) => SessionImport(exportPath, sessionDest, mediaDir, ptr, cap));
+
+    internal static unsafe string SessionCurrentPathText() =>
+        CopyUtf8((ptr, cap) => SessionCurrentPath(ptr, cap), 4096);
+
+    internal static bool SessionFileHasAssets(string path)
     {
-        var buffer = new byte[1 << 20];
-        unsafe
-        {
-            fixed (byte* ptr = buffer)
-            {
-                var n = SessionLoad(path, ptr, (nuint)buffer.Length);
-                if (n <= 0)
-                    ThrowIfFailed(n == 0 ? 5 : n, "Load session");
-                return Encoding.UTF8.GetString(buffer, 0, n);
-            }
-        }
+        var code = SessionHasAssets(path);
+        if (code < 0)
+            ThrowIfFailed(-code, "Load session");
+        return code > 0;
     }
+
+    internal static unsafe string SessionLoadRevText(string path, uint index) =>
+        CopyUtf8((ptr, cap) => SessionLoadRev(path, index, ptr, cap));
+
+    internal static unsafe string SessionHistoryText(string path) =>
+        CopyUtf8((ptr, cap) => SessionHistory(path, ptr, cap));
 
     internal static void SessionSaveText(string path, string json)
     {
@@ -520,6 +549,18 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionSave(path, ptr, (nuint)bytes.Length), "Save session");
+            }
+        }
+    }
+
+    internal static void SessionExportText(string path, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionExport(path, ptr, (nuint)bytes.Length), "Export session");
             }
         }
     }

@@ -2,6 +2,10 @@ import EivizMixer
 import Foundation
 
 enum MixerFFI {
+    static func withCString<R>(_ string: String, _ body: (UnsafePointer<CChar>) -> R) -> R {
+        string.withCString(body)
+    }
+
     static func listenOwnerText() -> String {
         var buffer = [UInt8](repeating: 0, count: 256)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
@@ -87,8 +91,36 @@ enum MixerFFI {
         return text.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
     }
 
-    static func withCString<T>(_ string: String, _ body: (UnsafePointer<CChar>) -> T) -> T {
-        string.withCString(body)
+    static func copyUtf8(
+        startCap: Int = 1 << 20,
+        maxCap: Int = 16 << 20,
+        _ body: (UnsafeMutablePointer<UInt8>?, Int) -> Int32
+    ) -> (Int32, [UInt8]) {
+        var cap = startCap
+        while true {
+            var buffer = [UInt8](repeating: 0, count: cap)
+            let n = buffer.withUnsafeMutableBufferPointer { ptr in
+                body(ptr.baseAddress, ptr.count)
+            }
+            if n >= 0 {
+                return (n, Array(buffer.prefix(Int(n))))
+            }
+            if n == -1 && cap < maxCap {
+                cap *= 2
+                continue
+            }
+            return (n, [])
+        }
+    }
+
+    static func sessionCurrentPath() -> String? {
+        let (n, bytes) = copyUtf8(startCap: 4096) { mixer_session_current_path($0, $1) }
+        guard n > 0 else { return nil }
+        return String(bytes: bytes, encoding: .utf8)
+    }
+
+    static func sessionHasAssets(_ path: String) -> Bool {
+        withCString(path) { mixer_session_has_assets($0) > 0 }
     }
 
     static func emptyState() -> EivizUnitState { zeroed() }

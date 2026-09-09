@@ -12,7 +12,7 @@ Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator 
 3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`)
 4. Click Connect in the top left, enter the IP, port, and token, then OK. The operator UI opens after the connection succeeds.
 
-The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in session JSON. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
+The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in the session file. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
 
 The Connect ▾ menu lists recent destinations. Disconnect closes the connection.
 
@@ -31,6 +31,12 @@ Adding Still/Video picks a file on the client, stores it in the destination medi
 The Settings window sends display, performance, outputs, audio, and Web API fields to the destination session. Adding, editing tiles, and deleting Multiview layouts are also sent from Settings. Language, theme, and OMT receive belong to `Eiviz.Remote.exe` Preferences.
 
 Session edits use `MutateSession` with `expected_revision`. A mismatched revision is rejected; reload and try again.
+
+## Save
+
+The Save button writes the host current session file. Headless `run` always has that file (`--session`, or a dated default under the OS `eiviz/sessions` directory). GUI New has no current file until the first Save; that request returns `UNAVAILABLE`. Success shows the saved path and how many in-file history entries remain. A `.eivz` keeps up to 20 previous documents. Export (`.eivzx`) is a separate Save-menu action with embedded Still/Video and empty history.
+
+`eivizctl save` is the same command.
 
 ## Media directory
 

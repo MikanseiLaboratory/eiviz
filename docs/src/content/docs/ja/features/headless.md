@@ -3,7 +3,7 @@ title: headless
 description: GUIなしでMixerを動かし、eivizctlとRemoteから操作する
 ---
 
-`eiviz-headless`はホストUIなしでMixerを動かすデーモンです。セッションJSONを読み、映像合成を行い、Protobuf WebSocketを開きます。既定はloopbackのポート9400です。
+`eiviz-headless`はホストUIなしでMixerを動かすデーモンです。セッションファイル（`.eivz`または`.eivzx`）を読み、映像合成を行い、Protobuf WebSocketを開きます。既定はloopbackのポート9400です。`run`で`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定`.eivz`を書き、そのファイルを使います。
 
 Linuxは現時点でこの形だけです。WindowsとmacOSのリリースにも同じバイナリが入っています。操作は同じマシンの`eivizctl`、または別PCの`Eiviz.Remote.exe`/`eiviz-remote.app`から行います。プロトコルは[eiviz API](/eiviz/ja/developers/api/)、Remoteの画面操作は[リモート接続](/eiviz/ja/features/remote/)です。
 
@@ -23,21 +23,25 @@ Preview/Programのホスト窓、Input Preview、シーンサムネイルはHost
 cargo build -p eiviz-headless --locked --release --bins
 ```
 
-バイナリは`target/release/eiviz-headless`と`target/release/eivizctl`です。セッションの例は`headless/tests/fixtures/bars.eiviz.json`です。
+バイナリは`target/release/eiviz-headless`と`target/release/eivizctl`です。セッションの例は`headless/tests/fixtures/bars.eivz`です。
 
 ```bash
-eiviz-headless validate --session show.eiviz.json
-eiviz-headless canonicalize --session show.eiviz.json
-eiviz-headless run --session show.eiviz.json --bind 127.0.0.1:9400
+eiviz-headless validate --session show.eivz
+eiviz-headless canonicalize --session show.eivz
+eiviz-headless export --session show.eivz --output show-portable.eivzx
+eiviz-headless history --session show.eivz
+eiviz-headless restore --session show.eivz --index 0 --output old.eivz
+eiviz-headless run --session show.eivz --bind 127.0.0.1:9400
+eiviz-headless run --bind 127.0.0.1:9400
 ```
 
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションを検証し、そのFPSでruntimeを作り、WebSocketの受付を始めて待機します。準備できるとstderrへ`eiviz-headless ready ws=`が出ます。Ctrl+C（UnixはSIGTERMも）で停止します。
+`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションを検証し、そのFPSでruntimeを作り、WebSocketの受付を始めて待機します。`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定ファイルを作ります。準備できるとstderrへ`eiviz-headless session=`と`eiviz-headless ready ws=`が出ます。Ctrl+C（UnixはSIGTERMも）で停止します。
 
 `--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。loopback以外へbindするときはtokenが必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません。
 
 ## 待ち受け
 
-GUIの環境設定に相当する値は、ホスト固有です。セッションJSONには保存しません。
+GUIの環境設定に相当する値は、ホスト固有です。セッションファイルには保存しません。
 
 | キー | 内容 |
 | --- | --- |
@@ -97,7 +101,8 @@ eiviz> snapshot
 eiviz> preview --unit 1 --scene 2
 eiviz> cut --unit 1
 eiviz> auto --unit 1 --duration-ms 1000
-eiviz> replace --session show.eiviz.json
+eiviz> replace --session show.eivz
+eiviz> save
 eiviz> shutdown
 ```
 
@@ -114,11 +119,11 @@ eiviz> mutate {"kind":"deleteInput","id":2}
 `eiviz-headless`が開くWebSocketは、GUIホストと同じ`eiviz.control.v1`です。subprotocolは`eiviz.protobuf.v1`です。
 
 1. 接続先でtokenを入れる。LANから触るなら`bind`を`0.0.0.0:9400`など到達できるアドレスにする
-2. `eiviz-headless run --session show.eiviz.json`を起動し、`ready ws=`を確認する
+2. `eiviz-headless run --session show.eivz`（または`eiviz-headless run`）を起動し、`ready ws=`を確認する
 3. 操作するPCで`Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）を起動する
 4. 左上のConnectに、headless側のIP、ポート（既定9400）、同じtokenを入れてOKする
 
-tokenはWindows Credential Manager/macOS Keychainに保存します。セッションJSONには入れません。Connectの▾から最近使った接続先を選べます。
+tokenはWindows Credential Manager/macOS Keychainに保存します。セッションファイルには入れません。Connectの▾から最近使った接続先を選べます。
 
 複数クライアントが同時に接続できます。`eivizctl`とRemoteを並べても構いません。ライブ状態は購読で揃います。
 
@@ -126,7 +131,7 @@ PreviewとProgramのライブ映像は、接続先のNDIまたはOMT出力をRem
 
 ## 環境変数
 
-`headless/eiviz-headless.example.env`がひな形です。tokenをコマンドラインやセッションJSONに書かないでください。
+`headless/eiviz-headless.example.env`がひな形です。tokenをコマンドラインやセッションファイルに書かないでください。
 
 | 変数 | 用途 |
 | --- | --- |
@@ -148,4 +153,6 @@ tokenを回すときは環境変数または`eivizctl prefs set token`を差し�
 | 5 | bind |
 | 6 | その他のruntime失敗 |
 
-ログはstderrです。バックアップ用にセッションを正規化するときは`eiviz-headless canonicalize`です。
+ログはstderrです。調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。`eiviz-headless export`は`.eivzx`を書き、Still/Videoを同梱し履歴は含めません。`run`の読み込み時はファイルの隣の`*.media`へ展開します。GUIで書き出しを開くときは、メディアの展開先と作業用`.eivz`を尋ねます。RemoteのSaveと`eivizctl save`は、いまの`run`セッションファイルへ書き込みます。`eivizctl replace`では保存先は変わりません。
+
+`eiviz-headless history --session show.eivz`はファイル内履歴を一覧します（index、unix ms、世代番号。新しい順、最大20件）。`eiviz-headless restore --session show.eivz --index N --output old.eivz`はその履歴を履歴なしの単体`.eivz`として書き出します。GUIの読み込みでは、履歴があるファイルを選ぶと最新版（既定）か保存時刻付きの履歴を選べます。最近使ったファイルとダブルクリックは最新版を開きます。

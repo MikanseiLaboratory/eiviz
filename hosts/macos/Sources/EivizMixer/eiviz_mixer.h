@@ -303,8 +303,15 @@ int32_t mixer_thumb_read(uint64_t source_id, uint8_t *buf, size_t cap, uint32_t 
 int32_t mixer_last_error(uint8_t *out, size_t cap);
 int32_t mixer_take_fatal(uint8_t *out, size_t cap);
 int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);
+int32_t mixer_session_has_assets(const char *path);
+int32_t mixer_session_import(const char *export_path, const char *session_dest, const char *media_dir, uint8_t *out, size_t cap);
+int32_t mixer_session_current_path(uint8_t *out, size_t cap);
 int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
+int32_t mixer_session_export(const char *path, const uint8_t *json, size_t len);
 int32_t mixer_session_canonicalize(const uint8_t *json, size_t len, uint8_t *out, size_t cap);
+int32_t mixer_session_clear_current(void);
+int32_t mixer_session_history(const char *path, uint8_t *out, size_t cap);
+int32_t mixer_session_load_rev(const char *path, uint32_t index, uint8_t *out, size_t cap);
 int32_t mixer_session_publish(const uint8_t *json, size_t len);
 int32_t mixer_session_replace(const uint8_t *json, size_t len, uint64_t expected_revision);
 int32_t mixer_poll_events(uint64_t after, uint8_t *out, size_t cap);

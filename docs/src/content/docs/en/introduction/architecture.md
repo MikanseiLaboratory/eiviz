@@ -13,7 +13,7 @@ The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks
 The host owns windows, interaction, and preview surfaces.  
 Compose, audio, I/O, and session data live in the mixer. Keeping that work off the UI is how the stack stays fast and portable.
 
-External control is handled by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API. API listen (bind, token, media directory) is host-owned; it is not stored in session JSON.
+External control is handled by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API. API listen (bind, token, media directory) is host-owned; it is not stored in the session file.
 
 Windows and macOS also ship a [remote connection](/eiviz/en/features/remote/) client (`Eiviz.Remote.exe` / `eiviz-remote.app`). The client loads a receive mixer and `eiviz_remote`, and sends ops to the destination `ControlService`. See [eiviz API](/eiviz/en/developers/api/) for the protocol. The mixer without a host UI is [Headless](/eiviz/en/features/headless/).
 
