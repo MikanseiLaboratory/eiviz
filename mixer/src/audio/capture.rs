@@ -49,6 +49,18 @@ impl AudioCaptureStore {
         uploads: Arc<Mutex<AudioInputStore>>,
     ) -> Result<(), String> {
         self.stop(spec.id);
+        #[cfg(windows)]
+        if spec.kind == DEVICE_ASIO {
+            super::asio::start_capture(&spec, uploads)?;
+            self.captures.insert(
+                spec.id,
+                CaptureHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    join: None,
+                },
+            );
+            return Ok(());
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
         let id = spec.id;
@@ -67,10 +79,16 @@ impl AudioCaptureStore {
     }
 
     pub fn stop(&mut self, id: u64) {
+        #[cfg(windows)]
+        super::asio::stop_capture(id);
         self.captures.remove(&id);
     }
 
     pub fn stop_all(&mut self) {
+        let ids: Vec<u64> = self.captures.keys().copied().collect();
+        for id in ids {
+            self.stop(id);
+        }
         self.captures.clear();
     }
 }

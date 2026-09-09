@@ -221,10 +221,15 @@
                         <ComboBoxItem Content="Microphone / line in" Tag="mic" IsSelected="True"/>
                         <ComboBoxItem Content="Output device loopback" Tag="loopback"/>
                         <ComboBoxItem Content="Application Audio" Tag="process"/>
+                        <ComboBoxItem Content="ASIO" Tag="asio"/>
                     </ComboBox>
                     <StackPanel x:Name="AudioDevicePanel">
                         <TextBlock Text="Device" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="AudioDeviceBox" Height="28"/>
+                        <ComboBox x:Name="AudioDeviceBox" Height="28" SelectionChanged="AudioDevice_Changed"/>
+                    </StackPanel>
+                    <StackPanel x:Name="AudioPairPanel" Visibility="Collapsed">
+                        <TextBlock Text="Channels" Margin="0,8,0,4"/>
+                        <ComboBox x:Name="AudioPairBox" Height="28"/>
                     </StackPanel>
                     <StackPanel x:Name="AudioProcessPanel" Visibility="Collapsed">
                         <TextBlock Text="Process" Margin="0,0,0,4"/>
@@ -234,7 +239,7 @@
                         </DockPanel>
                     </StackPanel>
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="Empty device follows the Windows default. Application Audio stores the exe or AUMID, not a PID. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
+                               Text="Empty device follows the Windows default. Application Audio stores the exe or AUMID, not a PID. ASIO shares the driver with output buses and adds one stereo pair (1+2, 3+4). Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
                 </StackPanel>
             </Grid>
         </DockPanel>

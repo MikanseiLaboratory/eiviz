@@ -177,6 +177,8 @@ impl AudioEngine {
                     let _ = join.join();
                 });
         }
+        #[cfg(windows)]
+        asio::shutdown();
     }
 
     pub fn upsert_bus(
@@ -311,7 +313,23 @@ impl AudioEngine {
                     }
                 }
             }
+            #[cfg(windows)]
+            {
+                let mut asio_keep = std::collections::HashSet::new();
+                for (key, maps) in &desired {
+                    if key.kind != DEVICE_ASIO {
+                        continue;
+                    }
+                    asio::set_outputs(&key.id, maps.clone());
+                    asio_keep.insert(key.id.clone());
+                }
+                asio::retain_outputs(&asio_keep);
+            }
             for (key, maps) in desired {
+                #[cfg(windows)]
+                if key.kind == DEVICE_ASIO {
+                    continue;
+                }
                 if keep.iter().any(|output| output.key == key) {
                     continue;
                 }
@@ -360,9 +378,7 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
                 }
             }
             DEVICE_ASIO => {
-                if let Err(error) = asio::run(&key.id, &maps, &stop) {
-                    eprintln!("eiviz asio: {error}");
-                }
+                let _ = (maps, stop);
             }
             _ => {}
         }

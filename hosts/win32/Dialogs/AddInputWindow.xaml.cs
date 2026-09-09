@@ -154,12 +154,14 @@ public partial class AddInputWindow : Window
         }
         if (input.Kind == InputKind.Audio)
         {
-            SelectTag(AudioModeBox, input.AudioCaptureMode switch
-            {
-                AudioCaptureMode.EndpointLoopback => "loopback",
-                AudioCaptureMode.ProcessLoopback => "process",
-                _ => "mic"
-            });
+            SelectTag(AudioModeBox, input.AudioDeviceKind == AudioDeviceKind.Asio
+                ? "asio"
+                : input.AudioCaptureMode switch
+                {
+                    AudioCaptureMode.EndpointLoopback => "loopback",
+                    AudioCaptureMode.ProcessLoopback => "process",
+                    _ => "mic"
+                });
             RefreshAudioDevices();
             foreach (AudioDeviceItem item in AudioDeviceBox.Items)
             {
@@ -169,6 +171,7 @@ public partial class AddInputWindow : Window
                     break;
                 }
             }
+            RefreshAudioPairs(input.AudioMapLeft, input.AudioMapRight);
             _ = RefreshAudioProcesses(input.AudioProcessExe, input.AudioProcessAumid);
         }
         if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
@@ -440,6 +443,23 @@ public partial class AddInputWindow : Window
                 ResultAudioMapLeft = 0;
                 ResultAudioMapRight = 1;
                 ResultAudioDeviceKind = AudioDeviceKind.Wasapi;
+                if (AudioModeBox.SelectedItem is ComboBoxItem { Tag: "asio" })
+                {
+                    if (AudioDeviceBox.SelectedItem is not AudioDeviceItem asio
+                        || string.IsNullOrWhiteSpace(asio.Id)
+                        || AudioPairBox.SelectedItem is not AudioPairItem pair)
+                        return;
+                    ResultAudioCaptureMode = AudioCaptureMode.Mic;
+                    ResultAudioDeviceKind = AudioDeviceKind.Asio;
+                    ResultAudioDeviceId = asio.Id;
+                    ResultAudioProcessExe = "";
+                    ResultAudioProcessAumid = "";
+                    ResultAudioMapLeft = pair.Left;
+                    ResultAudioMapRight = pair.Right;
+                    ResultPath = asio.Id;
+                    ResultName = $"{asio.Name} {pair}";
+                    break;
+                }
                 if (AudioModeBox.SelectedItem is ComboBoxItem { Tag: "process" })
                 {
                     if (AudioProcessBox.SelectedItem is not AudioProcessItem process
@@ -595,16 +615,25 @@ public partial class AddInputWindow : Window
         if (AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "process" })
             _ = RefreshAudioProcesses();
         else
+        {
             RefreshAudioDevices();
+            RefreshAudioPairs();
+        }
     }
+
+    private void AudioDevice_Changed(object sender, SelectionChangedEventArgs e) =>
+        RefreshAudioPairs();
 
     private void UpdateAudioModePanels()
     {
         var process = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "process" };
+        var asio = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "asio" };
         if (AudioDevicePanel is not null)
             AudioDevicePanel.Visibility = process ? Visibility.Collapsed : Visibility.Visible;
         if (AudioProcessPanel is not null)
             AudioProcessPanel.Visibility = process ? Visibility.Visible : Visibility.Collapsed;
+        if (AudioPairPanel is not null)
+            AudioPairPanel.Visibility = asio ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RefreshAudioProcesses_Click(object sender, RoutedEventArgs e) =>
@@ -644,25 +673,71 @@ public partial class AddInputWindow : Window
         if (AudioDeviceBox is null)
             return;
         var loopback = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "loopback" };
+        var asio = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "asio" };
         AudioDeviceBox.Items.Clear();
-        AudioDeviceBox.Items.Add(new AudioDeviceItem(
-            loopback ? "Default output (follow)" : "Default microphone (follow)",
-            "",
-            1));
+        if (!asio)
+        {
+            AudioDeviceBox.Items.Add(new AudioDeviceItem(
+                loopback ? "Default output (follow)" : "Default microphone (follow)",
+                "",
+                1));
+        }
         foreach (var device in Media.AudioGraphSync.EnumerateDevices(0))
         {
-            var capture = device.Direction == 1;
-            var canLoop = (device.Caps & 2) != 0;
-            if (loopback ? !canLoop : !capture)
-                continue;
+            if (asio)
+            {
+                if (device.Kind != 2)
+                    continue;
+            }
+            else
+            {
+                var capture = device.Direction == 1;
+                var canLoop = (device.Caps & 2) != 0;
+                if (loopback ? !canLoop : !capture)
+                    continue;
+            }
             AudioDeviceBox.Items.Add(new AudioDeviceItem(device.Name, device.Id, device.Kind));
         }
-        AudioDeviceBox.SelectedIndex = 0;
+        if (AudioDeviceBox.Items.Count > 0)
+            AudioDeviceBox.SelectedIndex = 0;
+    }
+
+    private void RefreshAudioPairs(int selectedLeft = 0, int selectedRight = 1)
+    {
+        if (AudioPairBox is null)
+            return;
+        AudioPairBox.Items.Clear();
+        if (AudioModeBox?.SelectedItem is not ComboBoxItem { Tag: "asio" })
+            return;
+        if (AudioDeviceBox.SelectedItem is not AudioDeviceItem device || string.IsNullOrWhiteSpace(device.Id))
+            return;
+        var channels = MixerNative.AudioDeviceChannels(2, device.Id);
+        for (var left = 0; left + 1 < channels; left += 2)
+        {
+            var right = left + 1;
+            AudioPairBox.Items.Add(new AudioPairItem(left, right));
+        }
+        if (AudioPairBox.Items.Count == 0)
+            return;
+        foreach (AudioPairItem item in AudioPairBox.Items)
+        {
+            if (item.Left == selectedLeft && item.Right == selectedRight)
+            {
+                AudioPairBox.SelectedItem = item;
+                return;
+            }
+        }
+        AudioPairBox.SelectedIndex = 0;
     }
 
     private sealed record AudioDeviceItem(string Name, string Id, uint Kind)
     {
         public override string ToString() => Name;
+    }
+
+    private sealed record AudioPairItem(int Left, int Right)
+    {
+        public override string ToString() => $"{Left + 1}+{Right + 1}";
     }
 
     private sealed record AudioProcessItem(string Name, string Exe, string Aumid)

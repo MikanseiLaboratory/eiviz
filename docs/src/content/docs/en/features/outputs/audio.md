@@ -9,7 +9,7 @@ The internal mix is 48 kHz stereo. Hardware assignment lives under Audio Auxilia
 
 Microphone and output-device loopback are regular Inputs with kind `Audio`. There is no separate Audio Input collection. Audio Inputs stay on their bus mask and do not participate in Scene Audio Follow. They are hidden from Scene layers and other video pickers.
 
-Windows capture uses WASAPI shared mode. An empty device id follows the current default endpoint. Exclusive output does not fall back to shared. Process loopback, ASIO input, and macOS Core Audio input are not implemented and fail explicitly.
+Windows capture uses WASAPI shared mode for microphone, output-device loopback, and Application Audio. An empty device id follows the current default endpoint. Exclusive output does not fall back to shared. ASIO input shares the driver instance with output buses and is added as a stereo pair (1+2, 3+4). macOS Core Audio input is not implemented and fails explicitly.
 
 ## OMT send
 

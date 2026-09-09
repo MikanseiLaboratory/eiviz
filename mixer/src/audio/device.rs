@@ -1,17 +1,17 @@
-use windows::core::PCWSTR;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, EDataFlow, IAudioClient, IMMDevice, IMMDeviceEnumerator,
-    MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+    DEVICE_STATE_ACTIVE, EDataFlow, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, eCapture, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY_LOCAL_MACHINE, KEY_READ,
-    RRF_RT_REG_SZ,
+    HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW,
+    RegOpenKeyExW,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+use windows::core::PCWSTR;
 
 use super::graph::{DEVICE_ASIO, DEVICE_WASAPI};
 use super::info::AudioDeviceInfo;
@@ -29,7 +29,9 @@ pub fn enumerate(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
 
 pub fn channel_count(kind: u32, device_id: &str) -> i32 {
     if kind == DEVICE_ASIO {
-        return 2;
+        return super::asio::io_channels(device_id)
+            .map(|(ins, _)| ins)
+            .unwrap_or(0);
     }
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);

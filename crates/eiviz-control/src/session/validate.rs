@@ -94,6 +94,22 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 input.id
             )));
         }
+        if input.audio_device_kind == crate::session::AudioDeviceKind::Asio
+            && input.audio_capture_mode == AudioCaptureMode::ProcessLoopback
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} cannot use ASIO with process loopback",
+                input.id
+            )));
+        }
+        if input.audio_device_kind == crate::session::AudioDeviceKind::Asio
+            && (input.audio_map_left < 0 || input.audio_map_right < 0)
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} ASIO pair is invalid",
+                input.id
+            )));
+        }
     }
     for input in &doc.inputs {
         if input.kind != InputKind::Mix {
@@ -347,6 +363,18 @@ mod tests {
           "units": [{ "id": 1, "name": "MU 1" }]
         }"#;
         validate(&parse(ok).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn asio_rejects_process_loopback() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "ASIO", "kind": "Audio", "audioDeviceKind": "Asio", "audioCaptureMode": "ProcessLoopback", "audioProcessExe": "app.exe" }],
+          "scenes": [{ "id": 1, "name": "Scene 1" }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let err = validate(&parse(src).unwrap()).unwrap_err();
+        assert!(err.message.contains("ASIO"), "{}", err.message);
     }
 
     #[test]
