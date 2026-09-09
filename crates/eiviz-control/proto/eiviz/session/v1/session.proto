@@ -239,6 +239,11 @@ message Output {
   bool enabled = 8;
   uint64 audio_bus_id = 9;
   bool skip_encode_when_no_receivers = 10;
+  // 0/0 follow the Mixing Unit (or session master) size and frame rate.
+  uint32 width = 11;
+  uint32 height = 12;
+  uint32 fps_num = 13;
+  uint32 fps_den = 14;
 }
 
 message MvSlot {

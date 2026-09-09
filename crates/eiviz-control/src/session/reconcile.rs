@@ -966,6 +966,10 @@ fn output_apply(output: &OutputDto) -> OutputApply {
             output.audio_bus_id
         },
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     }
 }
 
@@ -996,6 +1000,10 @@ fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
         && a.enabled == b.enabled
         && a.audio_bus_id == b.audio_bus_id
         && a.skip_encode_when_no_receivers == b.skip_encode_when_no_receivers
+        && a.width == b.width
+        && a.height == b.height
+        && a.fps_num == b.fps_num
+        && a.fps_den == b.fps_den
 }
 
 #[cfg(test)]

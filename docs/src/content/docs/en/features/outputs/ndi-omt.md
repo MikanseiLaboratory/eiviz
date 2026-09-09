@@ -12,7 +12,7 @@ Transport is OMT or NDI.
 OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to VMX. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
 NDI is always a CPU path.
 
-One thread is assigned per output.
+One thread is assigned per output. Video frames are sent at that output’s frame rate, not as soon as compose finishes. Resolution and frame rate are per output in Settings → Outputs.
 
 Each OMT output can skip VMX encode when no receiver is subscribed. The default is on. Turn off “Skip encode when there are no OMT receivers” in Settings → Outputs to keep encoding. NDI ignores this option.
 

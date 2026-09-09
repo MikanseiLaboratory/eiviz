@@ -322,7 +322,7 @@ internal static partial class MixerNative
     internal static partial int GeneratorSetTone(ulong id, float hz, float levelDbfs);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode);
+    internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode, uint width, uint height, uint fpsNum, uint fpsDen);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Snapshot(ulong unitId, uint kind, string path);

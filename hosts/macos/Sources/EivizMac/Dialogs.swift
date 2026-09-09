@@ -106,11 +106,16 @@ struct SettingsView: View {
                     }
                 }
             )) {
-                Text("NTSC 59.94p").tag("60000/1001")
-                Text("50p").tag("50/1")
-                Text("30p").tag("30/1")
+                Text("23.976p").tag("24000/1001")
                 Text("24p").tag("24/1")
+                Text("25p").tag("25/1")
+                Text("29.97p").tag("30000/1001")
+                Text("30p").tag("30/1")
+                Text("50p").tag("50/1")
+                Text("NTSC 59.94p").tag("60000/1001")
                 Text("60p").tag("60/1")
+                Text("119.88p").tag("120000/1001")
+                Text("120p").tag("120/1")
             }
             .frame(width: 220)
             Text("Frame buffer (frames)")
@@ -242,7 +247,11 @@ struct SettingsView: View {
                     let output = OutputEntry(
                         id: mixer.session.nextOutputId,
                         name: "eiviz-out-\(mixer.session.nextOutputId)",
-                        unitId: mixer.selectedUnitId
+                        unitId: mixer.selectedUnitId,
+                        width: mixer.session.settings.defaultWidth,
+                        height: mixer.session.settings.defaultHeight,
+                        fpsNum: mixer.session.settings.masterFpsNum,
+                        fpsDen: mixer.session.settings.masterFpsDen
                     )
                     mixer.session.nextOutputId += 1
                     mixer.session.outputs.append(output)
@@ -351,6 +360,76 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(output.wrappedValue.sourceKind == .multiview)
+            }
+            HStack {
+                Picker("Size", selection: Binding(
+                    get: {
+                        output.wrappedValue.width == 0 || output.wrappedValue.height == 0
+                            ? "0x0"
+                            : "\(output.wrappedValue.width)x\(output.wrappedValue.height)"
+                    },
+                    set: { value in
+                        if value == "0x0" {
+                            output.wrappedValue.width = 0
+                            output.wrappedValue.height = 0
+                        } else {
+                            let parts = value.split(separator: "x").compactMap { UInt32($0) }
+                            if parts.count == 2 {
+                                output.wrappedValue.width = parts[0]
+                                output.wrappedValue.height = parts[1]
+                            }
+                        }
+                        mixer.addOutput(output.wrappedValue)
+                    }
+                )) {
+                    Text(L10n.t("settings.followSessionSettings")).tag("0x0")
+                    Text("1920x1080").tag("1920x1080")
+                    Text("1280x720").tag("1280x720")
+                    Text("3840x2160").tag("3840x2160")
+                    if !["0x0", "1920x1080", "1280x720", "3840x2160"].contains(
+                        output.wrappedValue.width == 0 || output.wrappedValue.height == 0
+                            ? "0x0"
+                            : "\(output.wrappedValue.width)x\(output.wrappedValue.height)"
+                    ) {
+                        Text("\(output.wrappedValue.width)x\(output.wrappedValue.height)")
+                            .tag("\(output.wrappedValue.width)x\(output.wrappedValue.height)")
+                    }
+                }
+                Picker("Frame rate", selection: Binding(
+                    get: {
+                        output.wrappedValue.fpsNum == 0 || output.wrappedValue.fpsDen == 0
+                            ? "0/0"
+                            : "\(output.wrappedValue.fpsNum)/\(output.wrappedValue.fpsDen)"
+                    },
+                    set: { value in
+                        let parts = value.split(separator: "/").compactMap { UInt32($0) }
+                        if parts.count == 2 {
+                            output.wrappedValue.fpsNum = parts[0]
+                            output.wrappedValue.fpsDen = parts[1]
+                        }
+                        mixer.addOutput(output.wrappedValue)
+                    }
+                )) {
+                    Text(L10n.t("settings.followSessionSettings")).tag("0/0")
+                    Text("23.976p").tag("24000/1001")
+                    Text("24p").tag("24/1")
+                    Text("25p").tag("25/1")
+                    Text("29.97p").tag("30000/1001")
+                    Text("30p").tag("30/1")
+                    Text("50p").tag("50/1")
+                    Text("59.94p").tag("60000/1001")
+                    Text("60p").tag("60/1")
+                    Text("119.88p").tag("120000/1001")
+                    Text("120p").tag("120/1")
+                    if !["0/0", "24000/1001", "24/1", "25/1", "30000/1001", "30/1", "50/1", "60000/1001", "60/1", "120000/1001", "120/1"].contains(
+                        output.wrappedValue.fpsNum == 0 || output.wrappedValue.fpsDen == 0
+                            ? "0/0"
+                            : "\(output.wrappedValue.fpsNum)/\(output.wrappedValue.fpsDen)"
+                    ) {
+                        Text("\(output.wrappedValue.fpsNum)/\(output.wrappedValue.fpsDen)")
+                            .tag("\(output.wrappedValue.fpsNum)/\(output.wrappedValue.fpsDen)")
+                    }
+                }
             }
         }
         .padding(6)
@@ -1174,11 +1253,16 @@ struct MixingUnitView: View {
                         }
                     }
                 )) {
-                    Text("59.94p").tag("60000/1001")
-                    Text("50p").tag("50/1")
-                    Text("30p").tag("30/1")
+                    Text("23.976p").tag("24000/1001")
                     Text("24p").tag("24/1")
+                    Text("25p").tag("25/1")
+                    Text("29.97p").tag("30000/1001")
+                    Text("30p").tag("30/1")
+                    Text("50p").tag("50/1")
+                    Text("59.94p").tag("60000/1001")
                     Text("60p").tag("60/1")
+                    Text("119.88p").tag("120000/1001")
+                    Text("120p").tag("120/1")
                 }
             }
             labeled("Audio") {

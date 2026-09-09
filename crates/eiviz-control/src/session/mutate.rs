@@ -430,6 +430,10 @@ mod tests {
             enabled: true,
             audio_bus_id: 1,
             skip_encode_when_no_receivers: true,
+            width: 0,
+            height: 0,
+            fps_num: 0,
+            fps_den: 0,
         });
         doc.outputs.push(crate::session::OutputDto {
             id: 101,
@@ -442,6 +446,10 @@ mod tests {
             enabled: true,
             audio_bus_id: 1,
             skip_encode_when_no_receivers: true,
+            width: 0,
+            height: 0,
+            fps_num: 0,
+            fps_den: 0,
         });
         let published = doc.published_video_outputs();
         assert_eq!(published.len(), 1);
@@ -472,6 +480,10 @@ mod tests {
                     enabled: true,
                     audio_bus_id: 1,
                     skip_encode_when_no_receivers: true,
+                    width: 0,
+                    height: 0,
+                    fps_num: 0,
+                    fps_den: 0,
                 }],
                 buses: vec![],
                 headphone_copy_master: Some(true),

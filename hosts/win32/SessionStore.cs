@@ -227,7 +227,11 @@ internal static class SessionStore
                 UseGpu = output.UseGpu,
                 Enabled = output.Enabled,
                 AudioBusId = output.AudioBusId,
-                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers
+                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
+                Width = output.Width,
+                Height = output.Height,
+                FpsNum = output.FpsNum,
+                FpsDen = output.FpsDen
             }).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             Buses = session.Buses.Select(CloneBus).ToList(),

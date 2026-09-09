@@ -1163,5 +1163,9 @@ public partial class MainWindow
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled
         && left.AudioBusId == right.AudioBusId
-        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
+        && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers
+        && left.Width == right.Width
+        && left.Height == right.Height
+        && left.FpsNum == right.FpsNum
+        && left.FpsDen == right.FpsDen;
 }

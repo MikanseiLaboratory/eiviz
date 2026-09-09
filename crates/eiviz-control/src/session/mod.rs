@@ -1028,6 +1028,17 @@ pub struct OutputDto {
     pub audio_bus_id: u64,
     #[serde(default = "default_true")]
     pub skip_encode_when_no_receivers: bool,
+    /// 0 follows the Mixing Unit (or session master) width.
+    #[serde(default)]
+    pub width: u32,
+    /// 0 follows the Mixing Unit (or session master) height.
+    #[serde(default)]
+    pub height: u32,
+    /// 0 follows the Mixing Unit (or session master) frame rate.
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

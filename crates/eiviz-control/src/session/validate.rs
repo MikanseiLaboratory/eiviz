@@ -175,6 +175,26 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 output.id, output.audio_bus_id
             )));
         }
+        if (output.width == 0) != (output.height == 0) {
+            return Err(ValidationError::new(format!(
+                "output {} size must set both width and height, or neither",
+                output.id
+            )));
+        }
+        if output.width != 0 {
+            if output.width < 16 || output.height < 16 || output.width % 2 != 0 {
+                return Err(ValidationError::new(format!(
+                    "output {} size {}x{} is invalid",
+                    output.id, output.width, output.height
+                )));
+            }
+        }
+        if (output.fps_num == 0) != (output.fps_den == 0) {
+            return Err(ValidationError::new(format!(
+                "output {} frame rate must set both fps_num and fps_den, or neither",
+                output.id
+            )));
+        }
     }
     if doc.settings.master_fps_num == 0 || doc.settings.master_fps_den == 0 {
         return Err(ValidationError::new("master fps is zero"));

@@ -47,7 +47,11 @@ internal static class MixerApply
             output.UnitId,
             output.UseGpu ? 1u : 0u,
             audioBusId,
-            output.SkipEncodeWhenNoReceivers ? 1u : 0u);
+            output.SkipEncodeWhenNoReceivers ? 1u : 0u,
+            output.Width,
+            output.Height,
+            output.FpsNum,
+            output.FpsDen);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }

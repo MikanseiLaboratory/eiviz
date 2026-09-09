@@ -14,6 +14,8 @@ Audio can be Master, Headphone, any Audio Aux, or None (no audio).
 When Multiview is selected as the video source, audio cannot be sent.  
 A new session defaults to Mixing Unit Program.
 
+Each output has its own resolution and frame rate under Settings → Outputs. Follow session settings uses the Mixing Unit (or the session master frame rate and default size). Video is sent at that output rate, not as soon as a compose finishes.
+
 One thread is assigned per output.  
 Hardware outputs such as DeckLink are still in progress.  
 Send detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).

@@ -188,7 +188,11 @@ fn compose_omt_and_program_out() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -202,7 +206,11 @@ fn compose_omt_and_program_out() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -237,7 +245,11 @@ fn omt_program_shows_fade_during_auto() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -483,7 +495,11 @@ fn omt_multiview_output_is_received() {
                 1,
                 1,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -497,7 +513,11 @@ fn omt_multiview_output_is_received() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -551,7 +571,11 @@ fn omt_program_sends_master_audio() {
                 1,
                 0,
                 1,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -605,7 +629,11 @@ fn omt_gpu_in_and_out() {
                 1,
                 1,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             OK
         );
@@ -1090,7 +1118,11 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                     1,
                     0,
                     0,
-                    1
+                    1,
+                    0,
+                    0,
+                    0,
+                    0
                 ),
                 OK
             );
@@ -1109,7 +1141,11 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 1,
                 0,
                 0,
-                1
+                1,
+                0,
+                0,
+                0,
+                0
             ),
             ERR_IO
         );

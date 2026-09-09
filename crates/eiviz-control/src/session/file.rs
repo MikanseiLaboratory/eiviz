@@ -860,6 +860,10 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         enabled: output.enabled,
         audio_bus_id: output.audio_bus_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     }
 }
 
@@ -875,6 +879,10 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         enabled: output.enabled,
         audio_bus_id: output.audio_bus_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
+        width: output.width,
+        height: output.height,
+        fps_num: output.fps_num,
+        fps_den: output.fps_den,
     })
 }
 
@@ -1259,7 +1267,11 @@ mod tests {
     "name": "eiviz-pgm",
     "transport": "Omt",
     "sourceKind": "MuProgram",
-    "skipEncodeWhenNoReceivers": false
+    "skipEncodeWhenNoReceivers": false,
+    "width": 1280,
+    "height": 720,
+    "fpsNum": 30,
+    "fpsDen": 1
   }],
   "buses": [
     { "id": 1, "name": "Master", "role": "Master", "deviceKind": "Wasapi", "mapRight": 1 }
@@ -1287,6 +1299,10 @@ mod tests {
         assert!(!decoded.units[0].overlays[0].size_linked);
         assert!((decoded.units[0].overlays[0].crop_y - 0.2).abs() < f32::EPSILON);
         assert!(!decoded.outputs[0].skip_encode_when_no_receivers);
+        assert_eq!(decoded.outputs[0].width, 1280);
+        assert_eq!(decoded.outputs[0].height, 720);
+        assert_eq!(decoded.outputs[0].fps_num, 30);
+        assert_eq!(decoded.outputs[0].fps_den, 1);
         assert!(!decoded.settings.rebar_optimization);
         assert_eq!(decoded.settings.renderer, Renderer::Auto);
         assert_eq!(decoded.settings.last_session_path, None);

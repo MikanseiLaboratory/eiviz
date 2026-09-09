@@ -848,8 +848,14 @@ public sealed class MixingUnitEntry
 
     public string FormatFps()
     {
+        if (FpsNum == 24_000 && FpsDen == 1_001)
+            return "23.976p";
+        if (FpsNum == 30_000 && FpsDen == 1_001)
+            return "29.97p";
         if (FpsNum == 60_000 && FpsDen == 1_001)
             return "59.94p";
+        if (FpsNum == 120_000 && FpsDen == 1_001)
+            return "119.88p";
         if (FpsDen == 1)
             return $"{FpsNum}p";
         return $"{FpsNum}/{FpsDen}";
@@ -880,6 +886,10 @@ public sealed class OutputEntry
     public bool Enabled { get; set; } = true;
     public ulong AudioBusId { get; set; } = 1;
     public bool SkipEncodeWhenNoReceivers { get; set; } = true;
+    public uint Width { get; set; }
+    public uint Height { get; set; }
+    public uint FpsNum { get; set; }
+    public uint FpsDen { get; set; }
 }
 
 public enum MvLabelUnit
@@ -1069,7 +1079,11 @@ public sealed class Session
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = 1,
             UseGpu = true,
-            AudioBusId = 1
+            AudioBusId = 1,
+            Width = session.Settings.DefaultWidth,
+            Height = session.Settings.DefaultHeight,
+            FpsNum = session.Settings.MasterFpsNum,
+            FpsDen = session.Settings.MasterFpsDen
         });
         return session;
     }

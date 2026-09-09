@@ -212,6 +212,10 @@ pub(crate) struct LiveOutput {
     source_id: u64,
     unit_id: u64,
     audio_bus_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
@@ -226,6 +230,8 @@ pub(crate) struct OutputSnap {
     source_id: u64,
     unit_id: u64,
     audio_bus_id: u64,
+    width: u32,
+    height: u32,
     fps_n: u32,
     fps_d: u32,
     video_sub: Arc<AtomicBool>,
@@ -250,6 +256,12 @@ impl OutputSnap {
 
     fn gpu_video(&self) -> bool {
         self.use_gpu && self.wants_video()
+    }
+
+    fn video_size(&self, src_w: u32, src_h: u32) -> (u32, u32) {
+        let width = if self.width > 0 { self.width } else { src_w };
+        let height = if self.height > 0 { self.height } else { src_h };
+        (width.max(2), height.max(1))
     }
 }
 
@@ -2644,6 +2656,10 @@ pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char)
             0,
             0,
             1,
+            0,
+            0,
+            0,
+            0,
         )
     }
 }
@@ -2659,8 +2675,18 @@ pub unsafe extern "C" fn mixer_output_add(
     use_gpu: u32,
     audio_bus_id: u64,
     skip_idle_encode: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
 ) -> i32 {
     if name.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if width != 0 && (width < 16 || height < 16 || width % 2 != 0) {
         return ERR_INVALID_ARGUMENT;
     }
     let name = unsafe { CStr::from_ptr(name) }
@@ -2758,6 +2784,10 @@ pub unsafe extern "C" fn mixer_output_add(
                 source_id,
                 unit_id,
                 audio_bus_id,
+                width,
+                height,
+                fps_num,
+                fps_den,
                 video_sub,
                 use_gpu,
                 skip_idle_encode,
@@ -4100,6 +4130,8 @@ mod tests {
             source_id: 1,
             unit_id: 1,
             audio_bus_id: 1,
+            width: 0,
+            height: 0,
             fps_n: 60,
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(false)),
@@ -4196,6 +4228,8 @@ mod tests {
             source_id: mv,
             unit_id: 1,
             audio_bus_id: 1,
+            width: 0,
+            height: 0,
             fps_n: 60,
             fps_d: 1,
             video_sub: Arc::new(AtomicBool::new(true)),

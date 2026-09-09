@@ -839,7 +839,10 @@ struct MixingUnitEntry: Identifiable, Codable {
         }
     }
     var fpsLabel: String {
+        if fpsNum == 24_000 && fpsDen == 1_001 { return "23.976p" }
+        if fpsNum == 30_000 && fpsDen == 1_001 { return "29.97p" }
         if fpsNum == 60_000 && fpsDen == 1_001 { return "59.94p" }
+        if fpsNum == 120_000 && fpsDen == 1_001 { return "119.88p" }
         if fpsDen == 1 { return "\(fpsNum)p" }
         return "\(fpsNum)/\(fpsDen)"
     }
@@ -899,10 +902,14 @@ struct OutputEntry: Identifiable, Codable {
     var enabled: Bool = true
     var audioBusId: UInt64 = 1
     var skipEncodeWhenNoReceivers: Bool = true
+    var width: UInt32 = 0
+    var height: UInt32 = 0
+    var fpsNum: UInt32 = 0
+    var fpsDen: UInt32 = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioBusId
-        case skipEncodeWhenNoReceivers
+        case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
     }
 
     init(
@@ -915,7 +922,11 @@ struct OutputEntry: Identifiable, Codable {
         useGpu: Bool = true,
         enabled: Bool = true,
         audioBusId: UInt64 = 1,
-        skipEncodeWhenNoReceivers: Bool = true
+        skipEncodeWhenNoReceivers: Bool = true,
+        width: UInt32 = 0,
+        height: UInt32 = 0,
+        fpsNum: UInt32 = 0,
+        fpsDen: UInt32 = 0
     ) {
         self.id = id
         self.name = name
@@ -927,6 +938,10 @@ struct OutputEntry: Identifiable, Codable {
         self.enabled = enabled
         self.audioBusId = audioBusId
         self.skipEncodeWhenNoReceivers = skipEncodeWhenNoReceivers
+        self.width = width
+        self.height = height
+        self.fpsNum = fpsNum
+        self.fpsDen = fpsDen
     }
 
     init(from decoder: Decoder) throws {
@@ -941,6 +956,10 @@ struct OutputEntry: Identifiable, Codable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
         skipEncodeWhenNoReceivers = try container.decodeIfPresent(Bool.self, forKey: .skipEncodeWhenNoReceivers) ?? true
+        width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 0
+        height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 0
+        fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 0
+        fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 0
     }
 }
 
@@ -1431,7 +1450,16 @@ struct MixerSessionData: Codable {
         session.units[0].previewSceneId = session.scenes[0].id
         session.units[0].programSceneId = session.scenes[1].id
         session.outputs = [
-            OutputEntry(id: session.nextOutputId, name: "eiviz-pgm", transport: .omt, useGpu: true)
+            OutputEntry(
+                id: session.nextOutputId,
+                name: "eiviz-pgm",
+                transport: .omt,
+                useGpu: true,
+                width: session.settings.defaultWidth,
+                height: session.settings.defaultHeight,
+                fpsNum: session.settings.masterFpsNum,
+                fpsDen: session.settings.masterFpsDen
+            )
         ]
         session.nextOutputId += 1
         return session

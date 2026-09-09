@@ -239,6 +239,10 @@ pub struct OutputApply {
     pub use_gpu: bool,
     pub audio_bus_id: u64,
     pub skip_encode_when_no_receivers: bool,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

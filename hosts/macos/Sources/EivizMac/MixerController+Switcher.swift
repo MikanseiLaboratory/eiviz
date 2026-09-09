@@ -541,7 +541,21 @@ extension MixerController {
         let skipIdle: UInt32 = entry.transport == .omt && entry.skipEncodeWhenNoReceivers ? 1 : 0
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
-                let code = mixer_output_add(id, transport, cName, sourceKind, sourceId, unitId, useGpu, audioBusId, skipIdle)
+                let code = mixer_output_add(
+                    id,
+                    transport,
+                    cName,
+                    sourceKind,
+                    sourceId,
+                    unitId,
+                    useGpu,
+                    audioBusId,
+                    skipIdle,
+                    entry.width,
+                    entry.height,
+                    entry.fpsNum,
+                    entry.fpsDen
+                )
                 if code != 0 {
                     DispatchQueue.main.async {
                         _ = self?.fail(code, "Add output")
