@@ -317,6 +317,8 @@ public partial class SettingsWindow : Window
             var left = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             var right = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
             FillDeviceBox(device, bus);
+            if (device.SelectedItem is ComboBoxItem selected && selected.Tag is string selectedId)
+                bus.DeviceId = selectedId;
             FillMapBoxes(left, right, bus);
             device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
             device.SelectionChanged += (_, _) =>
@@ -387,12 +389,7 @@ public partial class SettingsWindow : Window
             || (bus.DeviceKind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
             || (bus.DeviceKind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
         {
-            var channels = device.Kind == (uint)AudioDeviceKind.Asio
-                ? OutputChannels(AudioDeviceKind.Asio, device.Id)
-                : (int)device.Channels;
-            var label = string.IsNullOrWhiteSpace(device.Name)
-                ? device.Id
-                : channels > 0 ? $"{device.Name}  ({channels}ch)" : device.Name;
+            var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : device.Name;
             box.Items.Add(new ComboBoxItem { Content = label, Tag = device.Id });
         }
         box.SelectedIndex = 0;

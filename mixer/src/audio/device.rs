@@ -168,9 +168,10 @@ pub fn enumerate_asio_registry(dest: &mut [AudioDeviceInfo]) -> usize {
             if clsid.is_empty() {
                 continue;
             }
+            let (ins, outs) = super::asio::listed_io(&driver, &clsid);
             dest[n] = AudioDeviceInfo {
                 kind: DEVICE_ASIO,
-                channels: 0,
+                channels: ins.max(outs).max(0) as u32,
                 id: cbuf(&clsid),
                 name: cbuf(&driver),
                 direction: super::info::AUDIO_DIR_BOTH,
