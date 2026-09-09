@@ -244,7 +244,7 @@
                         </DockPanel>
                     </StackPanel>
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="Empty device follows the Windows default. Application Audio stores the exe or AUMID, not a PID. ASIO shares the driver with output buses; pick any input channel for L and R. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
+                               Text="Empty device follows the Windows default. Application Audio lists processes with a visible window and stores the exe or AUMID, not a PID. ASIO shares the driver with output buses; pick any input channel for L and R. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
                 </StackPanel>
             </Grid>
         </DockPanel>

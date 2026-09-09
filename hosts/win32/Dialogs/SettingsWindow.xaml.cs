@@ -333,15 +333,6 @@ public partial class SettingsWindow : Window
                 if (int.TryParse(right.Text, out var value))
                     bus.MapRight = value;
             };
-            var exclusive = new CheckBox
-            {
-                Content = "Exclusive",
-                IsChecked = bus.Exclusive,
-                Foreground = System.Windows.Media.Brushes.White,
-                Margin = new Thickness(0, 0, 8, 0),
-                Visibility = bus.DeviceKind == AudioDeviceKind.Wasapi ? Visibility.Visible : Visibility.Collapsed
-            };
-            exclusive.Click += (_, _) => bus.Exclusive = exclusive.IsChecked == true;
             var remove = new Button { Content = "−", Width = 28, IsEnabled = bus.Role == AudioBusRole.Aux };
             remove.Click += (_, _) =>
             {
@@ -370,8 +361,6 @@ public partial class SettingsWindow : Window
             Grid.SetColumn(rightLabel, 1);
             Grid.SetRow(right, 2);
             Grid.SetColumn(right, 3);
-            Grid.SetColumn(exclusive, 4);
-            Grid.SetRow(exclusive, 2);
 
             grid.Children.Add(name);
             grid.Children.Add(remove);
@@ -381,7 +370,6 @@ public partial class SettingsWindow : Window
             grid.Children.Add(left);
             grid.Children.Add(rightLabel);
             grid.Children.Add(right);
-            grid.Children.Add(exclusive);
             box.Child = grid;
             BusRows.Children.Add(box);
         }
@@ -418,7 +406,7 @@ public partial class SettingsWindow : Window
         DeviceId = bus.DeviceId,
         MapLeft = bus.MapLeft,
         MapRight = bus.MapRight,
-        Exclusive = bus.Exclusive,
+        Exclusive = false,
         Bit = bus.Bit,
         Gain = MixerNative.MixerGain(bus.Gain),
         Mute = bus.Mute

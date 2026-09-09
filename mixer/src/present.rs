@@ -60,6 +60,10 @@ impl Presenters {
             None => create_presenter(device, surface, width, height)?,
         };
         self.by_key.insert((unit_id, kind, surface), presenter);
+        #[cfg(windows)]
+        if surface.kind == crate::abi::NATIVE_WIN32_HWND {
+            crate::audio::remember_asio_sys_handle(surface.handle);
+        }
         Ok(())
     }
 
@@ -867,7 +871,7 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{BlitParams, pick_present_mode};
+    use super::{pick_present_mode, BlitParams};
 
     #[test]
     fn present_params_match_uyvy_shader() {

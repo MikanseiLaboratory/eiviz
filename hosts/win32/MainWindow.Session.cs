@@ -53,20 +53,28 @@ public partial class MainWindow
                 RebuildMeters();
                 return;
             }
+            if (App.IsRemote)
+            {
+                ApplyInputSource(input, dialog, replacing: false);
+                RefreshInputList();
+                RebuildMeters();
+                return;
+            }
+            _session.Inputs.Add(input);
             ApplyInputSource(input, dialog, replacing: false);
         }
         catch (Exception ex)
         {
+            _session.Inputs.Remove(input);
+            if (!App.IsRemote)
+            {
+                MixerApply.DropSource(input.Id);
+                MixerNative.FlushAudio(input.Id);
+            }
+            RefreshInputList();
             MessageBox.Show(this, ex.Message, Loc.T("msg.addInput"));
             return;
         }
-        if (App.IsRemote)
-        {
-            RefreshInputList();
-            RebuildMeters();
-            return;
-        }
-        _session.Inputs.Add(input);
         MixerNative.AudioSetInput(input.Id, input.BusMask, 1, 0);
         RefreshInputList();
         RebuildMeters();

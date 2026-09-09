@@ -100,7 +100,7 @@ Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適�
 内部ミックスは48 kHzステレオです。A〜HのAudio AUXを最大8本足せます。  
 [Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。
 
-Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。
+Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。実機へ出すときはWASAPI共有かASIOです。
 
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
 

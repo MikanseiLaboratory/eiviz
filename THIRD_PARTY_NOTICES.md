@@ -13,12 +13,14 @@ as copyright and permission notices are preserved.
 | Crate | License | Source |
 | --- | --- | --- |
 | bytemuck | MIT OR Apache-2.0 | https://crates.io/crates/bytemuck |
+| cpal | Apache-2.0 | https://crates.io/crates/cpal |
 | gpu-video | MIT | https://github.com/software-mansion/smelter |
 | grafton-ndi | Apache-2.0 | https://crates.io/crates/grafton-ndi |
 | image | MIT OR Apache-2.0 | https://crates.io/crates/image |
 | openmediatransport | MIT | https://github.com/MikanseiLaboratory/openmediatransport-rs |
 | pollster | Apache-2.0 OR MIT | https://crates.io/crates/pollster |
 | raw-window-handle | MIT OR Apache-2.0 OR Zlib | https://crates.io/crates/raw-window-handle |
+| rsac | MIT OR Apache-2.0 | https://github.com/Codeseys-Labs/rust-crossplat-audio-capture |
 | thiserror | MIT OR Apache-2.0 | https://crates.io/crates/thiserror |
 | vmx | MIT | https://github.com/MikanseiLaboratory/vmx-rs |
 | wgpu | MIT OR Apache-2.0 | https://crates.io/crates/wgpu |

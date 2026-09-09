@@ -216,7 +216,8 @@ impl AudioGraph {
             bus.device_id = device_id.to_string();
             bus.map_left = map_left;
             bus.map_right = map_right;
-            bus.exclusive = exclusive;
+            let _ = exclusive;
+            bus.exclusive = false;
             return;
         }
         let bit = if role == ROLE_MASTER {
@@ -237,7 +238,7 @@ impl AudioGraph {
             device_id: device_id.to_string(),
             map_left,
             map_right,
-            exclusive,
+            exclusive: false,
             gain: 1.0,
             mute: false,
             peak: (0.0, 0.0),
@@ -299,7 +300,6 @@ impl AudioGraph {
             let key = DeviceKey {
                 kind: bus.device_kind,
                 id: bus.device_id.clone(),
-                exclusive: bus.exclusive,
             };
             groups.entry(key).or_default().push((
                 Arc::clone(&bus.ring),

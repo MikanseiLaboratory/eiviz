@@ -3,14 +3,17 @@ mod asio;
 mod capture;
 #[cfg(target_os = "macos")]
 mod coreaudio;
+#[cfg(any(windows, target_os = "macos"))]
+mod cpal_io;
 #[cfg(windows)]
 mod device;
 mod graph;
 mod info;
+mod pcm;
 mod process;
-mod scheduler;
 #[cfg(windows)]
-mod wasapi;
+mod rsac_process;
+mod scheduler;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,16 +21,21 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::OverlayDesc;
-use crate::upload::{AUDIO_RATE, AudioInputStore};
+use crate::upload::{AudioInputStore, AUDIO_RATE};
 
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS, MixedAudio,
+    AudioGraph, BusRing, MixedAudio, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI,
+    LINK_FOLLOW, MASTER_BUS,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;
+
+#[cfg(windows)]
+pub fn remember_asio_sys_handle(handle: isize) {
+    asio::remember_sys_handle(handle);
+}
 pub use scheduler::{AudioMixSnapshot, AudioOutputRoute, AudioScheduler};
 
 #[derive(Clone)]
@@ -137,7 +145,6 @@ struct DeviceOutput {
 pub(crate) struct DeviceKey {
     pub kind: u32,
     pub id: String,
-    pub exclusive: bool,
 }
 
 impl AudioEngine {
@@ -190,7 +197,7 @@ impl AudioEngine {
         device_id: &str,
         map_left: i32,
         map_right: i32,
-        exclusive: u32,
+        _exclusive: u32,
     ) {
         self.graph.lock().expect("audio").upsert_bus(
             id,
@@ -200,7 +207,7 @@ impl AudioEngine {
             device_id,
             map_left,
             map_right,
-            exclusive != 0,
+            false,
         );
         self.sync_outputs();
     }
@@ -366,30 +373,34 @@ impl AudioEngine {
 fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
     #[cfg(windows)]
     {
-        let kind = if key.kind == DEVICE_COREAUDIO {
-            DEVICE_WASAPI
-        } else {
-            key.kind
-        };
-        match kind {
+        match key.kind {
             DEVICE_WASAPI => {
-                if let Err(error) = wasapi::run(&key.id, key.exclusive, &maps, &stop) {
-                    eprintln!("eiviz wasapi: {error}");
+                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                    crate::diag::error(&format!("eiviz cpal output: {error}"));
                 }
             }
             DEVICE_ASIO => {
                 let _ = (maps, stop);
+            }
+            DEVICE_COREAUDIO => {
+                crate::diag::error("Core Audio output is only available on macOS");
             }
             _ => {}
         }
     }
     #[cfg(target_os = "macos")]
     {
-        if key.kind == DEVICE_ASIO || key.kind == DEVICE_NONE {
-            return;
-        }
-        if let Err(error) = coreaudio::run(&key.id, &maps, &stop) {
-            eprintln!("eiviz coreaudio: {error}");
+        match key.kind {
+            DEVICE_COREAUDIO => {
+                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                    crate::diag::error(&format!("eiviz cpal output: {error}"));
+                }
+            }
+            DEVICE_WASAPI => {
+                crate::diag::error("WASAPI output is only available on Windows");
+            }
+            DEVICE_ASIO | DEVICE_NONE => {}
+            _ => {}
         }
     }
     #[cfg(not(any(windows, target_os = "macos")))]

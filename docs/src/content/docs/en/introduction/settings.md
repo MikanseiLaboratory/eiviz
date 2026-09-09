@@ -99,7 +99,7 @@ Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 The internal mix is 48 kHz stereo. You can add up to eight Audio AUX buses, A–H.  
 Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
 
-Enabled keeps the bus mixing internally with no output device.
+Enabled keeps the bus mixing internally with no output device. Hardware output is WASAPI shared or ASIO.
 
 Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it off if you want a cue mix.
 

@@ -629,7 +629,7 @@ final class MixerController: ObservableObject {
                         device,
                         bus.mapLeft,
                         bus.mapRight,
-                        bus.exclusive ? 1 : 0
+                        0
                     )
                 }
             }

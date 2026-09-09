@@ -107,13 +107,6 @@ pub fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-pub fn activate_process_client(
-    pid: u32,
-) -> Result<windows::Win32::Media::Audio::IAudioClient, String> {
-    windows_activate(pid)
-}
-
-#[cfg(windows)]
 struct SnapshotProcess {
     pid: u32,
     parent: u32,
@@ -125,23 +118,35 @@ struct SnapshotProcess {
 fn windows_list() -> Vec<CaptureProcess> {
     use std::collections::HashMap;
     let self_pid = unsafe { windows::Win32::System::Threading::GetCurrentProcessId() };
+    let titles = gui_window_titles();
     let mut by_key: HashMap<(String, String), CaptureProcess> = HashMap::new();
     for process in windows_snapshot() {
         if process.pid == 0 || process.pid == self_pid || skip_system_exe(&process.exe) {
             continue;
         }
+        let Some(title) = titles.get(&process.pid) else {
+            continue;
+        };
         let exe = if process.exe.is_empty() {
             continue;
         } else {
             process.exe
         };
         let aumid = process.aumid;
+        let name = if title.trim().is_empty() {
+            exe.clone()
+        } else {
+            title.clone()
+        };
         let key = (exe_basename(&exe), aumid.to_ascii_lowercase());
-        by_key.entry(key).or_insert(CaptureProcess {
-            name: exe.clone(),
-            exe,
-            aumid,
-        });
+        by_key
+            .entry(key)
+            .and_modify(|existing| {
+                if existing.name.len() < name.len() {
+                    existing.name = name.clone();
+                }
+            })
+            .or_insert(CaptureProcess { name, exe, aumid });
     }
     let mut out: Vec<CaptureProcess> = by_key.into_values().collect();
     out.sort_by(|left, right| {
@@ -150,6 +155,60 @@ fn windows_list() -> Vec<CaptureProcess> {
             .cmp(&right.name.to_ascii_lowercase())
     });
     out
+}
+
+fn gui_window_titles() -> std::collections::HashMap<u32, String> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
+    };
+
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let titles = unsafe { &mut *(lparam.0 as *mut std::collections::HashMap<u32, String>) };
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            if GetWindow(hwnd, GW_OWNER)
+                .ok()
+                .is_some_and(|owner| !owner.0.is_null())
+            {
+                return BOOL(1);
+            }
+            if GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW.0 as isize != 0 {
+                return BOOL(1);
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 {
+                return BOOL(1);
+            }
+            let mut buf = [0u16; 256];
+            let n = GetWindowTextW(hwnd, &mut buf);
+            let title = if n > 0 {
+                String::from_utf16_lossy(&buf[..n as usize])
+            } else {
+                String::new()
+            };
+            titles
+                .entry(pid)
+                .and_modify(|existing| {
+                    if existing.len() < title.len() {
+                        *existing = title.clone();
+                    }
+                })
+                .or_insert(title);
+        }
+        BOOL(1)
+    }
+
+    let mut titles = std::collections::HashMap::new();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut titles as *mut _ as isize));
+    }
+    titles
 }
 
 fn skip_system_exe(exe: &str) -> bool {
@@ -174,7 +233,7 @@ fn skip_system_exe(exe: &str) -> bool {
 fn windows_snapshot() -> Vec<SnapshotProcess> {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
 
@@ -215,9 +274,9 @@ fn wchar_to_string(buf: &[u16]) -> String {
 
 #[cfg(windows)]
 fn process_aumid(pid: u32) -> String {
+    use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    use windows::core::PWSTR;
 
     unsafe {
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
@@ -242,128 +301,6 @@ unsafe extern "system" {
         applicationusermodelidlength: *mut u32,
         applicationusermodelid: windows::core::PWSTR,
     ) -> u32;
-}
-
-#[cfg(windows)]
-#[windows_core::implement(windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler)]
-struct ActivateHandler(std::sync::mpsc::Sender<windows::core::Result<windows::core::IUnknown>>);
-
-#[cfg(windows)]
-impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
-    for ActivateHandler_Impl
-{
-    fn ActivateCompleted(
-        &self,
-        operation: windows::core::Ref<
-            '_,
-            windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation,
-        >,
-    ) -> windows::core::Result<()> {
-        let result = match operation.as_ref() {
-            Some(op) => retrieve_client(op),
-            None => Err(windows::core::Error::from(
-                windows::Win32::Foundation::E_POINTER,
-            )),
-        };
-        let _ = self.0.send(result);
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-fn retrieve_client(
-    operation: &windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation,
-) -> windows::core::Result<windows::core::IUnknown> {
-    let mut status = windows::core::HRESULT::default();
-    let mut unknown = None;
-    unsafe {
-        operation.GetActivateResult(&mut status, &mut unknown)?;
-    }
-    status.ok()?;
-    unknown.ok_or_else(|| {
-        windows::core::Error::new(
-            windows::Win32::Foundation::E_FAIL,
-            "process loopback activation returned no interface",
-        )
-    })
-}
-
-#[cfg(windows)]
-fn windows_activate(pid: u32) -> Result<windows::Win32::Media::Audio::IAudioClient, String> {
-    use std::mem::{ManuallyDrop, size_of};
-    use std::sync::mpsc;
-    use std::time::Duration;
-    use windows::Win32::Media::Audio::{
-        AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
-        AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-        ActivateAudioInterfaceAsync, IActivateAudioInterfaceCompletionHandler, IAudioClient,
-        PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-    };
-    use windows::Win32::System::Com::BLOB;
-    use windows::Win32::System::Com::StructuredStorage::{
-        PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
-    };
-    use windows::Win32::System::Variant::VT_BLOB;
-    use windows::core::Interface;
-
-    let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
-        ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-        Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
-            ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
-                TargetProcessId: pid,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
-            },
-        },
-    };
-    let prop = PROPVARIANT {
-        Anonymous: PROPVARIANT_0 {
-            Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
-                vt: VT_BLOB,
-                wReserved1: 0,
-                wReserved2: 0,
-                wReserved3: 0,
-                Anonymous: PROPVARIANT_0_0_0 {
-                    blob: BLOB {
-                        cbSize: size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
-                        pBlobData: std::ptr::from_mut(&mut params).cast(),
-                    },
-                },
-            }),
-        },
-    };
-    let (tx, rx) = mpsc::channel();
-    let handler: IActivateAudioInterfaceCompletionHandler = ActivateHandler(tx).into();
-    let _operation = unsafe {
-        ActivateAudioInterfaceAsync(
-            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-            &IAudioClient::IID,
-            Some(&prop),
-            &handler,
-        )
-    }
-    .map_err(|error| activate_error(error))?;
-    let unknown = rx
-        .recv_timeout(Duration::from_secs(5))
-        .map_err(|_| "WASAPI process loopback activation timed out".to_string())?
-        .map_err(activate_error)?;
-    unknown
-        .cast()
-        .map_err(|error| format!("process loopback IAudioClient: {error}"))
-}
-
-#[cfg(windows)]
-fn activate_error(error: windows::core::Error) -> String {
-    let code = error.code().0 as u32;
-    if matches!(code, 0x8000_4001 | 0x8000_4002) {
-        "WASAPI process loopback needs Windows 10 1903 or later".into()
-    } else {
-        format!("WASAPI process loopback activate: {error}")
-    }
-}
-
-#[cfg(windows)]
-pub fn activate_is_fatal(error: &str) -> bool {
-    error.contains("Windows 10 1903")
 }
 
 #[cfg(test)]

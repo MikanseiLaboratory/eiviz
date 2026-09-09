@@ -377,8 +377,8 @@ internal static class MixerApply
             MixerNative.DefineMixInput(sourceId, targetId, sourceKind, delay, audioBusId),
             "Define Mix Input"));
 
-    public static bool StartAudioCapture(InputEntry input) =>
-        Try(() => MixerNative.ThrowIfFailed(
+    public static void StartAudioCapture(InputEntry input) =>
+        MixerNative.ThrowIfFailed(
             MixerNative.AudioCaptureStart(
                 input.Id,
                 input.AudioDeviceKind switch
@@ -399,7 +399,7 @@ internal static class MixerApply
                 input.AudioMapRight,
                 input.AudioProcessExe,
                 input.AudioProcessAumid),
-            "Audio capture start"));
+            "Audio capture start");
 
     public static bool DropSource(ulong sourceId) => Try(() => MixerNative.DestroySource(sourceId));
 

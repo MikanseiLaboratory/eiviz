@@ -14,7 +14,7 @@ FollowはPreview/ProgramとTバーのmixに追従します。Independentは映�
 ## デバイスへの割当
 
 実機への割当は[設定](/eiviz/ja/introduction/settings/)の音声AUXです。  
-Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。  
+Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。実機へ出すときはWASAPI共有かASIOです。  
 「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。
 
 デバイス側は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。

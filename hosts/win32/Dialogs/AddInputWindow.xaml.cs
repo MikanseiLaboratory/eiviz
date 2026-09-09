@@ -446,10 +446,17 @@ public partial class AddInputWindow : Window
                 if (AudioModeBox.SelectedItem is ComboBoxItem { Tag: "asio" })
                 {
                     if (AudioDeviceBox.SelectedItem is not AudioDeviceItem asio
-                        || string.IsNullOrWhiteSpace(asio.Id)
-                        || AudioMapLeftBox.SelectedItem is not AudioChannelItem left
-                        || AudioMapRightBox.SelectedItem is not AudioChannelItem right)
+                        || string.IsNullOrWhiteSpace(asio.Id))
                         return;
+                    if (AudioMapLeftBox.SelectedItem is not AudioChannelItem left
+                        || AudioMapRightBox.SelectedItem is not AudioChannelItem right)
+                    {
+                        MessageBox.Show(
+                            this,
+                            "ASIO driver reported no input channels. Confirm the driver is selected for output or input and try again.",
+                            "Audio Input");
+                        return;
+                    }
                     ResultAudioCaptureMode = AudioCaptureMode.Mic;
                     ResultAudioDeviceKind = AudioDeviceKind.Asio;
                     ResultAudioDeviceId = asio.Id;
