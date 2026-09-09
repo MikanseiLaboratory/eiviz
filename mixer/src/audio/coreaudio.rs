@@ -1,9 +1,9 @@
 //! Core Audio HAL output for macOS buses.
 
-use std::ffi::{CStr, c_void};
+use std::ffi::{c_void, CStr};
 use std::ptr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -371,6 +371,8 @@ pub fn enumerate(dest: &mut [AudioDeviceInfo]) -> usize {
             channels,
             id: write_fixed(&uid),
             name: write_fixed(&name),
+            direction: super::info::AUDIO_DIR_RENDER,
+            caps: 0,
         };
         let _ = id;
         n += 1;
@@ -494,7 +496,11 @@ fn device_rate(id: AudioDeviceID) -> f64 {
             &mut rate as *mut f64 as *mut c_void,
         )
     };
-    if rate < 8000.0 { 48_000.0 } else { rate }
+    if rate < 8000.0 {
+        48_000.0
+    } else {
+        rate
+    }
 }
 
 fn output_channels(id: AudioDeviceID) -> u32 {

@@ -2,12 +2,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::abi::{MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
-use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, AudioInputStore, SampleRing};
+use crate::abi::{is_scene, mixing_unit_from_source, MixInputSpec, OverlayDesc, UnitState};
+use crate::upload::{AudioInputStore, SampleRing, AUDIO_FIFO_FRAMES, AUDIO_RATE};
 
-use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
 use super::DeviceKey;
+use super::AUDIO_PRIME_FRAMES;
 
 pub const MASTER_BUS: u64 = 1;
 pub const HEADPHONE_BUS: u64 = 2;
@@ -39,10 +39,13 @@ impl MixedAudio {
             return &[];
         }
         let id = resolve_output_audio_bus(audio_bus_id);
-        self.by_bus
-            .get(&id)
-            .map(Vec::as_slice)
-            .unwrap_or(self.master.as_slice())
+        if let Some(samples) = self.by_bus.get(&id) {
+            return samples.as_slice();
+        }
+        if id == MASTER_BUS {
+            return self.master.as_slice();
+        }
+        &[]
     }
 }
 
@@ -885,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_audio_for_bus_falls_back_to_master() {
+    fn mixed_audio_for_bus_does_not_alias_unknown_to_master() {
         let mixed = MixedAudio {
             master: vec![0.5, -0.5],
             by_bus: HashMap::from([(3, vec![0.25, 0.25])]),
@@ -893,6 +896,6 @@ mod tests {
         assert!(mixed.for_bus(0).is_empty());
         assert_eq!(mixed.for_bus(1), &[0.5, -0.5]);
         assert_eq!(mixed.for_bus(3), &[0.25, 0.25]);
-        assert_eq!(mixed.for_bus(9), &[0.5, -0.5]);
+        assert!(mixed.for_bus(9).is_empty());
     }
 }

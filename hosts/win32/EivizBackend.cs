@@ -219,6 +219,13 @@ internal static class MutationJson
         public MixSource MixSource { get; set; }
         public ulong MixTargetId { get; set; }
         public ulong MixAudioBusId { get; set; }
+        public AudioCaptureMode AudioCaptureMode { get; set; } = AudioCaptureMode.Mic;
+        public AudioDeviceKind AudioDeviceKind { get; set; } = AudioDeviceKind.None;
+        public string AudioDeviceId { get; set; } = "";
+        public int AudioMapLeft { get; set; }
+        public int AudioMapRight { get; set; } = 1;
+        public string AudioProcessExe { get; set; } = "";
+        public string AudioProcessAumid { get; set; } = "";
 
         public static InputWire From(InputEntry input) => new()
         {
@@ -253,7 +260,14 @@ internal static class MutationJson
             Tags = [.. input.Tags],
             MixSource = input.MixSource,
             MixTargetId = input.MixTargetId,
-            MixAudioBusId = input.MixAudioBusId
+            MixAudioBusId = input.MixAudioBusId,
+            AudioCaptureMode = input.AudioCaptureMode,
+            AudioDeviceKind = input.AudioDeviceKind,
+            AudioDeviceId = input.AudioDeviceId,
+            AudioMapLeft = input.AudioMapLeft,
+            AudioMapRight = input.AudioMapRight,
+            AudioProcessExe = input.AudioProcessExe,
+            AudioProcessAumid = input.AudioProcessAumid
         };
     }
 

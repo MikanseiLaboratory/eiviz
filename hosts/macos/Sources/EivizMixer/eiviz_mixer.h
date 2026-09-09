@@ -221,6 +221,8 @@ typedef struct EivizAudioDeviceInfo {
     uint32_t channels;
     uint8_t id[256];
     uint8_t name[256];
+    uint32_t direction;
+    uint32_t caps;
 } EivizAudioDeviceInfo;
 
 typedef struct EivizAudioBusInfo {
@@ -336,6 +338,8 @@ int32_t mixer_audio_set_headphone_cue(uint64_t unit_id);
 int32_t mixer_audio_set_headphone_copy_master(uint32_t enabled);
 int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint32_t cap);
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
+int32_t mixer_audio_capture_start(uint64_t id, uint32_t kind, const char *device_id, uint32_t mode, int32_t map_left, int32_t map_right, const char *process_exe, const char *process_aumid);
+int32_t mixer_audio_capture_stop(uint64_t id);
 
 #ifdef __cplusplus
 }

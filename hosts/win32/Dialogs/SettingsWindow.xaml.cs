@@ -67,7 +67,10 @@ public partial class SettingsWindow : Window
             Buses.Add(CloneBus(bus));
         _nextBusId = Math.Max(_nextBusId, Buses.Count == 0 ? 3 : Buses.Max(item => item.Id) + 1);
         HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
-        _devices = AudioGraphSync.EnumerateDevices(0);
+        _devices = AudioGraphSync.EnumerateDevices(0)
+            .Where(device => device.Direction != 1)
+            .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
+            .ToList();
         RebuildOutputs();
         RebuildLayouts();
         RebuildBuses();

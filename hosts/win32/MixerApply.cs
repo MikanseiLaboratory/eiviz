@@ -377,6 +377,30 @@ internal static class MixerApply
             MixerNative.DefineMixInput(sourceId, targetId, sourceKind, delay, audioBusId),
             "Define Mix Input"));
 
+    public static bool StartAudioCapture(InputEntry input) =>
+        Try(() => MixerNative.ThrowIfFailed(
+            MixerNative.AudioCaptureStart(
+                input.Id,
+                input.AudioDeviceKind switch
+                {
+                    AudioDeviceKind.Wasapi => 1u,
+                    AudioDeviceKind.Asio => 2u,
+                    AudioDeviceKind.CoreAudio => 3u,
+                    _ => 0u
+                },
+                input.AudioDeviceId,
+                input.AudioCaptureMode switch
+                {
+                    AudioCaptureMode.EndpointLoopback => 1u,
+                    AudioCaptureMode.ProcessLoopback => 2u,
+                    _ => 0u
+                },
+                input.AudioMapLeft,
+                input.AudioMapRight,
+                input.AudioProcessExe,
+                input.AudioProcessAumid),
+            "Audio capture start"));
+
     public static bool DropSource(ulong sourceId) => Try(() => MixerNative.DestroySource(sourceId));
 
     public static UnitState BuildState(MixingUnitEntry unit, ulong program, ulong preview, float mix, uint transitionKind)

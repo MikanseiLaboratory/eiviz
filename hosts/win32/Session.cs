@@ -15,7 +15,15 @@ public enum InputKind
     OMT,
     NDI,
     UVC,
-    Mix
+    Mix,
+    Audio
+}
+
+public enum AudioCaptureMode
+{
+    Mic,
+    EndpointLoopback,
+    ProcessLoopback
 }
 
 public enum MixSource
@@ -338,6 +346,13 @@ public sealed class InputEntry
     public MixSource MixSource { get; set; } = MixSource.MuProgram;
     public ulong MixTargetId { get; set; }
     public ulong MixAudioBusId { get; set; }
+    public AudioCaptureMode AudioCaptureMode { get; set; } = AudioCaptureMode.Mic;
+    public AudioDeviceKind AudioDeviceKind { get; set; } = AudioDeviceKind.None;
+    public string AudioDeviceId { get; set; } = "";
+    public int AudioMapLeft { get; set; }
+    public int AudioMapRight { get; set; } = 1;
+    public string AudioProcessExe { get; set; } = "";
+    public string AudioProcessAumid { get; set; } = "";
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
 
@@ -379,7 +394,8 @@ internal static class InputKindNames
         InputKind.OMT,
         InputKind.NDI,
         InputKind.UVC,
-        InputKind.Mix
+        InputKind.Mix,
+        InputKind.Audio
     ];
 
     public static string Category(InputKind kind) => kind switch
@@ -391,6 +407,7 @@ internal static class InputKindNames
         InputKind.NDI => "NDI®",
         InputKind.UVC => "UVC",
         InputKind.Mix => "Mix",
+        InputKind.Audio => "Audio",
         _ => kind.ToString()
     };
 

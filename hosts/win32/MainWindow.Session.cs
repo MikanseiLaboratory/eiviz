@@ -24,7 +24,7 @@ public partial class MainWindow
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
             return;
         var id = _session.NextInputId++;
         var input = new InputEntry
@@ -86,7 +86,7 @@ public partial class MainWindow
         dialog.Load(input);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
             return;
         try
         {
@@ -207,6 +207,16 @@ public partial class MainWindow
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
         input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
+        if (dialog.Kind == InputKind.Audio)
+        {
+            input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
+            input.AudioDeviceKind = dialog.ResultAudioDeviceKind;
+            input.AudioDeviceId = dialog.ResultAudioDeviceId ?? "";
+            input.AudioMapLeft = dialog.ResultAudioMapLeft;
+            input.AudioMapRight = dialog.ResultAudioMapRight;
+            input.AudioProcessExe = dialog.ResultAudioProcessExe ?? "";
+            input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
+        }
         if (dialog.Kind == InputKind.Mix)
             input.BusMask = 0;
         input.BandwidthSave = dialog.Kind == InputKind.OMT
@@ -305,6 +315,16 @@ public partial class MainWindow
                     InputKindNames.MixSourceKind(dialog.ResultMixSource),
                     dialog.ResultFrameBufferFrames,
                     dialog.ResultMixAudioBusId);
+                break;
+            case InputKind.Audio:
+                input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
+                input.AudioDeviceKind = dialog.ResultAudioDeviceKind;
+                input.AudioDeviceId = dialog.ResultAudioDeviceId ?? "";
+                input.AudioMapLeft = dialog.ResultAudioMapLeft;
+                input.AudioMapRight = dialog.ResultAudioMapRight;
+                input.AudioProcessExe = dialog.ResultAudioProcessExe ?? "";
+                input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
+                MixerApply.StartAudioCapture(input);
                 break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");

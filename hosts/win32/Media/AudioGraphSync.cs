@@ -70,9 +70,9 @@ internal static class AudioGraphSync
         MixerNative.AudioSetHeadphoneCopyMaster(session.HeadphoneCopyMaster ? 1u : 0u);
     }
 
-    public static List<(uint Kind, uint Channels, string Id, string Name)> EnumerateDevices(uint kind)
+    public static List<(uint Kind, uint Channels, string Id, string Name, uint Direction, uint Caps)> EnumerateDevices(uint kind)
     {
-        var list = new List<(uint, uint, string, string)>();
+        var list = new List<(uint, uint, string, string, uint, uint)>();
         var buffer = new MixerAudioDeviceInfo[64];
         unsafe
         {
@@ -86,7 +86,9 @@ internal static class AudioGraphSync
                         current->Kind,
                         current->Channels,
                         ReadUtf8(current->Id, 256),
-                        ReadUtf8(current->Name, 256)));
+                        ReadUtf8(current->Name, 256),
+                        current->Direction,
+                        current->Caps));
                 }
             }
         }

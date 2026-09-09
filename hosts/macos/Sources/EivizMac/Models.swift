@@ -11,6 +11,7 @@ enum InputKind: String, Codable, CaseIterable {
     case ndi = "NDI"
     case uvc = "UVC"
     case mix = "Mix"
+    case audio = "Audio"
 
     var category: String {
         switch self {
@@ -21,6 +22,7 @@ enum InputKind: String, Codable, CaseIterable {
         case .ndi: return "NDI®"
         case .uvc: return "UVC"
         case .mix: return "Mix"
+        case .audio: return "Audio"
         }
     }
 
@@ -45,7 +47,9 @@ enum InputKind: String, Codable, CaseIterable {
         try container.encode(rawValue)
     }
 
-    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix]
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix, .audio]
+
+    var hasVideo: Bool { self != .audio }
 
     func sameCategory(as other: InputKind) -> Bool {
         self == other || (isColour && other.isColour)

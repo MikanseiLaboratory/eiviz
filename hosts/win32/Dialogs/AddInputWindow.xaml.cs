@@ -19,7 +19,7 @@ public partial class AddInputWindow : Window
     public AddInputWindow()
     {
         InitializeComponent();
-        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.OMT, InputKind.NDI, InputKind.UVC, InputKind.Mix })
+        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.OMT, InputKind.NDI, InputKind.UVC, InputKind.Mix, InputKind.Audio })
         {
             var button = new Button
             {
@@ -38,6 +38,7 @@ public partial class AddInputWindow : Window
         RefreshOmt();
         RefreshNdi();
         RefreshUvc();
+        RefreshAudioDevices();
     }
 
     public InputKind Kind => _kind;
@@ -67,6 +68,13 @@ public partial class AddInputWindow : Window
     public MixSource ResultMixSource { get; private set; } = MixSource.MuProgram;
     public ulong ResultMixTargetId { get; private set; }
     public ulong ResultMixAudioBusId { get; private set; }
+    public AudioCaptureMode ResultAudioCaptureMode { get; private set; } = AudioCaptureMode.Mic;
+    public AudioDeviceKind ResultAudioDeviceKind { get; private set; } = AudioDeviceKind.Wasapi;
+    public string? ResultAudioDeviceId { get; private set; }
+    public int ResultAudioMapLeft { get; private set; }
+    public int ResultAudioMapRight { get; private set; } = 1;
+    public string? ResultAudioProcessExe { get; private set; }
+    public string? ResultAudioProcessAumid { get; private set; }
 
     public void BindTags(Session session, IEnumerable<string>? selected = null)
     {
@@ -144,6 +152,19 @@ public partial class AddInputWindow : Window
             SelectTag(MixAudioBox, input.MixAudioBusId.ToString());
             SelectTag(MixBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         }
+        if (input.Kind == InputKind.Audio)
+        {
+            SelectTag(AudioModeBox, input.AudioCaptureMode == AudioCaptureMode.EndpointLoopback ? "loopback" : "mic");
+            RefreshAudioDevices();
+            foreach (AudioDeviceItem item in AudioDeviceBox.Items)
+            {
+                if (item.Id == input.AudioDeviceId)
+                {
+                    AudioDeviceBox.SelectedItem = item;
+                    break;
+                }
+            }
+        }
         if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
@@ -181,6 +202,7 @@ public partial class AddInputWindow : Window
         NdiPanel.Visibility = VisibleIf(InputKind.NDI);
         UvcPanel.Visibility = VisibleIf(InputKind.UVC);
         MixPanel.Visibility = VisibleIf(InputKind.Mix);
+        AudioPanel.Visibility = VisibleIf(InputKind.Audio);
         MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
         foreach (Button button in CategoryPanel.Children)
             button.Background = Equals(button.Tag, _kind)
@@ -407,6 +429,28 @@ public partial class AddInputWindow : Window
                     ? $"{target.Name} MV"
                     : $"{target.Name} {(ResultMixSource == MixSource.MuPreview ? "PRV" : "PGM")}";
                 break;
+            case InputKind.Audio:
+                ResultAudioCaptureMode = AudioModeBox.SelectedItem is ComboBoxItem { Tag: "loopback" }
+                    ? AudioCaptureMode.EndpointLoopback
+                    : AudioCaptureMode.Mic;
+                if (AudioDeviceBox.SelectedItem is AudioDeviceItem device)
+                {
+                    ResultAudioDeviceKind = device.Kind == 2 ? AudioDeviceKind.Asio : AudioDeviceKind.Wasapi;
+                    ResultAudioDeviceId = device.Id;
+                    ResultName = device.Name;
+                }
+                else
+                {
+                    ResultAudioDeviceKind = AudioDeviceKind.Wasapi;
+                    ResultAudioDeviceId = "";
+                    ResultName = ResultAudioCaptureMode == AudioCaptureMode.EndpointLoopback
+                        ? "Default output loopback"
+                        : "Default microphone";
+                }
+                ResultPath = ResultAudioDeviceId;
+                ResultAudioMapLeft = 0;
+                ResultAudioMapRight = 1;
+                break;
             case InputKind.UVC:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))
                     return;
@@ -521,6 +565,34 @@ public partial class AddInputWindow : Window
             AppPrefs.Current.RememberStill(path);
         else
             AppPrefs.Current.RememberVideo(path);
+    }
+
+    private void AudioMode_Changed(object sender, SelectionChangedEventArgs e) => RefreshAudioDevices();
+
+    private void RefreshAudioDevices()
+    {
+        if (AudioDeviceBox is null)
+            return;
+        var loopback = AudioModeBox?.SelectedItem is ComboBoxItem { Tag: "loopback" };
+        AudioDeviceBox.Items.Clear();
+        AudioDeviceBox.Items.Add(new AudioDeviceItem(
+            loopback ? "Default output (follow)" : "Default microphone (follow)",
+            "",
+            1));
+        foreach (var device in Media.AudioGraphSync.EnumerateDevices(0))
+        {
+            var capture = device.Direction == 1;
+            var canLoop = (device.Caps & 2) != 0;
+            if (loopback ? !canLoop : !capture)
+                continue;
+            AudioDeviceBox.Items.Add(new AudioDeviceItem(device.Name, device.Id, device.Kind));
+        }
+        AudioDeviceBox.SelectedIndex = 0;
+    }
+
+    private sealed record AudioDeviceItem(string Name, string Id, uint Kind)
+    {
+        public override string ToString() => Name;
     }
 
     private sealed record CameraItem(string Name, string Link)

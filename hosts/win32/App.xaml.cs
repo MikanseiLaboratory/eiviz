@@ -412,6 +412,9 @@ public partial class App : Application
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
                         input.MixAudioBusId);
                     break;
+                case InputKind.Audio when !network:
+                    MixerApply.StartAudioCapture(input);
+                    break;
             }
         }
         catch (Exception ex)

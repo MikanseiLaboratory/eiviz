@@ -17,12 +17,12 @@ use string_enum::session_string_enum;
 
 pub use default::{dated_session_filename, dated_session_filename_now, default_document};
 pub use file::{
-    CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, HistoryMeta, MAGIC, decode_file, encode_file,
-    export_document, extract_history, has_embedded_assets, import_exported_session, read_document,
-    read_history, write_document, write_document_rev,
+    decode_file, encode_file, export_document, extract_history, has_embedded_assets,
+    import_exported_session, read_document, read_history, write_document, write_document_rev,
+    HistoryMeta, CONTAINER_VERSION, FORMAT_VERSION, HISTORY_LIMIT, MAGIC,
 };
 pub use relink::{media_file_missing, missing_media_message, relink_missing_media};
-pub use validate::{ValidationError, validate, validate_for_apply};
+pub use validate::{validate, validate_for_apply, ValidationError};
 
 use serde::{Deserialize, Serialize};
 
@@ -372,6 +372,13 @@ session_string_enum! {
         NDI,
         UVC,
         Mix,
+        Audio,
+    }
+}
+
+impl InputKind {
+    pub fn has_video(self) -> bool {
+        !matches!(self, InputKind::Audio)
     }
 }
 
@@ -522,6 +529,16 @@ session_string_enum! {
     }
 }
 
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AudioCaptureMode {
+        #[default]
+        Mic,
+        EndpointLoopback,
+        ProcessLoopback,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputDto {
@@ -586,6 +603,20 @@ pub struct InputDto {
     pub mix_target_id: u64,
     #[serde(default)]
     pub mix_audio_bus_id: u64,
+    #[serde(default)]
+    pub audio_capture_mode: AudioCaptureMode,
+    #[serde(default)]
+    pub audio_device_kind: AudioDeviceKind,
+    #[serde(default)]
+    pub audio_device_id: String,
+    #[serde(default)]
+    pub audio_map_left: i32,
+    #[serde(default = "audio_map_right")]
+    pub audio_map_right: i32,
+    #[serde(default)]
+    pub audio_process_exe: String,
+    #[serde(default)]
+    pub audio_process_aumid: String,
 }
 
 session_string_enum! {
@@ -618,6 +649,9 @@ fn one_f32() -> f32 {
 }
 fn tone_level() -> f32 {
     -20.0
+}
+fn audio_map_right() -> i32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

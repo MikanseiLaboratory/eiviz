@@ -1,17 +1,17 @@
+use windows::core::PCWSTR;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    eConsole, eRender,
+    eCapture, eConsole, eRender, EDataFlow, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
 };
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Registry::{
-    HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW,
-    RegOpenKeyExW,
+    RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY_LOCAL_MACHINE, KEY_READ,
+    RRF_RT_REG_SZ,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
-use windows::core::PCWSTR;
 
 use super::graph::{DEVICE_ASIO, DEVICE_WASAPI};
 use super::info::AudioDeviceInfo;
@@ -59,7 +59,34 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
         else {
             return 0;
         };
-        let Ok(collection) = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) else {
+        let mut n = 0usize;
+        n += enumerate_wasapi_flow(
+            &enumerator,
+            eCapture,
+            super::info::AUDIO_DIR_CAPTURE,
+            0,
+            &mut dest[n..],
+        );
+        n += enumerate_wasapi_flow(
+            &enumerator,
+            eRender,
+            super::info::AUDIO_DIR_RENDER,
+            super::info::AUDIO_CAP_LOOPBACK,
+            &mut dest[n..],
+        );
+        n
+    }
+}
+
+fn enumerate_wasapi_flow(
+    enumerator: &IMMDeviceEnumerator,
+    flow: EDataFlow,
+    direction: u32,
+    caps: u32,
+    dest: &mut [AudioDeviceInfo],
+) -> usize {
+    unsafe {
+        let Ok(collection) = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE) else {
             return 0;
         };
         let Ok(count) = collection.GetCount() else {
@@ -81,6 +108,8 @@ fn enumerate_wasapi(dest: &mut [AudioDeviceInfo]) -> usize {
                 channels,
                 id: cbuf(&id),
                 name: cbuf(&name),
+                direction,
+                caps,
             };
             n += 1;
         }
@@ -143,6 +172,8 @@ pub fn enumerate_asio_registry(dest: &mut [AudioDeviceInfo]) -> usize {
                 channels: 2,
                 id: cbuf(&clsid),
                 name: cbuf(&driver),
+                direction: super::info::AUDIO_DIR_BOTH,
+                caps: 0,
             };
             n += 1;
         }

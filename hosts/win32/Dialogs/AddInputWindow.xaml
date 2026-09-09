@@ -214,6 +214,18 @@
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
                                Text="Mix Input reads N frames ago from the existing delay ring. Audio is a delayed copy of the selected bus, or silence if None. Same Mixing Unit wiring is refused."/>
                 </StackPanel>
+                <StackPanel x:Name="AudioPanel" Visibility="Collapsed">
+                    <TextBlock Text="Audio capture" Margin="0,0,0,8"/>
+                    <TextBlock Text="Mode" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="AudioModeBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8" SelectionChanged="AudioMode_Changed">
+                        <ComboBoxItem Content="Microphone / line in" Tag="mic" IsSelected="True"/>
+                        <ComboBoxItem Content="Output device loopback" Tag="loopback"/>
+                    </ComboBox>
+                    <TextBlock Text="Device" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="AudioDeviceBox" Height="28"/>
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="#AAAAAA"
+                               Text="Empty device follows the Windows default. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
+                </StackPanel>
             </Grid>
         </DockPanel>
     </Grid>

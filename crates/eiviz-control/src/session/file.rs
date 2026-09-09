@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioBusRole, AudioDeviceKind, AudioLinkMode, BandwidthSave, BusDto, Document, InputDto,
-    InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate, MvLabelAnchor,
-    MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
-    OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
+    AudioBusRole, AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BusDto,
+    Document, InputDto, InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate,
+    MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto,
+    OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
     SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset, UnitDto,
     VideoPlayWhen, VideoTriggerWhen,
 };
@@ -526,6 +526,13 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         mix_source: mix_source_to_pb(input.mix_source).into(),
         mix_target_id: input.mix_target_id,
         mix_audio_bus_id: input.mix_audio_bus_id,
+        audio_capture_mode: audio_capture_mode_to_pb(input.audio_capture_mode).into(),
+        audio_device_kind: device_kind_to_pb(input.audio_device_kind).into(),
+        audio_device_id: input.audio_device_id.clone(),
+        audio_map_left: input.audio_map_left,
+        audio_map_right: input.audio_map_right,
+        audio_process_exe: input.audio_process_exe.clone(),
+        audio_process_aumid: input.audio_process_aumid.clone(),
     }
 }
 
@@ -567,6 +574,17 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         mix_source: mix_source_from_pb(input.mix_source)?,
         mix_target_id: input.mix_target_id,
         mix_audio_bus_id: input.mix_audio_bus_id,
+        audio_capture_mode: audio_capture_mode_from_pb(input.audio_capture_mode)?,
+        audio_device_kind: device_kind_from_pb(input.audio_device_kind)?,
+        audio_device_id: input.audio_device_id,
+        audio_map_left: input.audio_map_left,
+        audio_map_right: if input.audio_map_right == 0 && input.audio_map_left == 0 {
+            1
+        } else {
+            input.audio_map_right
+        },
+        audio_process_exe: input.audio_process_exe,
+        audio_process_aumid: input.audio_process_aumid,
     })
 }
 
@@ -1138,6 +1156,14 @@ proto_enum!(
     { None => None, Wasapi => Wasapi, Asio => Asio, CoreAudio => CoreAudio }
 );
 proto_enum!(
+    audio_capture_mode_to_pb,
+    audio_capture_mode_from_pb,
+    AudioCaptureMode,
+    pb::AudioCaptureMode,
+    "audio capture mode",
+    { Mic => Mic, EndpointLoopback => EndpointLoopback, ProcessLoopback => ProcessLoopback }
+);
+proto_enum!(
     audio_link_to_pb,
     audio_link_from_pb,
     AudioLinkMode,
@@ -1165,6 +1191,7 @@ fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
         InputKind::NDI => pb::InputKind::Ndi,
         InputKind::UVC => pb::InputKind::Uvc,
         InputKind::Mix => pb::InputKind::Mix,
+        InputKind::Audio => pb::InputKind::Audio,
     }
 }
 
@@ -1180,6 +1207,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
         Ok(pb::InputKind::Ndi) => Ok(InputKind::NDI),
         Ok(pb::InputKind::Uvc) => Ok(InputKind::UVC),
         Ok(pb::InputKind::Mix) => Ok(InputKind::Mix),
+        Ok(pb::InputKind::Audio) => Ok(InputKind::Audio),
         Err(_) => Err(unknown("input kind", value)),
     }
 }
@@ -1187,7 +1215,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{Renderer, parse, to_vec};
+    use crate::session::{parse, to_vec, Renderer};
 
     fn sample_json() -> &'static [u8] {
         br#"{
@@ -1291,11 +1319,9 @@ mod tests {
         let mut bad_container = MAGIC.to_vec();
         bad_container.extend_from_slice(&2u16.to_le_bytes());
         bad_container.extend_from_slice(&[0u8; 4]);
-        assert!(
-            decode_file(&bad_container)
-                .unwrap_err()
-                .contains("container version")
-        );
+        assert!(decode_file(&bad_container)
+            .unwrap_err()
+            .contains("container version"));
         let mut payload = encode_file(&parse(sample_json()).unwrap()).unwrap();
         payload.truncate(8);
         assert!(decode_file(&payload).is_err());
@@ -1330,11 +1356,9 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
         bytes.extend_from_slice(&file.encode_to_vec());
-        assert!(
-            decode_file(&bytes)
-                .unwrap_err()
-                .contains("format version 99")
-        );
+        assert!(decode_file(&bytes)
+            .unwrap_err()
+            .contains("format version 99"));
     }
 
     #[test]
@@ -1348,11 +1372,9 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&CONTAINER_VERSION.to_le_bytes());
         bytes.extend_from_slice(&file.encode_to_vec());
-        assert!(
-            decode_file(&bytes)
-                .unwrap_err()
-                .contains("missing a document")
-        );
+        assert!(decode_file(&bytes)
+            .unwrap_err()
+            .contains("missing a document"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::live::LiveState;
 use crate::session::{
-    AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind, MixSource,
-    MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind,
+    MixSource, MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
     OutputTransport, SceneDto, VideoPlayWhen,
 };
 use crate::{geometry::MultiviewPane, ids, port::*};
@@ -37,6 +37,7 @@ pub enum ReconcileOp {
     StartVideo(VideoStartApply),
     ConnectOmt(LiveConnectApply),
     ConnectNdi(LiveConnectApply),
+    StartAudioCapture(AudioCaptureApply),
     DestroySource {
         id: u64,
     },
@@ -397,6 +398,7 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         | ReconcileOp::StartVideo(_)
         | ReconcileOp::ConnectOmt(_)
         | ReconcileOp::ConnectNdi(_)
+        | ReconcileOp::StartAudioCapture(_)
         | ReconcileOp::DestroySource { .. }
         | ReconcileOp::FailInput { .. } => apply_inputs(port, op, statuses),
         ReconcileOp::DefineScene(_)
@@ -465,6 +467,12 @@ fn apply_inputs<P: crate::port::MixerPort + ?Sized>(
         ),
         ReconcileOp::ConnectNdi(spec) => accept_io(
             port.ndi_connect(spec.clone()),
+            statuses,
+            crate::ids::ResourceKind::Input,
+            spec.id,
+        ),
+        ReconcileOp::StartAudioCapture(spec) => accept_io(
+            port.audio_capture_start(spec.clone()),
             statuses,
             crate::ids::ResourceKind::Input,
             spec.id,
@@ -723,6 +731,29 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 audio_bus_id: input.mix_audio_bus_id,
             })]
         }
+        InputKind::Audio => vec![ReconcileOp::StartAudioCapture(AudioCaptureApply {
+            id: input.id,
+            kind: match input.audio_device_kind {
+                AudioDeviceKind::Wasapi => 1,
+                AudioDeviceKind::Asio => 2,
+                AudioDeviceKind::CoreAudio => 3,
+                AudioDeviceKind::None => 0,
+            },
+            device_id: if input.audio_device_id.is_empty() {
+                input.path_or_address.clone().unwrap_or_default()
+            } else {
+                input.audio_device_id.clone()
+            },
+            mode: match input.audio_capture_mode {
+                AudioCaptureMode::Mic => 0,
+                AudioCaptureMode::EndpointLoopback => 1,
+                AudioCaptureMode::ProcessLoopback => 2,
+            },
+            map_left: input.audio_map_left,
+            map_right: input.audio_map_right,
+            process_exe: input.audio_process_exe.clone(),
+            process_aumid: input.audio_process_aumid.clone(),
+        })],
     }
 }
 
@@ -984,22 +1015,18 @@ mod tests {
         let doc = parse(src).unwrap();
         let ops = plan(None, &doc);
         assert!(matches!(ops.first(), Some(ReconcileOp::Settings)));
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::CreateUnit { id: 1, .. }))
-        );
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DefineGenerator(_)))
-        );
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DefineScene(_)))
-        );
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
-        );
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::CreateUnit { id: 1, .. })));
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DefineGenerator(_))));
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DefineScene(_))));
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
     }
 
     #[test]
@@ -1035,30 +1062,24 @@ mod tests {
         }"#;
         let doc = parse(src).unwrap();
         let ops = plan(Some(&doc), &doc);
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DefineGenerator(_)))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DefineScene(_)))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::ConfigureUnit { .. }))
-        );
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DefineGenerator(_))));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DestroySource { .. })));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::StartVideo(_))));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DefineScene(_))));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::ConfigureUnit { .. })));
     }
 
     #[test]
@@ -1076,22 +1097,18 @@ mod tests {
         let mut next = doc.clone();
         next.settings.vmix_api_port = 9099;
         let ops = plan(Some(&doc), &next);
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::SetLiveState { .. }))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::StartVideo(_)))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::DestroySource { .. }))
-        );
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. }))
-        );
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::SetLiveState { .. })));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::StartVideo(_))));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::DestroySource { .. })));
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::ConfigureVmixApi { port: 9099, .. })));
     }
 
     #[test]
@@ -1104,14 +1121,12 @@ mod tests {
         }"#;
         let doc = parse(src).unwrap();
         let ops = plan(None, &doc);
-        assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::FailInput { id: 2, .. }))
-        );
-        assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::LoadStill { .. }))
-        );
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::FailInput { id: 2, .. })));
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::LoadStill { .. })));
     }
 
     #[test]

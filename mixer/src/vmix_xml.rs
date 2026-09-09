@@ -409,6 +409,7 @@ fn input_type(kind: InputKind) -> String {
         InputKind::NDI => "NDI",
         InputKind::UVC => "Capture",
         InputKind::Mix => "Mix",
+        InputKind::Audio => "Audio",
     }
     .into()
 }

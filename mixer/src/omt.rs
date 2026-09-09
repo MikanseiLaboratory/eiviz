@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,8 +6,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use openmediatransport::{
-    Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame, Quality,
-    ReceiverConfig, ReceiverSession, Sender, Tally, VideoTextureMeta,
+    AudioIngress, Codec, DecodedAudioFrame, Discovery, FrameType, GpuVideoContext, MediaFrame,
+    Quality, ReceiverConfig, ReceiverSession, Sender, Tally, VideoTextureMeta,
 };
 
 use crate::abi::FMT_BGRA;
@@ -283,21 +283,10 @@ impl Drop for OmtReceiver {
     }
 }
 
-/// Enough for ~0.5s at 60fps so a slow VMX encode does not drop PCM.
-pub(crate) const HELD_AUDIO_CAP: usize = 32;
-
-pub(crate) fn push_held_audio(queue: &mut VecDeque<AudioPacket>, packet: AudioPacket) {
-    if queue.len() >= HELD_AUDIO_CAP {
-        queue.pop_front();
-    }
-    queue.push_back(packet);
-}
-
 pub struct ProgramSender {
     sender: Sender,
     encoder: VmxEncoder,
-    pair_after_video: bool,
-    held_audio: VecDeque<AudioPacket>,
+    audio_ingress: AudioIngress,
     name: String,
     discovery: Option<Discovery>,
 }
@@ -316,18 +305,18 @@ impl ProgramSender {
         }))
         .ok()
         .flatten();
+        let audio_ingress = sender.audio_ingress();
         Ok(Self {
             sender,
             encoder: VmxEncoder::new(),
-            pair_after_video: false,
-            held_audio: VecDeque::new(),
+            audio_ingress,
             name: name.to_string(),
             discovery,
         })
     }
 
-    pub fn set_pair_after_video(&mut self, pair: bool) {
-        self.pair_after_video = pair;
+    pub fn audio_ingress(&self) -> AudioIngress {
+        self.audio_ingress.clone()
     }
 
     /// Non-blocking accept only. Safe around GPU encode (no peer-lock reads).
@@ -381,9 +370,7 @@ impl ProgramSender {
             data: bitstream.to_vec(),
             ..Default::default()
         };
-        let result = self.sender.send_video(frame).map_err(|e| e.to_string());
-        self.flush_held_audio();
-        result
+        self.sender.send_video(frame).map_err(|e| e.to_string())
     }
 
     pub fn send_video_texture(
@@ -404,12 +391,9 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
-        let result = self
-            .sender
+        self.sender
             .send_video_texture(ctx, texture, meta)
-            .map_err(|e| e.to_string());
-        self.flush_held_audio();
-        result
+            .map_err(|e| e.to_string())
     }
 
     pub fn video_subscribed(&self) -> bool {
@@ -417,39 +401,44 @@ impl ProgramSender {
     }
 
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
-        if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
-            return Ok(());
-        }
-        if self.pair_after_video {
-            push_held_audio(&mut self.held_audio, audio.clone());
-            return Ok(());
-        }
-        self.emit_audio(audio)
+        send_audio_via_ingress(&self.audio_ingress, audio)
     }
+}
 
-    fn flush_held_audio(&mut self) {
-        while let Some(audio) = self.held_audio.pop_front() {
-            let _ = self.emit_audio(&audio);
-        }
+pub(crate) fn audio_packet_to_frame(audio: &AudioPacket) -> Option<MediaFrame> {
+    if audio.samples_per_channel <= 0 || audio.pcm_planar_f32.is_empty() {
+        return None;
     }
+    Some(MediaFrame {
+        frame_type: FrameType::AUDIO,
+        timestamp: audio.timestamp,
+        codec: Codec::Fpa1 as i32,
+        sample_rate: audio.sample_rate,
+        channels: audio.channels,
+        samples_per_channel: audio.samples_per_channel,
+        data: audio
+            .pcm_planar_f32
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect(),
+        ..Default::default()
+    })
+}
 
-    fn emit_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
-        let frame = MediaFrame {
-            frame_type: FrameType::AUDIO,
-            timestamp: audio.timestamp,
-            codec: Codec::Fpa1 as i32,
-            sample_rate: audio.sample_rate,
-            channels: audio.channels,
-            samples_per_channel: audio.samples_per_channel,
-            data: audio
-                .pcm_planar_f32
-                .iter()
-                .flat_map(|sample| sample.to_le_bytes())
-                .collect(),
-            ..Default::default()
-        };
-        self.sender.send_audio(frame).map_err(|e| e.to_string())
-    }
+pub(crate) fn send_audio_via_ingress(
+    ingress: &AudioIngress,
+    audio: &AudioPacket,
+) -> Result<(), String> {
+    let Some(frame) = audio_packet_to_frame(audio) else {
+        return Ok(());
+    };
+    ingress.send(frame).map_err(|e| e.to_string())
+}
+
+pub(crate) fn omt_audio_send(ingress: AudioIngress) -> Arc<dyn Fn(AudioPacket) + Send + Sync> {
+    Arc::new(move |packet| {
+        let _ = send_audio_via_ingress(&ingress, &packet);
+    })
 }
 
 impl Drop for ProgramSender {
@@ -915,9 +904,12 @@ impl VmxEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{HELD_AUDIO_CAP, omt_query_matches, push_held_audio};
+    use super::{
+        ProgramSender, audio_packet_to_frame, omt_query_matches, send_audio_via_ingress,
+    };
     use crate::upload::AudioPacket;
-    use std::collections::VecDeque;
+    use openmediatransport::Codec;
+    use std::time::{Duration, Instant};
 
     fn pkt(ts: i64) -> AudioPacket {
         AudioPacket {
@@ -930,26 +922,66 @@ mod tests {
     }
 
     #[test]
-    fn held_audio_keeps_multiple_packets() {
-        let mut q = VecDeque::new();
-        push_held_audio(&mut q, pkt(1));
-        push_held_audio(&mut q, pkt(2));
-        push_held_audio(&mut q, pkt(3));
-        assert_eq!(
-            q.iter().map(|p| p.timestamp).collect::<Vec<_>>(),
-            vec![1, 2, 3]
+    fn audio_packet_to_frame_encodes_planar_f32() {
+        let packet = AudioPacket {
+            timestamp: 42,
+            sample_rate: 48_000,
+            channels: 2,
+            samples_per_channel: 2,
+            pcm_planar_f32: vec![0.5, -0.5, 0.25, -0.25],
+        };
+        let frame = audio_packet_to_frame(&packet).expect("frame");
+        assert_eq!(frame.timestamp, 42);
+        assert_eq!(frame.codec, Codec::Fpa1 as i32);
+        assert_eq!(frame.sample_rate, 48_000);
+        assert_eq!(frame.channels, 2);
+        assert_eq!(frame.samples_per_channel, 2);
+        assert_eq!(frame.data.len(), 16);
+        assert!(audio_packet_to_frame(&pkt(0)).is_some());
+        assert!(
+            audio_packet_to_frame(&AudioPacket {
+                samples_per_channel: 0,
+                pcm_planar_f32: vec![],
+                ..pkt(1)
+            })
+            .is_none()
         );
     }
 
     #[test]
-    fn held_audio_caps_by_dropping_oldest() {
-        let mut q = VecDeque::new();
-        for ts in 0..=HELD_AUDIO_CAP as i64 {
-            push_held_audio(&mut q, pkt(ts));
+    fn omt_audio_ingress_keeps_cadence_while_sender_is_busy() {
+        let mut sender = ProgramSender::start(&format!(
+            "eiviz-audio-ingress-{}",
+            std::process::id()
+        ))
+        .expect("omt sender");
+        let ingress = sender.audio_ingress();
+        let _ = sender.pump();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let join = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = sender.pump_accept();
+            let _ = done_tx.send(());
+        });
+        let start = Instant::now();
+        let mut sent = 0u32;
+        while start.elapsed() < Duration::from_millis(150) {
+            send_audio_via_ingress(&ingress, &pkt(i64::from(sent))).expect("ingress send");
+            sent += 1;
+            std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(q.len(), HELD_AUDIO_CAP);
-        assert_eq!(q.front().unwrap().timestamp, 1);
-        assert_eq!(q.back().unwrap().timestamp, HELD_AUDIO_CAP as i64);
+        assert!(
+            sent >= 10,
+            "delayed video must not stall 10 ms PCM, sent={sent}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(250),
+            "ingress send must stay off the encode worker"
+        );
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("busy sender finished");
+        join.join().expect("busy sender thread");
     }
 
     #[test]

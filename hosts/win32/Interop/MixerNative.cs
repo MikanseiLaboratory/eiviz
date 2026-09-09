@@ -235,6 +235,20 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_device_channels", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int AudioDeviceChannels(uint kind, string deviceId);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_capture_start", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int AudioCaptureStart(
+        ulong id,
+        uint kind,
+        string deviceId,
+        uint mode,
+        int mapLeft,
+        int mapRight,
+        string processExe,
+        string processAumid);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_capture_stop")]
+    internal static partial int AudioCaptureStop(ulong id);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_bind_multiview")]
     internal static partial int BindMultiview(ulong sceneId, ulong previewUnit, ulong programUnit);
 
@@ -888,4 +902,6 @@ internal unsafe struct MixerAudioDeviceInfo
     public uint Channels;
     public fixed byte Id[256];
     public fixed byte Name[256];
+    public uint Direction;
+    public uint Caps;
 }

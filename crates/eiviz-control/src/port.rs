@@ -36,6 +36,7 @@ pub trait MixerPort: Send {
     fn video_start(&mut self, spec: VideoStartApply) -> ControlResult<()>;
     fn omt_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()>;
     fn ndi_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()>;
+    fn audio_capture_start(&mut self, spec: AudioCaptureApply) -> ControlResult<()>;
     fn destroy_source(&mut self, id: u64) -> ControlResult<()>;
     fn set_live_save(&mut self, id: u64, mode: u32, flags: u32) -> ControlResult<()>;
     fn set_omt_quality(&mut self, id: u64, quality: u32) -> ControlResult<()>;
@@ -202,6 +203,18 @@ pub struct VideoStartApply {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AudioCaptureApply {
+    pub id: u64,
+    pub kind: u32,
+    pub device_id: String,
+    pub mode: u32,
+    pub map_left: i32,
+    pub map_right: i32,
+    pub process_exe: String,
+    pub process_aumid: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LiveConnectApply {
     pub id: u64,
     pub address: String,
@@ -338,6 +351,9 @@ impl MixerPort for NullMixer {
         Ok(())
     }
     fn ndi_connect(&mut self, _spec: LiveConnectApply) -> ControlResult<()> {
+        Ok(())
+    }
+    fn audio_capture_start(&mut self, _spec: AudioCaptureApply) -> ControlResult<()> {
         Ok(())
     }
     fn destroy_source(&mut self, _id: u64) -> ControlResult<()> {

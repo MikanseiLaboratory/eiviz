@@ -40,8 +40,9 @@ public partial class SceneEditorWindow : Window
         WireCanvas.Width = width;
         WireCanvas.Height = height;
         WireLabel.Text = $"Wireframe ({width}x{height})";
-        InputPick.ItemsSource = session.Inputs;
-        LayerInputBox.ItemsSource = session.Inputs;
+        var videoInputs = session.Inputs.Where(input => input.Kind != InputKind.Audio).ToList();
+        InputPick.ItemsSource = videoInputs;
+        LayerInputBox.ItemsSource = videoInputs;
         if (session.Inputs.Count > 0)
             InputPick.SelectedIndex = 0;
         PreviewAspect.RatioWidth = width;

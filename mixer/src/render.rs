@@ -254,6 +254,7 @@ pub(crate) fn render_loop(
                     use_gpu: output.use_gpu,
                     skip_idle_encode: output.skip_idle_encode,
                     tx: output.tx.clone(),
+                    audio_send: output.audio_send.clone(),
                 }
             }));
             let compose_dirty = guard.compose_dirty;
@@ -267,11 +268,16 @@ pub(crate) fn render_loop(
                 })
                 .map(|output| {
                     let tx = output.tx.clone();
+                    let audio_send = output.audio_send.clone();
                     audio::AudioOutputRoute {
                         audio_bus_id: output.audio_bus_id,
                         source_kind: output.source_kind,
                         send: Arc::new(move |packet| {
-                            let _ = tx.send(SendCmd::Audio { packet });
+                            if let Some(send) = &audio_send {
+                                send(packet);
+                            } else {
+                                let _ = tx.send(SendCmd::Audio { packet });
+                            }
                         }),
                     }
                 })

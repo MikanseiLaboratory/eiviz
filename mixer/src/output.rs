@@ -223,8 +223,8 @@ pub(crate) fn coalesce_latest_video(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
     out
 }
 
-/// Send audio before video in a drain so OMT can hold PCM and flush it on
-/// the same send_video call. NDI audio also leaves before SpeedHQ.
+/// Send audio before video in a drain. OMT PCM uses AudioIngress; NDI audio
+/// still leaves this worker before SpeedHQ.
 pub(crate) fn take_audio_first(cmds: Vec<SendCmd>) -> Vec<SendCmd> {
     let mut out = Vec::with_capacity(cmds.len());
     let mut pending_video = Vec::new();

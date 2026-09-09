@@ -1,4 +1,6 @@
-use crate::session::{Document, InputKind, MixSource, OutputSourceKind, OutputTransport};
+use crate::session::{
+    AudioCaptureMode, Document, InputKind, MixSource, OutputSourceKind, OutputTransport,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
@@ -66,6 +68,31 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                     scene.id, layer.input_id
                 )));
             }
+            if doc
+                .inputs
+                .iter()
+                .find(|input| input.id == layer.input_id)
+                .is_some_and(|input| !input.kind.has_video())
+            {
+                return Err(ValidationError::new(format!(
+                    "scene {} cannot place audio-only input {}",
+                    scene.id, layer.input_id
+                )));
+            }
+        }
+    }
+    for input in &doc.inputs {
+        if input.kind != InputKind::Audio {
+            continue;
+        }
+        if input.audio_capture_mode == AudioCaptureMode::ProcessLoopback
+            && input.audio_process_exe.trim().is_empty()
+            && input.audio_process_aumid.trim().is_empty()
+        {
+            return Err(ValidationError::new(format!(
+                "audio input {} needs a process exe or AUMID",
+                input.id
+            )));
         }
     }
     for input in &doc.inputs {

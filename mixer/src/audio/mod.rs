@@ -1,5 +1,6 @@
 #[cfg(windows)]
 mod asio;
+mod capture;
 #[cfg(target_os = "macos")]
 mod coreaudio;
 #[cfg(windows)]
@@ -16,12 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::OverlayDesc;
-use crate::upload::{AUDIO_RATE, AudioInputStore};
+use crate::upload::{AudioInputStore, AUDIO_RATE};
 
+pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS, MixedAudio,
+    AudioGraph, BusRing, MixedAudio, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI,
+    LINK_FOLLOW, MASTER_BUS,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use scheduler::{AudioMixSnapshot, AudioOutputRoute, AudioScheduler};

@@ -1,17 +1,17 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    WAVE_FORMAT_PCM, eConsole, eRender,
+    eConsole, eRender, IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, AUDCLNT_SHAREMODE_EXCLUSIVE, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::PCWSTR;
 
 use super::graph::BusRing;
 use super::pop_stereo_rate;
@@ -62,14 +62,15 @@ pub fn run(
         };
         let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
         let hns = 200_000i64;
-        let init = client.Initialize(share, flags, hns, 0, mix, None);
-        if init.is_err() && exclusive {
-            client
-                .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, hns, 0, mix, None)
-                .map_err(|error| format!("initialize: {error}"))?;
-        } else {
-            init.map_err(|error| format!("initialize: {error}"))?;
-        }
+        client
+            .Initialize(share, flags, hns, 0, mix, None)
+            .map_err(|error| {
+                if exclusive {
+                    format!("exclusive initialize: {error}")
+                } else {
+                    format!("initialize: {error}")
+                }
+            })?;
         let event =
             CreateEventW(None, false, false, None).map_err(|error| format!("event: {error}"))?;
         client
