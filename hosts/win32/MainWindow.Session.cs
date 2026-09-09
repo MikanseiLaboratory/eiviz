@@ -18,6 +18,7 @@ namespace Eiviz.Host;
 
 public partial class MainWindow
 {
+    private void AddInput_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new AddInputWindow { Owner = this };
         dialog.BindTags(_session);
@@ -1135,5 +1136,4 @@ public partial class MainWindow
         && left.Enabled == right.Enabled
         && left.AudioBusId == right.AudioBusId
         && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers;
-}
 }

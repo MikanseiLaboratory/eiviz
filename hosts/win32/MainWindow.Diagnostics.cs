@@ -175,6 +175,8 @@ public partial class MainWindow
     }
 
 
+    private void Logs_Click(object sender, RoutedEventArgs e) => OpenLogs();
+
     private void ResourceHud_MouseUp(object sender, MouseButtonEventArgs e) => OpenResources();
 
     private void OpenResources()
