@@ -501,8 +501,8 @@ impl Composer {
         }
     }
 
-    /// Copy each Mix Input's delay-ring slot into a stable texture so blit /
-    /// pack bind groups stay valid. Ring wrap must not drop the update rate.
+    /// Copy each Mix Input's live bus into a stable texture so blit / pack
+    /// bind groups stay valid across the next compose.
     pub fn stage_mix_inputs(
         &mut self,
         device: &GpuDevice,

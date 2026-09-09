@@ -334,6 +334,7 @@ impl MixInputSpec {
             SRC_KIND_MU_PREVIEW | SRC_KIND_MU_PROGRAM | SRC_KIND_MU_MULTIVIEW => source_kind,
             _ => return None,
         };
+        let target_id = resolve_output_source_id(source_kind, target_id);
         if target_id == 0 {
             return None;
         }

@@ -57,4 +57,5 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 cc = "1"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"

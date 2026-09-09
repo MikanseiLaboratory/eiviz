@@ -6,21 +6,22 @@ use std::time::{Duration, Instant};
 use eiviz_mixer::{BACKEND_VULKAN, mixer_backend, mixer_create_with_backend};
 use eiviz_mixer::{
     EASING_IN_OUT, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM,
-    MULTIVIEW_BASE, MixerRebarInfo, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OUTPUT_SOURCE,
-    OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM, TRANSITION_CUBE,
-    TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
+    MULTIVIEW_BASE, MixerRebarInfo, MixerStats, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
+    OUTPUT_SOURCE, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
+    SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM,
+    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
     TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
-    mixer_audio_bus_count, mixer_copy_rebar_info, mixer_create, mixer_create_unit,
-    mixer_define_generator, mixer_define_mix_input, mixer_define_scene, mixer_destroy,
-    mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send,
-    mixer_output_add, mixer_ping, mixer_set_live_save, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_acquire_frame, mixer_unit_auto,
-    mixer_unit_cut, mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
-    mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
+    mixer_audio_bus_count, mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
+    mixer_create_unit, mixer_define_generator, mixer_define_mix_input, mixer_define_scene,
+    mixer_destroy, mixer_generator_set_tone, mixer_omt_connect, mixer_omt_discover,
+    mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
+    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
+    mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_get_state,
+    mixer_unit_release_frame, mixer_unit_set_state, mixer_validate_custom_wgsl,
+    mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
@@ -311,6 +312,150 @@ fn omt_program_shows_fade_during_auto() {
     }
     assert_eq!(out.program_source, SRC_BLUE);
     assert_eq!(out.mix, 0.0);
+    mixer_destroy();
+}
+
+/// Mix Input of MU Program must follow Auto. It samples live compose so a
+/// mix tick cannot jump from a stale delay slot to the current bus.
+#[test]
+fn mix_mu_program_shows_fade_during_auto() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(mixer_create_unit(2, 320, 180), OK);
+    let mix_layer = full_layer(20);
+    unsafe {
+        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1, 0), OK);
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_layer), OK);
+        let source = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            transition_kind: TRANSITION_FADE,
+            ..UnitState::default()
+        };
+        let dest = UnitState {
+            program_source: scene_id(2),
+            preview_source: SRC_BARS,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &source), OK);
+        assert_eq!(mixer_unit_set_state(2, &dest), OK);
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "eiviz-mix-pgm-fade-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let baseline = wait_snapshot_rgb(2, &path, Duration::from_secs(4));
+    assert!(
+        baseline.0 > 160.0 && baseline.1 < 80.0,
+        "mix of MU Program should start on Color (red), got r={} b={}",
+        baseline.0,
+        baseline.1
+    );
+
+    const AUTO_MS: u32 = 2000;
+    let auto_started = Instant::now();
+    assert_eq!(
+        mixer_unit_auto(
+            1,
+            TRANSITION_FADE,
+            AUTO_MS,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
+        OK
+    );
+
+    let mut during = Vec::new();
+    while auto_started.elapsed() < Duration::from_millis(1500) {
+        if let Some(sample) = snapshot_rgb_mean(2, &path) {
+            during.push(sample);
+            if sample.1 > baseline.1 + SNAP_FADE_DELTA && sample.0 < baseline.0 - SNAP_FADE_DELTA {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    assert!(
+        !during.is_empty(),
+        "mix of MU Program should keep composing during auto"
+    );
+    let max_blue = during.iter().map(|(_, blue)| *blue).fold(0.0f32, f32::max);
+    let min_red = during.iter().map(|(red, _)| *red).fold(f32::MAX, f32::min);
+    assert!(
+        max_blue > baseline.1 + SNAP_FADE_DELTA,
+        "fade must raise blue on Mix of MU Program (baseline b={} max b={max_blue})",
+        baseline.1
+    );
+    assert!(
+        min_red < baseline.0 - SNAP_FADE_DELTA,
+        "fade must lower red on Mix of MU Program (baseline r={} min r={min_red})",
+        baseline.0
+    );
+    let _ = std::fs::remove_file(&path);
+    mixer_destroy();
+}
+
+/// Mix(SessionMultiview) must address the GPU mosaic id. A raw layout id of 1
+/// used to sample scene 1 (missing) so Program capture was black.
+#[test]
+fn mix_session_multiview_raw_id_program_is_not_black() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let color = full_layer(SRC_COLOR);
+    let mix_layer = full_layer(20);
+    unsafe {
+        assert_eq!(
+            mixer_define_scene(MULTIVIEW_BASE | 1, 320, 180, 1, &color),
+            OK
+        );
+        assert_eq!(
+            mixer_define_mix_input(20, 1, SRC_KIND_MU_MULTIVIEW, 1, 0),
+            OK
+        );
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_layer), OK);
+        let state = UnitState {
+            program_source: scene_id(2),
+            preview_source: SRC_BARS,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "eiviz-mix-mv-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let sample = wait_snapshot_rgb(1, &path, Duration::from_secs(4));
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        sample.0 > 160.0 && sample.1 < 80.0,
+        "Mix(SessionMultiview) Program capture should show Color, got r={} b={}",
+        sample.0,
+        sample.1
+    );
     mixer_destroy();
 }
 
@@ -673,6 +818,80 @@ fn looks_blue(sample: (f32, f32)) -> bool {
 /// Mid-fade OMT is a mix, then UYVY. Look for a move off the baseline, not a
 /// full primary swing.
 const OMT_FADE_DELTA: f32 = 5.0;
+const SNAP_FADE_DELTA: f32 = 12.0;
+
+fn snapshot_rgb_mean(unit: u64, path: &std::path::Path) -> Option<(f32, f32)> {
+    let _ = std::fs::remove_file(path);
+    let cpath = CString::new(path.to_string_lossy().as_bytes()).ok()?;
+    let code = unsafe { mixer_snapshot(unit, OUTPUT_PROGRAM, cpath.as_ptr()) };
+    if code != OK {
+        return None;
+    }
+    let img = image::open(path).ok()?.to_rgb8();
+    let n = img.pixels().len().max(1) as f32;
+    let (mut red, mut blue) = (0.0f32, 0.0f32);
+    for pixel in img.pixels() {
+        red += f32::from(pixel[0]);
+        blue += f32::from(pixel[2]);
+    }
+    Some((red / n, blue / n))
+}
+
+fn assert_mixer_keeps_composing(units: &[u64], path: &std::path::Path, budget: Duration) {
+    for &unit in units {
+        let sample = wait_snapshot_rgb(unit, path, Duration::from_secs(3));
+        assert!(
+            sample.0 > 8.0 || sample.1 > 8.0,
+            "unit {unit} program stayed black (r={} b={})",
+            sample.0,
+            sample.1
+        );
+    }
+    let started = Instant::now();
+    let mut ok = 0u32;
+    let mut max_ms = 0.0f32;
+    while started.elapsed() < budget {
+        for &unit in units {
+            if snapshot_rgb_mean(unit, path).is_some() {
+                ok += 1;
+            }
+        }
+        let mut stats = MixerStats::default();
+        unsafe {
+            assert_eq!(mixer_copy_stats(&mut stats), OK);
+        }
+        max_ms = max_ms.max(stats.render_ms);
+        assert!(
+            stats.frame_budget_ms > 0.0,
+            "master clock budget must stay positive"
+        );
+        thread::sleep(Duration::from_millis(80));
+    }
+    assert!(
+        ok >= units.len() as u32,
+        "compose stalled: only {ok} program snapshots in {budget:?}"
+    );
+    assert!(
+        max_ms < 80.0,
+        "render_ms spiked to {max_ms} (budget ~16ms); compose is not keeping up"
+    );
+    assert_eq!(mixer_ping(), 0x4549_5649);
+}
+
+fn wait_snapshot_rgb(unit: u64, path: &std::path::Path, budget: Duration) -> (f32, f32) {
+    let started = Instant::now();
+    let mut last = (0.0, 0.0);
+    while started.elapsed() < budget {
+        if let Some(sample) = snapshot_rgb_mean(unit, path) {
+            last = sample;
+            if sample.0 > 8.0 || sample.1 > 8.0 {
+                return sample;
+            }
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    last
+}
 
 fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
     let deadline = Instant::now() + budget;
@@ -906,6 +1125,143 @@ fn mix_input_define_and_self_cycle_rejected() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &cycle), OK);
     }
+
+    let via_scene = full_layer(20);
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(5), 320, 180, 1, &via_scene), OK);
+        let mut scene_cycle = UnitState {
+            program_source: scene_id(5),
+            preview_source: SRC_BARS,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &scene_cycle), ERR_INVALID_ARGUMENT);
+
+        scene_cycle.program_source = SRC_COLOR;
+        scene_cycle.overlay_count = 1;
+        scene_cycle.overlays[0].source_id = 20;
+        assert_eq!(mixer_unit_set_state(1, &scene_cycle), ERR_INVALID_ARGUMENT);
+    }
+    mixer_destroy();
+}
+
+/// Nested Mix (A on B) and mutual Mix (A↔B) must keep composing.
+/// Sources are staged copies of the previous live bus, so this is a
+/// one-frame ping-pong, not a GPU feedback loop.
+#[test]
+fn mix_input_nesting_keeps_composing() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(mixer_create_unit(2, 320, 180), OK);
+    let mix_a = full_layer(20);
+    let mix_b = full_layer(21);
+    unsafe {
+        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1, 0), OK);
+        assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PROGRAM, 1, 0), OK);
+        assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_a), OK);
+        assert_eq!(mixer_define_scene(scene_id(3), 320, 180, 1, &mix_b), OK);
+        let source = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            transition_kind: TRANSITION_FADE,
+            ..UnitState::default()
+        };
+        let nested = UnitState {
+            program_source: scene_id(2),
+            preview_source: SRC_BARS,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &source), OK);
+        assert_eq!(mixer_unit_set_state(2, &nested), OK);
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "eiviz-mix-nest-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    assert_eq!(
+        mixer_unit_auto(
+            1,
+            TRANSITION_FADE,
+            1200,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
+        OK
+    );
+    assert_mixer_keeps_composing(&[1, 2], &path, Duration::from_millis(900));
+
+    unsafe {
+        let mutual_a = UnitState {
+            program_source: scene_id(3),
+            preview_source: SRC_COLOR,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        let mutual_b = UnitState {
+            program_source: scene_id(2),
+            preview_source: SRC_BLUE,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &mutual_a), OK);
+        assert_eq!(mixer_unit_set_state(2, &mutual_b), OK);
+    }
+    assert_eq!(
+        mixer_unit_auto(
+            1,
+            TRANSITION_FADE,
+            800,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
+        OK
+    );
+    assert_eq!(
+        mixer_unit_auto(
+            2,
+            TRANSITION_FADE,
+            800,
+            1,
+            1,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0,
+            0.02,
+            0.0
+        ),
+        OK
+    );
+    assert_mixer_keeps_composing(&[1, 2], &path, Duration::from_millis(900));
+    let _ = std::fs::remove_file(&path);
     mixer_destroy();
 }
 
