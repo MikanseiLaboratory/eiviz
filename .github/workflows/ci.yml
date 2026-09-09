@@ -61,6 +61,7 @@ jobs:
       - name: Validate sample session
         run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eivz
 
+      # windows-latest exposes WARP/DX12, not a Vulkan adapter. Vulkan exit is linux-vulkan.
       - name: Run headless Bars session and confirm process exit
         shell: pwsh
         run: |
@@ -82,7 +83,7 @@ jobs:
             "run",
             "--session", "headless\tests\fixtures\bars.eivz",
             "--bind", "127.0.0.1:0",
-            "--renderer", "vulkan"
+            "--renderer", "dx12"
           ) -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
           $ready = $false
           $ws = $null
