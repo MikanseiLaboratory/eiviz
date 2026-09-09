@@ -193,7 +193,7 @@ enum AppKitDialog {
             window.setContentSize(NSSize(width: width, height: height))
             window.setFrameOrigin(NSPoint(
                 x: parentFrame.midX - width / 2,
-                y: parentFrame.minY + 48
+                y: parentFrame.midY - height / 2
             ))
         } else {
             window.center()

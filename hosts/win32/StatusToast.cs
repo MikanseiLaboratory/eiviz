@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace Eiviz.Host;
@@ -16,7 +15,7 @@ internal static class StatusToast
             ShowInTaskbar = false,
             Topmost = true,
             SizeToContent = SizeToContent.WidthAndHeight,
-            WindowStartupLocation = WindowStartupLocation.Manual,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Owner = owner
         };
         HostDialog.Apply(toast);
@@ -28,7 +27,6 @@ internal static class StatusToast
             MaxWidth = 420
         };
         toast.MouseLeftButtonUp += (_, _) => toast.Close();
-        toast.Loaded += (_, _) => Place(toast, owner);
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
         timer.Tick += (_, _) =>
         {
@@ -37,16 +35,5 @@ internal static class StatusToast
         };
         toast.Show();
         timer.Start();
-    }
-
-    private static void Place(Window toast, Window? owner)
-    {
-        if (owner is { IsVisible: true })
-        {
-            toast.Left = owner.Left + (owner.ActualWidth - toast.ActualWidth) / 2;
-            toast.Top = owner.Top + owner.ActualHeight - toast.ActualHeight - 64;
-            return;
-        }
-        toast.WindowStartupLocation = WindowStartupLocation.CenterScreen;
     }
 }
