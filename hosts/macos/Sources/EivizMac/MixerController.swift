@@ -1527,6 +1527,17 @@ final class MixerController: ObservableObject {
         saveSnapshot(sourceId: input.id, kind: EIVIZ_OUTPUT_SOURCE, name: input.name)
     }
 
+    func snapshotSelectedInput() {
+        if isRemote { return }
+        guard let id = selectedInputId,
+              let input = session.inputs.first(where: { $0.id == id })
+        else {
+            presentError(L10n.t("msg.selectInputScreenshot"), title: L10n.t("chrome.screenshot"))
+            return
+        }
+        snapshotInput(input)
+    }
+
     private func saveSnapshot(sourceId: UInt64, kind: UInt32, name: String) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png, .jpeg]

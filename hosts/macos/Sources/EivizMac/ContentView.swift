@@ -446,12 +446,7 @@ struct ContentView: View {
                         }
                         if !mixer.isRemote {
                             Button("Preview") { mixer.previewSelectedInput() }
-                            Button(L10n.t("chrome.screenshot")) {
-                                guard let id = mixer.selectedInputId,
-                                      let input = mixer.session.inputs.first(where: { $0.id == id })
-                                else { return }
-                                mixer.snapshotInput(input)
-                            }
+                            Button(L10n.t("chrome.screenshot")) { mixer.snapshotSelectedInput() }
                         }
                         Button("Delete") { mixer.deleteSelectedInput() }
                     }
