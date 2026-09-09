@@ -263,6 +263,10 @@ impl OutputSnap {
         let height = if self.height > 0 { self.height } else { src_h };
         (width.max(2), height.max(1))
     }
+
+    fn has_custom_size(&self) -> bool {
+        self.width > 0 && self.height > 0
+    }
 }
 
 pub(crate) fn pack_copy_key(source_kind: u32, source_id: u64, unit_id: u64) -> u64 {

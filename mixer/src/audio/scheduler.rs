@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::abi::{MixInputSpec, OverlayDesc, UnitSnap, SRC_KIND_MU_MULTIVIEW};
+use crate::abi::{MixInputSpec, OverlayDesc, SRC_KIND_MU_MULTIVIEW, UnitSnap};
 use crate::generator_audio;
-use crate::upload::{AudioInputStore, AudioPacket, AUDIO_RATE};
+use crate::upload::{AUDIO_RATE, AudioInputStore, AudioPacket};
 
 use super::{AudioEngine, MixedAudio};
 

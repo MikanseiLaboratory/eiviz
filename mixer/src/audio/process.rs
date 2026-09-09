@@ -159,12 +159,12 @@ fn windows_list() -> Vec<CaptureProcess> {
 
 #[cfg(windows)]
 fn gui_window_titles() -> std::collections::HashMap<u32, String> {
-    use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
-        IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
+        EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
     };
+    use windows::core::BOOL;
 
     unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let titles = unsafe { &mut *(lparam.0 as *mut std::collections::HashMap<u32, String>) };
@@ -235,7 +235,7 @@ fn skip_system_exe(exe: &str) -> bool {
 fn windows_snapshot() -> Vec<SnapshotProcess> {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
 
@@ -276,9 +276,9 @@ fn wchar_to_string(buf: &[u16]) -> String {
 
 #[cfg(windows)]
 fn process_aumid(pid: u32) -> String {
-    use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::core::PWSTR;
 
     unsafe {
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {

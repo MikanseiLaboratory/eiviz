@@ -871,7 +871,7 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_present_mode, BlitParams};
+    use super::{BlitParams, pick_present_mode};
 
     #[test]
     fn present_params_match_uyvy_shader() {

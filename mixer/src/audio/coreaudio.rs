@@ -1,6 +1,6 @@
 //! Core Audio device listing for macOS. Playback and capture go through cpal.
 
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::ptr;
 
 use super::graph::DEVICE_COREAUDIO;

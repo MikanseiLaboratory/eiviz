@@ -9,7 +9,7 @@ use cpal::{DeviceId, HostId, SampleFormat, Stream, StreamConfig, SupportedStream
 
 use crate::upload::AudioInputStore;
 
-use super::capture::{send_ready, AudioCaptureSpec};
+use super::capture::{AudioCaptureSpec, send_ready};
 use super::graph::BusRing;
 use super::info::{CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_MIC};
 use super::pcm::{f32_to_i16, f32_to_i32, interleaved_f32_packet, mix_mapped_f32};

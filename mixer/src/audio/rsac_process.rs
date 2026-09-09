@@ -8,7 +8,7 @@ use rsac::{AudioCapture, AudioCaptureBuilder, CaptureTarget, ProcessId};
 
 use crate::upload::AudioInputStore;
 
-use super::capture::{send_ready, AudioCaptureSpec};
+use super::capture::{AudioCaptureSpec, send_ready};
 use super::pcm::interleaved_f32_packet;
 
 /// Process-loopback via rsac. We only use `AudioCapture` + `read_buffer` (the

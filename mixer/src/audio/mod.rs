@@ -21,13 +21,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::abi::OverlayDesc;
-use crate::upload::{AudioInputStore, AUDIO_RATE};
+use crate::upload::{AUDIO_RATE, AudioInputStore};
 
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, MixedAudio, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI,
-    LINK_FOLLOW, MASTER_BUS,
+    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
+    MASTER_BUS, MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;

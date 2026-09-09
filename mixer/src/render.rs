@@ -463,6 +463,23 @@ pub(crate) fn render_loop(
                     // Mix/T-bar ticks discard the delay ring so present can
                     // show the live compose. Program send must do the same
                     // or NDI/OMT freeze until mix is stable again.
+                    if output.cpu_video() && !output.has_custom_size() {
+                        // Native size: send the delay/live packed bus so Auto/T-bar
+                        // keeps moving. Re-packing a cached RGBA view freezes on the
+                        // last bind-group source while mix is in flight.
+                        if let Some(packed) = frame_delay
+                            .packed(output.unit_id, kind)
+                            .or_else(|| composer.packed_texture(output.unit_id, kind))
+                            .cloned()
+                        {
+                            let width = packed.size().width.saturating_mul(2).max(2);
+                            let height = packed.size().height.max(1);
+                            let rb = readbacks.ensure(&device, output.output_id, width, height);
+                            rb.copy_from(&mut encoder, &packed);
+                            packed_copies.push((output.output_id, width, height));
+                        }
+                        continue;
+                    }
                     let src = frame_delay
                         .rgba(output.unit_id, kind)
                         .or_else(|| composer.rgba_texture(output.unit_id, kind))

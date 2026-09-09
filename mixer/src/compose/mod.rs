@@ -2408,6 +2408,8 @@ impl Composer {
             .output_scaled
             .get(&output_id)?
             .create_view(&Default::default());
+        self.blit_groups.remove(&key);
+        self.uyvy_groups.remove(&key);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("output scale"),
@@ -2470,6 +2472,7 @@ impl Composer {
             .output_packed
             .get(&output_id)?
             .create_view(&Default::default());
+        self.pack_groups.remove(&key);
         self.pack_to(device, encoder, key, src, &dest);
         self.output_packed.get(&output_id)
     }

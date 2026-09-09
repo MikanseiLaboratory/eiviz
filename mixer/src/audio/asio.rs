@@ -4,17 +4,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use windows::core::{IUnknown, Interface, GUID, HRESULT};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
 };
+use windows::core::{GUID, HRESULT, IUnknown, Interface};
 
+use super::AudioCaptureSpec;
 use super::graph::{BusRing, DEVICE_ASIO};
 use super::info::{
     CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_MIC, CAPTURE_MODE_PROCESS_LOOPBACK,
 };
 use super::pop_stereo_rate;
-use super::AudioCaptureSpec;
 use crate::upload::{AudioInputStore, AudioPacket};
 
 const IID_IASIO: GUID = GUID::from_u128(0x4533_a902_d579_11d0_89f4_00a0_c905_425c);

@@ -904,9 +904,7 @@ impl VmxEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProgramSender, audio_packet_to_frame, omt_query_matches, send_audio_via_ingress,
-    };
+    use super::{ProgramSender, audio_packet_to_frame, omt_query_matches, send_audio_via_ingress};
     use crate::upload::AudioPacket;
     use openmediatransport::Codec;
     use std::time::{Duration, Instant};
@@ -950,11 +948,9 @@ mod tests {
 
     #[test]
     fn omt_audio_ingress_keeps_cadence_while_sender_is_busy() {
-        let mut sender = ProgramSender::start(&format!(
-            "eiviz-audio-ingress-{}",
-            std::process::id()
-        ))
-        .expect("omt sender");
+        let mut sender =
+            ProgramSender::start(&format!("eiviz-audio-ingress-{}", std::process::id()))
+                .expect("omt sender");
         let ingress = sender.audio_ingress();
         let _ = sender.pump();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
