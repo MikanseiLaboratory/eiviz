@@ -394,7 +394,7 @@ fn spawn_exit_watchdog() {
         .spawn(|| {
             std::thread::sleep(std::time::Duration::from_secs(8));
             eprintln!("eiviz-headless error=shutdown watchdog");
-            std::process::exit(EXIT_OTHER);
+            std::process::exit(i32::from(EXIT_OTHER));
         })
         .ok();
 }
