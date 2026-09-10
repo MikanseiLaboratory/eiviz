@@ -685,8 +685,8 @@ mod tests {
 
     #[test]
     fn xmltext_reads_version_and_input_title() {
-        let xml = r#"<vmix><version>0.3.0-alpha.2</version><inputs><input key="a" number="1" title="Scene 1"></input></inputs></vmix>"#;
-        assert_eq!(xml_text("vmix/version", xml).unwrap(), "0.3.0-alpha.2");
+        let xml = r#"<vmix><version>0.3.0</version><inputs><input key="a" number="1" title="Scene 1"></input></inputs></vmix>"#;
+        assert_eq!(xml_text("vmix/version", xml).unwrap(), "0.3.0");
         assert_eq!(
             xml_text("vmix/inputs/input[1]/@title", xml).unwrap(),
             "Scene 1"

@@ -608,7 +608,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "eiviz-api"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 dependencies = [
  "base64",
  "eiviz-control",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz-control"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz-headless"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 dependencies = [
  "clap",
  "eiviz-api",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz_mixer"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 dependencies = [
  "ash",
  "base64",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz_remote"
-version = "0.3.0-alpha.2"
+version = "0.3.0"
 dependencies = [
  "eiviz-api",
  "eiviz-control",
