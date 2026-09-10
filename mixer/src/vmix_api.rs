@@ -633,6 +633,7 @@ fn read_cstr(ptr: *const c_char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn query_and_path() {
@@ -653,6 +654,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn cut_with_input_leaves_preview() {
         crate::mixer_destroy();
         assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
@@ -672,6 +674,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn cut_without_input_takes_preview() {
         crate::mixer_destroy();
         assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
@@ -688,6 +691,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn fade_with_input_leaves_preview() {
         crate::mixer_destroy();
         assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
@@ -710,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn snapshot_function_requires_published_session() {
         clear_published();
         crate::mixer_destroy();
@@ -721,6 +726,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn snapshot_function_writes_after_session_publish() {
         crate::mixer_destroy();
         assert_eq!(crate::mixer_create(0, 60_000, 1_001), crate::OK);
@@ -784,6 +790,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(mixer)]
     fn http_auth_xml_and_unknown_function() {
         let port = 18721;
         assert_eq!(configure(true, port, "user", "secret"), crate::abi::OK);

@@ -2727,10 +2727,11 @@ pub unsafe extern "C" fn mixer_output_add(
     } else {
         audio_bus_id
     };
-    // Withdraw the previous OMT advertisement before creating the next
-    // sender. openmediatransport-rs keys DNS-SD by instance name, so Drop of
-    // the old sender would otherwise unregister the new one too. Settings
-    // ApplyOutputs + session publish hits this replace path for every enable.
+    // Replace must not withdraw `_omt._tcp` for this instance name.
+    // openmediatransport-rs keys DNS-SD by name; Drop of the old sender
+    // would unregister the live row, and a second register of the same
+    // fullname does not come back on macOS browse. Settings ApplyOutputs +
+    // session publish hits this path for every Enable.
     let old = match with_mixer(|mixer| {
         mixer
             .shared
@@ -2743,6 +2744,10 @@ pub unsafe extern "C" fn mixer_output_add(
         Ok(old) => old,
         Err(code) => return code,
     };
+    let replacing_omt = old.is_some() && transport == OUT_OMT;
+    if replacing_omt {
+        omt::retain_advertise(&name);
+    }
     if let Some(old) = old {
         shutdown_output_worker(old);
     }
@@ -2776,10 +2781,16 @@ pub unsafe extern "C" fn mixer_output_add(
             match started {
                 Ok(Ok(sender)) => OutputHandle::Omt(sender),
                 Ok(Err(error)) => {
+                    if replacing_omt {
+                        omt::abandon_advertise(&name);
+                    }
                     let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
                 }
                 Err(_) => {
+                    if replacing_omt {
+                        omt::abandon_advertise(&name);
+                    }
                     let _ = with_mixer(|mixer| {
                         set_error(&mixer.telemetry, "OMT sender panicked during create")
                     });
@@ -4174,6 +4185,7 @@ pub(crate) fn reset_frame_caches() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::collections::HashMap;
 
     #[test]
@@ -4499,6 +4511,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[serial(mixer)]
     fn attach_missing_remote_unit_reports_error() {
         mixer_destroy();
         assert_eq!(mixer_create(0, 60, 1), OK);
@@ -4552,6 +4565,7 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     #[test]
+    #[serial(mixer)]
     fn source_status_is_empty_without_receiver() {
         mixer_destroy();
         let mut status = MixerSourceStatus {
