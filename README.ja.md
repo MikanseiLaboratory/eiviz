@@ -21,7 +21,7 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
-| Windows x64 | Direct3D 12 | 対応済み |
+| Windows x64 | Direct3D 12またはVulkan | 対応済み |
 | macOS | Metal | 対応済み(未テスト) |
 | Linux | Vulkan | headlessのみ |
 
@@ -35,9 +35,7 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 ### macOS Apple Silicon（`macos-arm64`）
 
-`eiviz-*-macos-arm64.pkg`を実行すると、`/Applications`に入ります。Mixerは`eiviz.app`、操作クライアントは`eiviz-remote.app`です。`eivizctl`と`eiviz-headless`は`/usr/local/bin`に入ります。
-
-NDI®の発見と送出には`.app`バージョンのインストールが必要です。macOSにブロックされたときは、システム設定→プライバシーとセキュリティ→このまま開く からセキュリティを許可してください。
+`eiviz-*-macos-arm64.pkg`を実行します。
 
 ### macOS Intel（`macos-x64`）
 

@@ -12,7 +12,7 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 
 | Platform | Graphics | Status |
 | --- | --- | --- |
-| Windows x64 | Direct3D 12 | Supported |
+| Windows x64 | Direct3D 12 or Vulkan | Supported |
 | macOS | Metal | Supported (untested) |
 | Linux | Vulkan | Under development |
 
@@ -26,9 +26,7 @@ Run `eiviz-*-win-x64-setup.exe`.
 
 ### macOS Apple Silicon (`macos-arm64`)
 
-Run `eiviz-*-macos-arm64.pkg` to install into `/Applications`. The mixer is `eiviz.app`; the operator client is `eiviz-remote.app`. `eivizctl` and `eiviz-headless` install to `/usr/local/bin`.
-
-The `.app` is required for NDI® discovery and send. If macOS blocks it: System Settings → Privacy & Security → Open Anyway.
+Run `eiviz-*-macos-arm64.pkg`.
 
 ### macOS Intel (`macos-x64`)
 
