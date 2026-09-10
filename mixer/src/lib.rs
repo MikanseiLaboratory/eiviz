@@ -430,6 +430,14 @@ impl OutputHandle {
         }
     }
 
+    fn omt_video_subscribers(&self) -> Option<u32> {
+        match self {
+            Self::Omt(sender) => Some(sender.video_subscriber_count() as u32),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => None,
+        }
+    }
+
     fn send_video_uyvy(
         &mut self,
         width: u32,
@@ -2836,6 +2844,7 @@ pub unsafe extern "C" fn mixer_output_add(
             output_id,
             handle,
             Arc::clone(&video_sub),
+            Arc::clone(&connections),
             mixer.omt_gpu.clone(),
             Arc::clone(&mixer.stop),
             clock,
@@ -3996,9 +4005,8 @@ pub unsafe extern "C" fn mixer_copy_runtime_stats(out: *mut MixerRuntimeStats) -
             match output.transport {
                 OUT_OMT => {
                     output_omt += 1;
-                    if output.video_sub.load(Ordering::Relaxed) {
-                        output_omt_subscribed += 1;
-                    }
+                    output_omt_subscribed = output_omt_subscribed
+                        .saturating_add(output.connections.load(Ordering::Relaxed));
                 }
                 OUT_NDI => {
                     output_ndi += 1;
@@ -4071,11 +4079,7 @@ pub unsafe extern "C" fn mixer_copy_output_stats(
             if n >= cap {
                 break;
             }
-            let connections = if output.transport == OUT_OMT {
-                u32::from(output.video_sub.load(Ordering::Relaxed))
-            } else {
-                output.connections.load(Ordering::Relaxed)
-            };
+            let connections = output.connections.load(Ordering::Relaxed);
             unsafe {
                 *out.add(n as usize) = OutputRuntimeStats {
                     output_id,

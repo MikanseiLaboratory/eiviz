@@ -475,6 +475,10 @@ impl ProgramSender {
         self.sender.video_subscribed()
     }
 
+    pub fn video_subscriber_count(&self) -> usize {
+        self.sender.video_subscriber_count()
+    }
+
     pub fn send_audio(&mut self, audio: &AudioPacket) -> Result<(), String> {
         send_audio_via_ingress(&self.audio_ingress, audio)
     }
