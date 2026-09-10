@@ -88,6 +88,14 @@ internal static class GpuUtilization
         private void Rebuild()
         {
             ClearCounters();
+            Collect(requireLuid: !string.IsNullOrEmpty(_luidNeedle));
+            if (_counters.Count == 0 && !string.IsNullOrEmpty(_luidNeedle))
+                Collect(requireLuid: false);
+            _primed = false;
+        }
+
+        private void Collect(bool requireLuid)
+        {
             var chars = 0;
             var status = PdhExpandWildCardPathW(null, Wild, nint.Zero, ref chars, 0);
             if (status != PdhMoreData && status != 0 || chars <= 1)
@@ -108,7 +116,8 @@ internal static class GpuUtilization
                 start = i + 1;
                 if (!path.Contains(needle, StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (!string.IsNullOrEmpty(_luidNeedle)
+                if (requireLuid
+                    && !string.IsNullOrEmpty(_luidNeedle)
                     && !path.Contains(_luidNeedle, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (path.Contains("engtype_Copy", StringComparison.OrdinalIgnoreCase)
@@ -117,7 +126,6 @@ internal static class GpuUtilization
                 if (PdhAddEnglishCounterW(_query, path, nint.Zero, out var counter) == 0)
                     _counters.Add(counter);
             }
-            _primed = false;
         }
 
         private void ClearCounters()

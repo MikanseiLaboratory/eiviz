@@ -10,6 +10,8 @@ enum HostResources {
 
     static func gpuPercent() -> Float? { sampleGpu() }
 
+    static func ramBytes() -> UInt64 { sampleRamBytes() }
+
     static func hud(renderMs: Float, budgetMs: Float) -> (text: String, warn: String) {
         let cpu = sampleCpu()
         let ram = sampleRam()
@@ -47,6 +49,13 @@ enum HostResources {
     }
 
     private static func sampleRam() -> Float {
+        let resident = sampleRamBytes()
+        let total = Double(ProcessInfo.processInfo.physicalMemory)
+        guard resident > 0, total > 0 else { return 0 }
+        return Float(min(100, Double(resident) / total * 100))
+    }
+
+    private static func sampleRamBytes() -> UInt64 {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
         let kr = withUnsafeMutablePointer(to: &info) { ptr in
@@ -55,9 +64,7 @@ enum HostResources {
             }
         }
         guard kr == KERN_SUCCESS else { return 0 }
-        let total = Double(ProcessInfo.processInfo.physicalMemory)
-        guard total > 0 else { return 0 }
-        return Float(Double(info.resident_size) / total * 100)
+        return UInt64(info.resident_size)
     }
 
     private static func sampleGpu() -> Float? {

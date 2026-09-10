@@ -28,6 +28,7 @@
                     <WrapPanel x:Name="TagPanel" Margin="0,0,8,0"/>
                 </DockPanel>
             </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
             <Grid>
                 <StackPanel x:Name="ColourPanel" Visibility="Collapsed">
                     <TextBlock Text="Colour generator" Margin="0,0,0,8"/>
@@ -248,6 +249,7 @@
                                Text="Empty device follows the Windows default. Application Audio lists processes with a visible window and stores the exe or AUMID, not a PID. ASIO shares the driver with output buses; pick any input channel for L and R. Audio Inputs stay on the selected buses and are hidden from Scene layers."/>
                 </StackPanel>
             </Grid>
+            </ScrollViewer>
         </DockPanel>
     </Grid>
 </Window>

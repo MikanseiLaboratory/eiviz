@@ -1760,17 +1760,15 @@ struct ResourcesView: View {
                 liveOutputs[row.output_id] = row
             }
         }
-        var totalRam = stats.ram_bytes
-        var totalVram = stats.vram_bytes
-        if totalRam == 0 && totalVram == 0 {
+        var trackedVram = stats.vram_bytes
+        if trackedVram == 0 {
             for usage in usages.values {
-                totalRam += usage.ram_bytes
-                totalVram += usage.vram_bytes
+                trackedVram += usage.vram_bytes
             }
         }
-        if totalRam == 0 { totalRam = 1 }
-        if totalVram == 0 { totalVram = 1 }
         let gpuText = HostResources.gpuPercent().map { String(format: "%.0f%%", $0) } ?? L10n.t("resources.unmeasured")
+        let ramText = formatBytes(HostResources.ramBytes())
+        let vramText = trackedVram == 0 ? L10n.t("resources.unmeasured") : formatBytes(trackedVram)
         rows = mixer.session.inputs.map { input in
             let usage = usages[input.id]
             let live = liveInputs[input.id]
@@ -1828,7 +1826,7 @@ struct ResourcesView: View {
         let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
             ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
             : ""
-        summary = "Uptime \(formatUptime(runtime.uptime_ms))    Skipped \(runtime.render_skipped)    Lost \(runtime.input_queue_dropped)    OMT \(runtime.output_omt) (sub \(runtime.output_omt_subscribed))    NDI \(runtime.output_ndi) (conn \(runtime.output_ndi_connections))    Inputs \(mixer.session.inputs.count)    GPU \(gpuText)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        summary = "Uptime \(formatUptime(runtime.uptime_ms))    Skipped \(runtime.render_skipped)    Lost \(runtime.input_queue_dropped)    OMT \(runtime.output_omt) (sub \(runtime.output_omt_subscribed))    NDI \(runtime.output_ndi) (conn \(runtime.output_ndi_connections))    Inputs \(mixer.session.inputs.count)    GPU \(gpuText)    RAM \(ramText)    VRAM \(vramText)\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
 

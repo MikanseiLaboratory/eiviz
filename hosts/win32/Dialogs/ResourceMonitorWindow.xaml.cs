@@ -60,20 +60,19 @@ public partial class ResourceMonitorWindow : Window
                     outputs.Add(outputBuf[i]);
             }
         }
-        ulong totalRam = stats.RamBytes;
-        ulong totalVram = stats.VramBytes;
-        if (totalRam == 0 && totalVram == 0)
+        ulong trackedVram = stats.VramBytes;
+        if (trackedVram == 0)
         {
             foreach (var usage in usages.Values)
-            {
-                totalRam += usage.RamBytes;
-                totalVram += usage.VramBytes;
-            }
+                trackedVram += usage.VramBytes;
         }
-        if (totalRam == 0) totalRam = 1;
-        if (totalVram == 0) totalVram = 1;
-        var gpuLoad = GpuUtilization.Last();
+        var process = System.Diagnostics.Process.GetCurrentProcess();
+        process.Refresh();
+        var processRam = (ulong)Math.Max(0, process.WorkingSet64);
+        var gpuLoad = GpuUtilization.Last() ?? GpuUtilization.Percent();
         var gpuText = gpuLoad is { } gpu ? $"{gpu:0}%" : Loc.T("resources.unmeasured");
+        var ramText = FormatBytes(processRam);
+        var vramText = trackedVram == 0 ? Loc.T("resources.unmeasured") : FormatBytes(trackedVram);
 
         var rows = new List<Row>();
         foreach (var input in session.Inputs)
@@ -124,8 +123,6 @@ public partial class ResourceMonitorWindow : Window
                 "—"));
         }
         UsageList.ItemsSource = rows;
-        var ramText = FormatBytes(totalRam == 1 ? 0 : totalRam);
-        var vramText = FormatBytes(totalVram == 1 ? 0 : totalVram);
         var extra = stats.ComposeVramBytes > 0 || stats.DelayVramBytes > 0
             ? $"    Compose {FormatBytes(stats.ComposeVramBytes)}    Delay {FormatBytes(stats.DelayVramBytes)}"
             : "";
@@ -133,8 +130,7 @@ public partial class ResourceMonitorWindow : Window
             $"Uptime {FormatUptime(runtime.UptimeMs)}    Skipped {runtime.RenderSkipped}    Lost {runtime.InputQueueDropped}    " +
             $"OMT {runtime.OutputOmt} (sub {runtime.OutputOmtSubscribed})    NDI {runtime.OutputNdi} (conn {runtime.OutputNdiConnections})    " +
             $"Inputs {session.Inputs.Count}    GPU {gpuText}    RAM {ramText}    VRAM {vramText}{extra}    " +
-            $"Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms    " +
-            "VRAM is max(DXGI process memory, tracked textures)";
+            $"Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
     }
 
     private static string FormatUptime(ulong ms)

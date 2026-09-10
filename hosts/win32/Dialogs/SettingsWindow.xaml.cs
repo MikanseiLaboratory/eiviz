@@ -95,8 +95,13 @@ public partial class SettingsWindow : Window
 
     private void ApplyOnAirLock()
     {
+        var locked = OnAirLock.Active;
         if (AddOutputButton is not null)
-            AddOutputButton.IsEnabled = !OnAirLock.Active;
+            AddOutputButton.IsEnabled = !locked;
+        if (FpsBox is not null)
+            FpsBox.IsEnabled = !locked;
+        if (SizeBox is not null)
+            SizeBox.IsEnabled = !locked;
         if (OutputRows is not null)
             RebuildOutputs();
     }
@@ -123,8 +128,11 @@ public partial class SettingsWindow : Window
 
     private void Default_Click(object sender, RoutedEventArgs e)
     {
-        SelectTag(FpsBox, "60000/1001");
-        SelectTag(SizeBox, "1920x1080");
+        if (!OnAirLock.Active)
+        {
+            SelectTag(FpsBox, "60000/1001");
+            SelectTag(SizeBox, "1920x1080");
+        }
         SelectTag(BufferBox, "3");
         SelectTag(ColorFormatBox, "uyvy");
         SelectTag(MvPresentBox, "3");
@@ -649,13 +657,21 @@ public partial class SettingsWindow : Window
             skipIdle.Checked += (_, _) => output.SkipEncodeWhenNoReceivers = true;
             skipIdle.Unchecked += (_, _) => output.SkipEncodeWhenNoReceivers = false;
 
-            var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
             FillOutputSize(size, output);
-            size.SelectionChanged += (_, _) => ApplyOutputSize(size, output);
+            size.SelectionChanged += (_, _) =>
+            {
+                if (!OnAirLock.Active)
+                    ApplyOutputSize(size, output);
+            };
 
-            var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
             FillOutputFps(fps, output);
-            fps.SelectionChanged += (_, _) => ApplyOutputFps(fps, output);
+            fps.SelectionChanged += (_, _) =>
+            {
+                if (!OnAirLock.Active)
+                    ApplyOutputFps(fps, output);
+            };
 
             var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
             remove.Click += (_, _) =>
@@ -705,13 +721,15 @@ public partial class SettingsWindow : Window
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        if (FpsBox.SelectedItem is ComboBoxItem fps && fps.Tag is string fpsTag)
+        if (!OnAirLock.Active
+            && FpsBox.SelectedItem is ComboBoxItem fps && fps.Tag is string fpsTag)
         {
             var parts = fpsTag.Split('/');
             Settings.MasterFpsNum = uint.Parse(parts[0]);
             Settings.MasterFpsDen = uint.Parse(parts[1]);
         }
-        if (SizeBox.SelectedItem is ComboBoxItem size && size.Tag is string sizeTag)
+        if (!OnAirLock.Active
+            && SizeBox.SelectedItem is ComboBoxItem size && size.Tag is string sizeTag)
         {
             var parts = sizeTag.Split('x');
             Settings.DefaultWidth = uint.Parse(parts[0]);
