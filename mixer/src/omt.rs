@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -288,7 +288,85 @@ pub struct ProgramSender {
     encoder: VmxEncoder,
     audio_ingress: AudioIngress,
     name: String,
+    advertised: bool,
+}
+
+/// Process-wide DNS-SD handle. Per-sender `Discovery` Drop would withdraw the
+/// instance name that a replacement just registered (`mixer_output_add` replace).
+struct AdvertiseHub {
     discovery: Option<Discovery>,
+    retain: HashSet<String>,
+}
+
+fn advertise_hub() -> &'static Mutex<AdvertiseHub> {
+    static HUB: OnceLock<Mutex<AdvertiseHub>> = OnceLock::new();
+    HUB.get_or_init(|| {
+        Mutex::new(AdvertiseHub {
+            discovery: None,
+            retain: HashSet::new(),
+        })
+    })
+}
+
+/// Keep the current `_omt._tcp` row when the next sender with `name` is dropped.
+/// Used when `mixer_output_add` replaces an output so browse does not go dark.
+pub fn retain_advertise(name: &str) {
+    advertise_hub()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain
+        .insert(name.to_string());
+}
+
+fn claim_advertise(name: &str, port: u16) -> Result<(), String> {
+    let mut hub = advertise_hub()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if hub.discovery.is_none() {
+        hub.discovery = Some(Discovery::new().map_err(|error| error.to_string())?);
+    }
+    // Replace keeps the live `_omt._tcp` row. A second register of the same
+    // fullname withdraws it from the process-wide mdns-sd cache on macOS CI.
+    if hub.retain.remove(name) {
+        crate::diag::info(&format!("omt advertise keep name={name} port={port}"));
+        return Ok(());
+    }
+    let discovery = hub.discovery.as_mut().expect("discovery");
+    match discovery.register(name, port) {
+        Ok(()) => {
+            crate::diag::info(&format!("omt advertise name={name} port={port}"));
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            crate::diag::error(&format!("omt advertise name={name} port={port}: {message}"));
+            Err(message)
+        }
+    }
+}
+
+fn release_advertise(name: &str) {
+    let mut hub = advertise_hub()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if hub.retain.contains(name) {
+        return;
+    }
+    if let Some(discovery) = hub.discovery.as_mut() {
+        let _ = discovery.deregister(name);
+    }
+}
+
+/// Drop a retain flag and withdraw. Used when replace shut down the old
+/// sender but the replacement failed to start.
+pub fn abandon_advertise(name: &str) {
+    let mut hub = advertise_hub()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    hub.retain.remove(name);
+    if let Some(discovery) = hub.discovery.as_mut() {
+        let _ = discovery.deregister(name);
+    }
 }
 
 impl ProgramSender {
@@ -296,23 +374,20 @@ impl ProgramSender {
         let sender = Sender::create(name, FrameType::VIDEO | FrameType::AUDIO)
             .map_err(|error| error.to_string())?;
         let port = sender.port();
-        let advertised = name.to_string();
-        let discovery = panic::catch_unwind(AssertUnwindSafe(|| {
-            Discovery::new().ok().and_then(|mut discovery| {
-                discovery.register(&advertised, port).ok()?;
-                Some(discovery)
-            })
-        }))
-        .ok()
-        .flatten();
+        let advertised = claim_advertise(name, port).is_ok();
         let audio_ingress = sender.audio_ingress();
         Ok(Self {
             sender,
             encoder: VmxEncoder::new(),
             audio_ingress,
             name: name.to_string(),
-            discovery,
+            advertised,
         })
+    }
+
+    #[cfg(test)]
+    pub fn advertised(&self) -> bool {
+        self.advertised
     }
 
     pub fn audio_ingress(&self) -> AudioIngress {
@@ -443,8 +518,8 @@ pub(crate) fn omt_audio_send(ingress: AudioIngress) -> Arc<dyn Fn(AudioPacket) +
 
 impl Drop for ProgramSender {
     fn drop(&mut self) {
-        if let Some(discovery) = self.discovery.as_mut() {
-            let _ = discovery.deregister(&self.name);
+        if self.advertised {
+            release_advertise(&self.name);
         }
     }
 }
@@ -906,7 +981,8 @@ impl VmxEncoder {
 mod tests {
     use super::{ProgramSender, audio_packet_to_frame, omt_query_matches, send_audio_via_ingress};
     use crate::upload::AudioPacket;
-    use openmediatransport::Codec;
+    use openmediatransport::{Codec, Discovery};
+    use std::thread;
     use std::time::{Duration, Instant};
 
     fn pkt(ts: i64) -> AudioPacket {
@@ -944,6 +1020,74 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn program_sender_registers_discovery() {
+        let name = format!("eiviz-omt-adv-{}", std::process::id());
+        let sender = ProgramSender::start(&name).expect("omt sender");
+        assert!(
+            sender.advertised(),
+            "OMT output must keep the Discovery handle after register"
+        );
+        assert!(
+            wait_omt_name(&name, Duration::from_secs(4)),
+            "registered OMT sender must be browsable"
+        );
+        drop(sender);
+    }
+
+    #[test]
+    fn program_sender_reregister_after_drop_registers() {
+        let name = format!("eiviz-omt-rereg-{}", std::process::id());
+        let first = ProgramSender::start(&name).expect("first");
+        drop(first);
+        let second = ProgramSender::start(&name).expect("second");
+        assert!(
+            second.advertised(),
+            "replacement sender must register discovery"
+        );
+        // Withdraw + register of the same DNS-SD fullname does not come
+        // back in the process browse cache on macOS CI (ServiceRemoved).
+        // Settings Enable uses retain + keep, covered by
+        // program_sender_replace_keeps_existing_advertise.
+        drop(second);
+    }
+
+    #[test]
+    fn program_sender_replace_keeps_existing_advertise() {
+        let name = format!("eiviz-omt-keep-{}", std::process::id());
+        let first = ProgramSender::start(&name).expect("first");
+        super::retain_advertise(&name);
+        drop(first);
+        let second = ProgramSender::start(&name).expect("second");
+        assert!(
+            second.advertised(),
+            "replace must keep the existing DNS-SD row"
+        );
+        assert!(
+            wait_omt_name(&name, Duration::from_secs(4)),
+            "retained OMT advertise must stay browsable"
+        );
+        drop(second);
+    }
+
+    fn wait_omt_name(name: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok(mut discovery) = Discovery::new()
+                && discovery.refresh_for(Duration::from_millis(250)).is_ok()
+                && discovery.sources().iter().any(|source| {
+                    source.instance_name().contains(name)
+                        || source.to_url().contains(name)
+                        || source.name.contains(name)
+                })
+            {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        false
     }
 
     #[test]

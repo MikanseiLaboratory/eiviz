@@ -1,0 +1,3 @@
+# mixer_create is process-global. Parallel lib tests hit ERR_ALREADY_CREATED (#217).
+[env]
+RUST_TEST_THREADS = "1"

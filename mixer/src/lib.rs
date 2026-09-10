@@ -2727,6 +2727,30 @@ pub unsafe extern "C" fn mixer_output_add(
     } else {
         audio_bus_id
     };
+    // Replace must not withdraw `_omt._tcp` for this instance name.
+    // openmediatransport-rs keys DNS-SD by name; Drop of the old sender
+    // would unregister the live row, and a second register of the same
+    // fullname does not come back on macOS browse. Settings ApplyOutputs +
+    // session publish hits this path for every Enable.
+    let old = match with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock()
+            .expect("shared")
+            .outputs
+            .remove(&output_id);
+        mixer.send_workers.remove(&output_id)
+    }) {
+        Ok(old) => old,
+        Err(code) => return code,
+    };
+    let replacing_omt = old.is_some() && transport == OUT_OMT;
+    if replacing_omt {
+        omt::retain_advertise(&name);
+    }
+    if let Some(old) = old {
+        shutdown_output_worker(old);
+    }
     let handle = match transport {
         OUT_NDI => {
             #[cfg(not(any(windows, target_os = "macos")))]
@@ -2757,10 +2781,16 @@ pub unsafe extern "C" fn mixer_output_add(
             match started {
                 Ok(Ok(sender)) => OutputHandle::Omt(sender),
                 Ok(Err(error)) => {
+                    if replacing_omt {
+                        omt::abandon_advertise(&name);
+                    }
                     let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
                     return ERR_IO;
                 }
                 Err(_) => {
+                    if replacing_omt {
+                        omt::abandon_advertise(&name);
+                    }
                     let _ = with_mixer(|mixer| {
                         set_error(&mixer.telemetry, "OMT sender panicked during create")
                     });
@@ -2771,15 +2801,6 @@ pub unsafe extern "C" fn mixer_output_add(
         _ => return ERR_INVALID_ARGUMENT,
     };
     with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .outputs
-            .remove(&output_id);
-        if let Some(old) = mixer.send_workers.remove(&output_id) {
-            shutdown_output_worker(old);
-        }
         let audio_send = match &handle {
             OutputHandle::Omt(sender) => Some(omt::omt_audio_send(sender.audio_ingress())),
             #[cfg(any(windows, target_os = "macos"))]
@@ -4164,6 +4185,7 @@ pub(crate) fn reset_frame_caches() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::collections::HashMap;
 
     #[test]
@@ -4489,6 +4511,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[serial(mixer)]
     fn attach_missing_remote_unit_reports_error() {
         mixer_destroy();
         assert_eq!(mixer_create(0, 60, 1), OK);
@@ -4542,6 +4565,7 @@ mod tests {
 
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     #[test]
+    #[serial(mixer)]
     fn source_status_is_empty_without_receiver() {
         mixer_destroy();
         let mut status = MixerSourceStatus {

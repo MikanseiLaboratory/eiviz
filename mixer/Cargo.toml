@@ -1,6 +1,6 @@
 [package]
 name = "eiviz_mixer"
-version = "0.1.0"
+version = "0.3.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -63,3 +63,4 @@ cc = "1"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
+serial_test = "3"
