@@ -259,13 +259,25 @@ mod tests {
             Arc::clone(&primed),
             crate::clock::SharedMediaClock::new(),
         );
-        thread::sleep(Duration::from_millis(250));
+        // CI macOS runners skip late slots (45–100ms). 200ms of PCM is
+        // required to set primed; a fixed 250ms sleep is not enough.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let samples = pcm.lock().expect("pcm").len();
+            if samples >= AUDIO_BLOCK_FRAMES * 8 && primed.load(Ordering::Relaxed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
         sched.stop();
         let samples = pcm.lock().expect("pcm").len();
         assert!(
             samples >= AUDIO_BLOCK_FRAMES * 8,
             "audio must keep filling the monitor ring while GPU/render is idle (got {samples})"
         );
-        assert!(primed.load(Ordering::Relaxed));
+        assert!(
+            primed.load(Ordering::Relaxed),
+            "monitor prime needs ~200ms of PCM; got {samples} samples"
+        );
     }
 }
