@@ -26,14 +26,18 @@ public partial class SceneEditorWindow : Window
     private bool _cropDown;
     private bool _suppress;
     private Point _last;
+    private float _grabX;
+    private float _grabY;
+    private float? _snapX;
+    private float? _snapY;
     private DateTime _lastGpuPush;
-    private TextBox? _meterBox;
-    private string _meterFormat = "0.#";
     private TagCheckPanel? _tags;
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
         InitializeComponent();
+        LayoutSnapButton.Content = "🧲";
+        LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
         _scene = scene;
         _session = session;
         _width = width;
@@ -72,56 +76,22 @@ public partial class SceneEditorWindow : Window
 
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096, Func<double>? maxOf = null)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, maxOf?.Invoke() ?? max, format));
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
-        Bind(PosXLabel, XBox, 2, min: -_width, max: _width * 2);
-        Bind(PosYLabel, YBox, 2, min: -_height, max: _height * 2);
-        Bind(SizeXLabel, WBox, 2, min: 1, max: _width * 2);
-        Bind(SizeYLabel, HBox, 2, min: 1, max: _height * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, max: _width);
-        Bind(CropYLabel, CropYBox, 2, min: 0, max: _height);
-        Bind(CropWLabel, CropWBox, 2, min: 0, max: _width);
-        Bind(CropHLabel, CropHBox, 2, min: 0, max: _height);
-        Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
-    }
-
-    private void ToggleMeter(string title, TextBox box, double min, double max, string format)
-    {
-        if (ReferenceEquals(_meterBox, box) && MeterHost.Visibility == Visibility.Visible)
-        {
-            MeterHost.Visibility = Visibility.Collapsed;
-            _meterBox = null;
-            return;
-        }
-        _meterBox = box;
-        _meterFormat = format;
-        MeterTitle.Text = title;
-        MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min);
-        _suppress = true;
-        if (float.TryParse(box.Text, out var value))
-            MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
-        _suppress = false;
-        MeterHost.Visibility = Visibility.Visible;
-    }
-
-    private void MeterSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_suppress || _meterBox is null)
-            return;
-        _meterBox.Text = e.NewValue.ToString(_meterFormat);
-        ApplyNumeric(false, _meterBox);
-    }
-
-    private void MeterSlider_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (_meterBox is not null)
-            ApplyNumeric(true, _meterBox);
+        Bind(PosXLabel, XBox, 2);
+        Bind(PosYLabel, YBox, 2);
+        Bind(SizeXLabel, WBox, 2);
+        Bind(SizeYLabel, HBox, 2);
+        Bind(CropXLabel, CropXBox, 2);
+        Bind(CropYLabel, CropYBox, 2);
+        Bind(CropWLabel, CropWBox, 2);
+        Bind(CropHLabel, CropHBox, 2);
+        Bind(OpLabel, OpBox, 400, "0.###");
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -318,11 +288,6 @@ public partial class SceneEditorWindow : Window
         }
     }
 
-    private double CropXMaxPx() => _width;
-    private double CropYMaxPx() => _height;
-    private double CropWMaxPx() => _width;
-    private double CropHMaxPx() => _height;
-
     private void WriteCropBoxes()
     {
         if (_selected is null)
@@ -337,42 +302,6 @@ public partial class SceneEditorWindow : Window
         CropYBox.Text = (up * _height).ToString("0.#");
         CropWBox.Text = (right * _width).ToString("0.#");
         CropHBox.Text = (down * _height).ToString("0.#");
-    }
-
-    private void RefreshCropMeterRange()
-    {
-        if (_meterBox is null || MeterHost.Visibility != Visibility.Visible)
-            return;
-        double min;
-        double max;
-        if (ReferenceEquals(_meterBox, CropXBox))
-        {
-            min = 0;
-            max = CropXMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropYBox))
-        {
-            min = 0;
-            max = CropYMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropWBox))
-        {
-            min = 0;
-            max = CropWMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropHBox))
-        {
-            min = 0;
-            max = CropHMaxPx();
-        }
-        else
-            return;
-        _suppress = true;
-        MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min);
-        if (float.TryParse(_meterBox.Text, out var meter))
-            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
-        _suppress = false;
     }
 
     private void FillNumeric()
@@ -410,12 +339,6 @@ public partial class SceneEditorWindow : Window
         LinkBox.IsEnabled = edit;
         OpBox.IsEnabled = edit;
         LayerInputBox.IsEnabled = edit;
-        if (_meterBox is not null && float.TryParse(_meterBox.Text, out var meter))
-        {
-            _suppress = true;
-            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
-            _suppress = false;
-        }
     }
 
     private void PushGpu()
@@ -539,7 +462,6 @@ public partial class SceneEditorWindow : Window
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
         WriteCropBoxes();
-        RefreshCropMeterRange();
         if (push)
         {
             FillNumeric();
@@ -573,13 +495,15 @@ public partial class SceneEditorWindow : Window
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(WireCanvas);
+        _last = pos;
+        _snapX = null;
+        _snapY = null;
         if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false }
             && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             _resizing = true;
             _dragging = false;
             _cropping = false;
-            _last = pos;
             WireCanvas.CaptureMouse();
             return;
         }
@@ -597,10 +521,13 @@ public partial class SceneEditorWindow : Window
         else
         {
             _dragging = hit is { Locked: false };
-            if (_dragging)
+            if (_dragging && hit is not null)
+            {
+                _grabX = (float)(pos.X / WireCanvas.Width) - hit.X;
+                _grabY = (float)(pos.Y / WireCanvas.Height) - hit.Y;
                 WireCanvas.CaptureMouse();
+            }
         }
-        _last = pos;
         RefreshLayers();
     }
 
@@ -652,13 +579,15 @@ public partial class SceneEditorWindow : Window
             else
                 _selected.Height = Math.Max(0.02f, _selected.Height + dy);
             _selected.Width = width;
-            ApplySnap(resize: true);
+            ApplyResizeSnap();
         }
         else
         {
-            _selected.X += dx;
-            _selected.Y += dy;
-            ApplySnap(resize: false);
+            var x = (float)(pos.X / WireCanvas.Width) - _grabX;
+            var y = (float)(pos.Y / WireCanvas.Height) - _grabY;
+            ApplyMoveSnap(ref x, ref y);
+            _selected.X = x;
+            _selected.Y = y;
         }
         DrawWireframe();
         FillNumeric();
@@ -683,29 +612,46 @@ public partial class SceneEditorWindow : Window
             layer.SetCropInset(CropEdit.Down, 1f - layer.CropY - layer.CropHeight - dy / layer.Height);
     }
 
-    private void ApplySnap(bool resize)
+    private void LayoutSnap_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null)
+        _snapX = null;
+        _snapY = null;
+    }
+
+    private bool LayoutSnapOn => LayoutSnapButton.IsChecked == true;
+
+    private void ApplyMoveSnap(ref float x, ref float y)
+    {
+        if (_selected is null || !LayoutSnapOn)
             return;
-        var threshold = (float)(SceneSnap.PixelThreshold / Math.Max(WireCanvas.ActualWidth, 1));
+        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
         var boxes = _scene.Layers.Select(layer => new SceneSnap.Box(
             layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
-        if (resize)
-        {
-            var width = _selected.Width;
-            var height = _selected.Height;
-            SceneSnap.SnapResize(ref width, ref height, _selected.X, _selected.Y, _selected.SizeLinked, boxes, threshold);
-            _selected.Width = width;
-            _selected.Height = height;
-        }
-        else
-        {
-            var x = _selected.X;
-            var y = _selected.Y;
-            SceneSnap.SnapMove(ref x, ref y, _selected.Width, _selected.Height, boxes, threshold);
-            _selected.X = x;
-            _selected.Y = y;
-        }
+
+        x = SceneSnap.LatchMoveAxis(x, _selected.Width, boxes, true, rendered.Width, ref _snapX);
+        y = SceneSnap.LatchMoveAxis(y, _selected.Height, boxes, false, rendered.Height, ref _snapY);
+    }
+
+    private void ApplyResizeSnap()
+    {
+        if (_selected is null || !LayoutSnapOn)
+            return;
+        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
+        var boxes = _scene.Layers.Select(layer => new SceneSnap.Box(
+            layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
+        var width = _selected.Width;
+        var height = _selected.Height;
+        SceneSnap.SnapResize(
+            ref width,
+            ref height,
+            _selected.X,
+            _selected.Y,
+            _selected.SizeLinked,
+            boxes,
+            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Width, 1)),
+            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Height, 1)));
+        _selected.Width = width;
+        _selected.Height = height;
     }
 
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -715,6 +661,8 @@ public partial class SceneEditorWindow : Window
         _dragging = false;
         _resizing = false;
         _cropping = false;
+        _snapX = null;
+        _snapY = null;
         WireCanvas.ReleaseMouseCapture();
     }
 

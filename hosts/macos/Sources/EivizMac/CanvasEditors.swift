@@ -11,6 +11,7 @@ struct SceneEditorView: View {
     @State private var lastGpuPush = Date.distantPast
     @State private var editorMonitor: UInt64 = 0
     @State private var selectedTags: [String] = []
+    @State private var layoutSnap = true
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -92,7 +93,15 @@ struct SceneEditorView: View {
             .buttonStyle(MixerButtonStyle())
 
             VStack {
-                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+                HStack {
+                    Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+                    Spacer()
+                    Toggle(isOn: $layoutSnap) {
+                        Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
+                    }
+                    .toggleStyle(.button)
+                    .help("\(L10n.t("editor.layoutSnap"))\n\(L10n.t("editor.layoutSnapHelp"))")
+                }
                 WireCanvasView(
                     items: layers.map {
                         WireRect(
@@ -111,7 +120,7 @@ struct SceneEditorView: View {
                         )
                     },
                     aspect: projectAspect,
-                    snapEnabled: true,
+                    snapEnabled: layoutSnap,
                     onFit: fitLayerToScreen,
                     onCrop: applyCrop,
                     selected: $selectedLayer,

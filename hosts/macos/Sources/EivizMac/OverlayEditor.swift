@@ -8,6 +8,7 @@ struct OverlayView: View {
     @State private var lastGpuPush = Date.distantPast
     @State private var addKind: OverlaySourceKind = .scene
     @State private var addSourceId: UInt64 = 0
+    @State private var layoutSnap = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -95,10 +96,21 @@ struct OverlayView: View {
 
     private var overlayCanvas: some View {
         VStack {
-            Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+            HStack {
+                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+                Spacer()
+                Toggle(isOn: $layoutSnap) {
+                    Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
+                }
+                .toggleStyle(.button)
+                .help("\(L10n.t("editor.layoutSnap"))\n\(L10n.t("editor.layoutSnapHelp"))")
+            }
             WireCanvasView(
                 items: overlayWireItems,
                 aspect: CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height)),
+                snapEnabled: layoutSnap,
+                onFit: fitOverlayToScreen,
+                onCrop: applyCrop,
                 selected: $selected,
                 onChange: applyWire
             )
@@ -283,6 +295,38 @@ struct OverlayView: View {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
         for index in mixer.session.units[ui].overlays.indices {
             mixer.session.units[ui].overlays[index].z = Int32(mixer.session.units[ui].overlays.count - 1 - index)
+        }
+    }
+
+    private func fitOverlayToScreen(id: UUID) {
+        selected = id
+        mutate { slot in
+            guard !slot.locked else { return }
+            slot.x = 0
+            slot.y = 0
+            slot.width = 1
+            slot.height = 1
+            slot.sizeLinked = true
+            slot.cropX = 0
+            slot.cropY = 0
+            slot.cropWidth = 1
+            slot.cropHeight = 1
+        }
+        mixer.pushOverlays()
+    }
+
+    private func applyCrop(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
+        selected = id
+        mutate { slot in
+            guard !slot.locked else { return }
+            slot.cropX = x
+            slot.cropY = y
+            slot.cropWidth = w
+            slot.cropHeight = h
+        }
+        if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+            lastGpuPush = Date()
+            mixer.pushOverlays()
         }
     }
 

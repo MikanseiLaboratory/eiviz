@@ -33,6 +33,9 @@ struct WireCanvasView: View {
     @State private var cropUp = false
     @State private var cropDown = false
     @State private var last: CGPoint = .zero
+    @State private var grab: CGPoint = .zero
+    @State private var snapX: Float?
+    @State private var snapY: Float?
     @State private var draft: (UUID, Float, Float, Float, Float)?
     @State private var cropDraft: (UUID, Float, Float, Float, Float)?
 
@@ -126,8 +129,8 @@ struct WireCanvasView: View {
                             draft = (id, item.x, item.y, width, height)
                             onChange(id, item.x, item.y, width, height, false)
                         } else if dragging {
-                            var x = item.x + dx
-                            var y = item.y + dy
+                            var x = Float(local.x / size.width - grab.x)
+                            var y = Float(local.y / size.height - grab.y)
                             if snapEnabled {
                                 snapMove(x: &x, y: &y, width: item.width, height: item.height, except: id, canvas: size)
                             }
@@ -144,6 +147,8 @@ struct WireCanvasView: View {
                         dragging = false
                         resizing = false
                         cropping = false
+                        snapX = nil
+                        snapY = nil
                         draft = nil
                         cropDraft = nil
                     }
@@ -165,6 +170,8 @@ struct WireCanvasView: View {
 
     private func begin(at pos: CGPoint, canvas: CGSize) {
         let option = NSEvent.modifierFlags.contains(.option)
+        snapX = nil
+        snapY = nil
         if let id = selected, let item = items.first(where: { $0.id == id }), !item.locked {
             let handle = CGRect(
                 x: CGFloat(item.x + item.width) * canvas.width - 16,
@@ -204,6 +211,10 @@ struct WireCanvasView: View {
             resizing = false
             return
         }
+        grab = CGPoint(
+            x: pos.x / canvas.width - CGFloat(item.x),
+            y: pos.y / canvas.height - CGFloat(item.y)
+        )
         dragging = true
         resizing = false
         cropping = false
@@ -230,22 +241,26 @@ struct WireCanvasView: View {
     }
 
     private func snapMove(x: inout Float, y: inout Float, width: Float, height: Float, except: UUID, canvas: CGSize) {
-        let threshold = Float(8 / max(canvas.width, 1))
         let xs = guides(except: except, horizontal: true)
         let ys = guides(except: except, horizontal: false)
-        x += bestDelta([x, x + width * 0.5, x + width], xs, threshold)
-        y += bestDelta([y, y + height * 0.5, y + height], ys, threshold)
+        let horizontal = snappedAxis(raw: x, size: width, guides: xs, pixels: canvas.width, latched: snapX)
+        let vertical = snappedAxis(raw: y, size: height, guides: ys, pixels: canvas.height, latched: snapY)
+        x = horizontal.value
+        y = vertical.value
+        snapX = horizontal.latch
+        snapY = vertical.latch
     }
 
     private func snapResize(x: Float, y: Float, width: inout Float, height: inout Float, linked: Bool, except: UUID, canvas: CGSize) {
-        let threshold = Float(8 / max(canvas.width, 1))
+        let xThreshold = Float(6 / max(canvas.width, 1))
+        let yThreshold = Float(6 / max(canvas.height, 1))
         let xs = guides(except: except, horizontal: true)
-        width = max(0.02, x + width + bestDelta([x + width], xs, threshold) - x)
+        width = max(0.02, x + width + bestDelta([x + width], xs, xThreshold) - x)
         if linked {
             return
         }
         let ys = guides(except: except, horizontal: false)
-        height = max(0.02, y + height + bestDelta([y + height], ys, threshold) - y)
+        height = max(0.02, y + height + bestDelta([y + height], ys, yThreshold) - y)
     }
 
     private func guides(except: UUID, horizontal: Bool) -> [Float] {
@@ -264,8 +279,25 @@ struct WireCanvasView: View {
         return values
     }
 
+    private func snappedAxis(raw: Float, size: Float, guides: [Float], pixels: CGFloat, latched: Float?) -> (value: Float, latch: Float?) {
+        let rendered = Float(max(pixels, 1))
+        if let target = latched, abs(raw - target) * rendered <= 12 {
+            return (target, target)
+        }
+        let points = [raw, raw + size * 0.5, raw + size]
+        if let delta = snapDelta(points, guides, 6 / rendered) {
+            let target = raw + delta
+            return (target, target)
+        }
+        return (raw, nil)
+    }
+
     private func bestDelta(_ points: [Float], _ guides: [Float], _ threshold: Float) -> Float {
-        var best: Float = 0
+        snapDelta(points, guides, threshold) ?? 0
+    }
+
+    private func snapDelta(_ points: [Float], _ guides: [Float], _ threshold: Float) -> Float? {
+        var best: Float?
         var bestAbs = threshold
         for point in points {
             for guide in guides {
@@ -277,7 +309,7 @@ struct WireCanvasView: View {
                 }
             }
         }
-        return bestAbs <= threshold ? best : 0
+        return best
     }
 }
 

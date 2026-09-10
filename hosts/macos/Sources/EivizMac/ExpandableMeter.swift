@@ -8,56 +8,27 @@ struct ExpandableMeter: View {
     var pixelsPerUnit: Float = 2
     var onChange: (_ ended: Bool) -> Void
 
-    @State private var expanded = false
     @State private var lastY: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                Button {
-                    guard !disabled else { return }
-                    expanded.toggle()
-                } label: {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                        .frame(width: 10)
-                }
-                .buttonStyle(.plain)
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 11))
+                .frame(minWidth: 48, alignment: .leading)
+                .contentShape(Rectangle())
+                .gesture(drag)
                 .disabled(disabled)
-                Text(title)
-                    .font(.system(size: 11))
-                    .frame(minWidth: 48, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .gesture(drag)
-                    .disabled(disabled)
-                mixerFloatField(
-                    Binding(
-                        get: { value },
-                        set: { next in
-                            value = clamp(next)
-                        }
-                    ),
-                    onSubmit: { onChange(true) }
-                )
-                .frame(width: 72)
-                .disabled(disabled)
-            }
-            if expanded {
-                Slider(
-                    value: Binding(
-                        get: { Double(clamp(value)) },
-                        set: { next in
-                            value = Float(next)
-                            onChange(false)
-                        }
-                    ),
-                    in: Double(range.lowerBound) ... Double(range.upperBound),
-                    onEditingChanged: { editing in
-                        if !editing { onChange(true) }
+            mixerFloatField(
+                Binding(
+                    get: { value },
+                    set: { next in
+                        value = clamp(next)
                     }
-                )
-                .disabled(disabled)
-            }
+                ),
+                onSubmit: { onChange(true) }
+            )
+            .frame(width: 72)
+            .disabled(disabled)
         }
     }
 
