@@ -20,7 +20,7 @@ Connectの▾から最近使った接続先を選べます。Disconnectで切断
 
 ## 映像
 
-映像の主表示はPRV/PGMの2枠、またはMultiviewの1枠です。上部の表示切替で選びます。ヘッダーのメニューから受信するNDIまたはOMTソースを選びます。OMT受信のCPU/GPUは`Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）の環境設定です。既定はCPUです。Multiviewの追加・タイル編集・削除は設定画面から行います。
+映像の主表示はPRV/PGMの2枠、またはMultiviewの1枠です。上部の表示切替で選びます。ヘッダーのメニューから受信するNDIまたはOMTソースを選びます。OMT受信のCPU/GPUは`Eiviz.Remote.exe`（macOSは`eiviz-remote.app`）の環境設定です。既定はCPU(推奨)です。用途の説明は[NDI/OMT Capture](/eiviz/ja/features/inputs/ndi-omt/)です。Multiviewの追加・タイル編集・削除は設定画面から行います。
 
 シーン一覧とスイッチャーのシーンボタンは、折り畳んだ状態ですべてのSceneを出します。折り畳んでいてもPreview/Programの縁は出ます。
 

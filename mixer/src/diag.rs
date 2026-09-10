@@ -250,6 +250,7 @@ unsafe extern "system" fn on_unhandled_exception(_info: *mut core::ffi::c_void) 
 
 pub static GPU_FAULT: AtomicBool = AtomicBool::new(false);
 static SURFACE_LOST: AtomicU64 = AtomicU64::new(0);
+static RENDER_SKIPPED: AtomicU64 = AtomicU64::new(0);
 static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
@@ -270,6 +271,16 @@ pub fn note_surface_lost() {
 
 pub fn surface_lost() -> u64 {
     SURFACE_LOST.load(Ordering::Relaxed)
+}
+
+pub fn add_render_skipped(count: u64) {
+    if count > 0 {
+        RENDER_SKIPPED.fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+pub fn render_skipped() -> u64 {
+    RENDER_SKIPPED.load(Ordering::Relaxed)
 }
 
 pub fn mark_fatal(message: impl Into<String>) {

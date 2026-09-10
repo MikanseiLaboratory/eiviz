@@ -27,7 +27,7 @@ const DEFAULT_JSON: &[u8] = br#"{
     "transport": "Omt",
     "sourceKind": "MuProgram",
     "unitId": 1,
-    "useGpu": true,
+    "useGpu": false,
     "audioBusId": 1
   }],
   "buses": [{ "id": 1, "name": "Master", "role": "Master" }]
@@ -87,6 +87,7 @@ mod tests {
         assert_eq!(doc.inputs.len(), 4);
         assert_eq!(doc.scenes.len(), 2);
         assert_eq!(doc.units.len(), 1);
+        assert!(!doc.outputs[0].use_gpu);
     }
 
     #[test]

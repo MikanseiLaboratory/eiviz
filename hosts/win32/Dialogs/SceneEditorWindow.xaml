@@ -40,14 +40,22 @@
             </ListBox>
         </DockPanel>
         <DockPanel Grid.Column="1" Margin="12,0">
-            <TextBlock x:Name="WireLabel" DockPanel.Dock="Top" Text="Wireframe" FontWeight="Bold" Margin="0,0,0,6"/>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="True">
+                <ToggleButton x:Name="LayoutSnapButton" DockPanel.Dock="Right"
+                              IsChecked="True" Width="32" Height="26" Padding="0"
+                              FontSize="14" VerticalAlignment="Center"
+                              Click="LayoutSnap_Click"/>
+                <TextBlock x:Name="WireLabel" Text="Wireframe" FontWeight="Bold"
+                           VerticalAlignment="Center"/>
+            </DockPanel>
             <Border Background="#111" BorderBrush="#555" BorderThickness="1" ClipToBounds="True">
                 <Viewbox Stretch="Uniform" ClipToBounds="True">
                     <Canvas x:Name="WireCanvas" Width="1920" Height="1080" Background="#0A0A0A"
                             ClipToBounds="True"
                             MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
                             MouseMove="WireCanvas_MouseMove"
-                            MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"/>
+                            MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"
+                            MouseRightButtonUp="WireCanvas_MouseRightButtonUp"/>
                 </Viewbox>
             </Border>
         </DockPanel>
@@ -110,12 +118,6 @@
                     <Button Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
                             Height="26" Margin="0,8,0,0" Click="ResetLayer_Click"/>
                 </Grid>
-                <StackPanel x:Name="MeterHost" Visibility="Collapsed" Margin="0,4,0,0">
-                    <TextBlock x:Name="MeterTitle" FontSize="11" Margin="0,0,0,2"/>
-                    <Slider x:Name="MeterSlider" Height="18"
-                            ValueChanged="MeterSlider_ValueChanged"
-                            PreviewMouseLeftButtonUp="MeterSlider_MouseUp"/>
-                </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
                     <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>

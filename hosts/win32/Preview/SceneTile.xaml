@@ -19,7 +19,7 @@
             <DockPanel x:Name="ExpandedBody">
                 <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3">
                     <DockPanel>
-                        <Button DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
+                        <Button x:Name="CloseExpandedButton" DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
                         <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
                                    Margin="0,0,6,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"
@@ -38,7 +38,7 @@
                 <preview:ThumbView x:Name="Monitor" Height="90"/>
             </DockPanel>
             <DockPanel x:Name="CollapsedBody" Visibility="Collapsed" Background="#333">
-                <Button DockPanel.Dock="Top" Style="{StaticResource TileBtn}" Content="X"
+                <Button x:Name="CloseCollapsedButton" DockPanel.Dock="Top" Style="{StaticResource TileBtn}" Content="X"
                         HorizontalAlignment="Center" Margin="0,4,0,2" Click="Close_Click"/>
                 <TextBlock x:Name="CollapsedNumber" DockPanel.Dock="Top" Text="1"
                            Foreground="#EEE" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,4"/>

@@ -52,6 +52,12 @@ public partial class SceneTile : UserControl
 
     public void SetThumbWanted(bool wanted) => Monitor.SetWanted(wanted);
 
+    public void SetCloseEnabled(bool enabled)
+    {
+        CloseExpandedButton.IsEnabled = enabled;
+        CloseCollapsedButton.IsEnabled = enabled;
+    }
+
     public void SetSelected(bool selected, Color? previewColor = null, Color? inactiveColor = null) =>
         SetBusRoles(selected, false, previewColor, null, inactiveColor);
 
@@ -153,7 +159,12 @@ public partial class SceneTile : UserControl
         e.Handled = true;
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Raise(SceneCloseRequested);
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        if (OnAirLock.Active)
+            return;
+        Raise(SceneCloseRequested);
+    }
 
     private void Raise(EventHandler<SceneEntry>? handler)
     {

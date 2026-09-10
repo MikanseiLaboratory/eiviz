@@ -106,6 +106,38 @@ public partial class MainWindow : Window
         };
         if (HostRole.IsRemote)
             RemoteVideoCatalog.Updated += OnRemoteVideoCatalogUpdated;
+        OnAirLock.Changed += ApplyOnAirLock;
+        Closed += (_, _) => OnAirLock.Changed -= ApplyOnAirLock;
+        ApplyOnAirLock();
+    }
+
+    private void OnAirLock_Click(object sender, RoutedEventArgs e)
+    {
+        OnAirLock.Active = OnAirLockButton.IsChecked == true;
+    }
+
+    private void ApplyOnAirLock()
+    {
+        var locked = OnAirLock.Active;
+        OnAirLockButton.IsChecked = locked;
+        OnAirLockButton.Content = Loc.T(locked ? "chrome.onAirLockOn" : "chrome.onAirLock");
+        NewSessionButton.IsEnabled = !locked;
+        LoadSessionButton.IsEnabled = !locked;
+        LoadLastSessionButton.IsEnabled = !locked;
+        OpenRecentButton.IsEnabled = !locked;
+        DeleteUnitButton.IsEnabled = !locked;
+        DeleteInputButton.IsEnabled = !locked;
+        RemoveSceneButton.IsEnabled = !locked;
+        foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
+            tile.SetCloseEnabled(!locked);
+    }
+
+    private bool RejectIfOnAirLock()
+    {
+        if (!OnAirLock.Active)
+            return false;
+        MessageBox.Show(this, Loc.T("msg.onAirLock"), Loc.T("chrome.onAirLock"));
+        return true;
     }
 
     internal void ReloadFromSession()

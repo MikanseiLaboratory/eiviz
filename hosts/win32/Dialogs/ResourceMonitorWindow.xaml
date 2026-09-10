@@ -8,13 +8,15 @@
         <ListView x:Name="UsageList" Background="#222" Foreground="#EEE" BorderBrush="#444">
             <ListView.View>
                 <GridView>
-                    <GridViewColumn Header="Name" Width="180" DisplayMemberBinding="{Binding Name}"/>
-                    <GridViewColumn Header="Kind" Width="80" DisplayMemberBinding="{Binding Kind}"/>
-                    <GridViewColumn Header="Size" Width="100" DisplayMemberBinding="{Binding Size}"/>
-                    <GridViewColumn Header="CPU" Width="70" DisplayMemberBinding="{Binding Cpu}"/>
-                    <GridViewColumn Header="GPU" Width="70" DisplayMemberBinding="{Binding Gpu}"/>
-                    <GridViewColumn Header="RAM" Width="80" DisplayMemberBinding="{Binding Ram}"/>
-                    <GridViewColumn Header="VRAM" Width="80" DisplayMemberBinding="{Binding Vram}"/>
+                    <GridViewColumn Header="Name" Width="160" DisplayMemberBinding="{Binding Name}"/>
+                    <GridViewColumn Header="Kind" Width="72" DisplayMemberBinding="{Binding Kind}"/>
+                    <GridViewColumn Header="Size" Width="90" DisplayMemberBinding="{Binding Size}"/>
+                    <GridViewColumn Header="Uptime" Width="80" DisplayMemberBinding="{Binding Uptime}"/>
+                    <GridViewColumn Header="Lost" Width="60" DisplayMemberBinding="{Binding Lost}"/>
+                    <GridViewColumn Header="CPU" Width="60" DisplayMemberBinding="{Binding Cpu}"/>
+                    <GridViewColumn Header="GPU" Width="60" DisplayMemberBinding="{Binding Gpu}"/>
+                    <GridViewColumn Header="RAM" Width="70" DisplayMemberBinding="{Binding Ram}"/>
+                    <GridViewColumn Header="VRAM" Width="70" DisplayMemberBinding="{Binding Vram}"/>
                 </GridView>
             </ListView.View>
         </ListView>

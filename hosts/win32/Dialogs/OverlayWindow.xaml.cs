@@ -16,15 +16,24 @@ public partial class OverlayWindow : Window
     private OverlaySlot? _selected;
     private bool _dragging;
     private bool _resizing;
+    private bool _cropping;
+    private bool _cropLeft;
+    private bool _cropRight;
+    private bool _cropUp;
+    private bool _cropDown;
     private Point _last;
+    private float _grabX;
+    private float _grabY;
+    private float? _snapX;
+    private float? _snapY;
     private bool _suppress;
     private DateTime _lastGpuPush;
-    private TextBox? _meterBox;
-    private string _meterFormat = "0.#";
 
     public OverlayWindow(Session session, MixingUnitEntry unit)
     {
         InitializeComponent();
+        LayoutSnapButton.Content = "🧲";
+        LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
         _session = session;
         _unit = unit;
         AddKindBox.SelectedIndex = 0;
@@ -68,63 +77,24 @@ public partial class OverlayWindow : Window
     private float WidthPx => _unit.Width;
     private float HeightPx => _unit.Height;
 
-    private double CropXMaxPx() => WidthPx;
-    private double CropYMaxPx() => HeightPx;
-    private double CropWMaxPx() => WidthPx;
-    private double CropHMaxPx() => HeightPx;
-
     private void AttachDrags()
     {
-        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#", double min = 0, double max = 4096, Func<double>? maxOf = null)
+        void Bind(FrameworkElement handle, TextBox box, float scale, string format = "0.#")
         {
             void Preview() => ApplyNumeric(false, box);
             void Commit() => ApplyNumeric(true, box);
-            NumericDrag.Attach(handle, box, scale, Preview, Commit, format, () => ToggleMeter((handle as TextBlock)?.Text ?? "Value", box, min, maxOf?.Invoke() ?? max, format));
+            NumericDrag.Attach(handle, box, scale, Preview, Commit, format);
             NumericDrag.AttachBox(box, scale, Preview, Commit, format);
         }
-        Bind(PosXLabel, XBox, 2, min: -WidthPx, max: WidthPx * 2);
-        Bind(PosYLabel, YBox, 2, min: -HeightPx, max: HeightPx * 2);
-        Bind(SizeXLabel, WBox, 2, min: 1, max: WidthPx * 2);
-        Bind(SizeYLabel, HBox, 2, min: 1, max: HeightPx * 2);
-        Bind(CropXLabel, CropXBox, 2, min: 0, max: WidthPx);
-        Bind(CropYLabel, CropYBox, 2, min: 0, max: HeightPx);
-        Bind(CropWLabel, CropWBox, 2, min: 0, max: WidthPx);
-        Bind(CropHLabel, CropHBox, 2, min: 0, max: HeightPx);
-        Bind(OpLabel, OpBox, 400, "0.###", 0, 1);
-    }
-
-    private void ToggleMeter(string title, TextBox box, double min, double max, string format)
-    {
-        if (ReferenceEquals(_meterBox, box) && MeterHost.Visibility == Visibility.Visible)
-        {
-            MeterHost.Visibility = Visibility.Collapsed;
-            _meterBox = null;
-            return;
-        }
-        _meterBox = box;
-        _meterFormat = format;
-        MeterTitle.Text = title;
-        MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min);
-        _suppress = true;
-        if (float.TryParse(box.Text, out var value))
-            MeterSlider.Value = Math.Clamp(value, MeterSlider.Minimum, MeterSlider.Maximum);
-        _suppress = false;
-        MeterHost.Visibility = Visibility.Visible;
-    }
-
-    private void MeterSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_suppress || _meterBox is null)
-            return;
-        _meterBox.Text = e.NewValue.ToString(_meterFormat);
-        ApplyNumeric(false, _meterBox);
-    }
-
-    private void MeterSlider_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (_meterBox is not null)
-            ApplyNumeric(true, _meterBox);
+        Bind(PosXLabel, XBox, 2);
+        Bind(PosYLabel, YBox, 2);
+        Bind(SizeXLabel, WBox, 2);
+        Bind(SizeYLabel, HBox, 2);
+        Bind(CropXLabel, CropXBox, 2);
+        Bind(CropYLabel, CropYBox, 2);
+        Bind(CropWLabel, CropWBox, 2);
+        Bind(CropHLabel, CropHBox, 2);
+        Bind(OpLabel, OpBox, 400, "0.###");
     }
 
     private void Push()
@@ -252,7 +222,8 @@ public partial class OverlayWindow : Window
                 Height = Math.Max(8, slot.Height * WireCanvas.Height),
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = ReferenceEquals(slot, _selected) ? 4 : 2,
-                Fill = new SolidColorBrush(Color.FromArgb(40, color.R, color.G, color.B)),
+                StrokeDashArray = slot.Enabled ? null : new DoubleCollection { 4, 3 },
+                Fill = new SolidColorBrush(Color.FromArgb(slot.Enabled ? (byte)40 : (byte)20, color.R, color.G, color.B)),
                 Tag = slot
             };
             Canvas.SetLeft(rect, slot.X * WireCanvas.Width);
@@ -278,6 +249,17 @@ public partial class OverlayWindow : Window
                 Canvas.SetTop(crop, Canvas.GetTop(rect) + rect.Height * cropY);
                 WireCanvas.Children.Add(crop);
             }
+            var label = new TextBlock
+            {
+                Text = (i + 1).ToString(),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                FontSize = 28,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(label, Canvas.GetLeft(rect) + 8);
+            Canvas.SetTop(label, Canvas.GetTop(rect) + 4);
+            WireCanvas.Children.Add(label);
             if (ReferenceEquals(slot, _selected) && !slot.Locked)
             {
                 var handle = new Rectangle
@@ -310,42 +292,6 @@ public partial class OverlayWindow : Window
         CropHBox.Text = (down * HeightPx).ToString("0.#");
     }
 
-    private void RefreshCropMeterRange()
-    {
-        if (_meterBox is null || MeterHost.Visibility != Visibility.Visible)
-            return;
-        double min;
-        double max;
-        if (ReferenceEquals(_meterBox, CropXBox))
-        {
-            min = 0;
-            max = CropXMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropYBox))
-        {
-            min = 0;
-            max = CropYMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropWBox))
-        {
-            min = 0;
-            max = CropWMaxPx();
-        }
-        else if (ReferenceEquals(_meterBox, CropHBox))
-        {
-            min = 0;
-            max = CropHMaxPx();
-        }
-        else
-            return;
-        _suppress = true;
-        MeterSlider.Minimum = min;
-        MeterSlider.Maximum = Math.Max(max, min);
-        if (float.TryParse(_meterBox.Text, out var meter))
-            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
-        _suppress = false;
-    }
-
     private void FillFields()
     {
         if (_selected is null)
@@ -376,8 +322,6 @@ public partial class OverlayWindow : Window
         OpBox.IsEnabled = edit;
         SourceKindBox.IsEnabled = edit;
         SourceBox.IsEnabled = edit;
-        if (_meterBox is not null && float.TryParse(_meterBox.Text, out var meter))
-            MeterSlider.Value = Math.Clamp(meter, MeterSlider.Minimum, MeterSlider.Maximum);
         _suppress = false;
     }
 
@@ -640,7 +584,6 @@ public partial class OverlayWindow : Window
         if (float.TryParse(OpBox.Text, out var op)) _selected.Opacity = Math.Clamp(op, 0, 1);
         DrawWireframe();
         WriteCropBoxes();
-        RefreshCropMeterRange();
         if (push)
         {
             FillFields();
@@ -663,22 +606,53 @@ public partial class OverlayWindow : Window
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(WireCanvas);
-        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false })
+        _last = pos;
+        _snapX = null;
+        _snapY = null;
+        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false }
+            && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             _resizing = true;
-            _last = pos;
+            _dragging = false;
+            _cropping = false;
             WireCanvas.CaptureMouse();
             return;
         }
         var hit = HitSlot(pos);
         _selected = hit;
-        _dragging = hit is { Locked: false };
-        _last = pos;
-        if (_dragging)
+        _cropping = false;
+        _resizing = false;
+        _dragging = false;
+        if (hit is { Locked: false } && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)
+            && TryBeginCrop(hit, pos))
+        {
+            _cropping = true;
             WireCanvas.CaptureMouse();
+        }
+        else if (hit is { Locked: false })
+        {
+            _dragging = true;
+            _grabX = (float)(pos.X / WireCanvas.Width) - hit.X;
+            _grabY = (float)(pos.Y / WireCanvas.Height) - hit.Y;
+            WireCanvas.CaptureMouse();
+        }
         DrawWireframe();
         FillFields();
         UpdatePreview();
+    }
+
+    private bool TryBeginCrop(OverlaySlot slot, Point pos)
+    {
+        var left = slot.X * WireCanvas.Width;
+        var top = slot.Y * WireCanvas.Height;
+        var right = (slot.X + slot.Width) * WireCanvas.Width;
+        var bottom = (slot.Y + slot.Height) * WireCanvas.Height;
+        const double edge = 8;
+        _cropLeft = Math.Abs(pos.X - left) <= edge;
+        _cropRight = Math.Abs(pos.X - right) <= edge;
+        _cropUp = Math.Abs(pos.Y - top) <= edge;
+        _cropDown = Math.Abs(pos.Y - bottom) <= edge;
+        return _cropLeft || _cropRight || _cropUp || _cropDown;
     }
 
     private OverlaySlot? HitSlot(Point pos)
@@ -692,12 +666,12 @@ public partial class OverlayWindow : Window
             return null;
         if (_selected is not null && hits.Contains(_selected))
             return _selected;
-        return hits[0];
+        return hits.OrderByDescending(item => item.Z).First();
     }
 
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_selected is null || (!_dragging && !_resizing) || e.LeftButton != MouseButtonState.Pressed)
+        if (_selected is null || (!_dragging && !_resizing && !_cropping) || e.LeftButton != MouseButtonState.Pressed)
             return;
         var pos = e.GetPosition(WireCanvas);
         var dx = (float)((pos.X - _last.X) / WireCanvas.Width);
@@ -705,7 +679,9 @@ public partial class OverlayWindow : Window
         _last = pos;
         if (_selected.Locked)
             return;
-        if (_resizing)
+        if (_cropping)
+            ApplyCropDrag(_selected, dx, dy);
+        else if (_resizing)
         {
             var width = Math.Max(0.02f, _selected.Width + dx);
             if (_selected.SizeLinked && _selected.Width > 0)
@@ -713,11 +689,15 @@ public partial class OverlayWindow : Window
             else
                 _selected.Height = Math.Max(0.02f, _selected.Height + dy);
             _selected.Width = width;
+            ApplyResizeSnap();
         }
         else
         {
-            _selected.X += dx;
-            _selected.Y += dy;
+            var x = (float)(pos.X / WireCanvas.Width) - _grabX;
+            var y = (float)(pos.Y / WireCanvas.Height) - _grabY;
+            ApplyMoveSnap(ref x, ref y);
+            _selected.X = x;
+            _selected.Y = y;
         }
         DrawWireframe();
         FillFields();
@@ -728,12 +708,109 @@ public partial class OverlayWindow : Window
         }
     }
 
+    private void ApplyCropDrag(OverlaySlot slot, float dx, float dy)
+    {
+        if (slot.Width <= 0 || slot.Height <= 0)
+            return;
+        if (_cropLeft)
+            slot.SetCropInset(CropEdit.Left, slot.CropX + dx / slot.Width);
+        if (_cropRight)
+            slot.SetCropInset(CropEdit.Right, 1f - slot.CropX - slot.CropWidth - dx / slot.Width);
+        if (_cropUp)
+            slot.SetCropInset(CropEdit.Up, slot.CropY + dy / slot.Height);
+        if (_cropDown)
+            slot.SetCropInset(CropEdit.Down, 1f - slot.CropY - slot.CropHeight - dy / slot.Height);
+    }
+
+    private void LayoutSnap_Click(object sender, RoutedEventArgs e)
+    {
+        _snapX = null;
+        _snapY = null;
+    }
+
+    private bool LayoutSnapOn => LayoutSnapButton.IsChecked == true;
+
+    private void ApplyMoveSnap(ref float x, ref float y)
+    {
+        if (_selected is null || !LayoutSnapOn)
+            return;
+        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
+        var boxes = _unit.Overlays.Select(slot => new SceneSnap.Box(
+            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !slot.Enabled, ReferenceEquals(slot, _selected))).ToList();
+        x = SceneSnap.LatchMoveAxis(x, _selected.Width, boxes, true, rendered.Width, ref _snapX);
+        y = SceneSnap.LatchMoveAxis(y, _selected.Height, boxes, false, rendered.Height, ref _snapY);
+    }
+
+    private void ApplyResizeSnap()
+    {
+        if (_selected is null || !LayoutSnapOn)
+            return;
+        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
+        var boxes = _unit.Overlays.Select(slot => new SceneSnap.Box(
+            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !slot.Enabled, ReferenceEquals(slot, _selected))).ToList();
+        var width = _selected.Width;
+        var height = _selected.Height;
+        SceneSnap.SnapResize(
+            ref width,
+            ref height,
+            _selected.X,
+            _selected.Y,
+            _selected.SizeLinked,
+            boxes,
+            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Width, 1)),
+            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Height, 1)));
+        _selected.Width = width;
+        _selected.Height = height;
+    }
+
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_dragging || _resizing)
+        if (_dragging || _resizing || _cropping)
             Push();
         _dragging = false;
         _resizing = false;
+        _cropping = false;
+        _snapX = null;
+        _snapY = null;
         WireCanvas.ReleaseMouseCapture();
+    }
+
+    private void WireCanvas_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var pos = e.GetPosition(WireCanvas);
+        var hit = HitSlot(pos);
+        if (hit is null)
+            return;
+        _selected = hit;
+        RefreshList();
+        var menu = new ContextMenu();
+        var fit = new MenuItem
+        {
+            Header = Loc.T("scene.fitToScreen"),
+            IsEnabled = !hit.Locked
+        };
+        fit.Click += (_, _) => FitSlotToScreen(hit);
+        menu.Items.Add(fit);
+        menu.PlacementTarget = WireCanvas;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void FitSlotToScreen(OverlaySlot slot)
+    {
+        if (slot.Locked)
+            return;
+        slot.X = 0;
+        slot.Y = 0;
+        slot.Width = 1;
+        slot.Height = 1;
+        slot.SizeLinked = true;
+        slot.CropX = 0;
+        slot.CropY = 0;
+        slot.CropWidth = 1;
+        slot.CropHeight = 1;
+        _selected = slot;
+        RefreshList();
+        Push();
     }
 }

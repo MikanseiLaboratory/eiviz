@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ pub(crate) fn spawn_output_worker(
     output_id: u64,
     handle: OutputHandle,
     video_sub: Arc<AtomicBool>,
+    connections: Arc<AtomicU32>,
     omt_gpu: OmtGpu,
     stop: Arc<AtomicBool>,
     clock: SharedMediaClock,
@@ -34,7 +35,17 @@ pub(crate) fn spawn_output_worker(
         .name(format!("eiviz-send-{output_id}"))
         .spawn(move || {
             send_worker(
-                output_id, ctrl_rx, handle, video_sub, omt_gpu, stop, clock, video, audio, pace,
+                output_id,
+                ctrl_rx,
+                handle,
+                video_sub,
+                connections,
+                omt_gpu,
+                stop,
+                clock,
+                video,
+                audio,
+                pace,
             )
         })
         .expect("send worker");
@@ -51,6 +62,7 @@ fn send_worker(
     rx: mpsc::Receiver<SendCmd>,
     mut sender: OutputHandle,
     video_sub: Arc<AtomicBool>,
+    connections: Arc<AtomicU32>,
     omt_gpu: OmtGpu,
     stop: Arc<AtomicBool>,
     clock: SharedMediaClock,
@@ -75,7 +87,7 @@ fn send_worker(
             drain_release_gpu(&rx, video.take());
             return;
         }
-        if !pump_one(&mut sender, &video_sub) {
+        if !pump_one(&mut sender, &video_sub, &connections) {
             drain_release_gpu(&rx, video.take());
             return;
         }
@@ -267,10 +279,17 @@ pub(crate) fn pump_accept_one(sender: &mut OutputHandle) -> bool {
     }
 }
 
-pub(crate) fn pump_one(sender: &mut OutputHandle, video_sub: &AtomicBool) -> bool {
+pub(crate) fn pump_one(
+    sender: &mut OutputHandle,
+    video_sub: &AtomicBool,
+    connections: &AtomicU32,
+) -> bool {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sender.pump())) {
         Ok(Ok(subscribed)) => {
             video_sub.store(subscribed, Ordering::Relaxed);
+            if let Some(count) = sender.omt_video_subscribers() {
+                connections.store(count, Ordering::Relaxed);
+            }
             true
         }
         Ok(Err(_)) | Err(_) => false,

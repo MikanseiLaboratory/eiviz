@@ -157,7 +157,13 @@ impl PlayoutCursor {
     /// Returns the playout PTS when a slot is due. Late slots are skipped;
     /// the cursor never bursts catch-up sends.
     pub fn due(&mut self, clock: SharedMediaClock, now: Instant) -> Option<i64> {
+        self.due_with_skip(clock, now).map(|(pts, _)| pts)
+    }
+
+    /// Same as [`Self::due`], plus the number of skipped late slots.
+    pub fn due_with_skip(&mut self, clock: SharedMediaClock, now: Instant) -> Option<(i64, u64)> {
         let ideal = clock.frames_elapsed(self.rate, now);
+        let skipped = ideal.saturating_sub(self.idx);
         if ideal > self.idx {
             self.idx = ideal;
         }
@@ -166,7 +172,7 @@ impl PlayoutCursor {
         }
         let pts = self.rate.pts(self.idx);
         self.idx = self.idx.saturating_add(1);
-        Some(pts)
+        Some((pts, skipped))
     }
 
     pub fn next_deadline(&self, clock: SharedMediaClock) -> Instant {
@@ -300,7 +306,8 @@ mod tests {
                 .is_none()
         );
         let late = epoch + Duration::from_millis(80);
-        assert!(cursor.due(clock, late).is_some());
+        let (_, skipped) = cursor.due_with_skip(clock, late).expect("late slot");
+        assert!(skipped >= 2, "hitch must skip late compose slots");
         assert!(cursor.due(clock, late + Duration::from_millis(1)).is_none());
     }
 

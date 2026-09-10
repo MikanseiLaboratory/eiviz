@@ -11,6 +11,7 @@ struct SceneEditorView: View {
     @State private var lastGpuPush = Date.distantPast
     @State private var editorMonitor: UInt64 = 0
     @State private var selectedTags: [String] = []
+    @State private var layoutSnap = true
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -92,7 +93,15 @@ struct SceneEditorView: View {
             .buttonStyle(MixerButtonStyle())
 
             VStack {
-                Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+                HStack {
+                    Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
+                    Spacer()
+                    Toggle(isOn: $layoutSnap) {
+                        Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
+                    }
+                    .toggleStyle(.button)
+                    .help("\(L10n.t("editor.layoutSnap"))\n\(L10n.t("editor.layoutSnapHelp"))")
+                }
                 WireCanvasView(
                     items: layers.map {
                         WireRect(
@@ -111,6 +120,9 @@ struct SceneEditorView: View {
                         )
                     },
                     aspect: projectAspect,
+                    snapEnabled: layoutSnap,
+                    onFit: fitLayerToScreen,
+                    onCrop: applyCrop,
                     selected: $selectedLayer,
                     onChange: applyWire
                 )
@@ -251,6 +263,31 @@ struct SceneEditorView: View {
     private func moveLayers(from offsets: IndexSet, to dest: Int) {
         mutate { $0.layers.move(fromOffsets: offsets, toOffset: dest) }
         push()
+    }
+
+    private func fitLayerToScreen(id: UUID) {
+        mutate { scene in
+            if let i = scene.layers.firstIndex(where: { $0.id == id }), !scene.layers[i].locked {
+                scene.layers[i].resetLayout()
+            }
+        }
+        selectedLayer = id
+        push()
+    }
+
+    private func applyCrop(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
+        mutate { scene in
+            if let i = scene.layers.firstIndex(where: { $0.id == id }), !scene.layers[i].locked {
+                scene.layers[i].cropX = x
+                scene.layers[i].cropY = y
+                scene.layers[i].cropWidth = w
+                scene.layers[i].cropHeight = h
+            }
+        }
+        if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+            lastGpuPush = Date()
+            push()
+        }
     }
 
     private func applyWire(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {

@@ -71,7 +71,7 @@ Audio can be Master, Headphone, any Audio Aux, or None (no audio).
 When Multiview is selected as the video source, audio cannot be sent.  
 Resolution and frame rate are per output. Follow session settings uses the Mixing Unit (or the session master frame rate and default size). Video is sent at that rate, not as soon as compose finishes.
 
-OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to the VMX codec for send. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
+OMT can choose an encode path. The default is CPU (Recommended). CPU (Recommended) is the default OMT encoder. Use it for Mixing Unit Program and other mission-critical program video. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread. GPU is an auxiliary OMT encoder. It can offload work from the CPU, but it loses more than CPU, so use it for Multiview and other auxiliary video.  
 NDI is always CPU encode.
 
 One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).

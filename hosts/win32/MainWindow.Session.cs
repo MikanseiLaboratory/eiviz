@@ -342,6 +342,8 @@ public partial class MainWindow
 
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         if (InputList.SelectedItem is not InputEntry input)
         {
             MessageBox.Show(this, Loc.T("msg.selectInputDelete"));
@@ -421,6 +423,8 @@ public partial class MainWindow
 
     private void DeleteScene(SceneEntry removed)
     {
+        if (RejectIfOnAirLock())
+            return;
         if (_session.Scenes.Count <= 1)
         {
             MessageBox.Show(this, Loc.T("msg.oneScene"));
@@ -619,6 +623,8 @@ public partial class MainWindow
 
     private void DeleteUnit_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         if (_session.Units.Count <= 1)
         {
             MessageBox.Show(this, Loc.T("msg.oneUnit"));
@@ -746,12 +752,16 @@ public partial class MainWindow
 
     private void NewSession_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         MixerNative.SessionClearCurrent();
         ((App)Application.Current).ReloadSession(Session.Default());
     }
 
     private void LoadSession_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Loc.T("filter.session") };
         if (dialog.ShowDialog(this) != true)
             return;
@@ -777,6 +787,8 @@ public partial class MainWindow
 
     private void LoadLastSession_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         var last = AppPrefs.Current.ExistingSessions().FirstOrDefault();
         if (string.IsNullOrEmpty(last))
         {
@@ -866,6 +878,8 @@ public partial class MainWindow
 
     private void LoadSessionFrom(string path, uint? historyIndex = null)
     {
+        if (RejectIfOnAirLock())
+            return;
         try
         {
             if (historyIndex is null && SessionStore.FileHasAssets(path))

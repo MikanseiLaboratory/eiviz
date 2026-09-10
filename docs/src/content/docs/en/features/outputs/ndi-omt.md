@@ -9,7 +9,12 @@ The exit that puts a chosen source on the network. How to add a row and pick a s
 
 Transport is OMT or NDI.
 
-OMT can choose an encode path. GPU encode keeps the frame on the GPU and converts it to VMX. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.  
+OMT can choose an encode path. The default is CPU (Recommended).
+
+CPU (Recommended) is the default OMT encoder. Use it for Mixing Unit Program and other mission-critical program video. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread.
+
+GPU is an auxiliary OMT encoder. It can offload work from the CPU, but it loses more than CPU, so use it for Multiview and other auxiliary video. GPU encode keeps the frame on the GPU and converts it to VMX.
+
 NDI is always a CPU path.
 
 One thread is assigned per output. Video frames are sent at that output’s frame rate, not as soon as compose finishes. Resolution and frame rate are per output in Settings → Outputs. eiviz paces NDI submits on the shared media clock. The NDI SDK still requires one clock; audio clocking blocked send_audio, so video stays the required SDK clock. OMT encodes a VMX bitstream once per Output and fans that bitstream out to receivers. The pinned `openmediatransport-rs` revision already shares one encoded `Arc` and writes peers from a bounded background queue (depth 4, drop when full, 40 ms video write timeout). Ten receivers do not mean ten encodes.
