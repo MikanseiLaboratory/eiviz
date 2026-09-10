@@ -57,7 +57,19 @@ public partial class PreferencesWindow : Window
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        Apply(ReadLanguage(), ReadTheme(), ReadRenderer());
+        var renderer = ReadRenderer();
+        if (renderer != _originalRenderer)
+        {
+            var confirm = MessageBox.Show(
+                this,
+                Loc.T("prefs.rendererConfirm"),
+                Loc.T("prefs.renderer"),
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.OK)
+                return;
+        }
+        Apply(ReadLanguage(), ReadTheme(), renderer);
         if (HostRole.IsRemote)
             AppPrefs.Current.RemoteOmtUseGpu = ReadRemoteOmtUseGpu();
         if (!HostRole.IsRemote)

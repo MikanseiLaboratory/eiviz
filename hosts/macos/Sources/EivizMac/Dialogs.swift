@@ -258,7 +258,7 @@ struct SettingsView: View {
                     mixer.addOutput(output)
                 }
             }
-            Text("OMT and NDI® are sent from the mixer. NDI uses CPU encode.")
+            Text(L10n.t("settings.outputsHelp"))
                 .foregroundStyle(EivizTheme.dim)
             ForEach($mixer.session.outputs) { $output in
                 outputRow($output)
@@ -284,13 +284,16 @@ struct SettingsView: View {
                     Text("NDI®").tag(OutputTransport.ndi)
                 }
                 if output.wrappedValue.transport == .omt {
-                    Toggle("GPU", isOn: Binding(
+                    Picker("", selection: Binding(
                         get: { output.wrappedValue.useGpu },
                         set: { value in
                             output.wrappedValue.useGpu = value
                             mixer.addOutput(output.wrappedValue)
                         }
-                    ))
+                    )) {
+                        Text(L10n.t("settings.omtCpu")).tag(false)
+                        Text(L10n.t("settings.omtGpu")).tag(true)
+                    }
                 }
                 Toggle("Enabled", isOn: Binding(
                     get: { output.wrappedValue.enabled },
@@ -808,7 +811,7 @@ struct AddInputView: View {
     @State private var bars = false
     @State private var scroll = false
     @State private var toneHz: Float = 1000
-    @State private var useGpu = true
+    @State private var useGpu = false
     @State private var buffer: UInt32 = 1
     @State private var mediaBuffer: UInt32 = 3
     @State private var quality: UInt32 = 0
@@ -920,7 +923,13 @@ struct AddInputView: View {
             Button("Refresh discovery") { refreshOmt() }
             List(omtList, id: \.self, selection: $omtAddress) { Text($0) }
                 .frame(height: 120)
-            Toggle("GPU decode", isOn: $useGpu)
+            Picker("", selection: $useGpu) {
+                Text(L10n.t("settings.omtCpu")).tag(false)
+                Text(L10n.t("settings.omtGpu")).tag(true)
+            }
+            Text(L10n.t("settings.omtDecodeHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             frameBufferPicker($buffer)
         case "NDI®":
             mixerTextField($ndiAddress, placeholder: "NDI® source")
@@ -1652,6 +1661,8 @@ private struct ResourceRow: Identifiable {
     var name: String
     var kind: String
     var size: String
+    var uptime: String
+    var lost: String
     var cpu: String
     var gpu: String
     var ram: String
@@ -1674,6 +1685,8 @@ struct ResourcesView: View {
                     Text("Name").fontWeight(.bold)
                     Text("Kind").fontWeight(.bold)
                     Text("Size").fontWeight(.bold)
+                    Text("Uptime").fontWeight(.bold)
+                    Text("Lost").fontWeight(.bold)
                     Text("CPU").fontWeight(.bold)
                     Text("GPU").fontWeight(.bold)
                     Text("RAM").fontWeight(.bold)
@@ -1684,6 +1697,8 @@ struct ResourcesView: View {
                         Text(row.name)
                         Text(row.kind)
                         Text(row.size)
+                        Text(row.uptime)
+                        Text(row.lost)
                         Text(row.cpu)
                         Text(row.gpu)
                         Text(row.ram)
@@ -1723,6 +1738,28 @@ struct ResourcesView: View {
         }
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
+        var runtime = MixerFFI.zeroed() as EivizMixerRuntimeStats
+        _ = mixer_copy_runtime_stats(&runtime)
+        var inputBuf = [EivizInputRuntimeStats](repeating: MixerFFI.zeroed(), count: 128)
+        let inputN = inputBuf.withUnsafeMutableBufferPointer { ptr in
+            mixer_copy_input_stats(ptr.baseAddress, UInt32(ptr.count))
+        }
+        var liveInputs: [UInt64: EivizInputRuntimeStats] = [:]
+        if inputN > 0 {
+            for row in inputBuf.prefix(Int(inputN)) {
+                liveInputs[row.source_id] = row
+            }
+        }
+        var outputBuf = [EivizOutputRuntimeStats](repeating: MixerFFI.zeroed(), count: 64)
+        let outputN = outputBuf.withUnsafeMutableBufferPointer { ptr in
+            mixer_copy_output_stats(ptr.baseAddress, UInt32(ptr.count))
+        }
+        var liveOutputs: [UInt64: EivizOutputRuntimeStats] = [:]
+        if outputN > 0 {
+            for row in outputBuf.prefix(Int(outputN)) {
+                liveOutputs[row.output_id] = row
+            }
+        }
         var totalRam = stats.ram_bytes
         var totalVram = stats.vram_bytes
         if totalRam == 0 && totalVram == 0 {
@@ -1733,20 +1770,23 @@ struct ResourcesView: View {
         }
         if totalRam == 0 { totalRam = 1 }
         if totalVram == 0 { totalVram = 1 }
-        let gpuLoad = HostResources.gpuPercent()
+        let gpuText = HostResources.gpuPercent().map { String(format: "%.0f%%", $0) } ?? L10n.t("resources.unmeasured")
         rows = mixer.session.inputs.map { input in
             let usage = usages[input.id]
+            let live = liveInputs[input.id]
             let ram = usage?.ram_bytes ?? 0
             let vram = usage?.vram_bytes ?? 0
             let width = usage?.width ?? 0
             let height = usage?.height ?? 0
-            let live = input.kind == .omt || input.kind == .ndi || input.kind == .uvc || input.kind == .video
+            let isLive = input.kind == .omt || input.kind == .ndi || input.kind == .uvc || input.kind == .video
             return ResourceRow(
                 id: input.id,
                 name: input.listLabel(in: mixer.session, localFiles: !mixer.isRemote),
                 kind: input.kind.rawValue,
                 size: width == 0 ? "—" : "\(width)x\(height)",
-                cpu: live ? "live" : "—",
+                uptime: formatUptime(live?.uptime_ms ?? 0),
+                lost: (live?.queue_dropped ?? 0) == 0 ? "—" : String(live?.queue_dropped ?? 0),
+                cpu: isLive ? "live" : "—",
                 gpu: "—",
                 ram: formatBytes(ram),
                 vram: formatBytes(vram)
@@ -1762,17 +1802,46 @@ struct ResourcesView: View {
                 name: scene.name,
                 kind: "Scene",
                 size: width == 0 ? "—" : "\(width)x\(height)",
+                uptime: "—",
+                lost: "—",
                 cpu: "—",
                 gpu: pct > 0 ? String(format: "%.0f%%", pct) : "—",
                 ram: "—",
                 vram: formatBytes(usage?.vram_bytes ?? 0)
             )
         })
+        rows.append(contentsOf: mixer.session.outputs.map { output in
+            let live = liveOutputs[output.id]
+            return ResourceRow(
+                id: output.id,
+                name: output.name,
+                kind: String(describing: output.transport),
+                size: output.width == 0 ? "—" : "\(output.width)x\(output.height)",
+                uptime: formatUptime(live?.uptime_ms ?? 0),
+                lost: (live?.connections ?? 0) == 0 ? "—" : String(live?.connections ?? 0),
+                cpu: output.enabled ? "on" : "off",
+                gpu: "—",
+                ram: "—",
+                vram: "—"
+            )
+        })
         let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
             ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
             : ""
-        summary = "Inputs \(mixer.session.inputs.count)    GPU \(String(format: "%.0f", gpuLoad))%    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        summary = "Uptime \(formatUptime(runtime.uptime_ms))    Skipped \(runtime.render_skipped)    Lost \(runtime.input_queue_dropped)    OMT \(runtime.output_omt) (sub \(runtime.output_omt_subscribed))    NDI \(runtime.output_ndi) (conn \(runtime.output_ndi_connections))    Inputs \(mixer.session.inputs.count)    GPU \(gpuText)    RAM \(formatBytes(totalRam == 1 ? 0 : totalRam))    VRAM \(formatBytes(totalVram == 1 ? 0 : totalVram))\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
+}
+
+private func formatUptime(_ ms: UInt64) -> String {
+    guard ms > 0 else { return "—" }
+    let total = Int(ms / 1000)
+    let hours = total / 3600
+    let minutes = (total % 3600) / 60
+    let seconds = total % 60
+    if hours > 0 {
+        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+    }
+    return String(format: "%02d:%02d", minutes, seconds)
 }
 
 struct LogsView: View {

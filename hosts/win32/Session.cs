@@ -1078,7 +1078,7 @@ public sealed class Session
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = 1,
-            UseGpu = true,
+            UseGpu = false,
             AudioBusId = 1,
             Width = session.Settings.DefaultWidth,
             Height = session.Settings.DefaultHeight,

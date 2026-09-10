@@ -200,9 +200,10 @@ pub(crate) fn render_loop(
         if stop.load(Ordering::Relaxed) || crate::diag::is_fatal() {
             break;
         }
-        let Some(pts) = master_cursor.due(clock, Instant::now()) else {
+        let Some((pts, skipped)) = master_cursor.due_with_skip(clock, Instant::now()) else {
             continue;
         };
+        crate::diag::add_render_skipped(skipped);
         frame_i = master_cursor.idx.saturating_sub(1);
         {
             let mut guard = shared.lock().expect("shared");

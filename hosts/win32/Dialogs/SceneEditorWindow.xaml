@@ -47,7 +47,8 @@
                             ClipToBounds="True"
                             MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
                             MouseMove="WireCanvas_MouseMove"
-                            MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"/>
+                            MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"
+                            MouseRightButtonUp="WireCanvas_MouseRightButtonUp"/>
                 </Viewbox>
             </Border>
         </DockPanel>

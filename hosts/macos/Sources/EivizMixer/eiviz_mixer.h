@@ -197,6 +197,31 @@ typedef struct EivizMixerStats {
     uint64_t surface_lost;
 } EivizMixerStats;
 
+typedef struct EivizMixerRuntimeStats {
+    uint64_t uptime_ms;
+    uint64_t render_skipped;
+    uint64_t input_queue_dropped;
+    uint32_t output_omt;
+    uint32_t output_ndi;
+    uint32_t output_decklink;
+    uint32_t output_omt_subscribed;
+    uint32_t output_ndi_connections;
+} EivizMixerRuntimeStats;
+
+typedef struct EivizInputRuntimeStats {
+    uint64_t source_id;
+    uint64_t uptime_ms;
+    uint64_t queue_dropped;
+} EivizInputRuntimeStats;
+
+typedef struct EivizOutputRuntimeStats {
+    uint64_t output_id;
+    uint32_t transport;
+    uint64_t uptime_ms;
+    uint32_t connections;
+    uint32_t enabled;
+} EivizOutputRuntimeStats;
+
 typedef struct EivizMixerRebarInfo {
     uint32_t available;
     uint32_t active;
@@ -293,6 +318,9 @@ int32_t mixer_copy_follow_audio(float *out, uint32_t cap);
 int32_t mixer_copy_audio_peaks(EivizAudioPeak *out, uint32_t cap);
 int32_t mixer_copy_source_usage(EivizSourceUsage *out, uint32_t cap);
 int32_t mixer_copy_stats(EivizMixerStats *out);
+int32_t mixer_copy_runtime_stats(EivizMixerRuntimeStats *out);
+int32_t mixer_copy_input_stats(EivizInputRuntimeStats *out, uint32_t cap);
+int32_t mixer_copy_output_stats(EivizOutputRuntimeStats *out, uint32_t cap);
 int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);
 int32_t mixer_set_rebar_optimization(uint32_t enabled);
 int32_t mixer_set_ndi_gpu_upload(uint32_t enabled);

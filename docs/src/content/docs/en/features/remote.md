@@ -20,7 +20,7 @@ Multiple clients can stay connected; live state stays aligned through subscribe.
 
 ## Video
 
-The main video row is either Preview and Program, or one Multiview pane. Switch the layout from the top bar. Pick the NDI or OMT source from each header menu. CPU versus GPU OMT receive is a Preferences setting on `Eiviz.Remote.exe` (or `eiviz-remote.app`). The default is CPU. Add, tile-edit, and delete Multiview layouts from Settings.
+The main video row is either Preview and Program, or one Multiview pane. Switch the layout from the top bar. Pick the NDI or OMT source from each header menu. CPU versus GPU OMT receive is a Preferences setting on `Eiviz.Remote.exe` (or `eiviz-remote.app`). The default is CPU (Recommended). See [NDI / OMT Capture](/eiviz/en/features/inputs/ndi-omt/) for when to use each path. Add, tile-edit, and delete Multiview layouts from Settings.
 
 The scene list and switcher scene buttons show every Scene, collapsed. Preview/Program chrome still paints the collapsed tiles.
 

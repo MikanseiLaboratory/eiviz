@@ -19,6 +19,11 @@ public partial class SceneEditorWindow : Window
     private SceneLayer? _selected;
     private bool _dragging;
     private bool _resizing;
+    private bool _cropping;
+    private bool _cropLeft;
+    private bool _cropRight;
+    private bool _cropUp;
+    private bool _cropDown;
     private bool _suppress;
     private Point _last;
     private DateTime _lastGpuPush;
@@ -568,22 +573,49 @@ public partial class SceneEditorWindow : Window
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         var pos = e.GetPosition(WireCanvas);
-        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false })
+        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false }
+            && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             _resizing = true;
             _dragging = false;
+            _cropping = false;
             _last = pos;
             WireCanvas.CaptureMouse();
             return;
         }
         var hit = HitLayer(pos);
         _selected = hit;
-        _dragging = hit is { Locked: false };
+        _cropping = false;
         _resizing = false;
-        _last = pos;
-        if (_dragging)
+        _dragging = false;
+        if (hit is { Locked: false } && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)
+            && TryBeginCrop(hit, pos))
+        {
+            _cropping = true;
             WireCanvas.CaptureMouse();
+        }
+        else
+        {
+            _dragging = hit is { Locked: false };
+            if (_dragging)
+                WireCanvas.CaptureMouse();
+        }
+        _last = pos;
         RefreshLayers();
+    }
+
+    private bool TryBeginCrop(SceneLayer layer, Point pos)
+    {
+        var left = layer.X * WireCanvas.Width;
+        var top = layer.Y * WireCanvas.Height;
+        var right = (layer.X + layer.Width) * WireCanvas.Width;
+        var bottom = (layer.Y + layer.Height) * WireCanvas.Height;
+        const double edge = 8;
+        _cropLeft = Math.Abs(pos.X - left) <= edge;
+        _cropRight = Math.Abs(pos.X - right) <= edge;
+        _cropUp = Math.Abs(pos.Y - top) <= edge;
+        _cropDown = Math.Abs(pos.Y - bottom) <= edge;
+        return _cropLeft || _cropRight || _cropUp || _cropDown;
     }
 
     private SceneLayer? HitLayer(Point pos)
@@ -602,7 +634,7 @@ public partial class SceneEditorWindow : Window
 
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_selected is null || (!_dragging && !_resizing) || e.LeftButton != MouseButtonState.Pressed)
+        if (_selected is null || (!_dragging && !_resizing && !_cropping) || e.LeftButton != MouseButtonState.Pressed)
             return;
         var pos = e.GetPosition(WireCanvas);
         var dx = (float)((pos.X - _last.X) / WireCanvas.Width);
@@ -610,7 +642,9 @@ public partial class SceneEditorWindow : Window
         _last = pos;
         if (_selected.Locked)
             return;
-        if (_resizing)
+        if (_cropping)
+            ApplyCropDrag(_selected, dx, dy);
+        else if (_resizing)
         {
             var width = Math.Max(0.02f, _selected.Width + dx);
             if (_selected.SizeLinked && _selected.Width > 0)
@@ -618,11 +652,13 @@ public partial class SceneEditorWindow : Window
             else
                 _selected.Height = Math.Max(0.02f, _selected.Height + dy);
             _selected.Width = width;
+            ApplySnap(resize: true);
         }
         else
         {
             _selected.X += dx;
             _selected.Y += dy;
+            ApplySnap(resize: false);
         }
         DrawWireframe();
         FillNumeric();
@@ -633,13 +669,84 @@ public partial class SceneEditorWindow : Window
         }
     }
 
+    private void ApplyCropDrag(SceneLayer layer, float dx, float dy)
+    {
+        if (layer.Width <= 0 || layer.Height <= 0)
+            return;
+        if (_cropLeft)
+            layer.SetCropInset(CropEdit.Left, layer.CropX + dx / layer.Width);
+        if (_cropRight)
+            layer.SetCropInset(CropEdit.Right, 1f - layer.CropX - layer.CropWidth - dx / layer.Width);
+        if (_cropUp)
+            layer.SetCropInset(CropEdit.Up, layer.CropY + dy / layer.Height);
+        if (_cropDown)
+            layer.SetCropInset(CropEdit.Down, 1f - layer.CropY - layer.CropHeight - dy / layer.Height);
+    }
+
+    private void ApplySnap(bool resize)
+    {
+        if (_selected is null)
+            return;
+        var threshold = (float)(SceneSnap.PixelThreshold / Math.Max(WireCanvas.ActualWidth, 1));
+        var boxes = _scene.Layers.Select(layer => new SceneSnap.Box(
+            layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
+        if (resize)
+        {
+            var width = _selected.Width;
+            var height = _selected.Height;
+            SceneSnap.SnapResize(ref width, ref height, _selected.X, _selected.Y, _selected.SizeLinked, boxes, threshold);
+            _selected.Width = width;
+            _selected.Height = height;
+        }
+        else
+        {
+            var x = _selected.X;
+            var y = _selected.Y;
+            SceneSnap.SnapMove(ref x, ref y, _selected.Width, _selected.Height, boxes, threshold);
+            _selected.X = x;
+            _selected.Y = y;
+        }
+    }
+
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_dragging || _resizing)
+        if (_dragging || _resizing || _cropping)
             PushGpu();
         _dragging = false;
         _resizing = false;
+        _cropping = false;
         WireCanvas.ReleaseMouseCapture();
+    }
+
+    private void WireCanvas_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var pos = e.GetPosition(WireCanvas);
+        var hit = HitLayer(pos);
+        if (hit is null)
+            return;
+        _selected = hit;
+        RefreshLayers();
+        var menu = new ContextMenu();
+        var fit = new MenuItem
+        {
+            Header = Loc.T("scene.fitToScreen"),
+            IsEnabled = !hit.Locked
+        };
+        fit.Click += (_, _) => FitLayerToScreen(hit);
+        menu.Items.Add(fit);
+        menu.PlacementTarget = WireCanvas;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void FitLayerToScreen(SceneLayer layer)
+    {
+        if (layer.Locked)
+            return;
+        layer.ResetLayout();
+        _selected = layer;
+        RefreshLayers();
+        PushGpu();
     }
 
     private void Link_Click(object sender, RoutedEventArgs e)

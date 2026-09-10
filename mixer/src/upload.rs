@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
 
@@ -134,6 +134,8 @@ pub struct SourceRing {
     free: Vec<Vec<u8>>,
     ring_vram: u64,
     cache_ram: u64,
+    started_at: Instant,
+    dropped: u64,
 }
 
 /// CPU frame borrowed for GPU upload after the ingest lock is dropped.
@@ -381,7 +383,17 @@ impl SourceRing {
             free: Vec::new(),
             ring_vram: 0,
             cache_ram: 0,
+            started_at: Instant::now(),
+            dropped: 0,
         }
+    }
+
+    pub fn uptime_ms(&self) -> u64 {
+        self.started_at.elapsed().as_millis() as u64
+    }
+
+    pub fn queue_dropped(&self) -> u64 {
+        self.dropped
     }
 
     pub fn push(&mut self, src: &[u8], stride: usize, pts: i64) {
@@ -422,9 +434,11 @@ impl SourceRing {
         self.playout_depth = depth.clamp(1, 8) as usize;
         while self.cpu_fifo.len() > self.playout_depth {
             self.cpu_fifo.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
         }
         while self.gpu_fifo.len() > self.playout_depth {
             self.gpu_fifo.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
 
@@ -474,6 +488,7 @@ impl SourceRing {
         while self.cpu_fifo.len() > self.playout_depth {
             if let Some(old) = self.cpu_fifo.pop_front() {
                 self.recycle(old.pixels);
+                self.dropped = self.dropped.saturating_add(1);
             }
         }
     }
@@ -506,6 +521,7 @@ impl SourceRing {
         self.gpu_fifo.push_back(frame);
         while self.gpu_fifo.len() > self.playout_depth {
             self.gpu_fifo.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
 
@@ -788,6 +804,12 @@ impl Default for UploadStore {
 impl UploadStore {
     pub fn audio_store(&self) -> Arc<Mutex<AudioInputStore>> {
         Arc::clone(&self.audio)
+    }
+
+    pub fn runtime_rows(&self) -> impl Iterator<Item = (u64, u64, u64)> + '_ {
+        self.sources
+            .iter()
+            .map(|(&id, ring)| (id, ring.uptime_ms(), ring.queue_dropped()))
     }
 
     pub fn register(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
@@ -1159,6 +1181,17 @@ mod tests {
         ring.advance_playout();
         assert_eq!(ring.last_pts, 2);
         assert_eq!(ring.latest_rgba_or_packed()[..4], [2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn playout_overflow_counts_queue_drops() {
+        let mut ring = SourceRing::new(4, 2, CpuFormat::Bgra);
+        ring.set_playout_depth(2);
+        ring.push_playout_cpu(&[1u8; 32], 16, 1);
+        ring.push_playout_cpu(&[2u8; 32], 16, 2);
+        assert_eq!(ring.queue_dropped(), 0);
+        ring.push_playout_cpu(&[3u8; 32], 16, 3);
+        assert_eq!(ring.queue_dropped(), 1);
     }
 
     #[test]

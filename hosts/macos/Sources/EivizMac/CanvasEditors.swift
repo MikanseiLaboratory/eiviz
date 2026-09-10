@@ -111,6 +111,9 @@ struct SceneEditorView: View {
                         )
                     },
                     aspect: projectAspect,
+                    snapEnabled: true,
+                    onFit: fitLayerToScreen,
+                    onCrop: applyCrop,
                     selected: $selectedLayer,
                     onChange: applyWire
                 )
@@ -251,6 +254,31 @@ struct SceneEditorView: View {
     private func moveLayers(from offsets: IndexSet, to dest: Int) {
         mutate { $0.layers.move(fromOffsets: offsets, toOffset: dest) }
         push()
+    }
+
+    private func fitLayerToScreen(id: UUID) {
+        mutate { scene in
+            if let i = scene.layers.firstIndex(where: { $0.id == id }), !scene.layers[i].locked {
+                scene.layers[i].resetLayout()
+            }
+        }
+        selectedLayer = id
+        push()
+    }
+
+    private func applyCrop(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
+        mutate { scene in
+            if let i = scene.layers.firstIndex(where: { $0.id == id }), !scene.layers[i].locked {
+                scene.layers[i].cropX = x
+                scene.layers[i].cropY = y
+                scene.layers[i].cropWidth = w
+                scene.layers[i].cropHeight = h
+            }
+        }
+        if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
+            lastGpuPush = Date()
+            push()
+        }
     }
 
     private func applyWire(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {

@@ -268,7 +268,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var busMask: UInt32 = 1
     var gain: Float = 1
     var mute: Bool = false
-    var useGpu: Bool = true
+    var useGpu: Bool = false
     var frameBufferFrames: UInt32 = 1
     var bandwidthSave: BandwidthSave = .notOnPreviewOrProgram
     var keepFullOnMultiview: Bool = false
@@ -336,7 +336,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         busMask: UInt32 = 1,
         gain: Float = 1,
         mute: Bool = false,
-        useGpu: Bool = true,
+        useGpu: Bool = false,
         frameBufferFrames: UInt32 = 1,
         bandwidthSave: BandwidthSave = .notOnPreviewOrProgram,
         keepFullOnMultiview: Bool = false,
@@ -387,7 +387,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         busMask = try container.decodeIfPresent(UInt32.self, forKey: .busMask) ?? 1
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
         mute = try container.decodeIfPresent(Bool.self, forKey: .mute) ?? false
-        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
+        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 1
         bandwidthSave = try container.decodeIfPresent(BandwidthSave.self, forKey: .bandwidthSave) ?? .notOnPreviewOrProgram
         keepFullOnMultiview = try container.decodeIfPresent(Bool.self, forKey: .keepFullOnMultiview) ?? false
@@ -898,7 +898,7 @@ struct OutputEntry: Identifiable, Codable {
     var sourceKind: OutputSourceKind = .muProgram
     var sourceId: UInt64 = 0
     var unitId: UInt64 = 1
-    var useGpu: Bool = true
+    var useGpu: Bool = false
     var enabled: Bool = true
     var audioBusId: UInt64 = 1
     var skipEncodeWhenNoReceivers: Bool = true
@@ -919,7 +919,7 @@ struct OutputEntry: Identifiable, Codable {
         sourceKind: OutputSourceKind = .muProgram,
         sourceId: UInt64 = 0,
         unitId: UInt64 = 1,
-        useGpu: Bool = true,
+        useGpu: Bool = false,
         enabled: Bool = true,
         audioBusId: UInt64 = 1,
         skipEncodeWhenNoReceivers: Bool = true,
@@ -952,7 +952,7 @@ struct OutputEntry: Identifiable, Codable {
         sourceKind = try container.decodeIfPresent(OutputSourceKind.self, forKey: .sourceKind) ?? .muProgram
         sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
         unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
-        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? true
+        useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
         skipEncodeWhenNoReceivers = try container.decodeIfPresent(Bool.self, forKey: .skipEncodeWhenNoReceivers) ?? true
@@ -1454,7 +1454,7 @@ struct MixerSessionData: Codable {
                 id: session.nextOutputId,
                 name: "eiviz-pgm",
                 transport: .omt,
-                useGpu: true,
+                useGpu: false,
                 width: session.settings.defaultWidth,
                 height: session.settings.defaultHeight,
                 fpsNum: session.settings.masterFpsNum,

@@ -50,7 +50,7 @@ public partial class AddInputWindow : Window
     public bool Scroll { get; private set; }
     public float ResultToneHz { get; private set; }
     public float ResultToneLevelDbfs { get; private set; } = -20;
-    public bool ResultUseGpu { get; private set; } = true;
+    public bool ResultUseGpu { get; private set; }
     public uint ResultFrameBufferFrames { get; private set; } = 1;
     public BandwidthSave ResultSaveMode { get; private set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool ResultKeepFullOnMultiview { get; private set; }

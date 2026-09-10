@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -203,6 +203,7 @@ pub struct NdiSender {
     audio_tx: Option<SyncSender<AudioPacket>>,
     ctrl_tx: Option<SyncSender<NdiCtrl>>,
     worker: Option<JoinHandle<()>>,
+    pub(crate) connections: Arc<AtomicU32>,
     pack_ms: f32,
     sdk_ms: f32,
 }
@@ -221,6 +222,8 @@ impl NdiSender {
         let (video_tx, video_rx) = sync_channel::<NdiVideoCmd>(1);
         let (audio_tx, audio_rx) = sync_channel::<AudioPacket>(16);
         let (ctrl_tx, ctrl_rx) = sync_channel::<NdiCtrl>(4);
+        let connections = Arc::new(AtomicU32::new(0));
+        let connections_thread = Arc::clone(&connections);
         let worker = thread::Builder::new()
             .name("eiviz-ndi-send".into())
             .spawn(move || {
@@ -234,7 +237,8 @@ impl NdiSender {
                                 return;
                             }
                             NdiCtrl::Pump => {
-                                let _ = sender.connection_count(Duration::ZERO);
+                                let count = sender.connection_count(Duration::ZERO).unwrap_or(0);
+                                connections_thread.store(count as u32, Ordering::Relaxed);
                             }
                         }
                     }
@@ -294,6 +298,7 @@ impl NdiSender {
             audio_tx: Some(audio_tx),
             ctrl_tx: Some(ctrl_tx),
             worker: Some(worker),
+            connections,
             pack_ms: 0.0,
             sdk_ms: 0.0,
         })

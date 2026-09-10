@@ -345,6 +345,15 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_stats")]
     internal static unsafe partial int CopyStats(MixerStats* stats);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_runtime_stats")]
+    internal static unsafe partial int CopyRuntimeStats(MixerRuntimeStats* stats);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_input_stats")]
+    internal static unsafe partial int CopyInputStats(InputRuntimeStats* stats, uint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_copy_output_stats")]
+    internal static unsafe partial int CopyOutputStats(OutputRuntimeStats* stats, uint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_source_usage")]
     internal static unsafe partial int CopySourceUsage(SourceUsage* usage, uint capacity);
 
@@ -812,6 +821,37 @@ internal struct MixerStats
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct MixerRuntimeStats
+{
+    public ulong UptimeMs;
+    public ulong RenderSkipped;
+    public ulong InputQueueDropped;
+    public uint OutputOmt;
+    public uint OutputNdi;
+    public uint OutputDeckLink;
+    public uint OutputOmtSubscribed;
+    public uint OutputNdiConnections;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct InputRuntimeStats
+{
+    public ulong SourceId;
+    public ulong UptimeMs;
+    public ulong QueueDropped;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct OutputRuntimeStats
+{
+    public ulong OutputId;
+    public uint Transport;
+    public ulong UptimeMs;
+    public uint Connections;
+    public uint Enabled;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MixerRebarInfo
 {
     public uint Available;
@@ -821,6 +861,20 @@ internal unsafe struct MixerRebarInfo
     public ulong BarBytes;
     public ulong VramBytes;
     public fixed byte Adapter[128];
+
+    public string AdapterName()
+    {
+        unsafe
+        {
+            fixed (byte* ptr = Adapter)
+            {
+                var n = 0;
+                while (n < 128 && ptr[n] != 0)
+                    n++;
+                return n == 0 ? "" : System.Text.Encoding.UTF8.GetString(ptr, n);
+            }
+        }
+    }
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -19,6 +19,8 @@ public partial class SettingsWindow : Window
         if (App.IsRemote && OpenMvButton is not null)
             OpenMvButton.Visibility = Visibility.Collapsed;
         _nextOutputId = session.NextOutputId;
+        OnAirLock.Changed += ApplyOnAirLock;
+        Closed += (_, _) => OnAirLock.Changed -= ApplyOnAirLock;
         Settings = new SessionSettings
         {
             MasterFpsNum = session.Settings.MasterFpsNum,
@@ -74,6 +76,7 @@ public partial class SettingsWindow : Window
         RebuildOutputs();
         RebuildLayouts();
         RebuildBuses();
+        ApplyOnAirLock();
         FillRebar();
         PaintBusColors();
         WebApiEnabledBox.IsChecked = Settings.VmixApiEnabledValue;
@@ -89,6 +92,14 @@ public partial class SettingsWindow : Window
     public List<OutputEntry> Outputs { get; } = [];
     public List<AudioBusEntry> Buses { get; } = [];
     public bool HeadphoneCopyMaster { get; private set; }
+
+    private void ApplyOnAirLock()
+    {
+        if (AddOutputButton is not null)
+            AddOutputButton.IsEnabled = !OnAirLock.Active;
+        if (OutputRows is not null)
+            RebuildOutputs();
+    }
     public ulong NextOutputId => _nextOutputId;
     public ulong NextBusId => _nextBusId;
     private ulong _nextBusId;
@@ -516,6 +527,8 @@ public partial class SettingsWindow : Window
 
     private void AddOutput_Click(object sender, RoutedEventArgs e)
     {
+        if (OnAirLock.Active)
+            return;
         if (_nextOutputId < 100)
             _nextOutputId = 100;
         Outputs.Add(new OutputEntry
@@ -525,7 +538,7 @@ public partial class SettingsWindow : Window
             Transport = OutputTransport.Omt,
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
-            UseGpu = true,
+            UseGpu = false,
             AudioBusId = 1,
             SkipEncodeWhenNoReceivers = true,
             Width = Settings.DefaultWidth,
@@ -566,7 +579,7 @@ public partial class SettingsWindow : Window
 
             var name = new TextBox { Text = output.Name, Margin = new Thickness(0, 0, 8, 6) };
             name.TextChanged += (_, _) => output.Name = name.Text.Trim();
-            var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
             transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
@@ -582,10 +595,11 @@ public partial class SettingsWindow : Window
                 RebuildOutputs();
             };
 
-            var path = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = output.Transport == OutputTransport.Omt };
-            path.Items.Add(new ComboBoxItem { Content = "GPU encode", Tag = true });
-            path.Items.Add(new ComboBoxItem { Content = "CPU encode", Tag = false });
-            path.SelectedIndex = output.UseGpu ? 0 : 1;
+            var locked = OnAirLock.Active;
+            var path = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked && output.Transport == OutputTransport.Omt };
+            path.Items.Add(new ComboBoxItem { Content = I18n.Loc.T("settings.omtCpu"), Tag = false });
+            path.Items.Add(new ComboBoxItem { Content = I18n.Loc.T("settings.omtGpu"), Tag = true });
+            path.SelectedIndex = output.UseGpu ? 1 : 0;
             path.SelectionChanged += (_, _) =>
             {
                 if (path.SelectedItem is ComboBoxItem item && item.Tag is bool value)
@@ -599,7 +613,7 @@ public partial class SettingsWindow : Window
             AddKind(kinds, output, OutputSourceKind.MuProgram, "MU PGM", index);
             AddKind(kinds, output, OutputSourceKind.Multiview, "Multiview", index);
 
-            var pick = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+            var pick = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
             FillOutputPick(pick, output);
             pick.SelectionChanged += (_, _) => ApplyOutputPick(pick, output);
 
@@ -615,6 +629,7 @@ public partial class SettingsWindow : Window
             {
                 Content = "Enabled",
                 IsChecked = output.Enabled,
+                IsEnabled = !locked,
                 Foreground = System.Windows.Media.Brushes.White,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 6)
@@ -642,9 +657,11 @@ public partial class SettingsWindow : Window
             FillOutputFps(fps, output);
             fps.SelectionChanged += (_, _) => ApplyOutputFps(fps, output);
 
-            var remove = new Button { Content = "−", Width = 28 };
+            var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
             remove.Click += (_, _) =>
             {
+                if (OnAirLock.Active)
+                    return;
                 Outputs.RemoveAt(index);
                 RebuildOutputs();
             };
@@ -737,6 +754,7 @@ public partial class SettingsWindow : Window
             Content = label,
             GroupName = $"out-{index}",
             IsChecked = output.SourceKind == kind,
+            IsEnabled = !OnAirLock.Active,
             Foreground = System.Windows.Media.Brushes.White,
             Margin = new Thickness(0, 0, 12, 0)
         };

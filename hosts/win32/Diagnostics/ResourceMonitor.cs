@@ -15,7 +15,7 @@ internal sealed class ResourceMonitor : IDisposable
     private DateTime _lastSample = DateTime.UtcNow;
     private float _cpu;
     private float _ram;
-    private float _gpu;
+    private float? _gpu;
     private float _vram;
     private float _renderMs;
     private float _budgetMs = 16.67f;
@@ -79,13 +79,13 @@ internal sealed class ResourceMonitor : IDisposable
         }
         try
         {
-            SampleVideoMemory(out _vram);
-            _gpu = GpuUtilization.Percent();
+            SampleVideoMemory(MixerAdapterName(), out _vram, out var luidNeedle);
+            _gpu = GpuUtilization.Percent(luidNeedle);
         }
         catch
         {
             _vram = 0;
-            _gpu = GpuUtilization.Percent();
+            _gpu = null;
         }
     }
 
@@ -103,14 +103,15 @@ internal sealed class ResourceMonitor : IDisposable
 
     private string FormatLine()
     {
-        return $"CPU {_cpu:0}%   GPU {_gpu:0}%   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms";
+        var gpuText = _gpu is { } gpu ? $"{gpu:0}%" : I18n.Loc.T("resources.unmeasured");
+        return $"CPU {_cpu:0}%   GPU {gpuText}   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms";
     }
 
     private string? FormatWarning()
     {
         var hits = new List<string>();
         if (_cpu >= 85) hits.Add($"CPU {_cpu:0}%");
-        if (_gpu >= 85) hits.Add($"GPU {_gpu:0}%");
+        if (_gpu is { } gpu && gpu >= 85) hits.Add($"GPU {gpu:0}%");
         if (_ram >= 85) hits.Add($"RAM {_ram:0}%");
         if (_vram >= 85) hits.Add($"VRAM {_vram:0}%");
         if (_budgetMs > 0 && _renderMs >= _budgetMs * 0.85f)
@@ -133,9 +134,21 @@ internal sealed class ResourceMonitor : IDisposable
         return (float)(workingSet / (double)status.TotalPhys * 100.0);
     }
 
-    private static void SampleVideoMemory(out float vramPercent)
+    private static string MixerAdapterName()
+    {
+        MixerRebarInfo info = default;
+        unsafe
+        {
+            if (MixerNative.CopyRebarInfo(&info) != 0)
+                return "";
+        }
+        return info.AdapterName();
+    }
+
+    private static void SampleVideoMemory(string mixerAdapter, out float vramPercent, out string? luidNeedle)
     {
         vramPercent = 0;
+        luidNeedle = null;
         var iidFactory1 = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
         if (CreateDXGIFactory1(in iidFactory1, out var factory) != 0 || factory == nint.Zero)
             return;
@@ -144,6 +157,9 @@ internal sealed class ResourceMonitor : IDisposable
             ulong bestBudget = 0;
             ulong bestUsage = 0;
             ulong bestDedicated = 0;
+            ulong matchedBudget = 0;
+            ulong matchedUsage = 0;
+            var haveMatch = false;
             for (uint i = 0; ; i++)
             {
                 var hr = VTable.EnumAdapters1(factory, i, out var adapter);
@@ -153,7 +169,7 @@ internal sealed class ResourceMonitor : IDisposable
                 {
                     if (VTable.IsSoftwareAdapter(adapter))
                         continue;
-                    VTable.TryGetDedicated(adapter, out var dedicated);
+                    VTable.TryGetDesc(adapter, out _, out var description, out var dedicated, out var luidLow, out var luidHigh);
                     if (dedicated > bestDedicated)
                         bestDedicated = dedicated;
                     if (!VTable.TryQueryUsage(adapter, out var budget, out var usage) || budget == 0)
@@ -163,13 +179,23 @@ internal sealed class ResourceMonitor : IDisposable
                         bestBudget = budget;
                         bestUsage = usage;
                     }
+                    if (!string.IsNullOrEmpty(mixerAdapter)
+                        && description.Contains(mixerAdapter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchedBudget = budget;
+                        matchedUsage = usage;
+                        luidNeedle = $"luid_0x{(uint)luidHigh:x8}_0x{luidLow:x8}";
+                        haveMatch = true;
+                    }
                 }
                 finally
                 {
                     Marshal.Release(adapter);
                 }
             }
-            if (bestBudget > 0)
+            if (haveMatch)
+                vramPercent = (float)(matchedUsage / (double)matchedBudget * 100.0);
+            else if (bestBudget > 0)
                 vramPercent = (float)(bestUsage / (double)bestBudget * 100.0);
             else if (bestDedicated > 0)
                 vramPercent = 0;
@@ -222,7 +248,7 @@ internal sealed class ResourceMonitor : IDisposable
 
         internal static bool IsSoftwareAdapter(nint adapter)
         {
-            if (!TryGetDesc(adapter, out var vendor, out var description, out _))
+            if (!TryGetDesc(adapter, out var vendor, out var description, out _, out _, out _))
                 return false;
             if (vendor == 0x1414)
                 return true;
@@ -232,7 +258,7 @@ internal sealed class ResourceMonitor : IDisposable
 
         internal static bool TryGetDedicated(nint adapter, out ulong dedicated)
         {
-            return TryGetDesc(adapter, out _, out _, out dedicated) && dedicated > 0;
+            return TryGetDesc(adapter, out _, out _, out dedicated, out _, out _) && dedicated > 0;
         }
 
         internal static bool TryQueryUsage(nint adapter, out ulong budget, out ulong usage)
@@ -264,11 +290,19 @@ internal sealed class ResourceMonitor : IDisposable
             }
         }
 
-        private static bool TryGetDesc(nint adapter, out uint vendorId, out string description, out ulong dedicated)
+        internal static bool TryGetDesc(
+            nint adapter,
+            out uint vendorId,
+            out string description,
+            out ulong dedicated,
+            out uint luidLow,
+            out int luidHigh)
         {
             vendorId = 0;
             description = "";
             dedicated = 0;
+            luidLow = 0;
+            luidHigh = 0;
             var buffer = new byte[320];
             var dlg = Marshal.GetDelegateForFunctionPointer<GetDescDlg>(Slot(adapter, 8));
             unsafe
@@ -282,6 +316,8 @@ internal sealed class ResourceMonitor : IDisposable
             description = System.Text.Encoding.Unicode.GetString(buffer, 0, 256).TrimEnd('\0');
             vendorId = BitConverter.ToUInt32(buffer, 256);
             dedicated = BitConverter.ToUInt64(buffer, 272);
+            luidLow = BitConverter.ToUInt32(buffer, 296);
+            luidHigh = BitConverter.ToInt32(buffer, 300);
             return true;
         }
 

@@ -411,3 +411,48 @@ pub struct SourceUsage {
     pub vram_bytes: u64,
     pub gpu_pct: f32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::{align_of, size_of};
+
+    #[test]
+    fn runtime_stats_are_fixed_width() {
+        assert_eq!(size_of::<MixerRuntimeStats>(), 48);
+        assert_eq!(align_of::<MixerRuntimeStats>(), 8);
+        assert_eq!(size_of::<InputRuntimeStats>(), 24);
+        assert_eq!(size_of::<OutputRuntimeStats>(), 32);
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerRuntimeStats {
+    pub uptime_ms: u64,
+    pub render_skipped: u64,
+    pub input_queue_dropped: u64,
+    pub output_omt: u32,
+    pub output_ndi: u32,
+    pub output_decklink: u32,
+    pub output_omt_subscribed: u32,
+    pub output_ndi_connections: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InputRuntimeStats {
+    pub source_id: u64,
+    pub uptime_ms: u64,
+    pub queue_dropped: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OutputRuntimeStats {
+    pub output_id: u64,
+    pub transport: u32,
+    pub uptime_ms: u64,
+    pub connections: u32,
+    pub enabled: u32,
+}

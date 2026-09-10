@@ -245,6 +245,7 @@ public partial class MainWindow
         }
         RefreshSceneTiles();
         NotifySwitchers();
+        ApplyOnAirLock();
     }
 
     internal void NotifySceneTilesFromSwitcher()

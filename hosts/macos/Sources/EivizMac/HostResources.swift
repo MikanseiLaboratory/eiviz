@@ -8,20 +8,20 @@ enum HostResources {
     private static var lastCpu: Double = 0
     private static var lastStamp = Date.distantPast
 
-    static func gpuPercent() -> Float { sampleGpu() }
+    static func gpuPercent() -> Float? { sampleGpu() }
 
     static func hud(renderMs: Float, budgetMs: Float) -> (text: String, warn: String) {
         let cpu = sampleCpu()
         let ram = sampleRam()
         let vram = sampleVram()
         let gpu = sampleGpu()
-        let text = String(
-            format: "CPU %.0f%%   GPU %.0f%%   RAM %.0f%%   VRAM %.0f%%   Render %.1f ms / %.1f ms",
-            cpu, gpu, ram, vram, renderMs, budgetMs
-        )
+        let gpuText = gpu.map { String(format: "%.0f%%", $0) } ?? L10n.t("resources.unmeasured")
+        let text = String(format: "CPU %.0f%%   GPU ", cpu)
+            + gpuText
+            + String(format: "   RAM %.0f%%   VRAM %.0f%%   Render %.1f ms / %.1f ms", ram, vram, renderMs, budgetMs)
         var hits: [String] = []
         if cpu >= 85 { hits.append(String(format: "CPU %.0f%%", cpu)) }
-        if gpu >= 85 { hits.append(String(format: "GPU %.0f%%", gpu)) }
+        if let gpu, gpu >= 85 { hits.append(String(format: "GPU %.0f%%", gpu)) }
         if ram >= 85 { hits.append(String(format: "RAM %.0f%%", ram)) }
         if vram >= 85 { hits.append(String(format: "VRAM %.0f%%", vram)) }
         if budgetMs > 0 && renderMs >= budgetMs * 0.85 {
@@ -60,14 +60,15 @@ enum HostResources {
         return Float(Double(info.resident_size) / total * 100)
     }
 
-    private static func sampleGpu() -> Float {
+    private static func sampleGpu() -> Float? {
         var iterator: io_iterator_t = 0
         let matching = IOServiceMatching("IOAccelerator")
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
-            return 0
+            return nil
         }
         defer { IOObjectRelease(iterator) }
         var best: Float = 0
+        var found = false
         var service = IOIteratorNext(iterator)
         while service != 0 {
             defer {
@@ -79,12 +80,14 @@ enum HostResources {
                   let dict = props?.takeRetainedValue() as? [String: Any],
                   let stats = dict["PerformanceStatistics"] as? [String: Any]
             else { continue }
-            let util = (stats["Device Utilization %"] as? NSNumber)?.floatValue
+            if let util = (stats["Device Utilization %"] as? NSNumber)?.floatValue
                 ?? (stats["GPU Activity(%)"] as? NSNumber)?.floatValue
-                ?? 0
-            best = max(best, util)
+            {
+                found = true
+                best = max(best, util)
+            }
         }
-        return min(100, max(0, best))
+        return found ? min(100, max(0, best)) : nil
     }
 
     private static func sampleVram() -> Float {

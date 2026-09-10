@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct WireRect: Identifiable, Equatable {
@@ -18,12 +19,22 @@ struct WireRect: Identifiable, Equatable {
 struct WireCanvasView: View {
     var items: [WireRect]
     var aspect: CGFloat = 16.0 / 9.0
+    var snapEnabled = false
+    var onFit: ((UUID) -> Void)?
+    var onCrop: ((UUID, Float, Float, Float, Float, Bool) -> Void)?
     @Binding var selected: UUID?
     var onChange: (UUID, Float, Float, Float, Float, Bool) -> Void
 
     @State private var dragging = false
     @State private var resizing = false
+    @State private var cropping = false
+    @State private var cropLeft = false
+    @State private var cropRight = false
+    @State private var cropUp = false
+    @State private var cropDown = false
     @State private var last: CGPoint = .zero
+    @State private var draft: (UUID, Float, Float, Float, Float)?
+    @State private var cropDraft: (UUID, Float, Float, Float, Float)?
 
     private let hues: [Color] = [
         Color(red: 0xE8 / 255, green: 0x77 / 255, blue: 0x22 / 255),
@@ -52,6 +63,15 @@ struct WireCanvasView: View {
                         .overlay(Rectangle().stroke(color, lineWidth: selected == item.id ? 4 : 2))
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
+                        .contextMenu {
+                            if let onFit {
+                                Button(L10n.t("scene.fitToScreen")) {
+                                    selected = item.id
+                                    if !item.locked { onFit(item.id) }
+                                }
+                                .disabled(item.locked)
+                            }
+                        }
                     if item.cropX > 0.001 || item.cropY > 0.001 || item.cropWidth < 0.999 || item.cropHeight < 0.999 {
                         let crop = CGRect(
                             x: frame.minX + frame.width * CGFloat(item.cropX),
@@ -82,31 +102,50 @@ struct WireCanvasView: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         let local = CGPoint(x: value.location.x - origin.x, y: value.location.y - origin.y)
-                        if !dragging && !resizing {
+                        if !dragging && !resizing && !cropping {
                             begin(at: local, canvas: size)
                             last = local
                             return
                         }
-                        guard let id = selected, let item = items.first(where: { $0.id == id }), !item.locked else { return }
+                        guard let id = selected, var item = items.first(where: { $0.id == id }), !item.locked else { return }
                         let dx = Float((local.x - last.x) / size.width)
                         let dy = Float((local.y - last.y) / size.height)
                         last = local
-                        if resizing {
-                            let width = max(0.02, item.width + dx)
-                            let height = item.sizeLinked && item.width > 0
+                        if cropping {
+                            applyCrop(&item, dx: dx, dy: dy)
+                            cropDraft = (id, item.cropX, item.cropY, item.cropWidth, item.cropHeight)
+                            onCrop?(id, item.cropX, item.cropY, item.cropWidth, item.cropHeight, false)
+                        } else if resizing {
+                            var width = max(0.02, item.width + dx)
+                            var height = item.sizeLinked && item.width > 0
                                 ? max(0.02, width * (item.height / item.width))
                                 : max(0.02, item.height + dy)
+                            if snapEnabled {
+                                snapResize(x: item.x, y: item.y, width: &width, height: &height, linked: item.sizeLinked, except: id, canvas: size)
+                            }
+                            draft = (id, item.x, item.y, width, height)
                             onChange(id, item.x, item.y, width, height, false)
                         } else if dragging {
-                            onChange(id, item.x + dx, item.y + dy, item.width, item.height, false)
+                            var x = item.x + dx
+                            var y = item.y + dy
+                            if snapEnabled {
+                                snapMove(x: &x, y: &y, width: item.width, height: item.height, except: id, canvas: size)
+                            }
+                            draft = (id, x, y, item.width, item.height)
+                            onChange(id, x, y, item.width, item.height, false)
                         }
                     }
                     .onEnded { _ in
-                        if let id = selected, let item = items.first(where: { $0.id == id }), dragging || resizing {
-                            onChange(id, item.x, item.y, item.width, item.height, true)
+                        if cropping, let crop = cropDraft {
+                            onCrop?(crop.0, crop.1, crop.2, crop.3, crop.4, true)
+                        } else if let draft, dragging || resizing {
+                            onChange(draft.0, draft.1, draft.2, draft.3, draft.4, true)
                         }
                         dragging = false
                         resizing = false
+                        cropping = false
+                        draft = nil
+                        cropDraft = nil
                     }
             )
         }
@@ -125,6 +164,7 @@ struct WireCanvasView: View {
     }
 
     private func begin(at pos: CGPoint, canvas: CGSize) {
+        let option = NSEvent.modifierFlags.contains(.option)
         if let id = selected, let item = items.first(where: { $0.id == id }), !item.locked {
             let handle = CGRect(
                 x: CGFloat(item.x + item.width) * canvas.width - 16,
@@ -132,9 +172,10 @@ struct WireCanvasView: View {
                 width: 16,
                 height: 16
             )
-            if handle.insetBy(dx: -4, dy: -4).contains(pos) {
+            if !option, handle.insetBy(dx: -4, dy: -4).contains(pos) {
                 resizing = true
                 dragging = false
+                cropping = false
                 return
             }
         }
@@ -147,14 +188,116 @@ struct WireCanvasView: View {
             ).contains(pos)
         }
         if let current = selected, hits.contains(where: { $0.id == current }) {
-            dragging = items.first(where: { $0.id == current })?.locked != true
+            selected = current
+        } else {
+            selected = hits.first?.id
+        }
+        guard let id = selected, let item = items.first(where: { $0.id == id }), !item.locked else {
+            dragging = false
+            resizing = false
+            cropping = false
+            return
+        }
+        if option, onCrop != nil, beginCrop(item, pos: pos, canvas: canvas) {
+            cropping = true
+            dragging = false
             resizing = false
             return
         }
-        let hit = hits.first?.id
-        selected = hit
-        let locked = items.first(where: { $0.id == hit })?.locked == true
-        dragging = hit != nil && !locked
+        dragging = true
         resizing = false
+        cropping = false
+    }
+
+    private func beginCrop(_ item: WireRect, pos: CGPoint, canvas: CGSize) -> Bool {
+        let left = CGFloat(item.x) * canvas.width
+        let top = CGFloat(item.y) * canvas.height
+        let right = CGFloat(item.x + item.width) * canvas.width
+        let bottom = CGFloat(item.y + item.height) * canvas.height
+        cropLeft = abs(pos.x - left) <= 8
+        cropRight = abs(pos.x - right) <= 8
+        cropUp = abs(pos.y - top) <= 8
+        cropDown = abs(pos.y - bottom) <= 8
+        return cropLeft || cropRight || cropUp || cropDown
+    }
+
+    private func applyCrop(_ item: inout WireRect, dx: Float, dy: Float) {
+        guard item.width > 0, item.height > 0 else { return }
+        if cropLeft { item.setCrop(.left, item.cropX + dx / item.width) }
+        if cropRight { item.setCrop(.right, 1 - item.cropX - item.cropWidth - dx / item.width) }
+        if cropUp { item.setCrop(.up, item.cropY + dy / item.height) }
+        if cropDown { item.setCrop(.down, 1 - item.cropY - item.cropHeight - dy / item.height) }
+    }
+
+    private func snapMove(x: inout Float, y: inout Float, width: Float, height: Float, except: UUID, canvas: CGSize) {
+        let threshold = Float(8 / max(canvas.width, 1))
+        let xs = guides(except: except, horizontal: true)
+        let ys = guides(except: except, horizontal: false)
+        x += bestDelta([x, x + width * 0.5, x + width], xs, threshold)
+        y += bestDelta([y, y + height * 0.5, y + height], ys, threshold)
+    }
+
+    private func snapResize(x: Float, y: Float, width: inout Float, height: inout Float, linked: Bool, except: UUID, canvas: CGSize) {
+        let threshold = Float(8 / max(canvas.width, 1))
+        let xs = guides(except: except, horizontal: true)
+        width = max(0.02, x + width + bestDelta([x + width], xs, threshold) - x)
+        if linked {
+            return
+        }
+        let ys = guides(except: except, horizontal: false)
+        height = max(0.02, y + height + bestDelta([y + height], ys, threshold) - y)
+    }
+
+    private func guides(except: UUID, horizontal: Bool) -> [Float] {
+        var values: [Float] = [0, 0.5, 1]
+        for item in items where item.id != except && item.enabled {
+            if horizontal {
+                values.append(item.x)
+                values.append(item.x + item.width * 0.5)
+                values.append(item.x + item.width)
+            } else {
+                values.append(item.y)
+                values.append(item.y + item.height * 0.5)
+                values.append(item.y + item.height)
+            }
+        }
+        return values
+    }
+
+    private func bestDelta(_ points: [Float], _ guides: [Float], _ threshold: Float) -> Float {
+        var best: Float = 0
+        var bestAbs = threshold
+        for point in points {
+            for guide in guides {
+                let delta = guide - point
+                let absv = abs(delta)
+                if absv <= bestAbs {
+                    bestAbs = absv
+                    best = delta
+                }
+            }
+        }
+        return bestAbs <= threshold ? best : 0
+    }
+}
+
+private extension WireRect {
+    enum CropEdge { case left, right, up, down }
+
+    mutating func setCrop(_ edge: CropEdge, _ value: Float) {
+        var left = cropX
+        var up = cropY
+        var right = 1 - cropX - cropWidth
+        var down = 1 - cropY - cropHeight
+        switch edge {
+        case .left: left = max(0, min(value, 1 - right))
+        case .up: up = max(0, min(value, 1 - down))
+        case .right: right = max(0, min(value, 1 - left))
+        case .down: down = max(0, min(value, 1 - up))
+        }
+        cropX = left
+        cropY = up
+        cropWidth = max(0, 1 - left - right)
+        cropHeight = max(0, 1 - up - down)
     }
 }

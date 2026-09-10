@@ -6,25 +6,25 @@ internal static class GpuUtilization
 {
     private static readonly object Gate = new();
     private static readonly Sampler Engine = new();
-    private static float _last;
+    private static float? _last;
 
-    public static float Percent()
+    public static float? Percent(string? luidNeedle = null)
     {
         lock (Gate)
         {
             try
             {
-                _last = Engine.Sample();
+                _last = Engine.Sample(luidNeedle);
             }
             catch
             {
-                _last = 0;
+                _last = null;
             }
             return _last;
         }
     }
 
-    public static float Last()
+    public static float? Last()
     {
         lock (Gate)
             return _last;
@@ -41,6 +41,7 @@ internal static class GpuUtilization
         private readonly int _pid = Environment.ProcessId;
         private bool _primed;
         private int _emptyStreak;
+        private string? _luidNeedle;
 
         public Sampler()
         {
@@ -48,23 +49,25 @@ internal static class GpuUtilization
                 _query = 0;
         }
 
-        public float Sample()
+        public float? Sample(string? luidNeedle)
         {
             if (_query == nint.Zero)
-                return 0;
-            if (_counters.Count == 0 || _emptyStreak >= 8)
+                return null;
+            if (_counters.Count == 0 || _emptyStreak >= 8
+                || !string.Equals(_luidNeedle, luidNeedle, StringComparison.OrdinalIgnoreCase))
             {
+                _luidNeedle = luidNeedle;
                 Rebuild();
                 _emptyStreak = 0;
             }
             if (_counters.Count == 0)
-                return 0;
+                return null;
             if (PdhCollectQueryData(_query) != 0)
-                return 0;
+                return null;
             if (!_primed)
             {
                 _primed = true;
-                return 0;
+                return null;
             }
             double sum = 0;
             var any = false;
@@ -104,6 +107,9 @@ internal static class GpuUtilization
                 var path = new string(buffer, start, len);
                 start = i + 1;
                 if (!path.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!string.IsNullOrEmpty(_luidNeedle)
+                    && !path.Contains(_luidNeedle, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (path.Contains("engtype_Copy", StringComparison.OrdinalIgnoreCase)
                     || path.Contains("engtype_copy", StringComparison.OrdinalIgnoreCase))

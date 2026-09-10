@@ -58,7 +58,8 @@ pub use abi::{
     DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
     ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
     ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
-    MixerRebarInfo, MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW,
+    InputRuntimeStats, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus, MixerStats,
+    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, OutputRuntimeStats,
     NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM,
     OUTPUT_SOURCE, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
     SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
@@ -141,7 +142,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, c_char};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -218,6 +219,9 @@ pub(crate) struct LiveOutput {
     height: u32,
     fps_num: u32,
     fps_den: u32,
+    transport: u32,
+    started_at: Instant,
+    connections: Arc<AtomicU32>,
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
@@ -2807,6 +2811,11 @@ pub unsafe extern "C" fn mixer_output_add(
             OutputHandle::Ndi(_) => None,
         };
         let video_sub = Arc::new(AtomicBool::new(false));
+        let connections = match &handle {
+            #[cfg(any(windows, target_os = "macos"))]
+            OutputHandle::Ndi(sender) => Arc::clone(&sender.connections),
+            _ => Arc::new(AtomicU32::new(0)),
+        };
         let clock = mixer.shared.lock().expect("shared").clock;
         let inherited = {
             let shared = mixer.shared.lock().expect("shared");
@@ -2844,6 +2853,9 @@ pub unsafe extern "C" fn mixer_output_add(
                 height,
                 fps_num: inherited.0,
                 fps_den: inherited.1,
+                transport,
+                started_at: Instant::now(),
+                connections,
                 video_sub,
                 use_gpu,
                 skip_idle_encode,
@@ -3958,6 +3970,124 @@ pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
             };
         }
         OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis() as u64
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_runtime_stats(out: *mut MixerRuntimeStats) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let uploads = shared.uploads.lock().expect("uploads");
+        let input_queue_dropped = uploads.runtime_rows().map(|(_, _, dropped)| dropped).sum();
+        let mut output_omt = 0u32;
+        let mut output_ndi = 0u32;
+        let mut output_decklink = 0u32;
+        let mut output_omt_subscribed = 0u32;
+        let mut output_ndi_connections = 0u32;
+        for output in shared.outputs.values() {
+            match output.transport {
+                OUT_OMT => {
+                    output_omt += 1;
+                    if output.video_sub.load(Ordering::Relaxed) {
+                        output_omt_subscribed += 1;
+                    }
+                }
+                OUT_NDI => {
+                    output_ndi += 1;
+                    output_ndi_connections =
+                        output_ndi_connections.saturating_add(output.connections.load(Ordering::Relaxed));
+                }
+                OUT_DECKLINK => output_decklink += 1,
+                _ => {}
+            }
+        }
+        unsafe {
+            *out = MixerRuntimeStats {
+                uptime_ms: elapsed_ms(shared.clock.epoch()),
+                render_skipped: crate::diag::render_skipped(),
+                input_queue_dropped,
+                output_omt,
+                output_ndi,
+                output_decklink,
+                output_omt_subscribed,
+                output_ndi_connections,
+            };
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_input_stats(
+    out: *mut InputRuntimeStats,
+    cap: u32,
+) -> i32 {
+    if out.is_null() && cap != 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let uploads = shared.uploads.lock().expect("uploads");
+        let mut n = 0u32;
+        for (source_id, uptime_ms, queue_dropped) in uploads.runtime_rows() {
+            if n >= cap {
+                break;
+            }
+            unsafe {
+                *out.add(n as usize) = InputRuntimeStats {
+                    source_id,
+                    uptime_ms,
+                    queue_dropped,
+                };
+            }
+            n += 1;
+        }
+        n as i32
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_copy_output_stats(
+    out: *mut OutputRuntimeStats,
+    cap: u32,
+) -> i32 {
+    if out.is_null() && cap != 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock().expect("shared");
+        let mut n = 0u32;
+        for (&output_id, output) in &shared.outputs {
+            if n >= cap {
+                break;
+            }
+            let connections = if output.transport == OUT_OMT {
+                u32::from(output.video_sub.load(Ordering::Relaxed))
+            } else {
+                output.connections.load(Ordering::Relaxed)
+            };
+            unsafe {
+                *out.add(n as usize) = OutputRuntimeStats {
+                    output_id,
+                    transport: output.transport,
+                    uptime_ms: elapsed_ms(output.started_at),
+                    connections,
+                    enabled: 1,
+                };
+            }
+            n += 1;
+        }
+        n as i32
     })
     .unwrap_or_else(|code| code)
 }
