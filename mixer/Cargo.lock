@@ -929,7 +929,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openmediatransport"
 version = "0.1.0"
-source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=9df655741fa35b8662af09cc4055b32e46c3d449#9df655741fa35b8662af09cc4055b32e46c3d449"
+source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=7711da45e2ed83330c2e1fced06c5d1673e4d502#7711da45e2ed83330c2e1fced06c5d1673e4d502"
 dependencies = [
  "bytes",
  "mdns-sd",
@@ -1495,7 +1495,7 @@ dependencies = [
 [[package]]
 name = "vmx"
 version = "0.1.0"
-source = "git+https://github.com/MikanseiLaboratory/vmx-rs?rev=2780ad7d3441e9cc53cbbaef90f1c87c3c76fcc2#2780ad7d3441e9cc53cbbaef90f1c87c3c76fcc2"
+source = "git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3#b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3"
 dependencies = [
  "bytemuck",
  "pollster",

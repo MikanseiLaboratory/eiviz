@@ -21,7 +21,7 @@ tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "9df655741fa35b8662af09cc4055b32e46c3d449", features = ["wgpu"] }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "7711da45e2ed83330c2e1fced06c5d1673e4d502", features = ["wgpu"] }
 pollster = "0.4"
 raw-window-handle = "0.6"
 base64 = "0.22"
@@ -30,7 +30,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
-vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "2780ad7d3441e9cc53cbbaef90f1c87c3c76fcc2" }
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
