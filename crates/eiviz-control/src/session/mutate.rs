@@ -4,6 +4,12 @@ use crate::command::SessionMutation;
 use crate::error::{ControlError, ControlResult};
 use crate::session::{Document, InputDto, InputKind, MultiviewDto, SceneDto, UnitDto};
 
+/// Overlay slots are a small fixed-size UI concept; an index beyond this would
+/// only ever arrive from a malformed or hostile request, and resizing the
+/// backing `Vec` to that index would let a caller force an arbitrarily large
+/// allocation (e.g. `index: u32::MAX`).
+const MAX_OVERLAY_SLOTS: usize = 64;
+
 pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResult<()> {
     match mutation {
         SessionMutation::UpsertInput { input } => upsert_input(document, *input),
@@ -55,12 +61,17 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             index,
             slot,
         } => {
+            let index = index as usize;
+            if index >= MAX_OVERLAY_SLOTS {
+                return Err(ControlError::invalid(format!(
+                    "overlay slot index {index} exceeds the maximum of {MAX_OVERLAY_SLOTS}"
+                )));
+            }
             let unit = document
                 .units
                 .iter_mut()
                 .find(|item| item.id == unit_id)
                 .ok_or_else(|| ControlError::not_found(format!("unit {unit_id}")))?;
-            let index = index as usize;
             if index >= unit.overlays.len() {
                 unit.overlays.resize(
                     index + 1,
@@ -375,6 +386,42 @@ mod tests {
         );
         assert_eq!(added.switcher_scene_ids, vec![1]);
         assert_eq!(doc.next_unit_id, 3);
+    }
+
+    #[test]
+    fn set_overlay_slot_rejects_out_of_range_index() {
+        let mut doc = bars();
+        let err = apply(
+            &mut doc,
+            SessionMutation::SetOverlaySlot {
+                unit_id: 1,
+                index: u32::MAX,
+                slot: Box::new(crate::session::OverlaySlot::default()),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ControlError::InvalidArgument { .. }));
+        assert!(doc.units[0].overlays.is_empty());
+    }
+
+    #[test]
+    fn set_overlay_slot_within_range_resizes_and_sets() {
+        let mut doc = bars();
+        apply(
+            &mut doc,
+            SessionMutation::SetOverlaySlot {
+                unit_id: 1,
+                index: 2,
+                slot: Box::new(crate::session::OverlaySlot {
+                    scene_gpu_id: 7,
+                    enabled: true,
+                    ..crate::session::OverlaySlot::default()
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.units[0].overlays.len(), 3);
+        assert_eq!(doc.units[0].overlays[2].scene_gpu_id, 7);
     }
 
     #[test]
