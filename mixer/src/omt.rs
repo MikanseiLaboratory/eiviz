@@ -289,6 +289,7 @@ pub struct ProgramSender {
     audio_ingress: AudioIngress,
     name: String,
     advertised: bool,
+    pending_gpu_busy: Option<Arc<AtomicBool>>,
 }
 
 /// Process-wide DNS-SD handle. Per-sender `Discovery` Drop would withdraw the
@@ -371,8 +372,9 @@ pub fn abandon_advertise(name: &str) {
 
 impl ProgramSender {
     pub fn start(name: &str) -> Result<Self, String> {
-        let sender = Sender::create(name, FrameType::VIDEO | FrameType::AUDIO)
+        let mut sender = Sender::create(name, FrameType::VIDEO | FrameType::AUDIO)
             .map_err(|error| error.to_string())?;
+        sender.set_gpu_encode_pipeline(true);
         let port = sender.port();
         let advertised = claim_advertise(name, port).is_ok();
         let audio_ingress = sender.audio_ingress();
@@ -382,6 +384,7 @@ impl ProgramSender {
             audio_ingress,
             name: name.to_string(),
             advertised,
+            pending_gpu_busy: None,
         })
     }
 
@@ -457,6 +460,7 @@ impl ProgramSender {
         pts: i64,
         fps_num: u32,
         fps_den: u32,
+        busy: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let meta = VideoTextureMeta {
             width,
@@ -466,9 +470,32 @@ impl ProgramSender {
             frame_rate_d: fps_den as i32,
             ..Default::default()
         };
-        self.sender
+        let result = self
+            .sender
             .send_video_texture(ctx, texture, meta)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        self.release_pending_gpu();
+        if result.is_ok() {
+            self.pending_gpu_busy = Some(busy);
+        } else {
+            busy.store(false, Ordering::Release);
+        }
+        result
+    }
+
+    pub fn flush_gpu_encode(&mut self, ctx: &OmtGpu) -> Result<(), String> {
+        let result = self
+            .sender
+            .flush_gpu_encode(ctx)
+            .map_err(|e| e.to_string());
+        self.release_pending_gpu();
+        result
+    }
+
+    fn release_pending_gpu(&mut self) {
+        if let Some(busy) = self.pending_gpu_busy.take() {
+            busy.store(false, Ordering::Release);
+        }
     }
 
     pub fn video_subscribed(&self) -> bool {
@@ -522,6 +549,7 @@ pub(crate) fn omt_audio_send(ingress: AudioIngress) -> Arc<dyn Fn(AudioPacket) +
 
 impl Drop for ProgramSender {
     fn drop(&mut self) {
+        self.release_pending_gpu();
         if self.advertised {
             release_advertise(&self.name);
         }

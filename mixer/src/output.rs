@@ -80,15 +80,15 @@ fn send_worker(
     let mut timed_n = 0u32;
     loop {
         if stop.load(Ordering::Relaxed) || crate::diag::is_fatal() {
-            drain_release_gpu(&rx, video.take());
+            stop_send_worker(&mut sender, &omt_gpu, &rx, video.take());
             return;
         }
         if !drain_ctrl(&rx, &mut last_cpu) {
-            drain_release_gpu(&rx, video.take());
+            stop_send_worker(&mut sender, &omt_gpu, &rx, video.take());
             return;
         }
         if !pump_one(&mut sender, &video_sub, &connections) {
-            drain_release_gpu(&rx, video.take());
+            stop_send_worker(&mut sender, &omt_gpu, &rx, video.take());
             return;
         }
         for packet in audio.drain() {
@@ -114,7 +114,7 @@ fn send_worker(
                 &mut timed_n,
                 output_id,
             ) {
-                drain_release_gpu(&rx, video.take());
+                stop_send_worker(&mut sender, &omt_gpu, &rx, video.take());
                 return;
             }
             continue;
@@ -122,6 +122,18 @@ fn send_worker(
         let wait = cursor.next_deadline(clock);
         sleep_until_deadline(wait, stop.as_ref());
     }
+}
+
+fn stop_send_worker(
+    sender: &mut OutputHandle,
+    omt_gpu: &OmtGpu,
+    rx: &mpsc::Receiver<SendCmd>,
+    extra: Option<SendCmd>,
+) {
+    if let Err(error) = sender.flush_gpu_encode(omt_gpu) {
+        crate::diag::error(&format!("omt flush gpu encode: {error}"));
+    }
+    drain_release_gpu(rx, extra);
 }
 
 fn drain_ctrl(rx: &mpsc::Receiver<SendCmd>, last_cpu: &mut Option<SendCmd>) -> bool {
@@ -325,13 +337,20 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
             busy,
         } => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                sender.send_video_texture(omt_gpu, &texture, width, height, pts, fps_n, fps_d)
+                sender.send_video_texture(
+                    omt_gpu, &texture, width, height, pts, fps_n, fps_d, busy.clone(),
+                )
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::mark_fatal(format!("omt send texture: {error}")),
-                Err(_) => crate::diag::mark_fatal("omt send texture panicked"),
+                Ok(Err(error)) => {
+                    busy.store(false, Ordering::Release);
+                    crate::diag::mark_fatal(format!("omt send texture: {error}"));
+                }
+                Err(_) => {
+                    busy.store(false, Ordering::Release);
+                    crate::diag::mark_fatal("omt send texture panicked");
+                }
             }
-            busy.store(false, Ordering::Release);
         }
         SendCmd::Audio { packet } => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
