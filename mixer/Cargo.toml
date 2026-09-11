@@ -25,6 +25,7 @@ openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatra
 pollster = "0.4"
 raw-window-handle = "0.6"
 base64 = "0.22"
+subtle.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
