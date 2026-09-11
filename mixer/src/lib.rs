@@ -476,11 +476,23 @@ impl OutputHandle {
         pts: i64,
         fps_n: u32,
         fps_d: u32,
+        busy: Arc<AtomicBool>,
     ) -> Result<(), String> {
         match self {
-            Self::Omt(sender) => {
-                sender.send_video_texture(omt_gpu, texture, width, height, pts, fps_n, fps_d)
+            Self::Omt(sender) => sender.send_video_texture(
+                omt_gpu, texture, width, height, pts, fps_n, fps_d, busy,
+            ),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => {
+                busy.store(false, Ordering::Release);
+                Ok(())
             }
+        }
+    }
+
+    fn flush_gpu_encode(&mut self, omt_gpu: &OmtGpu) -> Result<(), String> {
+        match self {
+            Self::Omt(sender) => sender.flush_gpu_encode(omt_gpu),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
         }
