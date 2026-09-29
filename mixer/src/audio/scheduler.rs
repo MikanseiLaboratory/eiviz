@@ -117,7 +117,7 @@ fn run_scheduler(
 ) {
     let mut produced = 0u64;
     let mut tone_phase: HashMap<u64, f64> = HashMap::new();
-    let mut last_buffer = 0u32;
+    let mut last_delay = (0u32, 0u32, 0u32);
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         produced = produced.saturating_add(AUDIO_BLOCK_FRAMES as u64);
         let deadline = clock.audio_deadline(produced, AUDIO_RATE as u32);
@@ -139,9 +139,10 @@ fn run_scheduler(
             }
         }
         let snap = snapshot.lock_or_recover().clone();
-        if snap.buffer_frames != last_buffer {
+        let delay = (snap.buffer_frames, snap.fps_num, snap.fps_den);
+        if delay != last_delay {
             audio.set_video_delay(snap.buffer_frames, snap.fps_num, snap.fps_den);
-            last_buffer = snap.buffer_frames;
+            last_delay = delay;
         }
         let pts = clock.audio_pts(produced, AUDIO_RATE as u32);
         let mut tones = Vec::new();

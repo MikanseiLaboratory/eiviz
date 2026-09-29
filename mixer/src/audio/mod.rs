@@ -70,12 +70,24 @@ impl AudioDelay {
         }
     }
 
+    /// Changes the delay. Queued audio is shifted to match immediately: a longer delay
+    /// inserts silence at the front, a shorter one drops the oldest audio, so the output
+    /// follows the new video delay in one step instead of drifting towards it.
     pub fn set_delay_frames(&mut self, frames: usize) {
+        let previous = self.delay_frames;
         self.delay_frames = frames;
         let cap = frames
             .saturating_mul(2)
             .saturating_add((AUDIO_RATE as usize / 5) * 2);
         for fifo in self.fifos.values_mut() {
+            if frames > previous {
+                for _ in 0..(frames - previous) * 2 {
+                    fifo.push_front(0.0);
+                }
+            } else if frames < previous {
+                let drop = ((previous - frames) * 2).min(fifo.len());
+                fifo.drain(..drop);
+            }
             while fifo.len() > cap {
                 fifo.pop_front();
             }
@@ -447,5 +459,40 @@ pub fn device_io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     {
         let _ = (kind, device_id);
         (0, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(delay: &mut AudioDelay, blocks: usize, value: f32, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        for _ in 0..blocks {
+            delay.push(1, &vec![value; frames * 2]);
+            out.extend(delay.pop(1, frames, false));
+        }
+        out
+    }
+
+    #[test]
+    fn delay_increase_inserts_silence_and_keeps_length() {
+        let mut delay = AudioDelay::new();
+        delay.set_delay_frames(480);
+        run(&mut delay, 10, 0.5, 480);
+        delay.set_delay_frames(960);
+        let out = run(&mut delay, 3, 0.5, 480);
+        // The extra 480 frames of delay show up as one block of silence.
+        assert!(out[..480 * 2].iter().all(|v| *v == 0.0));
+        assert!(out[480 * 2..].iter().all(|v| *v == 0.5));
+    }
+
+    #[test]
+    fn delay_decrease_drops_the_surplus_at_once() {
+        let mut delay = AudioDelay::new();
+        delay.set_delay_frames(960);
+        run(&mut delay, 10, 0.5, 480);
+        delay.set_delay_frames(480);
+        assert_eq!(delay.fifos[&1].len(), 480 * 2);
     }
 }
