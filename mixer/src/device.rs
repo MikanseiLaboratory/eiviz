@@ -1,6 +1,7 @@
 use crate::guard::LockExt;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use thiserror::Error;
@@ -8,6 +9,40 @@ use thiserror::Error;
 thread_local! {
     static SURFACE_CONFIGURE: Cell<bool> = const { Cell::new(false) };
     static SURFACE_CONFIGURE_FAILED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Largest 2D texture edge the active device accepts. Every size that reaches
+/// the GPU from the C ABI is checked against it, because a texture creation
+/// error is reported through the uncaptured-error handler and stops the mixer.
+static MAX_TEXTURE_DIMENSION: AtomicU32 = AtomicU32::new(8192);
+
+pub fn max_texture_dimension() -> u32 {
+    MAX_TEXTURE_DIMENSION.load(Ordering::Relaxed)
+}
+
+pub fn dimensions_supported(width: u32, height: u32) -> bool {
+    let max = max_texture_dimension();
+    width > 0 && height > 0 && width <= max && height <= max
+}
+
+/// Default limits, raised to the adapter's texture size so 8K+ canvases and stills work.
+pub(crate) fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    wgpu::Limits {
+        max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
+        ..wgpu::Limits::default()
+    }
+}
+
+/// Registers the error and device-lost handlers and records the texture limit.
+/// Must run for every device created by this process.
+pub(crate) fn install_device_handlers(device: &wgpu::Device) {
+    MAX_TEXTURE_DIMENSION.store(device.limits().max_texture_dimension_2d, Ordering::Relaxed);
+    device.on_uncaptured_error(Arc::new(on_uncaptured_gpu_error));
+    device.set_device_lost_callback(|reason, message| {
+        if reason != wgpu::DeviceLostReason::Destroyed {
+            crate::diag::mark_fatal(format!("GPU device lost ({reason:?}): {message}"));
+        }
+    });
 }
 
 static GPU_QUEUE_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
@@ -107,8 +142,11 @@ impl GpuDevice {
         ));
 
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
-        device.on_uncaptured_error(Arc::new(on_uncaptured_gpu_error));
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: required_limits(&adapter),
+                ..Default::default()
+            }))?;
+        install_device_handlers(&device);
 
         Ok(Self {
             instance,
@@ -275,7 +313,9 @@ fn is_surface_local_error(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     text.contains("surface is not configured")
         || text.contains("surface does not exist")
-        || (text.contains("surface") && (text.contains("outdated") || text.contains("lost")))
+        || (text.contains("surface")
+            && !text.contains("device")
+            && (text.contains("outdated") || text.contains("lost")))
 }
 
 #[cfg(test)]

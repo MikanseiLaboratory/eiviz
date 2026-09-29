@@ -47,15 +47,16 @@ pub fn save_texture(device: &GpuDevice, texture: &wgpu::Texture, path: &str) -> 
     let index = device.submit(Some(encoder.finish()));
     let slice = buffer.slice(..);
     let (tx, rx) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |_| {
-        let _ = tx.send(());
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
     });
     let _ = device.device.poll(wgpu::PollType::Wait {
         submission_index: Some(index),
         timeout: Some(Duration::from_secs(2)),
     });
     rx.recv_timeout(Duration::from_secs(2))
-        .map_err(|_| "snapshot map timeout".to_string())?;
+        .map_err(|_| "snapshot map timeout".to_string())?
+        .map_err(|error| format!("snapshot map failed: {error}"))?;
     let view = slice
         .get_mapped_range()
         .map_err(|error| error.to_string())?;

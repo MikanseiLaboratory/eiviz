@@ -59,20 +59,35 @@ fn generator_needs_draw_update(spec: &Generator, last: Option<&Generator>, size_
 
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
+fn validate_wgsl_module(source: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(source).map_err(|error| error.to_string())?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::default(),
+    )
+    .validate(&module)
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn crop_uv(crop: Rect) -> [f32; 4] {
     const MIN: f32 = 0.001;
-    if crop.width <= 0.0 || crop.height <= 0.0 {
-        FULL_UV
-    } else {
-        let x = crop.x.clamp(0.0, 1.0 - MIN);
-        let y = crop.y.clamp(0.0, 1.0 - MIN);
-        [
-            x,
-            y,
-            crop.width.clamp(MIN, 1.0 - x),
-            crop.height.clamp(MIN, 1.0 - y),
-        ]
+    let finite = crop.x.is_finite()
+        && crop.y.is_finite()
+        && crop.width.is_finite()
+        && crop.height.is_finite();
+    if !finite || crop.width <= 0.0 || crop.height <= 0.0 {
+        return FULL_UV;
     }
+    // `f32::clamp` panics when min > max, which `1.0 - x` can produce next to MIN.
+    let x = crop.x.max(0.0).min(1.0 - 2.0 * MIN);
+    let y = crop.y.max(0.0).min(1.0 - 2.0 * MIN);
+    [
+        x,
+        y,
+        crop.width.max(MIN).min((1.0 - x).max(MIN)),
+        crop.height.max(MIN).min((1.0 - y).max(MIN)),
+    ]
 }
 
 fn crop_blit(rect: [f32; 4], crop: Rect) -> ([f32; 4], [f32; 4]) {
@@ -173,6 +188,7 @@ pub struct Composer {
     mix_groups: HashMap<u64, wgpu::BindGroup>,
     custom_mix: HashMap<u64, wgpu::RenderPipeline>,
     custom_mix_src: HashMap<u64, String>,
+    custom_mix_failed: HashMap<u64, String>,
     custom_compute: HashMap<u64, wgpu::ComputePipeline>,
     sort_cs: wgpu::ComputePipeline,
     flow_cs: wgpu::ComputePipeline,
@@ -412,6 +428,7 @@ impl Composer {
             mix_groups: HashMap::new(),
             custom_mix: HashMap::new(),
             custom_mix_src: HashMap::new(),
+            custom_mix_failed: HashMap::new(),
             custom_compute: HashMap::new(),
             sort_cs,
             flow_cs,
@@ -592,6 +609,7 @@ impl Composer {
                     || gpu.packed != packed
                     || gpu.bgra != bgra
                     || gpu.direct != direct_sample
+                    || !gpu.owned
             });
             if !needs_new
                 && self
@@ -948,9 +966,11 @@ impl Composer {
             );
             let text = labels.get(index).map(String::as_str).unwrap_or("");
             let tile_h = layer.rect.height * canvas_h.max(1) as f32;
-            let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
+            let dest_w = (layer.rect.width * canvas_w.max(1) as f32)
+                .round()
+                .clamp(1.0, canvas_w.max(1) as f32) as u32;
             let font_px = crate::labels::font_px(label_size, label_percent, tile_h);
-            let dest_h = crate::labels::band_height(font_px);
+            let dest_h = crate::labels::band_height(font_px).clamp(1, canvas_h.max(1));
             let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h)
             else {
                 continue;
@@ -1104,11 +1124,40 @@ impl Composer {
             self.custom_mix.remove(&unit_id);
             self.custom_mix_src.remove(&unit_id);
             self.custom_compute.remove(&unit_id);
+            self.custom_mix_failed.remove(&unit_id);
             return Ok(());
         }
         if self.custom_mix_src.get(&unit_id).map(String::as_str) == Some(trimmed) {
             return Ok(());
         }
+        // A rejected source is reported once, not on every frame.
+        if self.custom_mix_failed.get(&unit_id).map(String::as_str) == Some(trimmed) {
+            return Ok(());
+        }
+        match self.build_custom_mix(device, user_wgsl) {
+            Ok((pipeline, compute)) => {
+                match compute {
+                    Some(compute) => self.custom_compute.insert(unit_id, compute),
+                    None => self.custom_compute.remove(&unit_id),
+                };
+                self.custom_mix_src.insert(unit_id, trimmed.to_string());
+                self.custom_mix.insert(unit_id, pipeline);
+                self.custom_mix_failed.remove(&unit_id);
+                Ok(())
+            }
+            Err(error) => {
+                self.custom_mix_failed.insert(unit_id, trimmed.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    fn build_custom_mix(
+        &self,
+        device: &GpuDevice,
+        user_wgsl: &str,
+    ) -> Result<(wgpu::RenderPipeline, Option<wgpu::ComputePipeline>), String> {
+        Self::validate_custom_wgsl(user_wgsl)?;
         let source = custom_mix_source(user_wgsl);
         let pipeline = pipeline(
             device,
@@ -1118,25 +1167,19 @@ impl Composer {
             wgpu::TextureFormat::Rgba8Unorm,
             false,
         )?;
-        if trimmed.contains("fn user_compute") {
-            let cs = custom_compute_source(user_wgsl);
-            self.custom_compute.insert(
-                unit_id,
-                compute_pipeline(
-                    device,
-                    "mix-custom-cs",
-                    &cs,
-                    &self.user_cs_layout,
-                    "cs_user",
-                    true,
-                )?,
-            );
+        let compute = if user_wgsl.contains("fn user_compute") {
+            Some(compute_pipeline(
+                device,
+                "mix-custom-cs",
+                &custom_compute_source(user_wgsl),
+                &self.user_cs_layout,
+                "cs_user",
+                true,
+            )?)
         } else {
-            self.custom_compute.remove(&unit_id);
-        }
-        self.custom_mix_src.insert(unit_id, trimmed.to_string());
-        self.custom_mix.insert(unit_id, pipeline);
-        Ok(())
+            None
+        };
+        Ok((pipeline, compute))
     }
 
     pub fn validate_custom_wgsl(user_wgsl: &str) -> Result<(), String> {
@@ -1147,11 +1190,9 @@ impl Composer {
         if !trimmed.contains("fn user_transition") {
             return Err("Define fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>".into());
         }
-        let source = custom_mix_source(user_wgsl);
-        naga::front::wgsl::parse_str(&source).map_err(|error| error.to_string())?;
+        validate_wgsl_module(&custom_mix_source(user_wgsl))?;
         if trimmed.contains("fn user_compute") {
-            naga::front::wgsl::parse_str(&custom_compute_source(user_wgsl))
-                .map_err(|error| error.to_string())?;
+            validate_wgsl_module(&custom_compute_source(user_wgsl))?;
         }
         Ok(())
     }
@@ -2668,8 +2709,48 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL_UV, crop_blit};
+    use super::{FULL_UV, crop_blit, crop_uv, validate_wgsl_module};
     use crate::abi::Rect;
+
+    #[test]
+    fn crop_uv_never_panics_on_extreme_input() {
+        let values = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.0,
+            0.0,
+            0.0005,
+            0.999,
+            1.0,
+            2.0,
+            1.0e30,
+        ];
+        for &x in &values {
+            for &w in &values {
+                let uv = crop_uv(Rect {
+                    x,
+                    y: x,
+                    width: w,
+                    height: w,
+                });
+                assert!(uv.iter().all(|v| v.is_finite()));
+                assert!(uv[0] + uv[2] <= 1.0 + 1e-3);
+                assert!(uv[2] > 0.0 && uv[3] > 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn wgsl_validation_rejects_broken_source() {
+        assert!(validate_wgsl_module("fn main( {").is_err());
+        assert!(
+            validate_wgsl_module(
+                "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn full_crop_keeps_dest_and_uv() {

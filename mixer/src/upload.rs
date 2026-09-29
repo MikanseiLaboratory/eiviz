@@ -337,6 +337,16 @@ pub(crate) fn write_queue_texture(
         }
         (Cow::Owned(padded), aligned as u32)
     };
+    let needed = (pitch as usize)
+        .saturating_mul(height.saturating_sub(1) as usize)
+        .saturating_add(row_bytes);
+    if bytes.len() < needed || row_bytes > pitch as usize {
+        crate::diag::warn(&format!(
+            "write_queue_texture: short frame ({} < {needed} bytes), skipped",
+            bytes.len()
+        ));
+        return;
+    }
     queue.write_texture(
         texture.as_image_copy(),
         &bytes,

@@ -62,14 +62,17 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(mixer)]
     fn mixer_slot_survives_poison() {
         let _ = std::thread::spawn(|| {
             let _guard = crate::lifecycle::mixer_slot().lock().unwrap();
             panic!("poison the slot");
         })
         .join();
+        assert!(!crate::mixer_created());
         let _ = crate::lifecycle::with_mixer(|_| ());
         let _ = crate::lifecycle::with_mixer(|_| ());
+        crate::lifecycle::mixer_slot().clear_poison();
     }
 
     #[test]

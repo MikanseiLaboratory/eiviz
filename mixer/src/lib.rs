@@ -1115,10 +1115,7 @@ fn mixer_backend_ffi() -> u32 {
 }
 
 pub(crate) fn mixer_created() -> bool {
-    mixer_slot()
-        .lock()
-        .map(|slot| matches!(*slot, MixerSlot::Running(_)))
-        .unwrap_or(false)
+    matches!(*mixer_slot().lock_or_recover(), MixerSlot::Running(_))
 }
 
 pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
@@ -1267,7 +1264,7 @@ pub extern "C" fn mixer_create_unit(unit_id: u64, width: u32, height: u32) -> i3
 }
 
 fn mixer_create_unit_ffi(unit_id: u64, width: u32, height: u32) -> i32 {
-    if width == 0 || height == 0 {
+    if !size_supported("unit", width, height) {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
@@ -1320,7 +1317,7 @@ unsafe fn mixer_define_scene_ffi(
     count: u32,
     layers: *const OverlayDesc,
 ) -> i32 {
-    if width == 0 || height == 0 || count > 64 {
+    if count > 64 || !size_supported("scene", width, height) {
         return ERR_INVALID_ARGUMENT;
     }
     if count > 0 && layers.is_null() {
@@ -1331,6 +1328,10 @@ unsafe fn mixer_define_scene_ffi(
     } else {
         // SAFETY: caller keeps count OverlayDesc values readable for this call.
         let slice = unsafe { std::slice::from_raw_parts(layers, count as usize) };
+        if let Some(reason) = invalid_scene_layer(scene_id, slice) {
+            report_session_error(format!("scene {scene_id:#x}: {reason}"));
+            return ERR_INVALID_ARGUMENT;
+        }
         let mut descs = slice.to_vec();
         let mut texts = Vec::with_capacity(descs.len());
         for desc in &mut descs {
@@ -1661,6 +1662,11 @@ pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
         || state.mv_slot_count > state.mv_slots.len() as u32
         || !(0.0..=1.0).contains(&state.mix)
     {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let overlays = &state.overlays[..state.overlay_count as usize];
+    if let Some(reason) = invalid_overlays(overlays) {
+        report_session_error(format!("unit {unit_id:#x} state: {reason}"));
         return ERR_INVALID_ARGUMENT;
     }
     let state = *state;
@@ -2086,13 +2092,9 @@ pub unsafe extern "C" fn mixer_validate_custom_wgsl(wgsl: *const c_char) -> i32 
 }
 
 unsafe fn mixer_validate_custom_wgsl_ffi(wgsl: *const c_char) -> i32 {
-    let text = if wgsl.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(wgsl) }
-            .to_str()
-            .unwrap_or_default()
-            .to_string()
+    let Some(text) = read_cstr_strict(wgsl) else {
+        report_session_error("custom WGSL is not valid UTF-8");
+        return ERR_INVALID_ARGUMENT;
     };
     match crate::compose::Composer::validate_custom_wgsl(&text) {
         Ok(()) => OK,
@@ -2111,14 +2113,16 @@ pub unsafe extern "C" fn mixer_unit_set_custom_wgsl(unit_id: u64, wgsl: *const c
 }
 
 unsafe fn mixer_unit_set_custom_wgsl_ffi(unit_id: u64, wgsl: *const c_char) -> i32 {
-    let text = if wgsl.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(wgsl) }
-            .to_str()
-            .unwrap_or_default()
-            .to_string()
+    let Some(text) = read_cstr_strict(wgsl) else {
+        report_session_error("custom WGSL is not valid UTF-8");
+        return ERR_INVALID_ARGUMENT;
     };
+    if !text.trim().is_empty() {
+        if let Err(error) = crate::compose::Composer::validate_custom_wgsl(&text) {
+            report_session_error(format!("custom WGSL rejected: {error}"));
+            return ERR_INVALID_ARGUMENT;
+        }
+    }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -2154,7 +2158,8 @@ fn mixer_unit_configure_ffi(
     fps_num: u32,
     fps_den: u32,
 ) -> i32 {
-    if width == 0 || height == 0 || crate::clock::Rate::new(fps_num, fps_den).is_err() {
+    if !size_supported("unit", width, height) || crate::clock::Rate::new(fps_num, fps_den).is_err()
+    {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
@@ -2469,6 +2474,9 @@ fn mixer_register_source_ffi(id: u64, width: u32, height: u32, format: u32) -> i
     let Some(format) = CpuFormat::from_abi(format) else {
         return ERR_INVALID_ARGUMENT;
     };
+    if !size_supported("source", width, height) {
+        return ERR_INVALID_ARGUMENT;
+    }
     with_mixer(|mixer| {
         with_uploads(mixer, |uploads| uploads.register(id, width, height, format));
         OK
@@ -2576,6 +2584,9 @@ unsafe fn mixer_load_still_ffi(id: u64, path: *const c_char) -> i32 {
         }
     };
     let (width, height) = image.dimensions();
+    if !size_supported("still image", width, height) {
+        return ERR_INVALID_ARGUMENT;
+    }
     with_mixer(|mixer| {
         with_uploads(mixer, |uploads| {
             uploads.register(id, width, height, CpuFormat::Rgba);
@@ -3225,7 +3236,9 @@ unsafe fn mixer_output_add_ffi(
     if fps_num > 0 && crate::clock::Rate::new(fps_num, fps_den).is_err() {
         return ERR_INVALID_ARGUMENT;
     }
-    if width != 0 && (width < 16 || height < 16 || width % 2 != 0) {
+    if width != 0
+        && (width < 16 || height < 16 || width % 2 != 0 || !size_supported("output", width, height))
+    {
         return ERR_INVALID_ARGUMENT;
     }
     let name = unsafe { CStr::from_ptr(name) }
@@ -4528,6 +4541,44 @@ fn mixer_audio_capture_stop_ffi(id: u64) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+/// Like [`read_cstr`], but rejects invalid UTF-8 instead of silently returning an empty string.
+pub(crate) fn read_cstr_strict(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return Some(String::new());
+    }
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .ok()
+        .map(str::to_string)
+}
+
+/// Rejects sizes the GPU device cannot allocate. A failed texture creation
+/// reaches the uncaptured-error handler and would stop the whole mixer.
+pub(crate) fn size_supported(what: &str, width: u32, height: u32) -> bool {
+    if crate::device::dimensions_supported(width, height) {
+        return true;
+    }
+    report_session_error(format!(
+        "{what} size {width}x{height} is outside 1..={} (GPU texture limit)",
+        crate::device::max_texture_dimension()
+    ));
+    false
+}
+
+fn invalid_overlays(layers: &[OverlayDesc]) -> Option<&'static str> {
+    layers
+        .iter()
+        .any(|layer| !layer.is_finite())
+        .then_some("rect, crop and opacity must be finite numbers")
+}
+
+fn invalid_scene_layer(scene_id: u64, layers: &[OverlayDesc]) -> Option<&'static str> {
+    if layers.iter().any(|layer| layer.source_id == scene_id) {
+        return Some("a scene cannot contain itself as a layer");
+    }
+    invalid_overlays(layers)
+}
+
 pub(crate) fn read_cstr(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -5283,6 +5334,33 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    #[test]
+    fn scene_layer_validation_rejects_self_reference_and_non_finite() {
+        let layer = |source_id: u64, x: f32| OverlayDesc {
+            source_id,
+            rect: Rect {
+                x,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            crop: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            opacity: 1.0,
+            z: 0,
+            audio_follow: 0,
+            hidden: 0,
+            label: std::ptr::null(),
+        };
+        assert!(invalid_scene_layer(7, &[layer(7, 0.0)]).is_some());
+        assert!(invalid_scene_layer(7, &[layer(8, f32::NAN)]).is_some());
+        assert!(invalid_scene_layer(7, &[layer(8, 0.0)]).is_none());
+    }
 
     #[test]
     fn ping_is_stable() {

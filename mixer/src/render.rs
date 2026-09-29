@@ -163,11 +163,6 @@ pub(crate) fn render_loop(
                 }
             }
         }
-        if crate::diag::take_gpu_fault() {
-            crate::diag::mark_fatal("GPU device fault");
-            set_error(&telemetry, "GPU device fault");
-            break;
-        }
         let frame = panic::catch_unwind(AssertUnwindSafe(|| {
             presenters.reconfigure_pending(&device);
         }));
@@ -552,6 +547,7 @@ pub(crate) fn render_loop(
                     composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
                 {
                     crate::diag::error(&format!("custom wgsl: {error}"));
+                    set_error(&telemetry, format!("custom wgsl: {error}"));
                 }
                 let pack_pgm = outputs_snap.iter().any(|item| {
                     item.unit_id == *unit_id
@@ -1010,6 +1006,10 @@ pub(crate) fn mix_source_cycles(
 ) -> bool {
     if !seen.insert(source_id) {
         return false;
+    }
+    // A unit cannot sample its own bus while rendering into it.
+    if crate::abi::mixing_unit_from_source(source_id) == Some(unit_id) {
+        return true;
     }
     if let Some(spec) = mix_inputs.get(&source_id)
         && !spec.is_session_multiview()

@@ -188,6 +188,27 @@ pub(crate) fn make_texture_format(
     })
 }
 
+/// Runs GPU object creation inside validation and internal error scopes, so a
+/// bad shader or pipeline is returned as an error instead of reaching the
+/// uncaptured-error handler (which marks the whole mixer fatal).
+pub(crate) fn scoped_creation<T>(
+    device: &GpuDevice,
+    label: &str,
+    create: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let internal = device.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device
+        .device
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let value = create();
+    let validation_error = pollster::block_on(validation.pop());
+    let internal_error = pollster::block_on(internal.pop());
+    match validation_error.or(internal_error) {
+        Some(error) => Err(format!("{label}: {error}")),
+        None => Ok(value),
+    }
+}
+
 pub(crate) fn pipeline(
     device: &GpuDevice,
     label: &str,
@@ -196,6 +217,19 @@ pub(crate) fn pipeline(
     format: wgpu::TextureFormat,
     blend: bool,
 ) -> Result<wgpu::RenderPipeline, String> {
+    scoped_creation(device, label, || {
+        create_render_pipeline(device, label, source, layout, format, blend)
+    })
+}
+
+fn create_render_pipeline(
+    device: &GpuDevice,
+    label: &str,
+    source: &str,
+    layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+    blend: bool,
+) -> wgpu::RenderPipeline {
     let shader = device
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -209,7 +243,7 @@ pub(crate) fn pipeline(
             bind_group_layouts: &[Some(layout)],
             immediate_size: 0,
         });
-    Ok(device
+    device
         .device
         .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
@@ -235,7 +269,7 @@ pub(crate) fn pipeline(
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
-        }))
+        })
 }
 
 /// `zero_init_workgroup` may only be false when the shader writes every workgroup variable
@@ -248,6 +282,19 @@ pub(crate) fn compute_pipeline(
     entry: &str,
     zero_init_workgroup: bool,
 ) -> Result<wgpu::ComputePipeline, String> {
+    scoped_creation(device, label, || {
+        create_compute_pipeline(device, label, source, layout, entry, zero_init_workgroup)
+    })
+}
+
+fn create_compute_pipeline(
+    device: &GpuDevice,
+    label: &str,
+    source: &str,
+    layout: &wgpu::BindGroupLayout,
+    entry: &str,
+    zero_init_workgroup: bool,
+) -> wgpu::ComputePipeline {
     let shader = device
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -261,7 +308,7 @@ pub(crate) fn compute_pipeline(
             bind_group_layouts: &[Some(layout)],
             immediate_size: 0,
         });
-    Ok(device
+    device
         .device
         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(label),
@@ -273,7 +320,7 @@ pub(crate) fn compute_pipeline(
                 ..Default::default()
             },
             cache: None,
-        }))
+        })
 }
 
 pub(crate) fn begin_clear<'a>(
@@ -316,9 +363,20 @@ pub(crate) fn write_aligned_texture(
             return;
         }
     }
+    if row_bytes == 0 || height == 0 || tex_width == 0 {
+        return;
+    }
     let aligned = row_bytes.div_ceil(256) * 256;
     let (bytes, pitch) = if aligned == row_bytes {
-        (Cow::Borrowed(data), row_bytes)
+        let needed = row_bytes as usize * height as usize;
+        if data.len() < needed {
+            crate::diag::warn(&format!(
+                "write_aligned_texture: short frame ({} < {needed} bytes), skipped",
+                data.len()
+            ));
+            return;
+        }
+        (Cow::Borrowed(&data[..needed]), row_bytes)
     } else {
         let mut padded = vec![0u8; aligned as usize * height as usize];
         let row = row_bytes as usize;

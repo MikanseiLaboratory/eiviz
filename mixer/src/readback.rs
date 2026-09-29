@@ -9,7 +9,7 @@ struct Slot {
     buffer: wgpu::Buffer,
     pending: bool,
     waiting: bool,
-    ready: Option<Receiver<()>>,
+    ready: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     pts: i64,
 }
 
@@ -89,25 +89,29 @@ impl UnitReadback {
             if !self.slots[i].waiting {
                 continue;
             }
-            let done = self.slots[i]
+            let Some(result) = self.slots[i]
                 .ready
                 .as_ref()
-                .is_some_and(|rx| rx.try_recv().is_ok());
-            if !done {
+                .and_then(|rx| rx.try_recv().ok())
+            else {
                 continue;
-            }
-            let slice = self.slots[i].buffer.slice(..);
-            if let Ok(view) = slice.get_mapped_range() {
-                let mut packed = vec![0u8; (self.width * 2 * self.height) as usize];
-                for y in 0..self.height as usize {
-                    let src = y * self.stride as usize;
-                    let dst = y * self.width as usize * 2;
-                    packed[dst..dst + self.width as usize * 2]
-                        .copy_from_slice(&view[src..src + self.width as usize * 2]);
+            };
+            if result.is_ok() {
+                let slice = self.slots[i].buffer.slice(..);
+                if let Ok(view) = slice.get_mapped_range() {
+                    let row = self.width as usize * 2;
+                    let mut packed = vec![0u8; row * self.height as usize];
+                    for y in 0..self.height as usize {
+                        let src = y * self.stride as usize;
+                        let dst = y * row;
+                        if let Some(line) = view.get(src..src + row) {
+                            packed[dst..dst + row].copy_from_slice(line);
+                        }
+                    }
+                    drop(view);
+                    self.mapped = Some((packed, self.slots[i].pts));
                 }
-                drop(view);
                 self.slots[i].buffer.unmap();
-                self.mapped = Some((packed, self.slots[i].pts));
             }
             self.slots[i].pending = false;
             self.slots[i].waiting = false;
@@ -117,8 +121,8 @@ impl UnitReadback {
         if self.slots[read].pending && !self.slots[read].waiting {
             let slice = self.slots[read].buffer.slice(..);
             let (tx, rx) = mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |_| {
-                let _ = tx.send(());
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
             });
             self.slots[read].waiting = true;
             self.slots[read].ready = Some(rx);

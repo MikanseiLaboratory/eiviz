@@ -239,6 +239,25 @@ pub struct OverlayDesc {
     pub label: *const std::ffi::c_char,
 }
 
+impl OverlayDesc {
+    /// NaN and infinite geometry would reach GPU uniforms and clamp/range calls.
+    pub fn is_finite(&self) -> bool {
+        [
+            self.rect.x,
+            self.rect.y,
+            self.rect.width,
+            self.rect.height,
+            self.crop.x,
+            self.crop.y,
+            self.crop.width,
+            self.crop.height,
+            self.opacity,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+    }
+}
+
 impl Default for OverlayDesc {
     fn default() -> Self {
         Self {

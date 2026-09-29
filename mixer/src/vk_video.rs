@@ -7,6 +7,13 @@ use crate::device::{DeviceError, GpuDevice};
 
 pub type VulkanDecode = Arc<VideoDevice>;
 
+fn plain_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    wgpu::DeviceDescriptor {
+        required_limits: crate::device::required_limits(adapter),
+        ..Default::default()
+    }
+}
+
 pub fn create_vulkan_gpu_device(
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -22,15 +29,19 @@ pub fn create_vulkan_gpu_device(
         info.backend, info.device_type, info.name, info.driver
     ));
     let (device, queue) = if h264 {
-        match adapter.request_device_with_video_support(&VideoDeviceDescriptor::default()) {
+        let video_descriptor = VideoDeviceDescriptor {
+            wgpu_limits: crate::device::required_limits(&adapter),
+            ..Default::default()
+        };
+        match adapter.request_device_with_video_support(&video_descriptor) {
             Ok(pair) => pair,
             Err(error) => {
                 crate::diag::info(&format!("Vulkan Video device request: {error}"));
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?
+                pollster::block_on(adapter.request_device(&plain_device_descriptor(&adapter)))?
             }
         }
     } else {
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?
+        pollster::block_on(adapter.request_device(&plain_device_descriptor(&adapter)))?
     };
     let vulkan = match device.video() {
         Ok(video) => Some(Arc::new(video)),
@@ -39,7 +50,7 @@ pub fn create_vulkan_gpu_device(
             None
         }
     };
-    device.on_uncaptured_error(Arc::new(crate::device::on_uncaptured_gpu_error));
+    crate::device::install_device_handlers(&device);
     Ok(GpuDevice {
         instance,
         adapter,
