@@ -393,11 +393,7 @@ pub(crate) fn dispatch_function(
 }
 
 fn snapshot(source_id: u64, kind: u32, value: &str) -> Result<(), DispatchError> {
-    let path = if value.is_empty() {
-        crate::snapshot::default_path()
-    } else {
-        value.to_string()
-    };
+    let path = crate::snapshot::resolve_remote_path(value).map_err(DispatchError::BadRequest)?;
     let code = crate::take_snapshot(source_id, kind, &path);
     if code == OK {
         Ok(())
@@ -518,6 +514,12 @@ fn empty_document() -> Document {
         selected_unit_id: 0,
         headphone_copy_master: false,
     })
+}
+
+/// Credentials shared with the TCP API: whatever is set for HTTP applies to both.
+pub(crate) fn credentials() -> (String, String) {
+    let slot = api_slot().lock_or_recover();
+    (slot.config.user.clone(), slot.config.pass.clone())
 }
 
 fn check_auth(request: &Request, config: &ApiConfig) -> bool {
@@ -760,10 +762,10 @@ mod tests {
         assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
         thread::sleep(Duration::from_millis(350));
         publish_cut_session();
-        let path = std::env::temp_dir().join("eiviz-vmix-http-snapshot.png");
+        let path = crate::snapshot::snapshot_dir().join("eiviz-vmix-http-snapshot.png");
         let _ = std::fs::remove_file(&path);
         let mut params = HashMap::new();
-        params.insert("Value".into(), path.to_string_lossy().into_owned());
+        params.insert("Value".into(), "eiviz-vmix-http-snapshot.png".to_string());
         let mut result = dispatch_function("Snapshot", &params);
         if result.is_err() {
             thread::sleep(Duration::from_millis(250));

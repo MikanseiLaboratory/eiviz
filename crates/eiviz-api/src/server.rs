@@ -163,6 +163,29 @@ struct PendingUpload {
 }
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Origins allowed to open a WebSocket, from `EIVIZ_API_ALLOWED_ORIGINS` (comma separated,
+/// `*` allows any). Native clients send no `Origin` header and are always accepted.
+fn allowed_origins_from_env() -> Vec<String> {
+    std::env::var("EIVIZ_API_ALLOWED_ORIGINS")
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn origin_allowed(origin: Option<&str>, allowed: &[String]) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    allowed
+        .iter()
+        .any(|item| item == "*" || item.eq_ignore_ascii_case(origin))
+}
 const METER_INTERVAL: Duration = Duration::from_millis(48);
 
 struct SubscriberGuard(Arc<State>);
@@ -232,7 +255,20 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
         }
     }
     let _guard = Guard(Arc::clone(&state));
+    let allowed_origins = allowed_origins_from_env();
     let callback = |req: &Request, mut response: Response| {
+        let origin = req
+            .headers()
+            .get("Origin")
+            .and_then(|value| value.to_str().ok());
+        if !origin_allowed(origin, &allowed_origins) {
+            // A browser page on another site could otherwise drive the switcher from the
+            // operator's machine (cross-site WebSocket hijacking).
+            return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(403)
+                .body(None)
+                .unwrap());
+        }
         let proto = req
             .headers()
             .get("Sec-WebSocket-Protocol")
@@ -945,6 +981,19 @@ fn proto_event(event: &eiviz_control::Event, epoch: &str) -> ProtoEvent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn websocket_origin_is_refused_unless_allowed() {
+        assert!(origin_allowed(None, &[]));
+        assert!(!origin_allowed(Some("https://evil.example"), &[]));
+        let allowed = vec!["https://panel.local".to_string()];
+        assert!(origin_allowed(Some("https://panel.local"), &allowed));
+        assert!(!origin_allowed(Some("https://evil.example"), &allowed));
+        assert!(origin_allowed(
+            Some("https://any.example"),
+            &["*".to_string()]
+        ));
+    }
+
     use super::*;
     use crate::AuthConfig;
     use crate::client::ControlClient;
