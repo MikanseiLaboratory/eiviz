@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::AudioCaptureSpec;
 use super::feed::CaptureFeed;
@@ -85,10 +85,26 @@ pub fn listed_io(name: &str, clsid: &str) -> (i32, i32) {
     io
 }
 
+/// Minimum time between full driver scans; scanning loads every installed driver.
+const RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+
 fn cpal_asio_io(device_id: &str) -> Option<(i32, i32)> {
     let names = asio_lookup_names(device_id);
-    let table = cpal_asio_table(false);
-    lookup_table(&table, &names)
+    if let Some(io) = lookup_table(&cpal_asio_table(false), &names) {
+        return Some(io);
+    }
+    // A driver installed or plugged in after the first scan is not in the cached table.
+    static LAST_RESCAN: std::sync::OnceLock<Mutex<Option<Instant>>> = std::sync::OnceLock::new();
+    {
+        let mut last = LAST_RESCAN
+            .get_or_init(|| Mutex::new(None))
+            .lock_or_recover();
+        if last.is_some_and(|at| at.elapsed() < RESCAN_INTERVAL) {
+            return None;
+        }
+        *last = Some(Instant::now());
+    }
+    lookup_table(&cpal_asio_table(true), &names)
 }
 
 fn lookup_table(table: &HashMap<String, (i32, i32)>, names: &[String]) -> Option<(i32, i32)> {
@@ -550,6 +566,9 @@ fn run_device_thread(device_id: &str, shared: Arc<Mutex<AsioShared>>, stop: &Ato
     }
 }
 
+const REOPEN_BACKOFF_MIN: Duration = Duration::from_millis(250);
+const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
 fn run_driver(
     device_id: &str,
     shared: Arc<Mutex<AsioShared>>,
@@ -557,16 +576,13 @@ fn run_driver(
 ) -> Result<(), String> {
     let name = registry_name_for_id(device_id)
         .ok_or_else(|| format!("ASIO driver name not found for {device_id}"))?;
-    let device = find_cpal_asio_device(&name)?;
-    let (ins, outs) = cpal_asio_io(device_id).unwrap_or((0, 0));
-    if let Ok(mut guard) = shared.lock() {
-        guard.ins = ins;
-        guard.outs = outs;
-    }
 
     let mut input: Option<cpal::Stream> = None;
     let mut output: Option<cpal::Stream> = None;
     let mut opened = false;
+    let mut ever_opened = false;
+    let mut retry_at = Instant::now();
+    let mut backoff = REOPEN_BACKOFF_MIN;
     while !stop.load(Ordering::Relaxed) {
         let (want_in, want_out) = {
             let guard = shared.lock_or_recover();
@@ -580,15 +596,50 @@ fn run_driver(
             continue;
         }
         if opened {
+            // A driver reset or a removed device surfaces as a stream error. Tear down and
+            // reopen instead of leaving both directions silent until the app restarts.
+            let stream_error = shared.lock_or_recover().error.take();
+            if let Some(error) = stream_error {
+                crate::diag::error(&format!("asio {name}: {error}; reopening"));
+                drop(output.take());
+                drop(input.take());
+                shared.lock_or_recover().ready = false;
+                opened = false;
+                retry_at = Instant::now() + backoff;
+                backoff = (backoff * 2).min(REOPEN_BACKOFF_MAX);
+                continue;
+            }
             drain_captures(&shared);
             thread::sleep(Duration::from_millis(2));
             continue;
+        }
+        if Instant::now() < retry_at {
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+
+        let device = match find_cpal_asio_device(&name) {
+            Ok(device) => device,
+            Err(error) if ever_opened => {
+                crate::diag::warn(&format!("asio {name}: {error}; retrying"));
+                retry_at = Instant::now() + backoff;
+                backoff = (backoff * 2).min(REOPEN_BACKOFF_MAX);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let (ins, outs) = cpal_asio_io(device_id).unwrap_or((0, 0));
+        {
+            let mut guard = shared.lock_or_recover();
+            guard.ins = ins;
+            guard.outs = outs;
         }
 
         // ASIO allows one client. Open input, then output, so cpal creates one
         // duplex buffer set. A later bus route only updates the mix maps.
         let open_in = want_in || (want_out && ins > 0);
         let open_out = want_out || (want_in && outs > 0);
+        let mut failure = None;
         if open_in {
             match open_cpal_asio_input(&device, Arc::clone(&shared)) {
                 Ok(stream) => {
@@ -600,16 +651,14 @@ fn run_driver(
                 }
                 Err(error) => {
                     if want_in {
-                        if let Ok(mut guard) = shared.lock() {
-                            guard.error = Some(error.clone());
-                        }
-                        return Err(error);
+                        failure = Some(error);
+                    } else {
+                        crate::diag::warn(&format!("asio input {name}: {error}"));
                     }
-                    crate::diag::warn(&format!("asio input {name}: {error}"));
                 }
             }
         }
-        if open_out {
+        if failure.is_none() && open_out {
             match open_cpal_asio_output(&device, Arc::clone(&shared)) {
                 Ok(stream) => {
                     output = Some(stream);
@@ -622,18 +671,29 @@ fn run_driver(
                 Err(error) => {
                     crate::diag::error(&format!("asio output {name}: {error}"));
                     if want_out && input.is_none() {
-                        if let Ok(mut guard) = shared.lock() {
-                            guard.error = Some(error.clone());
-                        }
-                        return Err(error);
+                        failure = Some(error);
                     }
                 }
             }
         }
-        opened = input.is_some() || output.is_some();
-        if !opened {
-            return Err(format!("ASIO device '{name}' did not start"));
+        if failure.is_none() && input.is_none() && output.is_none() {
+            failure = Some(format!("ASIO device '{name}' did not start"));
         }
+        if let Some(error) = failure {
+            drop(output.take());
+            drop(input.take());
+            if !ever_opened {
+                shared.lock_or_recover().error = Some(error.clone());
+                return Err(error);
+            }
+            crate::diag::warn(&format!("asio {name}: {error}; retrying"));
+            retry_at = Instant::now() + backoff;
+            backoff = (backoff * 2).min(REOPEN_BACKOFF_MAX);
+            continue;
+        }
+        opened = true;
+        ever_opened = true;
+        backoff = REOPEN_BACKOFF_MIN;
         thread::sleep(Duration::from_millis(20));
     }
     drop(input);
