@@ -125,8 +125,8 @@ impl VideoGpuRing {
             self.uv = Some(owned_plane(
                 device,
                 wgpu::TextureFormat::Rg8Unorm,
-                width / 2,
-                height / 2,
+                width.div_ceil(2),
+                height.div_ceil(2),
             ));
         }
         (
@@ -242,24 +242,33 @@ impl Nv12Converter {
         queue: &wgpu::Queue,
         ring: &mut VideoGpuRing,
         resource: ID3D12Resource,
+        coded: (u32, u32),
         width: u32,
         height: u32,
         pts: i64,
     ) -> Result<GpuVideoFrame, String> {
+        if width > coded.0 || height > coded.1 {
+            return Err(format!(
+                "visible size {width}x{height} exceeds the decoded surface {}x{}",
+                coded.0, coded.1
+            ));
+        }
+        // Decoders pad the surface (1080p is usually 1088 rows). The planes are imported at the
+        // surface size and only the visible rectangle is copied out.
         let y_src = import_plane(
             device,
             resource.clone(),
             wgpu::TextureFormat::R8Unorm,
-            width,
-            height,
+            coded.0,
+            coded.1,
             0,
         )?;
         let uv_src = import_plane(
             device,
             resource,
             wgpu::TextureFormat::Rg8Unorm,
-            width / 2,
-            height / 2,
+            coded.0.div_ceil(2),
+            coded.1.div_ceil(2),
             1,
         )?;
         let (y, uv) = ring.acquire_planes(device, width, height);
@@ -308,8 +317,8 @@ impl Nv12Converter {
             uv_src.as_image_copy(),
             uv.as_image_copy(),
             wgpu::Extent3d {
-                width: (width / 2).max(1),
-                height: (height / 2).max(1),
+                width: width.div_ceil(2).max(1),
+                height: height.div_ceil(2).max(1),
                 depth_or_array_layers: 1,
             },
         );

@@ -10,13 +10,14 @@ use windows::Win32::Media::MediaFoundation::{
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_MT_AUDIO_NUM_CHANNELS,
     MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_MAJOR_TYPE, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_USER_DATA, MF_PD_DURATION,
-    MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_SOURCE_READER_ANY_STREAM,
-    MF_SOURCE_READER_D3D_MANAGER, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
-    MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_SOURCE_READER_MEDIASOURCE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_STREAMTICK, MF_VERSION, MFAudioFormat_Float,
-    MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
+    MF_MT_MAJOR_TYPE, MF_MT_MINIMUM_DISPLAY_APERTURE, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE,
+    MF_MT_USER_DATA, MF_PD_DURATION, MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+    MF_SOURCE_READER_ANY_STREAM, MF_SOURCE_READER_D3D_MANAGER,
+    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,
+    MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+    MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_ERROR, MF_SOURCE_READERF_STREAMTICK,
+    MF_VERSION, MFAudioFormat_Float, MFCreateAttributes, MFCreateDeviceSource, MFCreateMediaType,
     MFCreateSourceReaderFromMediaSource, MFCreateSourceReaderFromURL, MFEnumDeviceSources,
     MFMediaType_Audio, MFMediaType_Video, MFSTARTUP_NOSOCKET, MFStartup, MFVideoFormat_H264,
     MFVideoFormat_H264_ES, MFVideoFormat_NV12, MFVideoFormat_RGB32, MFVideoFormat_UYVY,
@@ -211,6 +212,7 @@ fn run_loop(
         }
     }
     let _ = ingest;
+    let mut retry_delay = CAPTURE_RETRY_MIN;
     loop {
         if stop.load(Ordering::Relaxed) {
             send_ready(&mut ready, Ok(()));
@@ -234,7 +236,7 @@ fn run_loop(
             },
             None => Err("Direct3D 12 video is not active".into()),
         };
-        let (reader, layout) = match opened {
+        let (reader, mut layout) = match opened {
             Ok(pair) => pair,
             Err(gpu_error) => match open_reader(&path, capture, None, prefer_packed) {
                 Ok(reader) => match configure_video(
@@ -286,6 +288,7 @@ fn run_loop(
         let mut gpu_warned = false;
         let mut need_frame = !capture;
         let mut was_playing = false;
+        let mut loop_pending = false;
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
@@ -305,6 +308,7 @@ fn run_loop(
                 position_hns.store(seek, Ordering::Relaxed);
                 clock_start = Instant::now();
                 need_frame = true;
+                loop_pending = false;
             }
             let is_playing = playing.load(Ordering::Relaxed);
             if is_playing && !was_playing {
@@ -334,6 +338,35 @@ fn run_loop(
                 thread::sleep(Duration::from_millis(16));
                 continue;
             }
+            if loop_pending {
+                // Let the decoded tail play out, then restart without clearing the picture.
+                if let Some(front) = prefetch.front() {
+                    wait_for_pts(
+                        front.pts(),
+                        clock_pts,
+                        clock_start,
+                        &reader,
+                        audio.as_ref(),
+                        &uploads,
+                        source_id,
+                        is_playing,
+                    );
+                    continue;
+                }
+                if !looping.load(Ordering::Relaxed) {
+                    loop_pending = false;
+                    playing.store(false, Ordering::Relaxed);
+                    continue;
+                }
+                let _ = unsafe { reader.Flush(stream(MF_SOURCE_READER_ANY_STREAM)) };
+                seek_to(&reader, 0);
+                clock_pts = -1;
+                seek_base = 0;
+                position_hns.store(0, Ordering::Relaxed);
+                clock_start = Instant::now();
+                loop_pending = false;
+                continue;
+            }
             let prefetch_cap = if capture { 0 } else { file_prefetch as usize };
             if !capture && prefetch.len() >= prefetch_cap && !need_frame {
                 if let Some(front) = prefetch.front() {
@@ -355,19 +388,24 @@ fn run_loop(
             let sample = match read_sample(&reader, audio.as_ref()) {
                 Ok(Some(sample)) => sample,
                 Ok(None) => continue,
-                Err(end) if end => {
+                Err(ReadStop::End) => {
                     if capture {
                         break;
                     }
-                    if looping.load(Ordering::Relaxed) {
-                        position_hns.store(0, Ordering::Relaxed);
-                        seek_hns.store(0, Ordering::Relaxed);
-                    } else {
-                        playing.store(false, Ordering::Relaxed);
-                    }
+                    loop_pending = true;
                     continue;
                 }
-                Err(_) => continue,
+                Err(ReadStop::TypeChanged) => {
+                    layout = read_video_layout(&reader, layout.gpu, layout.packed)?;
+                    continue;
+                }
+                Err(ReadStop::Failed(error)) => {
+                    if capture {
+                        eprintln!("eiviz video capture: {error}; reopening");
+                        break;
+                    }
+                    return Err(error);
+                }
             };
             match sample {
                 Decoded::Audio { pts, packet } => {
@@ -398,6 +436,7 @@ fn run_loop(
                     let Some(decoded) = decoded else {
                         continue;
                     };
+                    retry_delay = CAPTURE_RETRY_MIN;
                     if capture {
                         push_live_frame(
                             &uploads,
@@ -430,10 +469,14 @@ fn run_loop(
             }
         }
         if capture {
-            thread::sleep(Duration::from_millis(40));
+            thread::sleep(retry_delay);
+            retry_delay = (retry_delay * 2).min(CAPTURE_RETRY_MAX);
         }
     }
 }
+
+const CAPTURE_RETRY_MIN: Duration = Duration::from_millis(40);
+const CAPTURE_RETRY_MAX: Duration = Duration::from_secs(2);
 
 enum Prefetched {
     Gpu(GpuVideoFrame),
@@ -480,7 +523,12 @@ fn wait_for_pts(
     is_playing: bool,
 ) {
     let wait = pts_wait(pts, clock_pts, clock_start);
-    if wait == Duration::ZERO || wait >= Duration::from_secs(2) {
+    if clock_pts < 0 || wait >= Duration::from_secs(2) {
+        // A long gap in the timestamps: idle in short steps instead of spinning.
+        thread::sleep(Duration::from_millis(4));
+        return;
+    }
+    if wait == Duration::ZERO {
         return;
     }
     let deadline = Instant::now() + wait;
@@ -540,7 +588,10 @@ fn decode_video_frame(
 ) -> Option<Prefetched> {
     if layout.gpu {
         if let Some(gpu) = gpu {
-            match gpu.dxgi.import_sample(gpu, gpu_ring, sample, pts) {
+            match gpu
+                .dxgi
+                .import_sample(gpu, gpu_ring, sample, pts, (layout.width, layout.height))
+            {
                 Ok(frame) => return Some(Prefetched::Gpu(frame)),
                 Err(error) if !*gpu_warned => {
                     eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
@@ -928,11 +979,14 @@ fn read_video_layout(
             .map_err(|e| e.to_string())?;
         let subtype = ty.GetGUID(&MF_MT_SUBTYPE).map_err(|e| e.to_string())?;
         let frame_size = ty.GetUINT64(&MF_MT_FRAME_SIZE).map_err(|e| e.to_string())?;
-        let width = (frame_size >> 32) as u32;
-        let height = frame_size as u32;
-        if width == 0 || height == 0 {
+        let coded_width = (frame_size >> 32) as u32;
+        let coded_height = frame_size as u32;
+        if coded_width == 0 || coded_height == 0 {
             return Err("Media Foundation reported a zero-sized frame".into());
         }
+        let (width, height) = display_aperture(&ty)
+            .filter(|(w, h)| *w <= coded_width && *h <= coded_height)
+            .unwrap_or((coded_width, coded_height));
         let stride = ty.GetUINT32(&MF_MT_DEFAULT_STRIDE).unwrap_or(0) as i32;
         Ok(VideoLayout {
             width,
@@ -943,6 +997,21 @@ fn read_video_layout(
             packed,
         })
     }
+}
+
+/// Visible size from `MF_MT_MINIMUM_DISPLAY_APERTURE` (an `MFVideoArea`), when the crop starts at
+/// the top-left corner. Codecs code 1080p as 1088 rows and flag the extra rows as invisible.
+fn display_aperture(
+    ty: &windows::Win32::Media::MediaFoundation::IMFMediaType,
+) -> Option<(u32, u32)> {
+    let mut blob = [0u8; 16];
+    unsafe { ty.GetBlob(&MF_MT_MINIMUM_DISPLAY_APERTURE, &mut blob, None) }.ok()?;
+    let offset_x = i16::from_le_bytes([blob[2], blob[3]]);
+    let offset_y = i16::from_le_bytes([blob[6], blob[7]]);
+    let width = i32::from_le_bytes([blob[8], blob[9], blob[10], blob[11]]);
+    let height = i32::from_le_bytes([blob[12], blob[13], blob[14], blob[15]]);
+    (offset_x == 0 && offset_y == 0 && width > 0 && height > 0)
+        .then_some((width as u32, height as u32))
 }
 
 struct AudioLayout {
@@ -1072,10 +1141,20 @@ fn read_audio_sample(
     }
 }
 
+/// Why `read_sample` stopped delivering samples.
+enum ReadStop {
+    /// The video stream ended.
+    End,
+    /// The reader reported an error (device unplugged, decoder failure).
+    Failed(String),
+    /// The decoder changed its output type; the layout must be read again.
+    TypeChanged,
+}
+
 fn read_sample(
     reader: &IMFSourceReader,
     audio: Option<&AudioLayout>,
-) -> Result<Option<Decoded>, bool> {
+) -> Result<Option<Decoded>, ReadStop> {
     unsafe {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
@@ -1090,14 +1169,29 @@ fn read_sample(
                 Some(&mut pts),
                 Some(&mut sample),
             )
-            .map_err(|_| false)?;
-        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
-            return Err(true);
+            .map_err(|error| ReadStop::Failed(format!("ReadSample: {error}")))?;
+        if flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0 {
+            return Err(ReadStop::Failed(
+                "the source reader reported an error".into(),
+            ));
         }
-        if flags & MF_SOURCE_READERF_STREAMTICK.0 as u32 != 0 || sample.is_none() {
+        if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
+            return Err(ReadStop::TypeChanged);
+        }
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            // A shorter audio track ending must not end or restart the video.
+            return if is_audio(reader, stream_index) {
+                Ok(None)
+            } else {
+                Err(ReadStop::End)
+            };
+        }
+        if flags & MF_SOURCE_READERF_STREAMTICK.0 as u32 != 0 {
             return Ok(None);
         }
-        let sample = sample.ok_or(false)?;
+        let Some(sample) = sample else {
+            return Ok(None);
+        };
         if is_audio(reader, stream_index) {
             let Some(layout) = audio else {
                 return Ok(None);
@@ -1186,7 +1280,12 @@ fn take_cpu_frame(
             stride,
             format,
             pts,
-            width: layout.width,
+            // Packed 4:2:2 converters drop an odd last column, so report the width they produced.
+            width: if matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva) {
+                layout.width & !1
+            } else {
+                layout.width
+            },
             height: layout.height,
         })
     }
@@ -1237,6 +1336,15 @@ fn packed_stride(stride: i32, width: u32, bpp: u32) -> usize {
     }
 }
 
+/// Rows of luma before the chroma plane. Decoders pad the surface height, so the chroma plane
+/// starts after the padded rows; the buffer length (3/2 of the luma plane) tells how many.
+fn nv12_luma_rows(len: usize, y_stride: usize, visible_rows: usize) -> usize {
+    if y_stride == 0 {
+        return visible_rows;
+    }
+    (len * 2 / (3 * y_stride)).max(visible_rows)
+}
+
 fn nv12_to_uyvy(
     src: &[u8],
     width: u32,
@@ -1245,7 +1353,7 @@ fn nv12_to_uyvy(
 ) -> (Vec<u8>, usize, CpuFormat) {
     let w = (width as usize) & !1;
     let h = height as usize;
-    let uv_off = y_stride.saturating_mul(h);
+    let uv_off = y_stride.saturating_mul(nv12_luma_rows(src.len(), y_stride, h));
     let dst_stride = w * 2;
     let mut dst = vec![0u8; dst_stride * h];
     for y in 0..h {
@@ -1274,7 +1382,7 @@ fn nv12_to_bgra(
 ) -> (Vec<u8>, usize, CpuFormat) {
     let w = width as usize;
     let h = height as usize;
-    let uv_off = y_stride.saturating_mul(h);
+    let uv_off = y_stride.saturating_mul(nv12_luma_rows(src.len(), y_stride, h));
     let dst_stride = w * 4;
     let mut dst = vec![0u8; dst_stride * h];
     for y in 0..h {
@@ -1415,7 +1523,7 @@ fn run_vulkan_h264_file(
     ready: &mut Option<mpsc::SyncSender<Result<(), String>>>,
 ) -> Result<(), String> {
     let reader = open_reader(path, false, None, false)?;
-    let (layout_w, layout_h, prefix, nal_len) =
+    let (layout_w, layout_h, prefix, nal_format) =
         configure_h264_compressed(&reader, width, height, fps_num, fps_den)?;
     let audio = match configure_audio(&reader) {
         Ok(layout) => Some(layout),
@@ -1443,6 +1551,7 @@ fn run_vulkan_h264_file(
     let mut was_playing = false;
     let mut sent_prefix = false;
     let mut annexb = Vec::new();
+    let mut loop_pending = false;
     loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -1468,6 +1577,7 @@ fn run_vulkan_h264_file(
             position_hns.store(seek, Ordering::Relaxed);
             clock_start = Instant::now();
             need_frame = true;
+            loop_pending = false;
         }
         let is_playing = playing.load(Ordering::Relaxed);
         if is_playing && !was_playing {
@@ -1495,6 +1605,40 @@ fn run_vulkan_h264_file(
             thread::sleep(Duration::from_millis(16));
             continue;
         }
+        if loop_pending {
+            if let Some(front) = prefetch.front() {
+                wait_for_pts(
+                    front.pts(),
+                    clock_pts,
+                    clock_start,
+                    &reader,
+                    audio.as_ref(),
+                    uploads,
+                    source_id,
+                    is_playing,
+                );
+                continue;
+            }
+            if !looping.load(Ordering::Relaxed) {
+                loop_pending = false;
+                playing.store(false, Ordering::Relaxed);
+                continue;
+            }
+            let _ = unsafe { reader.Flush(stream(MF_SOURCE_READER_ANY_STREAM)) };
+            seek_to(&reader, 0);
+            decoder = vulkan
+                .create_wgpu_textures_decoder_h264(
+                    gpu_video::parameters::DecoderParameters::default(),
+                )
+                .map_err(|error| error.to_string())?;
+            sent_prefix = false;
+            clock_pts = -1;
+            seek_base = 0;
+            position_hns.store(0, Ordering::Relaxed);
+            clock_start = Instant::now();
+            loop_pending = false;
+            continue;
+        }
         if prefetch.len() >= file_prefetch as usize && !need_frame {
             if let Some(front) = prefetch.front() {
                 wait_for_pts(
@@ -1515,16 +1659,41 @@ fn run_vulkan_h264_file(
         let sample = match read_sample(&reader, audio.as_ref()) {
             Ok(Some(sample)) => sample,
             Ok(None) => continue,
-            Err(end) if end => {
-                if looping.load(Ordering::Relaxed) {
-                    position_hns.store(0, Ordering::Relaxed);
-                    seek_hns.store(0, Ordering::Relaxed);
-                } else {
-                    playing.store(false, Ordering::Relaxed);
+            Err(ReadStop::End) => {
+                // Drain the decoder so the last frames of the file are not lost.
+                match decoder.flush() {
+                    Ok(frames) => {
+                        for frame in frames {
+                            let size = frame.data.size();
+                            let gpu_pts = frame.metadata.pts.map(|value| value as i64).unwrap_or(0);
+                            match converter.convert_nv12_texture(
+                                &ingest.device,
+                                &ingest.queue,
+                                &mut gpu_ring,
+                                &frame.data,
+                                if size.width > 0 { size.width } else { layout_w },
+                                if size.height > 0 {
+                                    size.height
+                                } else {
+                                    layout_h
+                                },
+                                gpu_pts,
+                            ) {
+                                Ok(gpu) => {
+                                    ring_vram = gpu_ring.vram_bytes();
+                                    prefetch.push_back(Prefetched::Gpu(gpu));
+                                }
+                                Err(error) => eprintln!("eiviz vulkan nv12: {error}"),
+                            }
+                        }
+                    }
+                    Err(error) => eprintln!("eiviz vulkan flush: {error}"),
                 }
+                loop_pending = true;
                 continue;
             }
-            Err(_) => continue,
+            Err(ReadStop::TypeChanged) => continue,
+            Err(ReadStop::Failed(error)) => return Err(error),
         };
         match sample {
             Decoded::Audio { packet, .. } => {
@@ -1545,7 +1714,12 @@ fn run_vulkan_h264_file(
                     sent_prefix = true;
                 }
                 let payload = sample_bytes(&sample)?;
-                crate::vk_video::annexb_from_avcc(&payload, nal_len, &mut annexb);
+                if let Err(error) =
+                    crate::vk_video::append_annexb(&payload, nal_format, &mut annexb)
+                {
+                    eprintln!("eiviz vulkan video: skipping sample: {error}");
+                    continue;
+                }
                 if annexb.is_empty() {
                     continue;
                 }
@@ -1606,7 +1780,7 @@ fn configure_h264_compressed(
     height: u32,
     fps_num: u32,
     fps_den: u32,
-) -> Result<(u32, u32, Vec<u8>, usize), String> {
+) -> Result<(u32, u32, Vec<u8>, crate::vk_video::NalFormat), String> {
     unsafe {
         let _ = reader.SetStreamSelection(stream(MF_SOURCE_READER_ANY_STREAM), false);
         reader
@@ -1653,14 +1827,24 @@ fn configure_h264_compressed(
         if blob.is_empty() {
             blob = media_blob(&native);
         }
-        let (prefix, nal_len) = crate::vk_video::annexb_from_avc_config(&blob);
-        Ok((out_w, out_h, prefix, nal_len))
+        let (prefix, nal_format) = if blob.is_empty() {
+            // Without an avcC record only Annex-B streams are decodable; their parameter
+            // sets travel in-band.
+            if subtype == MF_AVC1 {
+                return Err("AVC1 stream has no avcC codec configuration".into());
+            }
+            (Vec::new(), crate::vk_video::NalFormat::AnnexB)
+        } else {
+            crate::vk_video::annexb_from_avc_config(&blob)?
+        };
+        Ok((out_w, out_h, prefix, nal_format))
     }
 }
 
+const MF_AVC1: GUID = GUID::from_u128(0x3143_5641_0000_0010_8000_00aa_0038_9b71);
+
 fn is_h264_compressed(subtype: GUID) -> bool {
-    const AVC1: GUID = GUID::from_u128(0x3143_5641_0000_0010_8000_00aa_0038_9b71);
-    subtype == MFVideoFormat_H264 || subtype == MFVideoFormat_H264_ES || subtype == AVC1
+    subtype == MFVideoFormat_H264 || subtype == MFVideoFormat_H264_ES || subtype == MF_AVC1
 }
 
 fn media_blob(ty: &windows::Win32::Media::MediaFoundation::IMFMediaType) -> Vec<u8> {
@@ -1704,6 +1888,14 @@ mod tests {
         assert!(frame_due(0, -1, Duration::ZERO));
         assert!(!frame_due(400_000, 0, Duration::from_millis(20)));
         assert!(frame_due(400_000, 0, Duration::from_millis(40)));
+    }
+
+    #[test]
+    fn nv12_chroma_starts_after_padded_luma_rows() {
+        let stride = 1920;
+        assert_eq!(nv12_luma_rows(stride * 1088 * 3 / 2, stride, 1080), 1088);
+        assert_eq!(nv12_luma_rows(stride * 1080 * 3 / 2, stride, 1080), 1080);
+        assert_eq!(nv12_luma_rows(10, 0, 4), 4);
     }
 
     #[test]

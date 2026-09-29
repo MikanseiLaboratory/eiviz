@@ -79,12 +79,8 @@ pub fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize, dst: &mu
 }
 
 pub fn or_opaque_bgra(pixels: &mut [u8]) {
-    let words = pixels.len() / 4;
-    let ptr = pixels.as_mut_ptr();
-    unsafe {
-        for i in 0..words {
-            *ptr.add(i * 4).cast::<u32>() |= 0xFF00_0000;
-        }
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = 0xFF;
     }
 }
 
@@ -227,5 +223,17 @@ pub fn copy_rows(
             break;
         }
         dst[d..d + row_bytes].copy_from_slice(&src[s..s + row_bytes]);
+    }
+}
+
+#[cfg(test)]
+mod opaque_tests {
+    use super::*;
+
+    #[test]
+    fn or_opaque_handles_unaligned_slices() {
+        let mut data = vec![0u8; 13];
+        or_opaque_bgra(&mut data[1..9]);
+        assert_eq!(data, vec![0, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 0]);
     }
 }

@@ -60,74 +60,81 @@ pub fn create_vulkan_gpu_device(
     })
 }
 
-/// AVCC length-prefixed H.264 (MP4) to Annex-B start codes.
-pub fn annexb_from_avcc(data: &[u8], nal_length_size: usize, out: &mut Vec<u8>) {
-    if data.starts_with(&[0, 0, 0, 1]) || data.starts_with(&[0, 0, 1]) {
-        out.extend_from_slice(data);
-        return;
-    }
-    let nal_length_size = nal_length_size.clamp(1, 4);
+/// How H.264 access units are framed in a stream. Decided once from the stream's codec
+/// configuration; guessing per sample would misread a length-prefixed NAL whose length bytes
+/// happen to look like a start code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NalFormat {
+    AnnexB,
+    Avcc { length_size: usize },
+}
+
+/// Appends one access unit to `out` as Annex-B. Malformed length prefixes are an error rather
+/// than a silently truncated frame.
+pub fn append_annexb(data: &[u8], format: NalFormat, out: &mut Vec<u8>) -> Result<(), String> {
+    let length_size = match format {
+        NalFormat::AnnexB => {
+            out.extend_from_slice(data);
+            return Ok(());
+        }
+        NalFormat::Avcc { length_size } => length_size.clamp(1, 4),
+    };
     let mut offset = 0;
-    while offset + nal_length_size <= data.len() {
+    while offset < data.len() {
+        if offset + length_size > data.len() {
+            return Err("truncated AVCC NAL length".into());
+        }
         let mut len = 0usize;
-        for i in 0..nal_length_size {
+        for i in 0..length_size {
             len = (len << 8) | data[offset + i] as usize;
         }
-        offset += nal_length_size;
+        offset += length_size;
         if len == 0 || offset + len > data.len() {
-            break;
+            return Err(format!(
+                "invalid AVCC NAL length {len} at offset {offset} of {}",
+                data.len()
+            ));
         }
         out.extend_from_slice(&[0, 0, 0, 1]);
         out.extend_from_slice(&data[offset..offset + len]);
         offset += len;
     }
+    Ok(())
 }
 
-/// Convert AVCDecoderConfigurationRecord (or Annex-B) into start-code NALs.
-pub fn annexb_from_avc_config(blob: &[u8]) -> (Vec<u8>, usize) {
+/// Splits codec configuration into an Annex-B parameter-set prefix and the sample framing.
+/// An AVCDecoderConfigurationRecord means length-prefixed samples; start codes mean Annex-B.
+pub fn annexb_from_avc_config(blob: &[u8]) -> Result<(Vec<u8>, NalFormat), String> {
     if blob.starts_with(&[0, 0, 0, 1]) || blob.starts_with(&[0, 0, 1]) {
-        return (blob.to_vec(), 4);
+        return Ok((blob.to_vec(), NalFormat::AnnexB));
     }
     if blob.len() < 7 || blob[0] != 1 {
-        return (Vec::new(), 4);
+        return Err("unrecognized H.264 codec configuration".into());
     }
-    let nal_length_size = ((blob[4] & 0x03) + 1) as usize;
+    let length_size = ((blob[4] & 0x03) + 1) as usize;
     let mut out = Vec::new();
     let mut offset = 5;
-    let sps_count = (blob.get(offset).copied().unwrap_or(0) & 0x1f) as usize;
+    let sps_count = (blob[offset] & 0x1f) as usize;
     offset += 1;
     for _ in 0..sps_count {
-        if offset + 2 > blob.len() {
-            break;
-        }
-        let len = u16::from_be_bytes([blob[offset], blob[offset + 1]]) as usize;
-        offset += 2;
-        if offset + len > blob.len() {
-            break;
-        }
-        out.extend_from_slice(&[0, 0, 0, 1]);
-        out.extend_from_slice(&blob[offset..offset + len]);
-        offset += len;
+        offset = push_parameter_set(blob, offset, &mut out)?;
     }
-    if offset >= blob.len() {
-        return (out, nal_length_size);
-    }
-    let pps_count = blob[offset] as usize;
+    let pps_count = *blob.get(offset).ok_or("truncated avcC")? as usize;
     offset += 1;
     for _ in 0..pps_count {
-        if offset + 2 > blob.len() {
-            break;
-        }
-        let len = u16::from_be_bytes([blob[offset], blob[offset + 1]]) as usize;
-        offset += 2;
-        if offset + len > blob.len() {
-            break;
-        }
-        out.extend_from_slice(&[0, 0, 0, 1]);
-        out.extend_from_slice(&blob[offset..offset + len]);
-        offset += len;
+        offset = push_parameter_set(blob, offset, &mut out)?;
     }
-    (out, nal_length_size)
+    Ok((out, NalFormat::Avcc { length_size }))
+}
+
+fn push_parameter_set(blob: &[u8], offset: usize, out: &mut Vec<u8>) -> Result<usize, String> {
+    let header = blob.get(offset..offset + 2).ok_or("truncated avcC")?;
+    let len = u16::from_be_bytes([header[0], header[1]]) as usize;
+    let start = offset + 2;
+    let set = blob.get(start..start + len).ok_or("truncated avcC")?;
+    out.extend_from_slice(&[0, 0, 0, 1]);
+    out.extend_from_slice(set);
+    Ok(start + len)
 }
 
 #[cfg(test)]
@@ -137,15 +144,40 @@ mod tests {
     #[test]
     fn annexb_passthrough() {
         let mut out = Vec::new();
-        annexb_from_avcc(&[0, 0, 0, 1, 0x67, 0x42], 4, &mut out);
+        append_annexb(&[0, 0, 0, 1, 0x67, 0x42], NalFormat::AnnexB, &mut out).unwrap();
         assert_eq!(out, vec![0, 0, 0, 1, 0x67, 0x42]);
     }
 
     #[test]
     fn annexb_from_length_prefixed() {
         let mut out = Vec::new();
-        annexb_from_avcc(&[0, 0, 0, 2, 0x67, 0x42, 0, 0, 0, 1, 0x68], 4, &mut out);
+        let format = NalFormat::Avcc { length_size: 4 };
+        append_annexb(
+            &[0, 0, 0, 2, 0x67, 0x42, 0, 0, 0, 1, 0x68],
+            format,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(out, vec![0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68]);
+    }
+
+    #[test]
+    fn length_prefix_that_resembles_a_start_code_is_not_passed_through() {
+        let mut out = Vec::new();
+        let format = NalFormat::Avcc { length_size: 4 };
+        append_annexb(&[0, 0, 0, 1, 0x65], format, &mut out).unwrap();
+        assert_eq!(out, vec![0, 0, 0, 1, 0x65]);
+        let mut out = Vec::new();
+        let format = NalFormat::Avcc { length_size: 3 };
+        append_annexb(&[0, 0, 1, 0x65], format, &mut out).unwrap();
+        assert_eq!(out, vec![0, 0, 0, 1, 0x65]);
+    }
+
+    #[test]
+    fn malformed_length_is_an_error() {
+        let mut out = Vec::new();
+        let format = NalFormat::Avcc { length_size: 4 };
+        assert!(append_annexb(&[0, 0, 0, 9, 0x67], format, &mut out).is_err());
     }
 
     #[test]
@@ -154,11 +186,16 @@ mod tests {
             1, 0x64, 0, 0x1e, 0xff, 0xe1, 0x00, 0x03, 0x67, 0x42, 0x00, 0x01, 0x00, 0x03, 0x68,
             0xce, 0x00,
         ];
-        let (out, nal_len) = annexb_from_avc_config(&blob);
-        assert_eq!(nal_len, 4);
+        let (out, format) = annexb_from_avc_config(&blob).unwrap();
+        assert_eq!(format, NalFormat::Avcc { length_size: 4 });
         assert_eq!(
             out,
             vec![0, 0, 0, 1, 0x67, 0x42, 0x00, 0, 0, 0, 1, 0x68, 0xce, 0x00]
         );
+    }
+
+    #[test]
+    fn unknown_config_is_rejected() {
+        assert!(annexb_from_avc_config(&[9, 9, 9]).is_err());
     }
 }

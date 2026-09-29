@@ -63,6 +63,24 @@ impl GpuVideoContext {
     }
 }
 
+struct ReturnGuard<'a> {
+    on12: &'a ID3D11On12Device2,
+    resource: ID3D11Resource,
+}
+
+impl Drop for ReturnGuard<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.on12.ReturnUnderlyingResource(
+                &self.resource,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+    }
+}
+
 impl DxgiVideo {
     pub fn new(device: &wgpu::Device) -> Result<Self, String> {
         let (device12, queue_wgpu) = unsafe {
@@ -145,12 +163,15 @@ impl DxgiVideo {
         })
     }
 
+    /// Imports a decoded D3D11 sample. `visible` is the display size reported by Media
+    /// Foundation; the decoder surface itself is usually padded to the codec's block size.
     pub fn import_sample(
         &self,
         gpu: &GpuVideoContext,
         ring: &mut crate::convert::VideoGpuRing,
         sample: &IMFSample,
         pts: i64,
+        visible: (u32, u32),
     ) -> Result<crate::upload::GpuVideoFrame, String> {
         unsafe {
             let buffer = sample.GetBufferByIndex(0).map_err(|e| e.to_string())?;
@@ -163,47 +184,67 @@ impl DxgiVideo {
             let tex11 = ID3D11Texture2D::from_raw(raw);
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             tex11.GetDesc(&mut desc);
+            if !matches!(
+                desc.Format,
+                DXGI_FORMAT_NV12
+                    | DXGI_FORMAT_B8G8R8A8_UNORM
+                    | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+                    | DXGI_FORMAT_R8G8B8A8_UNORM
+            ) {
+                return Err(format!("unsupported DXGI format {}", desc.Format.0));
+            }
+            // The decoder may hand out one slice of a texture array. Only slice 0 of a
+            // single-slice texture can be wrapped for wgpu, so anything else is refused
+            // instead of showing the wrong picture.
+            let subresource = dxgi.GetSubresourceIndex().map_err(|e| e.to_string())?;
+            if desc.ArraySize > 1 || subresource != 0 {
+                return Err(format!(
+                    "decoder output is slice {subresource} of a {}-slice texture array, which the GPU video path cannot import",
+                    desc.ArraySize
+                ));
+            }
+            let width = visible.0.min(desc.Width);
+            let height = visible.1.min(desc.Height);
+            if width == 0 || height == 0 {
+                return Err("decoded frame has no visible area".into());
+            }
             {
                 let ctx = self.context.lock_or_recover();
                 ctx.Flush();
             }
-            if let Ok(resource) = tex11.cast::<ID3D11Resource>() {
-                self.on12.ReleaseWrappedResources(&[Some(resource)]);
-            }
+            let resource11 = tex11.cast::<ID3D11Resource>().map_err(|e| e.to_string())?;
+            self.on12
+                .ReleaseWrappedResources(&[Some(resource11.clone())]);
             let (resource12, wrapped) = self.unwrap_or_share(&tex11)?;
-            let frame = match desc.Format {
+            // The underlying resource must go back to D3D11 on every exit path, otherwise the
+            // decoder can never reuse the surface.
+            let _return_guard = wrapped.then(|| ReturnGuard {
+                on12: &self.on12,
+                resource: resource11,
+            });
+            let coded = (desc.Width, desc.Height);
+            match desc.Format {
                 DXGI_FORMAT_NV12 => gpu.convert.convert_nv12(
                     &gpu.device,
                     &gpu.queue,
                     ring,
                     resource12,
-                    desc.Width,
-                    desc.Height,
+                    coded,
+                    width,
+                    height,
                     pts,
-                )?,
-                DXGI_FORMAT_B8G8R8A8_UNORM
-                | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-                | DXGI_FORMAT_R8G8B8A8_UNORM => gpu.convert.copy_bgra(
+                ),
+                _ => gpu.convert.copy_bgra(
                     &gpu.device,
                     &gpu.queue,
                     ring,
                     resource12,
-                    desc.Width,
-                    desc.Height,
+                    width,
+                    height,
                     pts,
                     desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM,
-                )?,
-                other => return Err(format!("unsupported DXGI format {}", other.0)),
-            };
-            if wrapped {
-                let _ = self.on12.ReturnUnderlyingResource(
-                    &tex11.cast::<ID3D11Resource>().map_err(|e| e.to_string())?,
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                );
+                ),
             }
-            Ok(frame)
         }
     }
 
