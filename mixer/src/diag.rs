@@ -248,22 +248,11 @@ unsafe extern "system" fn on_unhandled_exception(_info: *mut core::ffi::c_void) 
     0
 }
 
-pub static GPU_FAULT: AtomicBool = AtomicBool::new(false);
 static SURFACE_LOST: AtomicU64 = AtomicU64::new(0);
 static RENDER_SKIPPED: AtomicU64 = AtomicU64::new(0);
 static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
-
-#[allow(dead_code)]
-pub fn mark_gpu_fault(message: &str) {
-    GPU_FAULT.store(true, Ordering::Release);
-    error(message);
-}
-
-pub fn take_gpu_fault() -> bool {
-    GPU_FAULT.swap(false, Ordering::AcqRel)
-}
 
 pub fn note_surface_lost() {
     SURFACE_LOST.fetch_add(1, Ordering::Relaxed);

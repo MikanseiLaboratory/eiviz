@@ -287,25 +287,46 @@ fn media_dir(session_path: &Path) -> PathBuf {
     }
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Writes `bytes` next to `path`, syncs them to disk, then renames over the target so a crash
+/// mid-save can never leave a truncated or missing file. `rename` replaces an existing target
+/// on both Unix and Windows, so the previous file is never removed first.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
     }
     let tmp = tmp_path(path);
-    std::fs::write(&tmp, bytes).map_err(|error| error.to_string())?;
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|error| error.to_string())?;
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    };
+    if let Err(error) = write() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.to_string());
     }
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(error.to_string())
-        }
+    sync_parent_dir(path);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) {
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    if let Ok(dir) = std::fs::File::open(dir) {
+        let _ = dir.sync_all();
     }
 }
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) {}
 
 fn tmp_path(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
@@ -1216,6 +1237,18 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn atomic_write_replaces_existing_file_without_leaving_temp() {
+        let dir = std::env::temp_dir().join(format!("eiviz-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("session.eivz");
+        super::atomic_write(&path, b"first").unwrap();
+        super::atomic_write(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        assert!(!super::tmp_path(&path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use crate::session::{Renderer, parse, to_vec};
 

@@ -41,7 +41,7 @@ struct Slot {
     buffer: wgpu::Buffer,
     pending: bool,
     waiting: bool,
-    ready: Option<Receiver<()>>,
+    ready: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 struct ThumbGpu {
@@ -187,16 +187,17 @@ impl ThumbGpu {
             if !slot.waiting {
                 continue;
             }
-            let done = slot.ready.as_ref().is_some_and(|rx| rx.try_recv().is_ok());
-            if !done {
+            let Some(result) = slot.ready.as_ref().and_then(|rx| rx.try_recv().ok()) else {
                 continue;
+            };
+            if result.is_ok() {
+                let slice = slot.buffer.slice(..);
+                if let Ok(view) = slice.get_mapped_range() {
+                    mapped = Some(pack_bgra(&view, self.width, self.height, self.gpu_stride));
+                    drop(view);
+                }
+                slot.buffer.unmap();
             }
-            let slice = slot.buffer.slice(..);
-            if let Ok(view) = slice.get_mapped_range() {
-                mapped = Some(pack_bgra(&view, self.width, self.height, self.gpu_stride));
-                drop(view);
-            }
-            slot.buffer.unmap();
             slot.pending = false;
             slot.waiting = false;
             slot.ready = None;
@@ -205,8 +206,8 @@ impl ThumbGpu {
         if self.slots[read].pending && !self.slots[read].waiting {
             let slice = self.slots[read].buffer.slice(..);
             let (tx, rx) = mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |_| {
-                let _ = tx.send(());
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
             });
             self.slots[read].waiting = true;
             self.slots[read].ready = Some(rx);

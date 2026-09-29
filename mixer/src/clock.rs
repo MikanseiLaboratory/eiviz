@@ -428,6 +428,37 @@ mod tests {
     }
 
     #[test]
+    fn set_rate_keeps_next_deadline_within_one_frame_of_now() {
+        let epoch = Instant::now();
+        let clock = SharedMediaClock::at(epoch);
+        let rates = [
+            Rate::new(60_000, 1_001).unwrap(),
+            Rate::new(24, 1).unwrap(),
+            Rate::new(120, 1).unwrap(),
+            Rate::new(25, 1).unwrap(),
+            Rate::new(30_000, 1_001).unwrap(),
+            Rate::new(60, 1).unwrap(),
+        ];
+        let mut cursor = PlayoutCursor::new(rates[0]);
+        let mut now = epoch;
+        let mut last_pts = -1i64;
+        for (step, rate) in rates.iter().cycle().take(60).enumerate() {
+            cursor.set_rate(clock, now, *rate);
+            let deadline = cursor.next_deadline(clock);
+            let ahead = deadline.saturating_duration_since(now);
+            assert!(
+                ahead <= duration_from_ticks(rate.interval_ticks() * 2),
+                "step {step}: next slot is {ahead:?} ahead after switching to {rate:?}"
+            );
+            now = now.max(deadline);
+            let (pts, _) = cursor.due_with_skip(clock, now).expect("slot is due");
+            assert!(pts > last_pts, "step {step}: pts must stay monotonic");
+            last_pts = pts;
+            now += Duration::from_millis(3);
+        }
+    }
+
+    #[test]
     fn audio_and_video_share_the_same_epoch() {
         let epoch = Instant::now();
         let clock = SharedMediaClock::at(epoch);

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_char;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -15,6 +16,7 @@ use crate::abi::{
     ERR_INVALID_ARGUMENT, INCOMING_PREVIEW, OK, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
     TRANSITION_FADE,
 };
+use crate::guard::LockExt;
 use crate::session::Document;
 use crate::vmix_xml::{FlatMap, UnitLive, fade_duration_ms, render_xml, resolve_mix};
 
@@ -160,17 +162,23 @@ pub fn shutdown() {
 }
 
 fn stop_worker() {
-    let Ok(mut slot) = api_slot().lock() else {
-        return;
+    let (stop, server, join) = {
+        let mut slot = api_slot().lock_or_recover();
+        (
+            Arc::clone(&slot.stop),
+            slot.server.clone(),
+            slot.join.take(),
+        )
     };
-    slot.stop.store(true, Ordering::Relaxed);
-    if let Some(server) = slot.server.as_ref() {
+    stop.store(true, Ordering::Relaxed);
+    if let Some(server) = server.as_ref() {
         server.unblock();
     }
-    if let Some(join) = slot.join.take() {
+    // The worker may itself be waiting on the slot lock, so joining must happen outside it.
+    if let Some(join) = join {
         let _ = join.join();
     }
-    slot.stop.store(false, Ordering::Relaxed);
+    stop.store(false, Ordering::Relaxed);
 }
 
 fn spawn_worker(
@@ -183,7 +191,16 @@ fn spawn_worker(
         .spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 match server.recv_timeout(Duration::from_millis(200)) {
-                    Ok(Some(request)) => handle_request(request, &config),
+                    Ok(Some(request)) => {
+                        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            handle_request(request, &config)
+                        })) {
+                            crate::diag::http_error(&format!(
+                                "request handler panicked: {}",
+                                crate::guard::panic_message(payload.as_ref())
+                            ));
+                        }
+                    }
                     Ok(None) => {}
                     Err(error) => {
                         if !stop.load(Ordering::Relaxed) {
@@ -376,11 +393,7 @@ pub(crate) fn dispatch_function(
 }
 
 fn snapshot(source_id: u64, kind: u32, value: &str) -> Result<(), DispatchError> {
-    let path = if value.is_empty() {
-        crate::snapshot::default_path()
-    } else {
-        value.to_string()
-    };
+    let path = crate::snapshot::resolve_remote_path(value).map_err(DispatchError::BadRequest)?;
     let code = crate::take_snapshot(source_id, kind, &path);
     if code == OK {
         Ok(())
@@ -503,6 +516,12 @@ fn empty_document() -> Document {
     })
 }
 
+/// Credentials shared with the TCP API: whatever is set for HTTP applies to both.
+pub(crate) fn credentials() -> (String, String) {
+    let slot = api_slot().lock_or_recover();
+    (slot.config.user.clone(), slot.config.pass.clone())
+}
+
 fn check_auth(request: &Request, config: &ApiConfig) -> bool {
     if config.user.is_empty() && config.pass.is_empty() {
         return true;
@@ -555,15 +574,9 @@ fn url_decode(input: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = &input[i + 1..i + 3];
-                if let Ok(value) = u8::from_str_radix(hex, 16) {
-                    out.push(value);
-                    i += 3;
-                } else {
-                    out.push(bytes[i]);
-                    i += 1;
-                }
+            b'%' if i + 2 < bytes.len() && hex_pair(bytes[i + 1], bytes[i + 2]).is_some() => {
+                out.push(hex_pair(bytes[i + 1], bytes[i + 2]).unwrap_or(b'%'));
+                i += 3;
             }
             other => {
                 out.push(other);
@@ -572,6 +585,11 @@ fn url_decode(input: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_pair(high: u8, low: u8) -> Option<u8> {
+    let digit = |byte: u8| (byte as char).to_digit(16);
+    Some((digit(high)? * 16 + digit(low)?) as u8)
 }
 
 fn summarize_params(params: &HashMap<String, String>) -> String {
@@ -632,6 +650,17 @@ fn read_cstr(ptr: *const c_char) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn url_decode_handles_multibyte_and_trailing_escapes() {
+        assert_eq!(super::url_decode("%41"), "A");
+        assert_eq!(super::url_decode("a%20b+c"), "a b c");
+        assert_eq!(super::url_decode("%E3%81%82"), "あ");
+        assert_eq!(super::url_decode("%%あ"), "%%あ");
+        assert_eq!(super::url_decode("%あ"), "%あ");
+        assert_eq!(super::url_decode("%4"), "%4");
+        assert_eq!(super::url_decode("%"), "%");
+    }
+
     use super::*;
     use serial_test::serial;
 
@@ -733,10 +762,10 @@ mod tests {
         assert_eq!(crate::mixer_create_unit(1, 320, 180), crate::OK);
         thread::sleep(Duration::from_millis(350));
         publish_cut_session();
-        let path = std::env::temp_dir().join("eiviz-vmix-http-snapshot.png");
+        let path = crate::snapshot::snapshot_dir().join("eiviz-vmix-http-snapshot.png");
         let _ = std::fs::remove_file(&path);
         let mut params = HashMap::new();
-        params.insert("Value".into(), path.to_string_lossy().into_owned());
+        params.insert("Value".into(), "eiviz-vmix-http-snapshot.png".to_string());
         let mut result = dispatch_function("Snapshot", &params);
         if result.is_err() {
             thread::sleep(Duration::from_millis(250));

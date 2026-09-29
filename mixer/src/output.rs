@@ -20,7 +20,7 @@ pub(crate) fn spawn_output_worker(
     clock: SharedMediaClock,
     fps_n: u32,
     fps_d: u32,
-) -> OutputWorker {
+) -> Result<OutputWorker, String> {
     let video = Arc::new(VideoMailbox::new());
     let audio = Arc::new(AudioMailbox::new());
     let pace = Arc::new(OutputPace::new(fps_n, fps_d));
@@ -48,8 +48,8 @@ pub(crate) fn spawn_output_worker(
                 pace,
             )
         })
-        .expect("send worker");
-    OutputWorker { tx, join }
+        .map_err(|error| format!("send worker spawn failed: {error}"))?;
+    Ok(OutputWorker { tx, join })
 }
 
 pub(crate) fn shutdown_output_worker(worker: OutputWorker) {
@@ -338,13 +338,20 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
         } => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 sender.send_video_texture(
-                    omt_gpu, &texture, width, height, pts, fps_n, fps_d, busy.clone(),
+                    omt_gpu,
+                    &texture,
+                    width,
+                    height,
+                    pts,
+                    fps_n,
+                    fps_d,
+                    busy.clone(),
                 )
             })) {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     busy.store(false, Ordering::Release);
-                    crate::diag::mark_fatal(format!("omt send texture: {error}"));
+                    crate::diag::error(&format!("omt send texture: {error}"));
                 }
                 Err(_) => {
                     busy.store(false, Ordering::Release);

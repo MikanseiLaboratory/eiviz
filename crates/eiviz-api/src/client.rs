@@ -617,49 +617,68 @@ impl ControlSession {
         } else {
             accepted.chunk_size as usize
         };
-        let mut offset = 0u64;
-        for piece in bytes.chunks(chunk) {
-            let sent = self
+        let upload_id = accepted.upload_id.clone();
+        let transfer = async {
+            let mut offset = 0u64;
+            for piece in bytes.chunks(chunk) {
+                let sent = self
+                    .roundtrip(Request {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        expected_revision: 0,
+                        payload: Some(request::Payload::UploadMediaChunk(UploadMediaChunk {
+                            upload_id: upload_id.clone(),
+                            offset,
+                            data: piece.to_vec(),
+                        })),
+                    })
+                    .await;
+                let failed = match sent {
+                    Ok(response) => status_ok(&response).err(),
+                    Err(error) => Some(error),
+                };
+                if let Some(error) = failed {
+                    let _ = self
+                        .roundtrip(Request {
+                            request_id: uuid::Uuid::new_v4().to_string(),
+                            expected_revision: 0,
+                            payload: Some(request::Payload::AbortMediaUpload(AbortMediaUpload {
+                                upload_id: upload_id.clone(),
+                            })),
+                        })
+                        .await;
+                    return Err(error);
+                }
+                offset += piece.len() as u64;
+            }
+            let commit = self
                 .roundtrip(Request {
                     request_id: uuid::Uuid::new_v4().to_string(),
-                    expected_revision: 0,
-                    payload: Some(request::Payload::UploadMediaChunk(UploadMediaChunk {
-                        upload_id: accepted.upload_id.clone(),
-                        offset,
-                        data: piece.to_vec(),
+                    expected_revision,
+                    payload: Some(request::Payload::CommitMediaUpload(CommitMediaUpload {
+                        upload_id: upload_id.clone(),
+                        expected_revision,
                     })),
                 })
-                .await;
-            let failed = match sent {
-                Ok(response) => status_ok(&response).err(),
-                Err(error) => Some(error),
-            };
-            if let Some(error) = failed {
+                .await?;
+            apply_response(&self.view, &commit);
+            status_ok(&commit)
+        };
+        match tokio::time::timeout(UPLOAD_DEADLINE, transfer).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Abort so a later retry cannot end up adding the same input twice.
                 let _ = self
                     .roundtrip(Request {
                         request_id: uuid::Uuid::new_v4().to_string(),
                         expected_revision: 0,
                         payload: Some(request::Payload::AbortMediaUpload(AbortMediaUpload {
-                            upload_id: accepted.upload_id.clone(),
+                            upload_id,
                         })),
                     })
                     .await;
-                return Err(error);
+                Err(ControlError::unavailable("media upload timed out"))
             }
-            offset += piece.len() as u64;
         }
-        let commit = self
-            .roundtrip(Request {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                expected_revision,
-                payload: Some(request::Payload::CommitMediaUpload(CommitMediaUpload {
-                    upload_id: accepted.upload_id,
-                    expected_revision,
-                })),
-            })
-            .await?;
-        apply_response(&self.view, &commit);
-        status_ok(&commit)
     }
 
     pub fn take_events(&self) -> Vec<String> {
@@ -872,6 +891,12 @@ fn apply_response(view: &Arc<Mutex<SessionView>>, response: &Response) {
     }
 }
 
+/// Bound on undelivered event names so a client that never polls cannot grow without limit.
+const MAX_PENDING_EVENTS: usize = 4096;
+
+/// Total time allowed for sending and committing one media upload.
+pub const UPLOAD_DEADLINE: Duration = Duration::from_secs(120);
+
 fn apply_event(
     view: &Arc<Mutex<SessionView>>,
     events: &Arc<Mutex<Vec<String>>>,
@@ -879,6 +904,10 @@ fn apply_event(
     last_seq: &mut u64,
 ) {
     if let Ok(mut slot) = events.lock() {
+        if slot.len() >= MAX_PENDING_EVENTS {
+            let excess = slot.len() + 1 - MAX_PENDING_EVENTS;
+            slot.drain(..excess);
+        }
         slot.push(event.kind.clone());
     }
     let Ok(mut slot) = view.lock() else {

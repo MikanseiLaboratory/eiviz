@@ -7,14 +7,18 @@ mod coreaudio;
 mod cpal_io;
 #[cfg(windows)]
 mod device;
+mod feed;
 mod graph;
 mod info;
 mod pcm;
 mod process;
+mod pump;
 #[cfg(windows)]
 mod rsac_process;
+mod rt;
 mod scheduler;
 
+use crate::guard::LockExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,8 +30,8 @@ use crate::upload::{AUDIO_RATE, AudioInputStore};
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS, MixedAudio,
+    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS,
+    MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;
@@ -66,12 +70,24 @@ impl AudioDelay {
         }
     }
 
+    /// Changes the delay. Queued audio is shifted to match immediately: a longer delay
+    /// inserts silence at the front, a shorter one drops the oldest audio, so the output
+    /// follows the new video delay in one step instead of drifting towards it.
     pub fn set_delay_frames(&mut self, frames: usize) {
+        let previous = self.delay_frames;
         self.delay_frames = frames;
         let cap = frames
             .saturating_mul(2)
             .saturating_add((AUDIO_RATE as usize / 5) * 2);
         for fifo in self.fifos.values_mut() {
+            if frames > previous {
+                for _ in 0..(frames - previous) * 2 {
+                    fifo.push_front(0.0);
+                }
+            } else if frames < previous {
+                let drop = ((previous - frames) * 2).min(fifo.len());
+                fifo.drain(..drop);
+            }
             while fifo.len() > cap {
                 fifo.pop_front();
             }
@@ -133,6 +149,7 @@ pub struct AudioEngine {
 
 struct DeviceOutput {
     key: DeviceKey,
+    routes: Arc<rt::Published<Vec<pump::Route>>>,
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -160,7 +177,7 @@ impl AudioEngine {
 
     pub fn shutdown(&self) {
         let joins = {
-            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut outputs = self.outputs.lock_or_recover();
             let mut joins = Vec::new();
             for output in outputs.iter_mut() {
                 output.stop.store(true, Ordering::Relaxed);
@@ -194,7 +211,7 @@ impl AudioEngine {
         map_left: i32,
         map_right: i32,
     ) {
-        self.graph.lock().expect("audio").upsert_bus(
+        self.graph.lock_or_recover().upsert_bus(
             id,
             name,
             role,
@@ -207,47 +224,41 @@ impl AudioEngine {
     }
 
     pub fn remove_bus(&self, id: u64) {
-        self.graph.lock().expect("audio").remove_bus(id);
+        self.graph.lock_or_recover().remove_bus(id);
         self.sync_outputs();
     }
 
     pub fn set_input(&self, id: u64, bus_mask: u32, gain: f32, mute: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_input(id, bus_mask, gain, mute != 0);
     }
 
     pub fn set_bus_gain(&self, id: u64, gain: f32, mute: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_bus_gain(id, gain, mute != 0);
     }
 
     pub fn set_unit_link(&self, unit_id: u64, bus_id: u64, mode: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_unit_link(unit_id, bus_id, mode);
     }
 
     pub fn set_headphone_cue(&self, unit_id: u64) {
-        self.graph.lock().expect("audio").headphone_cue_unit = unit_id;
+        self.graph.lock_or_recover().headphone_cue_unit = unit_id;
     }
 
     pub fn set_headphone_copy_master(&self, enabled: u32) {
-        self.graph.lock().expect("audio").headphone_copy_master = enabled != 0;
+        self.graph.lock_or_recover().headphone_copy_master = enabled != 0;
     }
 
     pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
         let samples =
             (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
                 / u64::from(fps_num.max(1))) as usize;
-        self.delay
-            .lock()
-            .expect("audio delay")
-            .set_delay_frames(samples);
+        self.delay.lock_or_recover().set_delay_frames(samples);
     }
 
     pub fn mix(
@@ -261,21 +272,20 @@ impl AudioEngine {
         fps_num: u32,
         fps_den: u32,
     ) -> MixedAudio {
-        let mut graph = self.graph.lock().expect("audio");
-        let mut delay = self.delay.lock().expect("audio delay");
+        let mut graph = self.graph.lock_or_recover();
+        let mut delay = self.delay.lock_or_recover();
         graph.mix(
             uploads, snapshot, scenes, frames, &mut delay, produce, mix_inputs, fps_num, fps_den,
         )
     }
 
     pub fn master_peak(&self) -> (f32, f32) {
-        self.graph.lock().expect("audio").master_peak
+        self.graph.lock_or_recover().master_peak
     }
 
     pub fn bus_peaks(&self) -> Vec<(u64, f32, f32)> {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .buses
             .iter()
             .map(|bus| (bus.id, bus.peak.0, bus.peak.1))
@@ -283,7 +293,7 @@ impl AudioEngine {
     }
 
     pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
-        self.graph.lock().expect("audio").mix_input_peaks()
+        self.graph.lock_or_recover().mix_input_peaks()
     }
 
     #[allow(dead_code)]
@@ -291,21 +301,22 @@ impl AudioEngine {
         if frames == 0 {
             return;
         }
-        self.delay.lock().expect("audio delay").skip_frames(frames);
-        let graph = self.graph.lock().expect("audio");
+        self.delay.lock_or_recover().skip_frames(frames);
+        let graph = self.graph.lock_or_recover();
         for bus in &graph.buses {
             bus.ring.skip_frames(frames);
         }
     }
 
     fn sync_outputs(&self) {
-        let desired = self.graph.lock().expect("audio").device_groups();
+        let desired = self.graph.lock_or_recover().device_groups();
         let mut stale = Vec::new();
         {
-            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut outputs = self.outputs.lock_or_recover();
             let mut keep = Vec::new();
             for mut output in outputs.drain(..) {
-                if desired.iter().any(|(key, _)| *key == output.key) {
+                if let Some((_, maps)) = desired.iter().find(|(key, _)| *key == output.key) {
+                    output.routes.set(maps.clone());
                     keep.push(output);
                 } else {
                     output.stop.store(true, Ordering::Relaxed);
@@ -340,13 +351,16 @@ impl AudioEngine {
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_t = Arc::clone(&stop);
                 let key_t = key.clone();
+                let routes = rt::Published::new(maps);
+                let routes_t = Arc::clone(&routes);
                 let join = std::thread::Builder::new()
                     .name(format!("eiviz-audio-{}", key.kind))
-                    .spawn(move || run_device(key_t, maps, stop_t))
+                    .spawn(move || run_device(key_t, routes_t, stop_t))
                     .ok();
                 if let Some(join) = join {
                     keep.push(DeviceOutput {
                         key,
+                        routes,
                         stop,
                         join: Some(join),
                     });
@@ -364,17 +378,17 @@ impl AudioEngine {
     }
 }
 
-fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
+fn run_device(key: DeviceKey, routes: Arc<rt::Published<Vec<pump::Route>>>, stop: Arc<AtomicBool>) {
     #[cfg(windows)]
     {
         match key.kind {
             DEVICE_WASAPI => {
-                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                if let Err(error) = cpal_io::run_output(&key.id, &routes, &stop) {
                     crate::diag::error(&format!("eiviz cpal output: {error}"));
                 }
             }
             DEVICE_ASIO => {
-                let _ = (maps, stop);
+                let _ = (routes, stop);
             }
             DEVICE_COREAUDIO => {
                 crate::diag::error("Core Audio output is only available on macOS");
@@ -386,7 +400,7 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
     {
         match key.kind {
             DEVICE_COREAUDIO => {
-                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                if let Err(error) = cpal_io::run_output(&key.id, &routes, &stop) {
                     crate::diag::error(&format!("eiviz cpal output: {error}"));
                 }
             }
@@ -399,47 +413,8 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (key, maps, stop);
+        let _ = (key, routes, stop);
     }
-}
-
-pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: u32) -> Vec<f32> {
-    if dst_frames == 0 {
-        return Vec::new();
-    }
-    let mut out = vec![0.0f32; dst_frames * 2];
-    crate::simd::resample_stereo(src, src_rate, dst_frames, dst_rate, &mut out);
-    out
-}
-
-pub fn pop_stereo_rate(
-    maps: &[(Arc<BusRing>, i32, i32)],
-    dst_frames: usize,
-    dst_rate: u32,
-) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
-    let src_frames = ((dst_frames as u64 * AUDIO_RATE as u64 + u64::from(dst_rate.max(1)) / 2)
-        / u64::from(dst_rate.max(1))) as usize;
-    let mut by_map = HashMap::new();
-    for (ring, left, right) in maps {
-        let interleaved = ring.pop_interleaved(src_frames.max(1));
-        let resampled = resample_stereo(&interleaved, AUDIO_RATE as u32, dst_frames, dst_rate);
-        let stereo: Vec<(f32, f32)> = resampled
-            .chunks_exact(2)
-            .map(|chunk| (chunk[0], chunk[1]))
-            .collect();
-        by_map
-            .entry((*left, *right))
-            .and_modify(|acc: &mut Vec<(f32, f32)>| {
-                for (i, sample) in stereo.iter().enumerate() {
-                    if let Some(slot) = acc.get_mut(i) {
-                        slot.0 += sample.0;
-                        slot.1 += sample.1;
-                    }
-                }
-            })
-            .or_insert(stereo);
-    }
-    by_map
 }
 
 pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {
@@ -484,5 +459,40 @@ pub fn device_io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     {
         let _ = (kind, device_id);
         (0, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(delay: &mut AudioDelay, blocks: usize, value: f32, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        for _ in 0..blocks {
+            delay.push(1, &vec![value; frames * 2]);
+            out.extend(delay.pop(1, frames, false));
+        }
+        out
+    }
+
+    #[test]
+    fn delay_increase_inserts_silence_and_keeps_length() {
+        let mut delay = AudioDelay::new();
+        delay.set_delay_frames(480);
+        run(&mut delay, 10, 0.5, 480);
+        delay.set_delay_frames(960);
+        let out = run(&mut delay, 3, 0.5, 480);
+        // The extra 480 frames of delay show up as one block of silence.
+        assert!(out[..480 * 2].iter().all(|v| *v == 0.0));
+        assert!(out[480 * 2..].iter().all(|v| *v == 0.5));
+    }
+
+    #[test]
+    fn delay_decrease_drops_the_surplus_at_once() {
+        let mut delay = AudioDelay::new();
+        delay.set_delay_frames(960);
+        run(&mut delay, 10, 0.5, 480);
+        delay.set_delay_frames(480);
+        assert_eq!(delay.fifos[&1].len(), 480 * 2);
     }
 }

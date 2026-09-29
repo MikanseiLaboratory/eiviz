@@ -50,6 +50,14 @@ impl FrameDelay {
         self.epoch = self.epoch.wrapping_add(1);
     }
 
+    pub fn retain(&mut self, live: &std::collections::HashSet<u64>) {
+        let before = self.units.len();
+        self.units.retain(|id, _| live.contains(id));
+        if self.units.len() != before {
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }

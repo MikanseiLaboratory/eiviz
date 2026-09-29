@@ -21,7 +21,7 @@ use std::time::Duration;
 use eiviz_api::ControlClient;
 use eiviz_api::client::{ControlSession, SessionView};
 
-use crate::abi::{ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK};
+use crate::abi::{ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_CREATED, OK};
 
 struct MixCoalesce {
     pending: Mutex<HashMap<u64, f32>>,
@@ -34,6 +34,22 @@ struct RemoteSlot {
     mix: Arc<MixCoalesce>,
     stop: tokio::sync::watch::Sender<bool>,
     join: Option<JoinHandle<()>>,
+}
+
+fn guarded(name: &'static str, f: impl FnOnce() -> i32) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(code) => code,
+        Err(_) => {
+            eprintln!("eiviz remote: {name} panicked");
+            -ERR_DEVICE
+        }
+    }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn slots() -> &'static Mutex<HashMap<i32, RemoteSlot>> {
@@ -94,7 +110,8 @@ pub unsafe fn open(url: *const c_char, token: *const c_char) -> i32 {
     match ready_rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok((handle, session))) => {
             let id = next_id();
-            if let Ok(mut map) = slots().lock() {
+            {
+                let mut map = lock_or_recover(slots());
                 map.insert(
                     id,
                     RemoteSlot {
@@ -120,7 +137,7 @@ pub unsafe fn open(url: *const c_char, token: *const c_char) -> i32 {
 }
 
 pub fn close(handle: i32) -> i32 {
-    let Some(mut slot) = slots().lock().ok().and_then(|mut map| map.remove(&handle)) else {
+    let Some(mut slot) = lock_or_recover(slots()).remove(&handle) else {
         return ERR_NOT_CREATED;
     };
     let session = Arc::clone(&slot.session);
@@ -136,7 +153,7 @@ pub fn close(handle: i32) -> i32 {
 }
 
 fn with_slot<T>(handle: i32, f: impl FnOnce(&RemoteSlot) -> T) -> Option<T> {
-    let map = slots().lock().ok()?;
+    let map = lock_or_recover(slots());
     map.get(&handle).map(f)
 }
 
@@ -197,12 +214,20 @@ fn run<T: Send + 'static>(
     handle: i32,
     fut: impl std::future::Future<Output = T> + Send + 'static,
 ) -> Option<T> {
+    run_for(handle, Duration::from_secs(30), fut)
+}
+
+fn run_for<T: Send + 'static>(
+    handle: i32,
+    timeout: Duration,
+    fut: impl std::future::Future<Output = T> + Send + 'static,
+) -> Option<T> {
     let rt = with_slot(handle, |slot| slot.handle.clone())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     rt.spawn(async move {
         let _ = tx.send(fut.await);
     });
-    rx.recv_timeout(Duration::from_secs(30)).ok()
+    rx.recv_timeout(timeout).ok()
 }
 
 fn spawn_live(handle: i32, fut: impl std::future::Future<Output = i32> + Send + 'static) -> i32 {
@@ -492,7 +517,9 @@ pub unsafe fn upload(
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    // The client enforces its own deadline (and aborts the upload) before this wait gives up.
+    let wait = eiviz_api::client::UPLOAD_DEADLINE + Duration::from_secs(15);
+    run_for(handle, wait, async move {
         map_result(
             session
                 .upload_file(
@@ -520,37 +547,45 @@ unsafe fn read_cstr(ptr: *const c_char) -> Option<String> {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_remote_open(url: *const c_char, token: *const c_char) -> i32 {
-    unsafe { open(url, token) }
+    guarded("mixer_remote_open", || unsafe { open(url, token) })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_close(handle: i32) -> i32 {
-    close(handle)
+    guarded("mixer_remote_close", || close(handle))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_remote_copy_snapshot(handle: i32, out: *mut u8, cap: usize) -> i32 {
-    unsafe { copy_snapshot(handle, out, cap) }
+    guarded("mixer_remote_copy_snapshot", || unsafe {
+        copy_snapshot(handle, out, cap)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_remote_copy_live(handle: i32, out: *mut u8, cap: usize) -> i32 {
-    unsafe { copy_live(handle, out, cap) }
+    guarded("mixer_remote_copy_live", || unsafe {
+        copy_live(handle, out, cap)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_remote_copy_status(handle: i32, out: *mut u8, cap: usize) -> i32 {
-    unsafe { copy_status(handle, out, cap) }
+    guarded("mixer_remote_copy_status", || unsafe {
+        copy_status(handle, out, cap)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_cut(handle: i32, unit_id: u64, swap: u32) -> i32 {
-    cut(handle, unit_id, swap)
+    guarded("mixer_remote_cut", || cut(handle, unit_id, swap))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_preview(handle: i32, unit_id: u64, scene_id: u64) -> i32 {
-    preview(handle, unit_id, scene_id)
+    guarded("mixer_remote_preview", || {
+        preview(handle, unit_id, scene_id)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -570,27 +605,29 @@ pub extern "C" fn mixer_remote_auto(
     softness: f32,
     param: f32,
 ) -> i32 {
-    auto(
-        handle,
-        unit_id,
-        kind,
-        duration_ms,
-        swap,
-        keep_preview,
-        easing,
-        direction,
-        dip_r,
-        dip_g,
-        dip_b,
-        dip_a,
-        softness,
-        param,
-    )
+    guarded("mixer_remote_auto", || {
+        auto(
+            handle,
+            unit_id,
+            kind,
+            duration_ms,
+            swap,
+            keep_preview,
+            easing,
+            direction,
+            dip_r,
+            dip_g,
+            dip_b,
+            dip_a,
+            softness,
+            param,
+        )
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_set_mix(handle: i32, unit_id: u64, value: f32) -> i32 {
-    set_mix(handle, unit_id, value)
+    guarded("mixer_remote_set_mix", || set_mix(handle, unit_id, value))
 }
 
 #[unsafe(no_mangle)]
@@ -601,7 +638,9 @@ pub extern "C" fn mixer_remote_overlay_auto(
     duration_ms: u32,
     to_on: u32,
 ) -> i32 {
-    overlay_auto(handle, unit_id, index, duration_ms, to_on)
+    guarded("mixer_remote_overlay_auto", || {
+        overlay_auto(handle, unit_id, index, duration_ms, to_on)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -611,7 +650,9 @@ pub unsafe extern "C" fn mixer_remote_mutate(
     len: usize,
     expected_revision: u64,
 ) -> i32 {
-    unsafe { mutate(handle, json, len, expected_revision) }
+    guarded("mixer_remote_mutate", || unsafe {
+        mutate(handle, json, len, expected_revision)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -621,27 +662,37 @@ pub unsafe extern "C" fn mixer_remote_replace(
     len: usize,
     expected_revision: u64,
 ) -> i32 {
-    unsafe { replace(handle, json, len, expected_revision) }
+    guarded("mixer_remote_replace", || unsafe {
+        replace(handle, json, len, expected_revision)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_remote_save_session(handle: i32, out: *mut u8, cap: usize) -> i32 {
-    unsafe { save_session(handle, out, cap) }
+    guarded("mixer_remote_save_session", || unsafe {
+        save_session(handle, out, cap)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_video_play(handle: i32, input_id: u64, playing: u32) -> i32 {
-    video_play(handle, input_id, playing)
+    guarded("mixer_remote_video_play", || {
+        video_play(handle, input_id, playing)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_video_loop(handle: i32, input_id: u64, looping: u32) -> i32 {
-    video_loop(handle, input_id, looping)
+    guarded("mixer_remote_video_loop", || {
+        video_loop(handle, input_id, looping)
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
-    video_seek(handle, input_id, position_hns)
+    guarded("mixer_remote_video_seek", || {
+        video_seek(handle, input_id, position_hns)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -652,7 +703,9 @@ pub extern "C" fn mixer_remote_audio_set_input(
     gain: f32,
     mute: u32,
 ) -> i32 {
-    audio_set_input(handle, input_id, bus_mask, gain, mute)
+    guarded("mixer_remote_audio_set_input", || {
+        audio_set_input(handle, input_id, bus_mask, gain, mute)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -662,7 +715,9 @@ pub extern "C" fn mixer_remote_audio_set_bus(
     gain: f32,
     mute: u32,
 ) -> i32 {
-    audio_set_bus(handle, bus_id, gain, mute)
+    guarded("mixer_remote_audio_set_bus", || {
+        audio_set_bus(handle, bus_id, gain, mute)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -673,7 +728,9 @@ pub unsafe extern "C" fn mixer_remote_discover(
     out: *mut u8,
     cap: usize,
 ) -> i32 {
-    unsafe { discover(handle, kind, query, out, cap) }
+    guarded("mixer_remote_discover", || unsafe {
+        discover(handle, kind, query, out, cap)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -685,7 +742,9 @@ pub unsafe extern "C" fn mixer_remote_upload(
     video_loop: u32,
     expected_revision: u64,
 ) -> i32 {
-    unsafe { upload(handle, path, kind, name, video_loop, expected_revision) }
+    guarded("mixer_remote_upload", || unsafe {
+        upload(handle, path, kind, name, video_loop, expected_revision)
+    })
 }
 
 fn join_timeout(handle: JoinHandle<()>, timeout: Duration) {

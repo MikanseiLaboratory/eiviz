@@ -47,15 +47,16 @@ pub fn save_texture(device: &GpuDevice, texture: &wgpu::Texture, path: &str) -> 
     let index = device.submit(Some(encoder.finish()));
     let slice = buffer.slice(..);
     let (tx, rx) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |_| {
-        let _ = tx.send(());
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
     });
     let _ = device.device.poll(wgpu::PollType::Wait {
         submission_index: Some(index),
         timeout: Some(Duration::from_secs(2)),
     });
     rx.recv_timeout(Duration::from_secs(2))
-        .map_err(|_| "snapshot map timeout".to_string())?;
+        .map_err(|_| "snapshot map timeout".to_string())?
+        .map_err(|error| format!("snapshot map failed: {error}"))?;
     let view = slice
         .get_mapped_range()
         .map_err(|error| error.to_string())?;
@@ -109,12 +110,8 @@ pub fn wants_jpeg(path: &str) -> bool {
     )
 }
 
-pub fn default_path() -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let name = format!("eiviz-{millis}.png");
+/// Directory that remote (network) callers may write snapshots into.
+pub fn snapshot_dir() -> std::path::PathBuf {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .ok()
@@ -122,16 +119,68 @@ pub fn default_path() -> String {
     if let Some(pictures) = home.as_ref().map(|h| h.join("Pictures"))
         && pictures.is_dir()
     {
-        return pictures.join(&name).to_string_lossy().into_owned();
+        return pictures;
     }
     std::env::temp_dir()
-        .join(name)
+}
+
+pub fn default_path() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    snapshot_dir()
+        .join(format!("eiviz-{millis}.png"))
         .to_string_lossy()
         .into_owned()
 }
 
+/// Maps a file name supplied by a remote caller into [`snapshot_dir`]. Only a bare `.png` /
+/// `.jpg` / `.jpeg` file name is accepted; directories, drive letters and `..` are refused so a
+/// network client cannot write anywhere else on the machine.
+pub fn resolve_remote_path(value: &str) -> Result<String, String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Ok(default_path());
+    }
+    if name.contains(['/', '\\', ':', '\0']) || name == "." || name.contains("..") {
+        return Err(format!(
+            "snapshot name must be a plain file name inside the snapshot folder: {name}"
+        ));
+    }
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")) {
+        return Err(format!(
+            "snapshot name must end in .png, .jpg or .jpeg: {name}"
+        ));
+    }
+    Ok(snapshot_dir().join(name).to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_snapshot_names_cannot_leave_the_snapshot_folder() {
+        for bad in [
+            "../evil.png",
+            "..\\evil.png",
+            "/etc/passwd.png",
+            "C:\\Windows\\x.png",
+            "sub/dir.png",
+            "notes.txt",
+            "noextension",
+            "a..b.png",
+        ] {
+            assert!(super::resolve_remote_path(bad).is_err(), "{bad}");
+        }
+        let ok = super::resolve_remote_path("frame.PNG").expect("plain name");
+        assert!(ok.ends_with("frame.PNG"));
+        assert!(super::resolve_remote_path("").is_ok());
+    }
+
     #[test]
     fn jpeg_extension_is_detected() {
         assert!(super::wants_jpeg("C:/Temp/out.jpg"));

@@ -111,31 +111,6 @@ pub fn sine_fill(out: &mut [f32], phase: f64, hz: f32, amplitude: f32, rate: f64
     scalar::sine_fill(out, phase, hz, amplitude, rate);
 }
 
-pub fn planar_to_stereo(planar: &[f32], frames: usize, channels: usize, out: &mut Vec<f32>) {
-    scalar::planar_to_stereo(planar, frames, channels, out);
-}
-
-pub fn resample_planar_to_stereo(
-    planar: &[f32],
-    src_frames: usize,
-    channels: usize,
-    src_rate: usize,
-    dst_rate: usize,
-    out: &mut Vec<f32>,
-) {
-    scalar::resample_planar_to_stereo(planar, src_frames, channels, src_rate, dst_rate, out);
-}
-
-pub fn resample_stereo(
-    src: &[f32],
-    src_rate: u32,
-    dst_frames: usize,
-    dst_rate: u32,
-    out: &mut [f32],
-) {
-    scalar::resample_stereo(src, src_rate, dst_frames, dst_rate, out);
-}
-
 pub fn blend_u8(bg: u8, fg: u8, cover: u16) -> u8 {
     scalar::blend_u8(bg, fg, cover)
 }

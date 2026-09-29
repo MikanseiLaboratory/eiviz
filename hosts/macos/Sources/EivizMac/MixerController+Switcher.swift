@@ -201,19 +201,32 @@ extension MixerController {
         if isRemote {
             if replacing == nil, input.kind == .still || input.kind == .video {
                 guard let path = input.pathOrAddress else { return }
+                guard !remoteUploading else { return }
+                remoteUploading = true
                 let kind = input.kind == .still ? "still" : "video"
-                let code = MixerFFI.withCString(path) { pathPtr in
-                    MixerFFI.withCString(kind) { kindPtr in
-                        MixerFFI.withCString(input.name) { namePtr in
-                            mixer_remote_upload(remoteHandle, pathPtr, kindPtr, namePtr, input.videoLoop ? 1 : 0, remoteRevision)
+                let name = input.name
+                let loop: UInt32 = input.videoLoop ? 1 : 0
+                let handle = remoteHandle
+                let revision = remoteRevision
+                // Uploads can take tens of seconds; keep them off the main actor.
+                Task { [weak self] in
+                    let code = await Task.detached(priority: .userInitiated) {
+                        MixerFFI.withCString(path) { pathPtr in
+                            MixerFFI.withCString(kind) { kindPtr in
+                                MixerFFI.withCString(name) { namePtr in
+                                    mixer_remote_upload(handle, pathPtr, kindPtr, namePtr, loop, revision)
+                                }
+                            }
                         }
+                    }.value
+                    guard let self else { return }
+                    self.remoteUploading = false
+                    if code != 0 {
+                        self.presentInputError(L10n.t("msg.uploadFailed"))
+                        return
                     }
+                    self.pollRemote(force: true)
                 }
-                if code != 0 {
-                    presentInputError(L10n.t("msg.uploadFailed"))
-                    return
-                }
-                pollRemote(force: true)
                 return
             }
             if input.kind == .mix,
