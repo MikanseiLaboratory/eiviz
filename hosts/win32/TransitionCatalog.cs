@@ -64,7 +64,7 @@ internal static class TransitionCatalog
         new(MixerNative.TransitionFilmBurn, "FilmBurn", TransitionGroup.Shader, false, true, true, true, "Edge", "Intensity"),
         new(MixerNative.TransitionZoomBlur, "ZoomBlur", TransitionGroup.Shader, false, false, false, true, "", "Intensity"),
         new(MixerNative.TransitionPixelSort, "PixelSort", TransitionGroup.Shader, true, false, true, true, "Threshold", "Span"),
-        new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, true, false, false, true, "", "Intensity"),
+        new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, false, false, false, true, "", "Intensity"),
         new(MixerNative.TransitionVisualDissolve, "VisualDissolve", TransitionGroup.Shader, false, false, true, true, "Edge", "Flow"),
         new(MixerNative.TransitionOpticalFlow, "OpticalFlow", TransitionGroup.Shader, false, false, false, true, "", "Amount"),
         new(MixerNative.TransitionBloom, "Bloom", TransitionGroup.Shader, false, false, true, true, "Threshold", "Intensity"),
