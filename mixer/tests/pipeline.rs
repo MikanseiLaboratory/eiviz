@@ -1655,16 +1655,14 @@ fn feedback_transitions_track_live_buses() {
         mixer_destroy();
         assert_eq!(mixer_create(0, 60_000, 1_001), OK);
         assert_eq!(mixer_create_unit(1, 320, 180), OK);
-        unsafe {
-            assert_eq!(
-                mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
-                OK
-            );
-            assert_eq!(
-                mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
-                OK
-            );
-        }
+        assert_eq!(
+            mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+            OK
+        );
+        assert_eq!(
+            mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+            OK
+        );
 
         let path = std::env::temp_dir().join(format!("eiviz-live-transition-{kind}.png"));
         let mut state = UnitState {
