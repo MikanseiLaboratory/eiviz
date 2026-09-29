@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::abi::{
     GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
-    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER, UnitState, is_multiview,
-    is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_preview, mixing_unit_source,
+    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_PIXEL_SORT, TRANSITION_STINGER,
+    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
+    mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
 use crate::pool::{UniformPool, uniform_dyn};
@@ -1366,7 +1367,7 @@ impl Composer {
     ) -> Result<(), String> {
         let kind = state.transition_kind;
         let custom = kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
-        let need_sort = false;
+        let need_sort = kind == TRANSITION_PIXEL_SORT;
         let need_flow = matches!(kind, TRANSITION_DATAMOSH | TRANSITION_OPTICAL_FLOW) || custom;
         let need_bloom = matches!(kind, TRANSITION_BLOOM | TRANSITION_FILM_BURN) || custom;
         let need_user = custom && self.custom_compute.contains_key(&unit_id);

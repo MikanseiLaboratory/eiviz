@@ -459,23 +459,6 @@ fn axis_offset(amount: f32, dir: u32) -> vec2<f32> {
     return dir_sign(dir) * amount;
 }
 
-fn pixel_sort_swap(me: vec4<f32>, nei: vec4<f32>, n_uv: vec2<f32>, side: i32, descending: bool, thresh: f32) -> vec4<f32> {
-    let me_l = luma(me);
-    let nei_l = luma(nei);
-    if !in_bounds(n_uv) || me_l < thresh || nei_l < thresh {
-        return me;
-    }
-    let want_brighter = (side > 0) != descending;
-    if want_brighter {
-        if nei_l > me_l {
-            return nei;
-        }
-    } else if nei_l < me_l {
-        return nei;
-    }
-    return me;
-}
-
 fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let a = sample_pgm(uv);
     let b = sample_pvw(uv);
@@ -485,34 +468,14 @@ fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     if t >= 0.999 {
         return b;
     }
-    let thresh = params.softness;
-    let horiz = dir == 0u || dir == 1u;
-    let descending = dir == 1u || dir == 3u;
     let res = max(params.resolution, vec2<f32>(1.0));
-    let pix = select(vec2<f32>(1.0, 0.0) / res.x, vec2<f32>(0.0, 1.0) / res.y, !horiz);
-    let axis = i32(select(uv.x * res.x, uv.y * res.y, !horiz));
-    let jump = max(1, i32(round(1.0 + 5.0 * clamp(params.param, 0.0, 1.0))));
-    let frame = i32(floor(params.time * 60.0));
-    let seeded = t > 0.02;
     let cell = floor(uv * res);
     let gate = hash21(cell + vec2<f32>(f32(dir) + 0.7, 4.1));
     let take_b = gate < saturate((t - 0.08) / 0.76);
     let src = select(a, b, take_b);
-    var me = select(src, sample_prev_n(uv), seeded);
-    if seeded && min(distance(me.rgb, a.rgb), distance(me.rgb, b.rgb)) < 0.1 {
-        me = src;
-    }
-    let side1 = select(-1, 1, (axis & 1) == (frame & 1));
-    let n1 = uv + pix * f32(side1);
-    let nei1 = select(sample_pgm(n1), sample_prev_n(n1), seeded);
-    var field = pixel_sort_swap(me, nei1, n1, side1, descending, thresh);
-    if jump > 1 {
-        let pair = axis / jump;
-        let side_j = select(-1, 1, (pair & 1) == (frame & 1));
-        let nj = uv + pix * f32(jump * side_j);
-        let nei_j = select(sample_pgm(nj), sample_prev_n(nj), seeded);
-        field = pixel_sort_swap(field, nei_j, nj, side_j, descending, thresh);
-    }
+    let sorted_a = textureSample(aux_tex, src_samp_n, uv);
+    let sorted_b = textureSample(aux2_tex, src_samp_n, uv);
+    let field = select(sorted_a, sorted_b, take_b);
     let fade = pow(saturate((t - 0.88) / 0.12), 1.5);
     let effect = saturate(t / 0.05) * (1.0 - fade);
     let plate = mix(src, b, fade);
@@ -567,9 +530,11 @@ fn datamosh(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let uv_b = uv - flow * (1.0 - t) + slide_b;
     let ca = sample_pgm(uv_a);
     let cb = sample_pvw(uv_b);
-    let held = sample_prev(uv + flow + slide_a * 0.35);
+    let held_uv = uv + flow + slide_a * 0.35;
+    let held = mix(sample_pgm(held_uv), sample_pvw(held_uv), t);
     let q = (cell + vec2<f32>(0.5)) / vec2<f32>(blocks, blocks * 0.56);
-    let blocky = sample_prev_n(q + flow * 0.5);
+    let block_uv = q + flow * 0.5;
+    let blocky = mix(sample_pgm(block_uv), sample_pvw(block_uv), t);
     let moshed_a = mix(ca, mix(held, blocky, 0.4), chaos * 0.72);
     let torn_a = vec4<f32>(moshed_a.r, mix(moshed_a.g, ca.g, 0.22), moshed_a.b, 1.0);
     let torn_b = vec4<f32>(cb.r, mix(cb.g, sample_pvw(uv_b + flow * 0.25).g, 0.2), cb.b, 1.0);

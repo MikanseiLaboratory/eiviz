@@ -1012,6 +1012,26 @@ fn wait_snapshot_rgb(unit: u64, path: &std::path::Path, budget: Duration) -> (f3
     last
 }
 
+fn wait_snapshot_until(
+    unit: u64,
+    path: &std::path::Path,
+    done: impl Fn((f32, f32)) -> bool,
+    budget: Duration,
+) -> (f32, f32) {
+    let started = Instant::now();
+    let mut last = (0.0, 0.0);
+    while started.elapsed() < budget {
+        if let Some(sample) = snapshot_rgb_mean(unit, path) {
+            last = sample;
+            if done(sample) {
+                return sample;
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    last
+}
+
 fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -1627,6 +1647,84 @@ fn shader_transitions_emit_frames() {
         }
     }
     mixer_destroy();
+}
+
+#[test]
+fn feedback_transitions_track_live_buses() {
+    for kind in [TRANSITION_PIXEL_SORT, TRANSITION_DATAMOSH] {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        assert_eq!(mixer_create_unit(1, 320, 180), OK);
+        unsafe {
+            assert_eq!(
+                mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+                OK
+            );
+            assert_eq!(
+                mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+                OK
+            );
+        }
+
+        let path = std::env::temp_dir().join(format!("eiviz-live-transition-{kind}.png"));
+        let mut state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_COLOR,
+            mix: 0.2,
+            transition_kind: kind,
+            softness: 0.02,
+            param: 0.25,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+        }
+        let red = wait_snapshot_until(
+            1,
+            &path,
+            |sample| sample.0 > 150.0 && sample.0 > sample.1 + 40.0,
+            Duration::from_secs(3),
+        );
+        assert!(
+            red.0 > 150.0 && red.0 > red.1 + 40.0,
+            "transition {kind} did not render the initial red buses: r={} b={}",
+            red.0,
+            red.1
+        );
+
+        state.program_source = SRC_BLUE;
+        state.preview_source = SRC_BLUE;
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+        }
+        let blue = wait_snapshot_until(1, &path, looks_blue, Duration::from_secs(3));
+        assert!(
+            looks_blue(blue),
+            "transition {kind} kept stale bus content: r={} b={}",
+            blue.0,
+            blue.1
+        );
+        let _ = std::fs::remove_file(path);
+    }
+    mixer_destroy();
+}
+
+#[test]
+fn builtin_live_transitions_do_not_sample_mix_history() {
+    let shader = include_str!("../shaders/mix.wgsl");
+    let pixel_sort = shader
+        .split_once("fn pixel_sort(")
+        .and_then(|(_, tail)| tail.split_once("fn optical_flow_mix("))
+        .map(|(body, _)| body)
+        .expect("PixelSort shader body");
+    let datamosh = shader
+        .split_once("fn datamosh(")
+        .and_then(|(_, tail)| tail.split_once("fn visual_dissolve("))
+        .map(|(body, _)| body)
+        .expect("Datamosh shader body");
+
+    assert!(!pixel_sort.contains("sample_prev"));
+    assert!(!datamosh.contains("sample_prev"));
 }
 
 #[test]
