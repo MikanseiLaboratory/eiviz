@@ -141,6 +141,8 @@ struct SourceGpu {
     uploaded_pts: i64,
     direct: bool,
     owned: bool,
+    /// Keeps the ingest ring slot behind `texture` reserved while this source samples it.
+    lease: Option<crate::upload::FrameLease>,
 }
 
 mod cache;
@@ -595,6 +597,7 @@ impl Composer {
                         uploaded_pts: frame.pts,
                         direct: false,
                         owned: false,
+                        lease: frame.lease.clone(),
                     },
                 );
                 continue;
@@ -657,6 +660,7 @@ impl Composer {
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
                                 owned: true,
+                                lease: None,
                             },
                         );
                         continue;
@@ -691,6 +695,7 @@ impl Composer {
                         uploaded_pts: i64::MIN,
                         direct: false,
                         owned: true,
+                        lease: None,
                     },
                 );
             }
@@ -2168,6 +2173,7 @@ impl Composer {
                     uploaded_pts: i64::MIN,
                     direct: false,
                     owned: true,
+                    lease: None,
                 },
             );
         }
@@ -2214,6 +2220,7 @@ impl Composer {
                         uploaded_pts: i64::MIN,
                         direct: false,
                         owned: true,
+                        lease: None,
                     },
                 );
                 self.blit_groups.remove(&id);

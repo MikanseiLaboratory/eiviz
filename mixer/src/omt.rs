@@ -837,6 +837,7 @@ fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame, pts: i64)
         ),
         view: frame.texture.create_view(&Default::default()),
         texture: frame.texture,
+        lease: None,
     }
 }
 
@@ -892,6 +893,7 @@ fn copy_gpu_frame(
         ),
         view: texture.create_view(&Default::default()),
         texture,
+        lease: None,
     }
 }
 

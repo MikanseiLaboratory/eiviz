@@ -41,6 +41,7 @@ mod save;
 mod session;
 pub mod simd;
 mod snapshot;
+mod staging;
 mod tcp_listen_owner;
 mod thumb;
 mod upload;

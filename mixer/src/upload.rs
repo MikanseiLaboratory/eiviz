@@ -152,6 +152,10 @@ pub struct CpuFrameSnap {
     pub gpu: Option<GpuVideoFrame>,
 }
 
+/// Marks a ring slot as in use. Ring slots are only rewritten once the ring holds the sole
+/// clone, so a frame that is queued or still on screen can never be overwritten.
+pub type FrameLease = Arc<()>;
+
 #[derive(Clone, Debug)]
 pub struct GpuVideoFrame {
     pub pts: i64,
@@ -161,6 +165,7 @@ pub struct GpuVideoFrame {
     pub bgra: bool,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    pub lease: Option<FrameLease>,
 }
 
 /// wgpu device/queue handle for ingest threads. Render only binds the result.
@@ -179,20 +184,21 @@ struct GpuUploadSlot {
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    lease: FrameLease,
 }
 
-/// Triple-buffered textures written on the NDI/OMT thread.
+const UPLOAD_RING_SLOTS: usize = 3;
+const UPLOAD_RING_MAX_SLOTS: usize = 6;
+
+/// Textures written on the NDI/OMT thread. Slots are reused only after every frame that
+/// referenced them has been dropped; the ring grows briefly when the consumer lags.
 pub struct GpuUploadRing {
     slots: Vec<GpuUploadSlot>,
-    next: usize,
 }
 
 impl GpuUploadRing {
     pub fn new() -> Self {
-        Self {
-            slots: Vec::new(),
-            next: 0,
-        }
+        Self { slots: Vec::new() }
     }
 
     pub fn upload(
@@ -222,7 +228,7 @@ impl GpuUploadRing {
         } else {
             wgpu::TextureFormat::Rgba8Unorm
         };
-        let slot_i = self.ensure(gpu, tex_w, tex_h, tex_format);
+        let slot_i = self.acquire(gpu, tex_w, tex_h, tex_format)?;
         let slot = &self.slots[slot_i];
         write_queue_texture(
             &gpu.queue,
@@ -233,7 +239,6 @@ impl GpuUploadRing {
             tex_h,
             tex_w,
         );
-        self.next = (slot_i + 1) % 3;
         Ok(GpuVideoFrame {
             pts,
             width,
@@ -242,57 +247,68 @@ impl GpuUploadRing {
             bgra,
             texture: slot.texture.clone(),
             view: slot.view.clone(),
+            lease: Some(Arc::clone(&slot.lease)),
         })
     }
 
-    fn ensure(
+    fn acquire(
         &mut self,
         gpu: &GpuIngest,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
-    ) -> usize {
-        if self.slots.get(self.next).is_some_and(|slot| {
-            slot.width == width && slot.height == height && slot.format == format
-        }) {
-            return self.next;
-        }
-        if self.slots.len() == 3
-            && self
-                .slots
-                .iter()
-                .any(|slot| slot.width != width || slot.height != height || slot.format != format)
+    ) -> Result<usize, String> {
+        if self
+            .slots
+            .iter()
+            .any(|slot| slot.width != width || slot.height != height || slot.format != format)
         {
             self.slots.clear();
-            self.next = 0;
         }
-        while self.slots.len() < 3 {
-            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("eiviz ndi gpu"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&Default::default());
-            self.slots.push(GpuUploadSlot {
-                texture,
-                view,
+        if let Some(index) = self
+            .slots
+            .iter()
+            .position(|slot| Arc::strong_count(&slot.lease) == 1)
+        {
+            return Ok(index);
+        }
+        let limit = if self.slots.len() < UPLOAD_RING_SLOTS {
+            UPLOAD_RING_SLOTS
+        } else {
+            UPLOAD_RING_MAX_SLOTS
+        };
+        if self.slots.len() >= limit {
+            return Err(format!(
+                "gpu upload ring exhausted: all {} textures are still in use",
+                self.slots.len()
+            ));
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz ndi gpu"),
+            size: wgpu::Extent3d {
                 width,
                 height,
-                format,
-            });
-        }
-        self.next
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        self.slots.push(GpuUploadSlot {
+            texture,
+            view,
+            width,
+            height,
+            format,
+            lease: Arc::new(()),
+        });
+        Ok(self.slots.len() - 1)
     }
 
     pub fn vram_bytes(&self) -> u64 {
@@ -1124,6 +1140,35 @@ fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn upload_ring_keeps_referenced_textures_and_grows_then_errors() {
+        let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Auto)
+            .expect("gpu");
+        let gpu = GpuIngest {
+            device: device.device.clone(),
+            queue: device.queue.clone(),
+            ndi_gpu: Arc::new(AtomicBool::new(false)),
+            use_rebar: Arc::new(AtomicBool::new(false)),
+            rebar_available: false,
+        };
+        let data = vec![0u8; 4 * 4 * 4];
+        let mut ring = GpuUploadRing::new();
+        let mut held = Vec::new();
+        for _ in 0..UPLOAD_RING_MAX_SLOTS {
+            held.push(
+                ring.upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+                    .expect("slot available"),
+            );
+        }
+        let error = ring
+            .upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+            .expect_err("every slot is referenced");
+        assert!(error.contains("exhausted"), "{error}");
+        held.pop();
+        ring.upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+            .expect("released slot is reused");
+    }
 
     #[test]
     fn linear_resample_48k_passthrough() {
