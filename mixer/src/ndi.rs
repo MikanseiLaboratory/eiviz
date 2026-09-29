@@ -156,6 +156,7 @@ impl NdiReceiver {
                 #[cfg(windows)]
                 let mut ingest_ring: Option<crate::rebar::FrameIngestRing> = None;
                 let mut gpu_warned = false;
+                let mut last_error = String::new();
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
                         Ok(Some(frame)) => ingest_video(
@@ -165,6 +166,7 @@ impl NdiReceiver {
                             #[cfg(windows)]
                             &mut ingest_ring,
                             &mut gpu_warned,
+                            &mut last_error,
                             source_id,
                             depth,
                             &frame,
@@ -526,6 +528,7 @@ fn ingest_video(
     gpu_ring: &mut GpuUploadRing,
     #[cfg(windows)] ingest_ring: &mut Option<crate::rebar::FrameIngestRing>,
     gpu_warned: &mut bool,
+    last_error: &mut String,
     source_id: u64,
     depth: u32,
     frame: &VideoFrame,
@@ -547,56 +550,61 @@ fn ingest_video(
         _ => width as usize * bpp,
     };
     if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
+        // With GPU ingest enabled a failed upload drops the frame: silently switching to the
+        // CPU path would change latency and load behind the operator's back.
         #[cfg(windows)]
         if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
             if ingest_ring.is_none() {
                 *ingest_ring = crate::rebar::FrameIngestRing::new(&gpu.device, &gpu.queue);
             }
-            if let Some(ring) = ingest_ring.as_mut().filter(|ring| ring.is_live()) {
-                let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
-                let bgra = format == CpuFormat::Bgra;
-                let tex_format = if packed {
-                    wgpu::TextureFormat::Rgba8Unorm
-                } else if bgra {
-                    wgpu::TextureFormat::Bgra8Unorm
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                };
-                match ring.upload(
-                    frame.data(),
-                    stride,
-                    width as usize * bpp,
-                    width,
-                    height,
-                    packed,
-                    bgra,
-                    tex_format,
-                    frame.timestamp(),
-                ) {
-                    Ok(uploaded) => {
-                        finish_gpu_frame(
-                            uploads,
-                            gpu_warned,
-                            source_id,
-                            depth,
-                            width,
-                            height,
-                            pixel_format,
-                            stride,
-                            frame,
-                            uploaded,
-                            ring.vram_bytes(),
-                            "host",
-                        );
-                        return;
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "eiviz ndi host-visible upload: {error}; falling back to write_texture"
-                        );
-                    }
+            let Some(ring) = ingest_ring.as_mut().filter(|ring| ring.is_live()) else {
+                report_ingest_error(
+                    last_error,
+                    source_id,
+                    "host-visible ingest ring is unavailable".into(),
+                );
+                return;
+            };
+            let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+            let bgra = format == CpuFormat::Bgra;
+            let tex_format = if packed {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else if bgra {
+                wgpu::TextureFormat::Bgra8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+            match ring.upload(
+                frame.data(),
+                stride,
+                width as usize * bpp,
+                width,
+                height,
+                packed,
+                bgra,
+                tex_format,
+                frame.timestamp(),
+            ) {
+                Ok(uploaded) => {
+                    last_error.clear();
+                    finish_gpu_frame(
+                        uploads,
+                        gpu_warned,
+                        source_id,
+                        depth,
+                        width,
+                        height,
+                        pixel_format,
+                        stride,
+                        frame,
+                        uploaded,
+                        ring.vram_bytes(),
+                        "host",
+                    );
                 }
+                Err(error) => report_ingest_error(last_error, source_id, error),
             }
+            return;
         }
         match gpu_ring.upload(
             gpu,
@@ -608,6 +616,7 @@ fn ingest_video(
             frame.timestamp(),
         ) {
             Ok(uploaded) => {
+                last_error.clear();
                 finish_gpu_frame(
                     uploads,
                     gpu_warned,
@@ -622,14 +631,10 @@ fn ingest_video(
                     gpu_ring.vram_bytes(),
                     "queue",
                 );
-                return;
             }
-            Err(error) if !*gpu_warned => {
-                eprintln!("eiviz ndi gpu upload: {error}; falling back to CPU frames");
-                *gpu_warned = true;
-            }
-            Err(_) => {}
+            Err(error) => report_ingest_error(last_error, source_id, error),
         }
+        return;
     }
     let opaque_x = matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX);
     let (mut pixels, format, width, height) = {
@@ -650,6 +655,14 @@ fn ingest_video(
     );
     let mut store = uploads.lock_or_recover();
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
+}
+
+fn report_ingest_error(last_error: &mut String, source_id: u64, error: String) {
+    if crate::staging::is_exhausted(&error) || *last_error == error {
+        return;
+    }
+    eprintln!("eiviz ndi {source_id}: gpu upload failed, frame dropped: {error}");
+    *last_error = error;
 }
 
 fn finish_gpu_frame(

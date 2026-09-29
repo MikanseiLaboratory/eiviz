@@ -1001,6 +1001,17 @@ impl FrameUploader {
         }
     }
 
+    /// True when the backend has no staged copy path and the plain `queue.write_texture`
+    /// is its designed upload route (Metal unified memory).
+    pub fn uses_queue_write(&self) -> bool {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Uma(_) => true,
+            #[allow(unreachable_patterns)]
+            _ => false,
+        }
+    }
+
     pub fn upload(
         &mut self,
         device: &GpuDevice,
@@ -1017,7 +1028,7 @@ impl FrameUploader {
                 uploader.upload(device, dest, data, row_bytes, height, tex_width, format)
             }
             #[cfg(target_os = "macos")]
-            Self::Uma(_) => Err("uma copy uses write_texture".into()),
+            Self::Uma(_) => Err("uma uploads through queue.write_texture".into()),
             #[cfg(any(windows, target_os = "linux"))]
             Self::Vulkan(uploader) => {
                 uploader.upload(device, dest, data, row_bytes, height, tex_width, format)

@@ -396,11 +396,17 @@ pub(crate) fn render_loop(
                     upload_guard.advance_playout(&used_uploads);
                     upload_guard.snapshot(&used_uploads)
                 };
-                composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
-                need_bake
+                let upload_error =
+                    composer.upload_sources(&device, &snaps, use_rebar, direct_sample);
+                (need_bake, upload_error)
             }));
             let need_gen_bake = match composed {
-                Ok(need_bake) => need_bake,
+                Ok((need_bake, upload_error)) => {
+                    if let Some(error) = upload_error {
+                        set_error(&telemetry, error);
+                    }
+                    need_bake
+                }
                 Err(_) => {
                     crate::diag::error("compose panicked");
                     set_error(&telemetry, "compose panicked");

@@ -351,7 +351,7 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     busy.store(false, Ordering::Release);
-                    crate::diag::mark_fatal(format!("omt send texture: {error}"));
+                    crate::diag::error(&format!("omt send texture: {error}"));
                 }
                 Err(_) => {
                     busy.store(false, Ordering::Release);

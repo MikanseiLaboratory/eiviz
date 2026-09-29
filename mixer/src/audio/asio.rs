@@ -649,12 +649,15 @@ fn asio_stream_config(
             .map_err(|error| format!("ASIO input config: {error}"))?
     };
     let format = supported.sample_format();
-    let mut config = supported.config();
+    let config = supported.config();
     if config.sample_rate == 0 {
-        config.sample_rate = 48_000;
+        return Err("ASIO driver reported a sample rate of 0 Hz".into());
     }
-    let channels = usize::from(config.channels.max(1));
-    let rate = config.sample_rate.max(1);
+    if config.channels == 0 {
+        return Err("ASIO driver reported 0 channels".into());
+    }
+    let channels = usize::from(config.channels);
+    let rate = config.sample_rate;
     Ok((config, format, rate, channels))
 }
 

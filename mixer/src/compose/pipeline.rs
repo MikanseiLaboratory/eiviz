@@ -354,17 +354,13 @@ pub(crate) fn write_aligned_texture(
     tex_width: u32,
     format: wgpu::TextureFormat,
     uploader: Option<&mut crate::rebar::FrameUploader>,
-) {
-    if let Some(uploader) = uploader {
-        if uploader
-            .upload(device, texture, data, row_bytes, height, tex_width, format)
-            .is_ok()
-        {
-            return;
-        }
+) -> Result<(), String> {
+    // A selected uploader that fails is reported, not replaced by `queue.write_texture`.
+    if let Some(uploader) = uploader.filter(|uploader| !uploader.uses_queue_write()) {
+        return uploader.upload(device, texture, data, row_bytes, height, tex_width, format);
     }
     if row_bytes == 0 || height == 0 || tex_width == 0 {
-        return;
+        return Ok(());
     }
     let aligned = row_bytes.div_ceil(256) * 256;
     let (bytes, pitch) = if aligned == row_bytes {
@@ -374,7 +370,7 @@ pub(crate) fn write_aligned_texture(
                 "write_aligned_texture: short frame ({} < {needed} bytes), skipped",
                 data.len()
             ));
-            return;
+            return Ok(());
         }
         (Cow::Borrowed(&data[..needed]), row_bytes)
     } else {
@@ -403,6 +399,7 @@ pub(crate) fn write_aligned_texture(
             depth_or_array_layers: 1,
         },
     );
+    Ok(())
 }
 
 pub(crate) fn solid_swatch(

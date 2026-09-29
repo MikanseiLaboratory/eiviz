@@ -653,7 +653,8 @@ impl Composer {
         snaps: &[CpuFrameSnap],
         use_rebar: bool,
         direct_sample: bool,
-    ) {
+    ) -> Option<String> {
+        let mut first_error = None;
         let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
         if let Some(uploader) = self.uploader.as_mut() {
             uploader.retain_direct(&needed, direct_sample);
@@ -801,7 +802,7 @@ impl Composer {
                 .expect("source inserted")
                 .texture
                 .clone();
-            write_aligned_texture(
+            let written = write_aligned_texture(
                 device,
                 &texture,
                 pixels,
@@ -815,13 +816,21 @@ impl Composer {
                 format,
                 self.uploader.as_mut().filter(|_| use_rebar),
             );
-            if let Some(gpu) = self.sources.get_mut(&id) {
-                gpu.uploaded_pts = snap.last_pts;
+            match written {
+                Ok(()) => {
+                    if let Some(gpu) = self.sources.get_mut(&id) {
+                        gpu.uploaded_pts = snap.last_pts;
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(format!("source {id} upload: {error}"));
+                }
             }
         }
         if let Some(uploader) = self.uploader.as_mut() {
             uploader.flush(device);
         }
+        first_error
     }
 
     pub fn set_bus_colors(&mut self, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) {
@@ -1144,8 +1153,9 @@ impl Composer {
             raster.height,
             raster.width,
             wgpu::TextureFormat::Rgba8Unorm,
-            self.uploader.as_mut(),
-        );
+            None,
+        )
+        .ok()?;
         let view = texture.create_view(&Default::default());
         self.blit_groups.remove(&label_cache_key(&key));
         self.label_cache.insert(

@@ -205,9 +205,13 @@ fn run_loop(
             &duration_hns,
             &mut ready,
         ) {
-            Ok(()) => return Ok(()),
+            Ok(VulkanFile::Played) => return Ok(()),
+            Ok(VulkanFile::UnsupportedCodec) => {
+                eprintln!("eiviz vulkan video: codec is not H.264; using Media Foundation decode");
+            }
             Err(error) => {
-                eprintln!("eiviz vulkan video: {error}");
+                send_ready(&mut ready, Err(error.clone()));
+                return Err(error);
             }
         }
     }
@@ -219,8 +223,8 @@ fn run_loop(
             return Ok(());
         }
         let opened = match gpu.as_ref() {
-            Some(gpu) => match open_reader(&path, capture, Some(gpu), prefer_packed) {
-                Ok(reader) => match configure_video(
+            Some(gpu) => open_reader(&path, capture, Some(gpu), prefer_packed).and_then(|reader| {
+                configure_video(
                     &reader,
                     true,
                     prefer_packed,
@@ -228,18 +232,11 @@ fn run_loop(
                     height,
                     fps_num,
                     fps_den,
-                ) {
-                    Ok(layout) => Ok((reader, layout)),
-                    Err(error) => Err(error),
-                },
-                Err(error) => Err(error),
-            },
-            None => Err("Direct3D 12 video is not active".into()),
-        };
-        let (reader, mut layout) = match opened {
-            Ok(pair) => pair,
-            Err(gpu_error) => match open_reader(&path, capture, None, prefer_packed) {
-                Ok(reader) => match configure_video(
+                )
+                .map(|layout| (reader, layout))
+            }),
+            None => open_reader(&path, capture, None, prefer_packed).and_then(|reader| {
+                configure_video(
                     &reader,
                     false,
                     prefer_packed,
@@ -247,20 +244,16 @@ fn run_loop(
                     height,
                     fps_num,
                     fps_den,
-                ) {
-                    Ok(layout) => (reader, layout),
-                    Err(error) => {
-                        let message = format!("{gpu_error}; cpu fallback: {error}");
-                        send_ready(&mut ready, Err(message.clone()));
-                        return Err(message);
-                    }
-                },
-                Err(error) => {
-                    let message = format!("{gpu_error}; cpu fallback: {error}");
-                    send_ready(&mut ready, Err(message.clone()));
-                    return Err(message);
-                }
-            },
+                )
+                .map(|layout| (reader, layout))
+            }),
+        };
+        let (reader, mut layout) = match opened {
+            Ok(pair) => pair,
+            Err(error) => {
+                send_ready(&mut ready, Err(error.clone()));
+                return Err(error);
+            }
         };
         let audio = match configure_audio(&reader) {
             Ok(layout) => Some(layout),
@@ -587,19 +580,29 @@ fn decode_video_frame(
     gpu_warned: &mut bool,
 ) -> Option<Prefetched> {
     if layout.gpu {
-        if let Some(gpu) = gpu {
-            match gpu
-                .dxgi
-                .import_sample(gpu, gpu_ring, sample, pts, (layout.width, layout.height))
-            {
-                Ok(frame) => return Some(Prefetched::Gpu(frame)),
-                Err(error) if !*gpu_warned => {
-                    eprintln!("eiviz video gpu: {error}; falling back to CPU frames");
+        let Some(gpu) = gpu else {
+            if !*gpu_warned {
+                eprintln!("eiviz video gpu: Direct3D 12 video context is missing");
+                *gpu_warned = true;
+            }
+            return None;
+        };
+        return match gpu.dxgi.import_sample(
+            gpu,
+            gpu_ring,
+            sample,
+            pts,
+            (layout.width, layout.height),
+        ) {
+            Ok(frame) => Some(Prefetched::Gpu(frame)),
+            Err(error) => {
+                if !*gpu_warned {
+                    eprintln!("eiviz video gpu: {error}; dropping frames until it recovers");
                     *gpu_warned = true;
                 }
-                Err(_) => {}
+                None
             }
-        }
+        };
     }
     match take_cpu_frame(sample, layout, pts) {
         Ok(frame) => Some(frame),
@@ -1521,10 +1524,16 @@ fn run_vulkan_h264_file(
     position_hns: &AtomicI64,
     duration_hns: &AtomicI64,
     ready: &mut Option<mpsc::SyncSender<Result<(), String>>>,
-) -> Result<(), String> {
+) -> Result<VulkanFile, String> {
     let reader = open_reader(path, false, None, false)?;
+    if !first_video_is_h264(&reader)? {
+        return Ok(VulkanFile::UnsupportedCodec);
+    }
     let (layout_w, layout_h, prefix, nal_format) =
         configure_h264_compressed(&reader, width, height, fps_num, fps_den)?;
+    let mut decoder = vulkan
+        .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
+        .map_err(|error| error.to_string())?;
     let audio = match configure_audio(&reader) {
         Ok(layout) => Some(layout),
         Err(_) => {
@@ -1539,9 +1548,6 @@ fn run_vulkan_h264_file(
     let file_prefetch = depth.max(3);
     let mut gpu_ring = crate::convert::VideoGpuRing::new(file_prefetch);
     let converter = crate::convert::Nv12Converter::new(&ingest.device);
-    let mut decoder = vulkan
-        .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
-        .map_err(|error| error.to_string())?;
     let mut prefetch = std::collections::VecDeque::new();
     let mut ring_vram = 0u64;
     let mut clock_pts = -1i64;
@@ -1554,7 +1560,7 @@ fn run_vulkan_h264_file(
     let mut loop_pending = false;
     loop {
         if stop.load(Ordering::Relaxed) {
-            return Ok(());
+            return Ok(VulkanFile::Played);
         }
         let seek = seek_hns.swap(-1, Ordering::Relaxed);
         if seek >= 0 {
@@ -1771,6 +1777,21 @@ fn run_vulkan_h264_file(
                 }
             }
         }
+    }
+}
+
+enum VulkanFile {
+    Played,
+    UnsupportedCodec,
+}
+
+fn first_video_is_h264(reader: &IMFSourceReader) -> Result<bool, String> {
+    unsafe {
+        let native = reader
+            .GetNativeMediaType(stream(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0)
+            .map_err(|e| e.to_string())?;
+        let subtype = native.GetGUID(&MF_MT_SUBTYPE).map_err(|e| e.to_string())?;
+        Ok(is_h264_compressed(subtype))
     }
 }
 
