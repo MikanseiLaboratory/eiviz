@@ -6,6 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
+use crate::audio_in::{self, PacketError, StreamResampler};
 
 const SLOTS: usize = 3;
 pub const AUDIO_RATE: i32 = 48_000;
@@ -649,11 +650,15 @@ struct AudioRing {
     last_hold: (f32, f32),
     fifo_primed: bool,
     audio: Option<AudioPacket>,
+    resampler: StreamResampler,
+    rejected_logged: bool,
 }
 
 impl AudioRing {
     fn new() -> Self {
         Self {
+            resampler: StreamResampler::default(),
+            rejected_logged: false,
             fifo: SampleRing::new(AUDIO_FIFO_FRAMES * 2),
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
@@ -663,8 +668,17 @@ impl AudioRing {
     }
 
     fn ingest(&mut self, packet: AudioPacket) {
-        self.last_peak = peak_planar(&packet);
-        let stereo = resample_to_stereo_48k(&packet);
+        let stereo = match packet_to_stereo_48k(&mut self.resampler, &packet) {
+            Ok(stereo) => stereo,
+            Err(error) => {
+                if !self.rejected_logged {
+                    crate::diag::warn(&format!("audio packet rejected: {error}"));
+                    self.rejected_logged = true;
+                }
+                return;
+            }
+        };
+        self.last_peak = crate::simd::peak_interleaved(&stereo);
         self.fifo.extend(stereo);
         if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.fifo_primed = true;
@@ -678,6 +692,7 @@ impl AudioRing {
         self.last_peak = (0.0, 0.0);
         self.last_hold = (0.0, 0.0);
         self.fifo_primed = false;
+        self.resampler.reset();
     }
 
     #[cfg(test)]
@@ -1110,30 +1125,21 @@ fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
     }
 }
 
-fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
-    let channels = packet.channels.max(1) as usize;
-    let src_rate = packet.sample_rate.max(1) as usize;
-    let values = &packet.pcm_planar_f32;
-    if values.is_empty() {
-        return Vec::new();
-    }
-    let src_frames = if packet.samples_per_channel > 0 {
-        packet.samples_per_channel as usize
-    } else {
-        values.len() / channels
-    }
-    .max(1)
-    .min(values.len() / channels.max(1));
-    let mut out = Vec::new();
-    crate::simd::resample_planar_to_stereo(
-        values,
-        src_frames,
-        channels,
-        src_rate,
-        AUDIO_RATE as usize,
-        &mut out,
-    );
-    out
+fn packet_to_stereo_48k(
+    resampler: &mut StreamResampler,
+    packet: &AudioPacket,
+) -> Result<Vec<f32>, PacketError> {
+    let (frames, channels, rate) = audio_in::validate(
+        packet.sample_rate,
+        packet.channels,
+        packet.samples_per_channel,
+        packet.pcm_planar_f32.len(),
+    )?;
+    let mut stereo = Vec::new();
+    audio_in::planar_to_stereo(&packet.pcm_planar_f32, frames, channels, &mut stereo);
+    let mut out = Vec::with_capacity(stereo.len() + 8);
+    resampler.process(&stereo, rate, &mut out);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1180,7 +1186,7 @@ mod tests {
             samples_per_channel: 3,
             pcm_planar_f32: pcm,
         };
-        let out = resample_to_stereo_48k(&packet);
+        let out = packet_to_stereo_48k(&mut StreamResampler::default(), &packet).unwrap();
         assert_eq!(out.len(), 6);
         assert!((out[0] - 0.0).abs() < 1e-6);
         assert!((out[2] - 0.5).abs() < 1e-6);
@@ -1294,28 +1300,6 @@ mod tests {
             store.fifo_frames(1)
         );
     }
-}
-
-fn peak_planar(audio: &AudioPacket) -> (f32, f32) {
-    let channels = audio.channels.max(1) as usize;
-    if audio.pcm_planar_f32.is_empty() {
-        return (0.0, 0.0);
-    }
-    let samples = if audio.samples_per_channel > 0 {
-        audio.samples_per_channel as usize
-    } else {
-        (audio.pcm_planar_f32.len() / channels).max(1)
-    };
-    let plane = samples.min(audio.pcm_planar_f32.len());
-    let left = crate::simd::peak_f32(&audio.pcm_planar_f32[..plane]);
-    let right = if channels > 1 {
-        let start = plane.min(audio.pcm_planar_f32.len());
-        let end = (start + plane).min(audio.pcm_planar_f32.len());
-        crate::simd::peak_f32(&audio.pcm_planar_f32[start..end])
-    } else {
-        left
-    };
-    (left.min(1.0), right.min(1.0))
 }
 
 fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {

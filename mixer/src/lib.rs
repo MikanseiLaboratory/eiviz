@@ -2,6 +2,7 @@
 
 mod abi;
 mod audio;
+mod audio_in;
 mod clock;
 mod compose;
 #[cfg(windows)]

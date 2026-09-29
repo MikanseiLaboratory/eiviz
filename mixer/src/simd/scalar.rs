@@ -124,56 +124,6 @@ pub fn sine_fill(out: &mut [f32], phase: f64, hz: f32, amplitude: f32, rate: f64
     }
 }
 
-pub fn planar_to_stereo(planar: &[f32], frames: usize, channels: usize, out: &mut Vec<f32>) {
-    out.clear();
-    out.reserve(frames * 2);
-    for i in 0..frames {
-        let left = planar.get(i).copied().unwrap_or(0.0);
-        let right = if channels > 1 {
-            planar.get(frames + i).copied().unwrap_or(left)
-        } else {
-            left
-        };
-        out.push(left);
-        out.push(right);
-    }
-}
-
-pub fn resample_planar_to_stereo(
-    planar: &[f32],
-    src_frames: usize,
-    channels: usize,
-    src_rate: usize,
-    dst_rate: usize,
-    out: &mut Vec<f32>,
-) {
-    if src_rate == dst_rate {
-        planar_to_stereo(planar, src_frames, channels, out);
-        return;
-    }
-    let dst_frames = (src_frames * dst_rate + src_rate / 2) / src_rate.max(1);
-    out.clear();
-    out.reserve(dst_frames * 2);
-    let last = src_frames.saturating_sub(1);
-    for i in 0..dst_frames {
-        let src = i as f64 * src_rate as f64 / dst_rate.max(1) as f64;
-        let idx = (src.floor() as usize).min(last);
-        let frac = (src - idx as f64) as f32;
-        let nxt = (idx + 1).min(last);
-        let left = planar.get(idx).copied().unwrap_or(0.0) * (1.0 - frac)
-            + planar.get(nxt).copied().unwrap_or(0.0) * frac;
-        let right = if channels > 1 {
-            let a = planar.get(src_frames + idx).copied().unwrap_or(left);
-            let b = planar.get(src_frames + nxt).copied().unwrap_or(a);
-            a * (1.0 - frac) + b * frac
-        } else {
-            left
-        };
-        out.push(left);
-        out.push(right);
-    }
-}
-
 pub fn blend_u8(bg: u8, fg: u8, cover: u16) -> u8 {
     ((fg as u16 * cover + bg as u16 * (255 - cover)) / 255) as u8
 }
