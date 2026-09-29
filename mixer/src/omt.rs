@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -119,7 +120,7 @@ impl OmtReceiver {
                         return;
                     }
                     {
-                        let mut store = uploads.lock().expect("uploads lock");
+                        let mut store = uploads.lock_or_recover();
                         store.ensure_playout(source_id, 16, 16, format, depth);
                     }
                     let mut sent: Option<(bool, bool, bool, u32)> = None;
@@ -160,7 +161,7 @@ impl OmtReceiver {
                                     } else {
                                         gpu_frame_from_omt(frame, pts)
                                     };
-                                    let mut store = uploads.lock().expect("uploads lock");
+                                    let mut store = uploads.lock_or_recover();
                                     store.ensure_playout(
                                         source_id,
                                         gpu_frame.width,
@@ -183,7 +184,7 @@ impl OmtReceiver {
                             } else if let Some(frame) =
                                 session.recv_video_timeout(Duration::from_millis(4))
                             {
-                                let mut store = uploads.lock().expect("uploads lock");
+                                let mut store = uploads.lock_or_recover();
                                 store.ensure_playout(
                                     source_id,
                                     frame.width.max(2),
@@ -484,10 +485,7 @@ impl ProgramSender {
     }
 
     pub fn flush_gpu_encode(&mut self, ctx: &OmtGpu) -> Result<(), String> {
-        let result = self
-            .sender
-            .flush_gpu_encode(ctx)
-            .map_err(|e| e.to_string());
+        let result = self.sender.flush_gpu_encode(ctx).map_err(|e| e.to_string());
         self.release_pending_gpu();
         result
     }

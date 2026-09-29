@@ -15,6 +15,7 @@ mod process;
 mod rsac_process;
 mod scheduler;
 
+use crate::guard::LockExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -160,7 +161,7 @@ impl AudioEngine {
 
     pub fn shutdown(&self) {
         let joins = {
-            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut outputs = self.outputs.lock_or_recover();
             let mut joins = Vec::new();
             for output in outputs.iter_mut() {
                 output.stop.store(true, Ordering::Relaxed);
@@ -194,7 +195,7 @@ impl AudioEngine {
         map_left: i32,
         map_right: i32,
     ) {
-        self.graph.lock().expect("audio").upsert_bus(
+        self.graph.lock_or_recover().upsert_bus(
             id,
             name,
             role,
@@ -207,47 +208,41 @@ impl AudioEngine {
     }
 
     pub fn remove_bus(&self, id: u64) {
-        self.graph.lock().expect("audio").remove_bus(id);
+        self.graph.lock_or_recover().remove_bus(id);
         self.sync_outputs();
     }
 
     pub fn set_input(&self, id: u64, bus_mask: u32, gain: f32, mute: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_input(id, bus_mask, gain, mute != 0);
     }
 
     pub fn set_bus_gain(&self, id: u64, gain: f32, mute: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_bus_gain(id, gain, mute != 0);
     }
 
     pub fn set_unit_link(&self, unit_id: u64, bus_id: u64, mode: u32) {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .set_unit_link(unit_id, bus_id, mode);
     }
 
     pub fn set_headphone_cue(&self, unit_id: u64) {
-        self.graph.lock().expect("audio").headphone_cue_unit = unit_id;
+        self.graph.lock_or_recover().headphone_cue_unit = unit_id;
     }
 
     pub fn set_headphone_copy_master(&self, enabled: u32) {
-        self.graph.lock().expect("audio").headphone_copy_master = enabled != 0;
+        self.graph.lock_or_recover().headphone_copy_master = enabled != 0;
     }
 
     pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
         let samples =
             (AUDIO_RATE as u64 * u64::from(buffer_frames.max(1)) * u64::from(fps_den.max(1))
                 / u64::from(fps_num.max(1))) as usize;
-        self.delay
-            .lock()
-            .expect("audio delay")
-            .set_delay_frames(samples);
+        self.delay.lock_or_recover().set_delay_frames(samples);
     }
 
     pub fn mix(
@@ -261,21 +256,20 @@ impl AudioEngine {
         fps_num: u32,
         fps_den: u32,
     ) -> MixedAudio {
-        let mut graph = self.graph.lock().expect("audio");
-        let mut delay = self.delay.lock().expect("audio delay");
+        let mut graph = self.graph.lock_or_recover();
+        let mut delay = self.delay.lock_or_recover();
         graph.mix(
             uploads, snapshot, scenes, frames, &mut delay, produce, mix_inputs, fps_num, fps_den,
         )
     }
 
     pub fn master_peak(&self) -> (f32, f32) {
-        self.graph.lock().expect("audio").master_peak
+        self.graph.lock_or_recover().master_peak
     }
 
     pub fn bus_peaks(&self) -> Vec<(u64, f32, f32)> {
         self.graph
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .buses
             .iter()
             .map(|bus| (bus.id, bus.peak.0, bus.peak.1))
@@ -283,7 +277,7 @@ impl AudioEngine {
     }
 
     pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
-        self.graph.lock().expect("audio").mix_input_peaks()
+        self.graph.lock_or_recover().mix_input_peaks()
     }
 
     #[allow(dead_code)]
@@ -291,18 +285,18 @@ impl AudioEngine {
         if frames == 0 {
             return;
         }
-        self.delay.lock().expect("audio delay").skip_frames(frames);
-        let graph = self.graph.lock().expect("audio");
+        self.delay.lock_or_recover().skip_frames(frames);
+        let graph = self.graph.lock_or_recover();
         for bus in &graph.buses {
             bus.ring.skip_frames(frames);
         }
     }
 
     fn sync_outputs(&self) {
-        let desired = self.graph.lock().expect("audio").device_groups();
+        let desired = self.graph.lock_or_recover().device_groups();
         let mut stale = Vec::new();
         {
-            let mut outputs = self.outputs.lock().expect("audio outputs");
+            let mut outputs = self.outputs.lock_or_recover();
             let mut keep = Vec::new();
             for mut output in outputs.drain(..) {
                 if desired.iter().any(|(key, _)| *key == output.key) {

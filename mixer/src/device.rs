@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -23,7 +24,7 @@ pub fn gpu_queue_lock_handle() -> Arc<Mutex<()>> {
 /// Serializes `Queue::submit` against `Surface::configure`.
 /// wgpu treats a submit during configure's wait-idle as a validation error.
 pub fn lock_gpu_queue() -> MutexGuard<'static, ()> {
-    gpu_queue_lock_arc().lock().expect("gpu queue lock")
+    gpu_queue_lock_arc().lock_or_recover()
 }
 
 pub fn with_surface_configure<R>(f: impl FnOnce() -> R) -> (R, bool) {

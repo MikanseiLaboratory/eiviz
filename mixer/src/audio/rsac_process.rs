@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -79,7 +80,7 @@ pub fn run(
                         map_left,
                         map_right,
                     );
-                    uploads.lock().expect("audio").ingest_audio(spec.id, packet);
+                    uploads.lock_or_recover().ingest_audio(spec.id, packet);
                     pts = pts.saturating_add(frames * 10_000_000 / i64::from(rate));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(5)),

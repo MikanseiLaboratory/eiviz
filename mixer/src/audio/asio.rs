@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,7 +42,8 @@ struct AsioHub {
 }
 
 static HUB: std::sync::OnceLock<Mutex<AsioHub>> = std::sync::OnceLock::new();
-static IO_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (i32, i32)>>> = std::sync::OnceLock::new();
+static IO_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (i32, i32)>>> =
+    std::sync::OnceLock::new();
 
 fn hub() -> &'static Mutex<AsioHub> {
     HUB.get_or_init(|| {
@@ -96,7 +98,8 @@ fn lookup_table(table: &HashMap<String, (i32, i32)>, names: &[String]) -> Option
 }
 
 fn cpal_asio_table(force: bool) -> HashMap<String, (i32, i32)> {
-    static TABLE: std::sync::OnceLock<Mutex<HashMap<String, (i32, i32)>>> = std::sync::OnceLock::new();
+    static TABLE: std::sync::OnceLock<Mutex<HashMap<String, (i32, i32)>>> =
+        std::sync::OnceLock::new();
     let slot = TABLE.get_or_init(|| Mutex::new(HashMap::new()));
     if !force {
         if let Ok(table) = slot.lock() {
@@ -253,10 +256,10 @@ pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
     if key.is_empty() {
         return;
     }
-    let mut hub = hub().lock().expect("asio hub");
+    let mut hub = hub().lock_or_recover();
     if maps.is_empty() {
         if let Some(device) = hub.devices.get_mut(&key) {
-            device.shared.lock().expect("asio shared").outputs.clear();
+            device.shared.lock_or_recover().outputs.clear();
             if device.is_idle() {
                 stop_device(hub.devices.remove(&key));
             }
@@ -264,19 +267,19 @@ pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
         return;
     }
     let device = hub.ensure(&key, device_id);
-    device.shared.lock().expect("asio shared").outputs = maps;
+    device.shared.lock_or_recover().outputs = maps;
 }
 
 pub fn retain_outputs(keep: &HashSet<String>) {
     let keep: HashSet<String> = keep.iter().map(|id| norm(id)).collect();
-    let mut hub = hub().lock().expect("asio hub");
+    let mut hub = hub().lock_or_recover();
     let keys: Vec<String> = hub.devices.keys().cloned().collect();
     for key in keys {
         if keep.contains(&key) {
             continue;
         }
         if let Some(device) = hub.devices.get_mut(&key) {
-            device.shared.lock().expect("asio shared").outputs.clear();
+            device.shared.lock_or_recover().outputs.clear();
             if device.is_idle() {
                 stop_device(hub.devices.remove(&key));
             }
@@ -314,9 +317,9 @@ pub fn start_capture(
     }
     let key = norm(&spec.device_id);
     {
-        let mut hub = hub().lock().expect("asio hub");
+        let mut hub = hub().lock_or_recover();
         let device = hub.ensure(&key, &spec.device_id);
-        let mut shared = device.shared.lock().expect("asio shared");
+        let mut shared = device.shared.lock_or_recover();
         shared.error = None;
         shared.captures.insert(
             spec.id,
@@ -348,16 +351,11 @@ pub fn start_capture(
 }
 
 pub fn stop_capture(id: u64) {
-    let mut hub = hub().lock().expect("asio hub");
+    let mut hub = hub().lock_or_recover();
     let keys: Vec<String> = hub.devices.keys().cloned().collect();
     for key in keys {
         let idle = if let Some(device) = hub.devices.get_mut(&key) {
-            device
-                .shared
-                .lock()
-                .expect("asio shared")
-                .captures
-                .remove(&id);
+            device.shared.lock_or_recover().captures.remove(&id);
             device.is_idle()
         } else {
             false
@@ -369,7 +367,7 @@ pub fn stop_capture(id: u64) {
 }
 
 pub fn shutdown() {
-    let mut hub = hub().lock().expect("asio hub");
+    let mut hub = hub().lock_or_recover();
     let devices: Vec<AsioDevice> = hub.devices.drain().map(|(_, device)| device).collect();
     drop(hub);
     for device in devices {
@@ -500,7 +498,7 @@ impl AsioDevice {
     }
 
     fn is_idle(&self) -> bool {
-        let shared = self.shared.lock().expect("asio shared");
+        let shared = self.shared.lock_or_recover();
         shared.outputs.is_empty() && shared.captures.is_empty()
     }
 }
@@ -543,7 +541,7 @@ fn run_driver(
     let mut opened = false;
     while !stop.load(Ordering::Relaxed) {
         let (want_in, want_out) = {
-            let guard = shared.lock().expect("asio shared");
+            let guard = shared.lock_or_recover();
             (!guard.captures.is_empty(), !guard.outputs.is_empty())
         };
         if !want_in && !want_out {
@@ -690,10 +688,8 @@ fn open_cpal_asio_input(
             device.build_input_stream(
                 config,
                 move |data: &[i16], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|sample| *sample as f32 / 32768.0)
-                        .collect();
+                    let converted: Vec<f32> =
+                        data.iter().map(|sample| *sample as f32 / 32768.0).collect();
                     ingest_asio_input(&shared, &converted, channels, rate);
                 },
                 err_cb,
@@ -834,8 +830,7 @@ fn ingest_asio_input(shared: &Mutex<AsioShared>, interleaved: &[f32], channels: 
         let frames = i64::from(packet.samples_per_channel.max(0));
         capture
             .uploads
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .ingest_audio(capture.id, packet);
         capture.pts.store(
             capture

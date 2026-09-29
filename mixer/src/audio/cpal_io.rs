@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -122,7 +123,7 @@ fn wait_stream(
 ) {
     let mut follow_check = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        if failed.lock().expect("cpal err").is_some() {
+        if failed.lock_or_recover().is_some() {
             break;
         }
         if follow_default && follow_check.elapsed() >= Duration::from_millis(250) {
@@ -202,7 +203,7 @@ fn open_input(
     let pts = Arc::new(AtomicI64::new(0));
     let err_flag = Arc::clone(failed);
     let err_cb = move |error| {
-        *err_flag.lock().expect("cpal err") = Some(format!("cpal stream: {error}"));
+        *err_flag.lock_or_recover() = Some(format!("cpal stream: {error}"));
     };
 
     let stream = match supported.sample_format() {
@@ -279,7 +280,7 @@ fn open_output(
     let maps = maps.to_vec();
     let err_flag = Arc::clone(failed);
     let err_cb = move |error| {
-        *err_flag.lock().expect("cpal err") = Some(format!("cpal stream: {error}"));
+        *err_flag.lock_or_recover() = Some(format!("cpal stream: {error}"));
     };
 
     let stream = match supported.sample_format() {
@@ -362,7 +363,7 @@ fn ingest(
         map_right,
     );
     let frames = packet.samples_per_channel.max(0) as i64;
-    uploads.lock().expect("audio").ingest_audio(id, packet);
+    uploads.lock_or_recover().ingest_audio(id, packet);
     pts.store(
         timestamp.saturating_add(frames * 10_000_000 / i64::from(rate.max(1))),
         Ordering::Relaxed,

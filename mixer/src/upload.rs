@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -833,7 +834,7 @@ impl UploadStore {
 
     pub fn unregister(&mut self, id: u64) {
         self.sources.remove(&id);
-        self.audio.lock().expect("audio").unregister(id);
+        self.audio.lock_or_recover().unregister(id);
     }
 
     pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
@@ -999,7 +1000,7 @@ impl UploadStore {
         pts: i64,
         planar: &[f32],
     ) {
-        self.audio.lock().expect("audio").ingest_audio(
+        self.audio.lock_or_recover().ingest_audio(
             id,
             AudioPacket {
                 timestamp: pts,
@@ -1013,21 +1014,21 @@ impl UploadStore {
 
     #[cfg(test)]
     pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
-        self.audio.lock().expect("audio").ingest_audio(id, packet);
+        self.audio.lock_or_recover().ingest_audio(id, packet);
     }
 
     #[cfg(test)]
     pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
-        self.audio.lock().expect("audio").pop_frames(id, frames)
+        self.audio.lock_or_recover().pop_frames(id, frames)
     }
 
     #[allow(dead_code)]
     pub fn skip_audio_frames(&mut self, frames: usize) {
-        self.audio.lock().expect("audio").skip_audio_frames(frames);
+        self.audio.lock_or_recover().skip_audio_frames(frames);
     }
 
     pub fn flush_audio(&mut self, id: u64) {
-        self.audio.lock().expect("audio").flush_audio(id);
+        self.audio.lock_or_recover().flush_audio(id);
     }
 
     pub fn flush_video(&mut self, id: u64) {
@@ -1044,7 +1045,7 @@ impl UploadStore {
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
-        self.audio.lock().expect("audio").fifo_frames(id)
+        self.audio.lock_or_recover().fifo_frames(id)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -1057,25 +1058,25 @@ impl UploadStore {
 }
 
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    let audio = uploads.lock().expect("uploads").audio_store();
+    let audio = uploads.lock_or_recover().audio_store();
     wait_fifo_below(&audio, id, AUDIO_FIFO_HIGH_FRAMES);
-    audio.lock().expect("audio").ingest_audio(id, packet);
+    audio.lock_or_recover().ingest_audio(id, packet);
 }
 
 /// File pumps are clocked by video PTS. Keep only a short audio lead so the
 /// mix does not play 400–500 ms of already-decoded sound behind the current frame.
 pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    let audio = uploads.lock().expect("uploads").audio_store();
+    let audio = uploads.lock_or_recover().audio_store();
     wait_fifo_below(&audio, id, AUDIO_LIVE_FRAMES);
-    audio.lock().expect("audio").ingest_audio(id, packet);
+    audio.lock_or_recover().ingest_audio(id, packet);
 }
 
 fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
-    let mut guard = audio.lock().expect("audio");
+    let mut guard = audio.lock_or_recover();
     while guard.fifo_frames(id) >= limit {
         let (next, timeout) = fifo_cond()
             .wait_timeout(guard, Duration::from_millis(50))
-            .expect("fifo wait");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard = next;
         if timeout.timed_out() {
             break;

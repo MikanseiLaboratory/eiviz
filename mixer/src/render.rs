@@ -14,6 +14,7 @@ pub(crate) fn render_loop(
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
         Err(error) => {
+            crate::diag::mark_fatal(format!("compose init: {error}"));
             set_error(&telemetry, error);
             return;
         }
@@ -23,7 +24,7 @@ pub(crate) fn render_loop(
     let mut readbacks = ReadbackStore::default();
     let mut gpu_sends = GpuSendStore::default();
     let mut frame_delay = FrameDelay::new(3);
-    let clock = shared.lock().expect("shared").clock;
+    let clock = shared.lock_or_recover().clock;
     let mut master_cursor =
         crate::clock::PlayoutCursor::new(crate::clock::Rate::or_default(fps_num, fps_den));
     let mut frame_i;
@@ -40,7 +41,15 @@ pub(crate) fn render_loop(
         .unwrap_or_else(Instant::now);
     let mut pending_snapshots: Vec<(u64, u32, String, mpsc::Sender<i32>)> = Vec::new();
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
-        while let Ok(cmd) = cmds.try_recv() {
+        loop {
+            let cmd = match cmds.try_recv() {
+                Ok(cmd) => cmd,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+            };
             match cmd {
                 GpuCmd::Attach {
                     unit_id,
@@ -55,7 +64,7 @@ pub(crate) fn render_loop(
                         presenters.attach(&device, unit_id, kind, surface, width, height, prepared)
                     })) {
                         Ok(Ok(())) => {
-                            shared.lock().expect("shared").compose_dirty = true;
+                            shared.lock_or_recover().compose_dirty = true;
                             OK
                         }
                         Ok(Err(error)) => {
@@ -169,7 +178,7 @@ pub(crate) fn render_loop(
             break;
         }
         let (buffer_frames, use_rebar, direct_sample, fps_num, fps_den) = {
-            let guard = shared.lock().expect("shared");
+            let guard = shared.lock_or_recover();
             let use_rebar = guard.rebar.available && guard.rebar_optimization;
             let direct_sample = use_rebar && cfg!(target_os = "macos");
             (
@@ -192,8 +201,7 @@ pub(crate) fn render_loop(
         master_cursor.set_rate(clock, Instant::now(), master_rate);
         frame_delay.set_depth(buffer_frames);
         shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_video_delay(buffer_frames, fps_num, fps_den);
         crate::frame_hub::sleep_until_deadline(master_cursor.next_deadline(clock), stop.as_ref());
@@ -206,7 +214,7 @@ pub(crate) fn render_loop(
         crate::diag::add_render_skipped(skipped);
         frame_i = master_cursor.idx.saturating_sub(1);
         {
-            let mut guard = shared.lock().expect("shared");
+            let mut guard = shared.lock_or_recover();
             for unit in guard.units.values_mut() {
                 tick_unit_transitions(unit);
             }
@@ -303,7 +311,7 @@ pub(crate) fn render_loop(
                     }
                 })
                 .collect();
-            *guard.audio_snap.lock().expect("audio snap") = audio::AudioMixSnapshot {
+            *guard.audio_snap.lock_or_recover() = audio::AudioMixSnapshot {
                 units: snapshot.clone(),
                 scenes: scene_specs.clone(),
                 mix_inputs: mix_inputs.clone(),
@@ -357,7 +365,7 @@ pub(crate) fn render_loop(
                 .collect();
             let roles = collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
             {
-                let guard = shared.lock().expect("shared");
+                let guard = shared.lock_or_recover();
                 for (id, receiver) in &guard.receivers {
                     let save = guard.live_save.get(id).copied().unwrap_or_default();
                     let role = roles.get(id).copied().unwrap_or_default();
@@ -379,7 +387,7 @@ pub(crate) fn render_loop(
                     }
                 }
                 let snaps = {
-                    let mut upload_guard = uploads.lock().expect("uploads");
+                    let mut upload_guard = uploads.lock_or_recover();
                     upload_guard.advance_playout(&used_uploads);
                     upload_guard.snapshot(&used_uploads)
                 };
@@ -392,7 +400,7 @@ pub(crate) fn render_loop(
                     crate::diag::error("compose panicked");
                     set_error(&telemetry, "compose panicked");
                     crate::diag::mark_fatal("compose panicked");
-                    false
+                    break;
                 }
             };
             if need_gen_bake {
@@ -653,7 +661,7 @@ pub(crate) fn render_loop(
             let delay_vram = frame_delay.vram_bytes();
             let send_vram = gpu_sends.vram_bytes();
             if mem_at.elapsed() >= Duration::from_millis(500) {
-                cached_mem = uploads.lock().expect("uploads").memory_bytes();
+                cached_mem = uploads.lock_or_recover().memory_bytes();
                 cached_adapter = crate::rebar::adapter_usage_bytes(&device.device);
                 mem_at = Instant::now();
             }
@@ -663,7 +671,7 @@ pub(crate) fn render_loop(
                 .saturating_add(delay_vram)
                 .saturating_add(send_vram);
             {
-                let mut guard = telemetry.lock().expect("telemetry");
+                let mut guard = telemetry.lock_or_recover();
                 guard.last_render_ms = frame_begin.elapsed().as_secs_f32() * 1000.0;
                 guard.last_ram_bytes = ram;
                 guard.last_compose_vram = compose_vram;
@@ -753,7 +761,7 @@ pub(crate) fn emit_packed(
             }
             if let Some((packed, content_pts)) = rb.latest() {
                 let data: Arc<[u8]> = packed.to_vec().into();
-                last_frames().lock().expect("frames").insert(
+                last_frames().lock_or_recover().insert(
                     *key,
                     Acquired {
                         data: Arc::clone(&data),

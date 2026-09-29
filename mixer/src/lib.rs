@@ -13,6 +13,7 @@ mod diag;
 mod dxgi;
 mod frame_hub;
 mod generator_audio;
+mod guard;
 mod labels;
 mod lifecycle;
 #[cfg(windows)]
@@ -57,26 +58,25 @@ pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
     ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, MULTIVIEW_BASE,
-    InputRuntimeStats, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus, MixerStats,
-    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, OutputRuntimeStats,
-    NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM,
-    OUTPUT_SOURCE, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
-    SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW,
-    SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE,
-    TRANSITION_BARN_DOOR, TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK,
-    TRANSITION_CROSS_ZOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM,
-    TRANSITION_CUT, TRANSITION_DATAMOSH, TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN,
-    TRANSITION_DIR_LEFT, TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE,
-    TRANSITION_FADE, TRANSITION_FILM_BURN, TRANSITION_FLIP, TRANSITION_FLY_ROTATE,
-    TRANSITION_GLITCH, TRANSITION_GRID_DISSOLVE, TRANSITION_HEART, TRANSITION_IRIS,
-    TRANSITION_KALEIDOSCOPE, TRANSITION_LOREZ, TRANSITION_LUMA_MORPH, TRANSITION_METAMIX,
-    TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS,
-    TRANSITION_PIXEL_SORT, TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE,
-    TRANSITION_ROLLER_DOOR, TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR,
-    TRANSITION_STATIC, TRANSITION_STINGER, TRANSITION_SWIRL, TRANSITION_TILE,
-    TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap,
-    UnitState, VideoCaptureInfo, VideoCaptureMode,
+    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats,
+    MULTIVIEW_BASE, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus, MixerStats,
+    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT,
+    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats, OverlayDesc, Rect,
+    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
+    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
+    TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
+    TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
+    TRANSITION_FILM_BURN, TRANSITION_FLIP, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH,
+    TRANSITION_GRID_DISSOLVE, TRANSITION_HEART, TRANSITION_IRIS, TRANSITION_KALEIDOSCOPE,
+    TRANSITION_LOREZ, TRANSITION_LUMA_MORPH, TRANSITION_METAMIX, TRANSITION_MULTITASK,
+    TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL, TRANSITION_PARTS, TRANSITION_PIXEL_SORT,
+    TRANSITION_POLAR, TRANSITION_PUSH, TRANSITION_RIPPLE, TRANSITION_ROLLER_DOOR,
+    TRANSITION_SHIFT_RGB, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_STATIC, TRANSITION_STINGER,
+    TRANSITION_SWIRL, TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE,
+    TRANSITION_ZOOM, TRANSITION_ZOOM_BLUR, UnitSnap, UnitState, VideoCaptureInfo, VideoCaptureMode,
 };
 pub use eiviz_control::{ControlFacade, ControlService, RequestKey};
 pub use runtime::ProcessMixer;
@@ -147,6 +147,7 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use guard::{LockExt, ffi_guard};
 use lifecycle::{
     MixerSlot, abort_mixer_create, commit_mixer_create, mixer_slot, reserve_mixer_create,
     with_mixer,
@@ -479,9 +480,9 @@ impl OutputHandle {
         busy: Arc<AtomicBool>,
     ) -> Result<(), String> {
         match self {
-            Self::Omt(sender) => sender.send_video_texture(
-                omt_gpu, texture, width, height, pts, fps_n, fps_d, busy,
-            ),
+            Self::Omt(sender) => {
+                sender.send_video_texture(omt_gpu, texture, width, height, pts, fps_n, fps_d, busy)
+            }
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {
                 busy.store(false, Ordering::Release);
@@ -636,7 +637,7 @@ pub(crate) struct Mixer {
 
 pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let mut snap = crate::vmix_xml::LiveSnapshot::default();
         for (id, unit) in &shared.units {
             snap.units.insert(*id, live_unit_from(unit));
@@ -648,7 +649,7 @@ pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
 
 pub(crate) fn live_unit(unit_id: u64) -> Option<crate::vmix_xml::UnitLive> {
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         shared.units.get(&unit_id).map(live_unit_from)
     })
     .ok()
@@ -706,25 +707,31 @@ pub(crate) fn report_io(error: impl Into<String>) -> i32 {
 }
 
 pub(crate) fn insert_receiver(id: u64, receiver: LiveReceiver) -> i32 {
-    with_mixer(|mixer| {
+    match with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .receivers
-            .insert(id, receiver);
-        OK
-    })
-    .unwrap_or_else(|code| code)
+            .insert(id, receiver)
+    }) {
+        // Dropping a replaced receiver joins its thread; do it after the locks are released.
+        Ok(replaced) => {
+            drop(replaced);
+            OK
+        }
+        Err(code) => code,
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn insert_video(id: u64, pump: VideoPump) -> i32 {
-    with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").videos.insert(id, pump);
-        OK
-    })
-    .unwrap_or_else(|code| code)
+    match with_mixer(|mixer| mixer.shared.lock_or_recover().videos.insert(id, pump)) {
+        Ok(replaced) => {
+            drop(replaced);
+            OK
+        }
+        Err(code) => code,
+    }
 }
 
 pub(crate) struct DetachedSource {
@@ -736,7 +743,7 @@ pub(crate) struct DetachedSource {
 
 pub(crate) fn detach_source(id: u64) -> Result<DetachedSource, i32> {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         #[cfg(any(windows, target_os = "macos"))]
         let video = shared.videos.remove(&id);
         let receiver = shared.receivers.remove(&id);
@@ -757,7 +764,7 @@ pub(crate) fn detach_source(id: u64) -> Result<DetachedSource, i32> {
 #[cfg(target_os = "macos")]
 pub(crate) fn take_source_uploads(id: u64) -> Result<Arc<Mutex<UploadStore>>, i32> {
     let (video, receiver, uploads) = with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let video = shared.videos.remove(&id);
         let receiver = shared.receivers.remove(&id);
         let uploads = shared.uploads.clone();
@@ -795,11 +802,11 @@ pub(crate) fn send_gpu_and_wait_timeout(
 }
 
 pub(crate) fn set_error(telemetry: &Mutex<Telemetry>, message: impl Into<String>) {
-    telemetry.lock().expect("telemetry").last_error = message.into();
+    telemetry.lock_or_recover().last_error = message.into();
 }
 
 pub(crate) fn with_uploads<T>(mixer: &Mixer, f: impl FnOnce(&mut UploadStore) -> T) -> T {
-    f(&mut mixer.uploads.lock().expect("uploads"))
+    f(&mut mixer.uploads.lock_or_recover())
 }
 
 pub(crate) fn session_error_slot() -> &'static Mutex<String> {
@@ -809,7 +816,7 @@ pub(crate) fn session_error_slot() -> &'static Mutex<String> {
 
 pub(crate) fn report_session_error(message: impl Into<String>) {
     let message = message.into();
-    *session_error_slot().lock().expect("session error") = message.clone();
+    *session_error_slot().lock_or_recover() = message.clone();
     let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
 }
 
@@ -856,12 +863,29 @@ pub(crate) fn prepare_surface_off_slot(
 /// Creates the OS-default wgpu device (DX12 on Windows, Metal on macOS, Vulkan on Linux).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create(adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
+    ffi_guard("mixer_create", ERR_DEVICE, || {
+        mixer_create_ffi(adapter_luid, fps_num, fps_den)
+    })
+}
+
+fn mixer_create_ffi(adapter_luid: u64, fps_num: u32, fps_den: u32) -> i32 {
     mixer_create_with_backend(crate::abi::BACKEND_AUTO, adapter_luid, fps_num, fps_den)
 }
 
 /// Creates a mixer with an explicit GPU backend (`0=auto`, `1=dx12`, `2=vulkan`, `3=metal`).
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create_with_backend(
+    backend: u32,
+    _adapter_luid: u64,
+    fps_num: u32,
+    fps_den: u32,
+) -> i32 {
+    ffi_guard("mixer_create_with_backend", ERR_DEVICE, || {
+        mixer_create_with_backend_ffi(backend, _adapter_luid, fps_num, fps_den)
+    })
+}
+
+fn mixer_create_with_backend_ffi(
     backend: u32,
     _adapter_luid: u64,
     fps_num: u32,
@@ -1005,31 +1029,42 @@ pub(crate) fn start_mixer(
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
-            render_loop(
-                device,
-                fps_num,
-                fps_den,
-                render_shared,
-                render_uploads,
-                render_telemetry,
-                render_thumbs,
-                rx,
-                render_stop,
-            );
+            let panic_telemetry = Arc::clone(&render_telemetry);
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                render_loop(
+                    device,
+                    fps_num,
+                    fps_den,
+                    render_shared,
+                    render_uploads,
+                    render_telemetry,
+                    render_thumbs,
+                    rx,
+                    render_stop,
+                );
+            }));
+            if let Err(payload) = result {
+                let message = format!(
+                    "render thread panicked: {}",
+                    crate::guard::panic_message(payload.as_ref())
+                );
+                crate::diag::error(&message);
+                set_error(&panic_telemetry, message.clone());
+                crate::diag::mark_fatal(message);
+            }
         })
-        .expect("render thread");
-    let audio_snap = Arc::clone(&shared.lock().expect("shared").audio_snap);
-    let monitor = telemetry.lock().expect("telemetry").audio_monitor.clone();
-    let audio_inputs = uploads.lock().expect("uploads").audio_store();
-    let audio_sched = Some(audio::AudioScheduler::start(
-        audio,
-        audio_inputs,
-        audio_snap,
-        monitor.pcm,
-        monitor.primed,
-        clock,
-    ));
-    Ok(Mixer {
+        .map_err(|error| {
+            let message = format!("render thread spawn failed: {error}");
+            crate::diag::error(&message);
+            report_session_error(message);
+            ERR_DEVICE
+        })?;
+    let audio_snap = Arc::clone(&shared.lock_or_recover().audio_snap);
+    let monitor = telemetry.lock_or_recover().audio_monitor.clone();
+    let audio_inputs = uploads.lock_or_recover().audio_store();
+    // Build the Mixer first: its Drop stops the render thread if the audio
+    // scheduler cannot be started.
+    let mut mixer = Mixer {
         shared,
         uploads,
         telemetry,
@@ -1038,17 +1073,44 @@ pub(crate) fn start_mixer(
         omt_gpu: omt_send_gpu,
         thumb_pixels,
         render: Some(render),
-        audio_sched,
+        audio_sched: None,
         audio_captures: Arc::new(Mutex::new(audio::AudioCaptureStore::default())),
         stop,
         backend,
         #[cfg(target_os = "macos")]
         surface_gpu,
-    })
+    };
+    match audio::AudioScheduler::start(
+        audio,
+        audio_inputs,
+        audio_snap,
+        monitor.pcm,
+        monitor.primed,
+        clock,
+    ) {
+        Ok(scheduler) => mixer.audio_sched = Some(scheduler),
+        Err(error) => {
+            crate::diag::error(&error);
+            report_session_error(error);
+            return Err(ERR_DEVICE);
+        }
+    }
+    Ok(mixer)
+}
+
+impl Drop for Mixer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.cmds.send(GpuCmd::Shutdown);
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_backend() -> u32 {
+    ffi_guard("mixer_backend", 0, mixer_backend_ffi)
+}
+
+fn mixer_backend_ffi() -> u32 {
     with_mixer(|mixer| mixer.backend).unwrap_or(crate::abi::BACKEND_AUTO)
 }
 
@@ -1063,7 +1125,7 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
     use eiviz_control::live::{LivePeak, LiveState, UnitLiveState};
     with_mixer(|mixer| {
         let (units, master, buses, mix_peaks) = {
-            let shared = mixer.shared.lock().expect("shared");
+            let shared = mixer.shared.lock_or_recover();
             let mut units = HashMap::new();
             for (id, unit) in &shared.units {
                 units.insert(
@@ -1091,8 +1153,8 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                 shared.audio.mix_input_peaks(),
             )
         };
-        let audio_in = mixer.uploads.lock().expect("uploads").audio_store();
-        let audio_in = audio_in.lock().expect("audio");
+        let audio_in = mixer.uploads.lock_or_recover().audio_store();
+        let audio_in = audio_in.lock_or_recover();
         let mut peaks = vec![LivePeak {
             id: 0,
             left: master.0,
@@ -1124,6 +1186,10 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy() {
+    ffi_guard("mixer_destroy", (), mixer_destroy_ffi)
+}
+
+fn mixer_destroy_ffi() {
     if let Ok(mut svc) = crate::runtime::control().try_lock() {
         svc.abandon();
     }
@@ -1134,7 +1200,7 @@ pub(crate) fn mixer_destroy_inner() {
     crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
     let mut mixer = {
-        let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+        let mut slot = mixer_slot().lock_or_recover();
         match std::mem::replace(&mut *slot, MixerSlot::Stopping) {
             MixerSlot::Running(mixer) => mixer,
             previous => {
@@ -1148,7 +1214,7 @@ pub(crate) fn mixer_destroy_inner() {
     };
     mixer.stop.store(true, Ordering::Relaxed);
     let (audio, receivers, videos) = {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let audio = shared.audio.clone();
         let receivers = std::mem::take(&mut shared.receivers);
         #[cfg(any(windows, target_os = "macos"))]
@@ -1161,11 +1227,7 @@ pub(crate) fn mixer_destroy_inner() {
     if let Some(mut sched) = mixer.audio_sched.take() {
         sched.stop();
     }
-    mixer
-        .audio_captures
-        .lock()
-        .expect("audio captures")
-        .stop_all();
+    mixer.audio_captures.lock_or_recover().stop_all();
     audio.shutdown();
     crate::diag::info("mixer_destroy drop receivers");
     drop(receivers);
@@ -1181,7 +1243,7 @@ pub(crate) fn mixer_destroy_inner() {
     }
     crate::diag::info("mixer_destroy drop");
     drop(mixer);
-    *mixer_slot().lock().expect("mixer mutex poisoned") = MixerSlot::Empty;
+    *mixer_slot().lock_or_recover() = MixerSlot::Empty;
     crate::diag::reset_generation();
     reset_frame_caches();
     crate::diag::info("mixer_destroy end");
@@ -1189,17 +1251,27 @@ pub(crate) fn mixer_destroy_inner() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_ping() -> u32 {
+    ffi_guard("mixer_ping", 0, mixer_ping_ffi)
+}
+
+fn mixer_ping_ffi() -> u32 {
     crate::diag::init();
     0x4549_5649
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_create_unit(unit_id: u64, width: u32, height: u32) -> i32 {
+    ffi_guard("mixer_create_unit", ERR_DEVICE, || {
+        mixer_create_unit_ffi(unit_id, width, height)
+    })
+}
+
+fn mixer_create_unit_ffi(unit_id: u64, width: u32, height: u32) -> i32 {
     if width == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let fps_num = shared.master_fps_num;
         let fps_den = shared.master_fps_den;
         shared.units.insert(
@@ -1236,6 +1308,18 @@ pub unsafe extern "C" fn mixer_define_scene(
     count: u32,
     layers: *const OverlayDesc,
 ) -> i32 {
+    ffi_guard("mixer_define_scene", ERR_DEVICE, || unsafe {
+        mixer_define_scene_ffi(scene_id, width, height, count, layers)
+    })
+}
+
+unsafe fn mixer_define_scene_ffi(
+    scene_id: u64,
+    width: u32,
+    height: u32,
+    count: u32,
+    layers: *const OverlayDesc,
+) -> i32 {
     if width == 0 || height == 0 || count > 64 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -1256,7 +1340,7 @@ pub unsafe extern "C" fn mixer_define_scene(
         (Arc::from(descs), Arc::from(texts))
     };
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let mv_label = shared
             .scenes
             .get(&scene_id)
@@ -1280,9 +1364,15 @@ pub unsafe extern "C" fn mixer_define_scene(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_scene(scene_id: u64) -> i32 {
+    ffi_guard("mixer_destroy_scene", ERR_DEVICE, || {
+        mixer_destroy_scene_ffi(scene_id)
+    })
+}
+
+fn mixer_destroy_scene_ffi(scene_id: u64) -> i32 {
     with_mixer(|mixer| {
         {
-            let mut shared = mixer.shared.lock().expect("shared");
+            let mut shared = mixer.shared.lock_or_recover();
             shared.scenes.remove(&scene_id);
             shared.multiview_binds.remove(&scene_id);
             shared.compose_dirty = true;
@@ -1302,11 +1392,25 @@ pub extern "C" fn mixer_define_generator(
     a: f32,
     scroll: u32,
 ) -> i32 {
+    ffi_guard("mixer_define_generator", ERR_DEVICE, || {
+        mixer_define_generator_ffi(id, kind, r, g, b, a, scroll)
+    })
+}
+
+fn mixer_define_generator_ffi(
+    id: u64,
+    kind: u32,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+    scroll: u32,
+) -> i32 {
     if kind != GEN_SOLID && kind != GEN_BARS {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let previous = shared.generators.get(&id).copied();
         shared.generators.insert(
             id,
@@ -1332,6 +1436,18 @@ pub extern "C" fn mixer_define_mix_input(
     delay: u32,
     audio_bus_id: u64,
 ) -> i32 {
+    ffi_guard("mixer_define_mix_input", ERR_DEVICE, || {
+        mixer_define_mix_input_ffi(id, target_id, source_kind, delay, audio_bus_id)
+    })
+}
+
+fn mixer_define_mix_input_ffi(
+    id: u64,
+    target_id: u64,
+    source_kind: u32,
+    delay: u32,
+    audio_bus_id: u64,
+) -> i32 {
     let Some(spec) = MixInputSpec::new(target_id, source_kind, delay, audio_bus_id) else {
         return ERR_INVALID_ARGUMENT;
     };
@@ -1339,7 +1455,7 @@ pub extern "C" fn mixer_define_mix_input(
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let mut pending = shared.mix_inputs.clone();
         pending.insert(id, spec);
         if !spec.is_session_multiview() {
@@ -1358,8 +1474,14 @@ pub extern "C" fn mixer_define_mix_input(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) -> i32 {
+    ffi_guard("mixer_generator_set_tone", ERR_DEVICE, || {
+        mixer_generator_set_tone_ffi(id, hz, level_dbfs)
+    })
+}
+
+fn mixer_generator_set_tone_ffi(id: u64, hz: f32, level_dbfs: f32) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let kind = if id == SRC_BARS { GEN_BARS } else { GEN_SOLID };
         let entry = shared.generators.entry(id).or_insert_with(|| Generator {
             kind,
@@ -1377,9 +1499,16 @@ pub extern "C" fn mixer_generator_set_tone(id: u64, hz: f32, level_dbfs: f32) ->
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_unit(unit_id: u64) -> i32 {
-    send_gpu_and_wait_timeout(
+    ffi_guard("mixer_destroy_unit", ERR_DEVICE, || {
+        mixer_destroy_unit_ffi(unit_id)
+    })
+}
+
+fn mixer_destroy_unit_ffi(unit_id: u64) -> i32 {
+    let mut workers = Vec::new();
+    let code = send_gpu_and_wait_timeout(
         |mixer, reply| {
-            let mut shared = mixer.shared.lock().expect("shared");
+            let mut shared = mixer.shared.lock_or_recover();
             shared.units.remove(&unit_id);
             let mut gone = Vec::new();
             shared.outputs.retain(|id, output| {
@@ -1393,7 +1522,7 @@ pub extern "C" fn mixer_destroy_unit(unit_id: u64) -> i32 {
             drop(shared);
             for output_id in gone {
                 if let Some(worker) = mixer.send_workers.remove(&output_id) {
-                    shutdown_output_worker(worker);
+                    workers.push(worker);
                 }
             }
             if mixer
@@ -1406,11 +1535,28 @@ pub extern "C" fn mixer_destroy_unit(unit_id: u64) -> i32 {
             OK
         },
         Duration::from_secs(2),
-    )
+    );
+    // Joining send threads can take seconds; never do it under the slot lock.
+    for worker in workers {
+        shutdown_output_worker(worker);
+    }
+    code
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_attach_output(
+    unit_id: u64,
+    hwnd: isize,
+    width: u32,
+    height: u32,
+    kind: u32,
+) -> i32 {
+    ffi_guard("mixer_unit_attach_output", ERR_DEVICE, || {
+        mixer_unit_attach_output_ffi(unit_id, hwnd, width, height, kind)
+    })
+}
+
+fn mixer_unit_attach_output_ffi(
     unit_id: u64,
     hwnd: isize,
     width: u32,
@@ -1422,6 +1568,19 @@ pub extern "C" fn mixer_unit_attach_output(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_attach_native(
+    unit_id: u64,
+    kind: u32,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
+    ffi_guard("mixer_unit_attach_native", ERR_DEVICE, || {
+        mixer_unit_attach_native_ffi(unit_id, kind, native_kind, handle, width, height)
+    })
+}
+
+fn mixer_unit_attach_native_ffi(
     unit_id: u64,
     kind: u32,
     native_kind: u32,
@@ -1447,13 +1606,7 @@ pub extern "C" fn mixer_unit_attach_native(
     #[cfg(not(target_os = "macos"))]
     let prepared = None;
     send_gpu_and_wait(|mixer, reply| {
-        if !mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .units
-            .contains_key(&unit_id)
-        {
+        if !mixer.shared.lock_or_recover().units.contains_key(&unit_id) {
             set_error(
                 &mixer.telemetry,
                 format!("attach surface: mixing unit {unit_id:#x} is not created"),
@@ -1486,6 +1639,12 @@ pub(crate) fn attach_invalid(message: impl Into<String>) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_set_state(unit_id: u64, state: *const UnitState) -> i32 {
+    ffi_guard("mixer_unit_set_state", ERR_DEVICE, || unsafe {
+        mixer_unit_set_state_ffi(unit_id, state)
+    })
+}
+
+unsafe fn mixer_unit_set_state_ffi(unit_id: u64, state: *const UnitState) -> i32 {
     if state.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -1506,7 +1665,7 @@ pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
     }
     let state = *state;
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
             return ERR_INVALID_ARGUMENT;
         }
@@ -1687,7 +1846,7 @@ pub(crate) fn take_cut_to(unit: &mut LiveUnit, swap: bool, incoming: u64) {
 /// GPU CUT. ControlService calls this; the C ABI entry goes through ControlService.
 pub(crate) fn unit_cut_inner(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1709,6 +1868,12 @@ pub(crate) fn unit_cut_inner(unit_id: u64, swap: u32, incoming_source: u64) -> i
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_cut(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
+    ffi_guard("mixer_unit_cut", ERR_DEVICE, || {
+        mixer_unit_cut_ffi(unit_id, swap, incoming_source)
+    })
+}
+
+fn mixer_unit_cut_ffi(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
     crate::runtime::c_cut(unit_id, swap, incoming_source)
 }
 
@@ -1730,7 +1895,7 @@ pub(crate) fn unit_auto_inner(
     param: f32,
 ) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1795,6 +1960,42 @@ pub extern "C" fn mixer_unit_auto(
     softness: f32,
     param: f32,
 ) -> i32 {
+    ffi_guard("mixer_unit_auto", ERR_DEVICE, || {
+        mixer_unit_auto_ffi(
+            unit_id,
+            kind,
+            duration_ms,
+            swap,
+            keep_preview,
+            easing,
+            direction,
+            dip_r,
+            dip_g,
+            dip_b,
+            dip_a,
+            incoming_source,
+            softness,
+            param,
+        )
+    })
+}
+
+fn mixer_unit_auto_ffi(
+    unit_id: u64,
+    kind: u32,
+    duration_ms: u32,
+    swap: u32,
+    keep_preview: u32,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    incoming_source: u64,
+    softness: f32,
+    param: f32,
+) -> i32 {
     crate::runtime::c_auto(
         unit_id,
         kind,
@@ -1820,6 +2021,17 @@ pub unsafe extern "C" fn mixer_unit_overlay_auto(
     duration_ms: u32,
     desc: *const OverlayDesc,
 ) -> i32 {
+    ffi_guard("mixer_unit_overlay_auto", ERR_DEVICE, || unsafe {
+        mixer_unit_overlay_auto_ffi(unit_id, target_enabled, duration_ms, desc)
+    })
+}
+
+unsafe fn mixer_unit_overlay_auto_ffi(
+    unit_id: u64,
+    target_enabled: u32,
+    duration_ms: u32,
+    desc: *const OverlayDesc,
+) -> i32 {
     if desc.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -1838,7 +2050,7 @@ pub(crate) fn overlay_auto_inner(
     desc: OverlayDesc,
 ) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1868,6 +2080,12 @@ pub(crate) fn overlay_auto_inner(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_validate_custom_wgsl(wgsl: *const c_char) -> i32 {
+    ffi_guard("mixer_validate_custom_wgsl", ERR_DEVICE, || unsafe {
+        mixer_validate_custom_wgsl_ffi(wgsl)
+    })
+}
+
+unsafe fn mixer_validate_custom_wgsl_ffi(wgsl: *const c_char) -> i32 {
     let text = if wgsl.is_null() {
         String::new()
     } else {
@@ -1887,6 +2105,12 @@ pub unsafe extern "C" fn mixer_validate_custom_wgsl(wgsl: *const c_char) -> i32 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_set_custom_wgsl(unit_id: u64, wgsl: *const c_char) -> i32 {
+    ffi_guard("mixer_unit_set_custom_wgsl", ERR_DEVICE, || unsafe {
+        mixer_unit_set_custom_wgsl_ffi(unit_id, wgsl)
+    })
+}
+
+unsafe fn mixer_unit_set_custom_wgsl_ffi(unit_id: u64, wgsl: *const c_char) -> i32 {
     let text = if wgsl.is_null() {
         String::new()
     } else {
@@ -1896,7 +2120,7 @@ pub unsafe extern "C" fn mixer_unit_set_custom_wgsl(unit_id: u64, wgsl: *const c
             .to_string()
     };
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1918,11 +2142,23 @@ pub extern "C" fn mixer_unit_configure(
     fps_num: u32,
     fps_den: u32,
 ) -> i32 {
+    ffi_guard("mixer_unit_configure", ERR_DEVICE, || {
+        mixer_unit_configure_ffi(unit_id, width, height, fps_num, fps_den)
+    })
+}
+
+fn mixer_unit_configure_ffi(
+    unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> i32 {
     if width == 0 || height == 0 || crate::clock::Rate::new(fps_num, fps_den).is_err() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1937,11 +2173,17 @@ pub extern "C" fn mixer_unit_configure(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_unit_get_state(unit_id: u64, out: *mut UnitState) -> i32 {
+    ffi_guard("mixer_unit_get_state", ERR_DEVICE, || unsafe {
+        mixer_unit_get_state_ffi(unit_id, out)
+    })
+}
+
+unsafe fn mixer_unit_get_state_ffi(unit_id: u64, out: *mut UnitState) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -1962,11 +2204,36 @@ pub extern "C" fn mixer_unit_resize_output(
     width: u32,
     height: u32,
 ) -> i32 {
+    ffi_guard("mixer_unit_resize_output", ERR_DEVICE, || {
+        mixer_unit_resize_output_ffi(unit_id, kind, hwnd, width, height)
+    })
+}
+
+fn mixer_unit_resize_output_ffi(
+    unit_id: u64,
+    kind: u32,
+    hwnd: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
     mixer_unit_resize_native(unit_id, kind, NATIVE_WIN32_HWND, hwnd, width, height)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_resize_native(
+    unit_id: u64,
+    kind: u32,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
+    ffi_guard("mixer_unit_resize_native", ERR_DEVICE, || {
+        mixer_unit_resize_native_ffi(unit_id, kind, native_kind, handle, width, height)
+    })
+}
+
+fn mixer_unit_resize_native_ffi(
     unit_id: u64,
     kind: u32,
     native_kind: u32,
@@ -2001,6 +2268,12 @@ pub extern "C" fn mixer_unit_resize_native(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_detach_output(unit_id: u64, kind: u32, hwnd: isize) -> i32 {
+    ffi_guard("mixer_unit_detach_output", ERR_DEVICE, || {
+        mixer_unit_detach_output_ffi(unit_id, kind, hwnd)
+    })
+}
+
+fn mixer_unit_detach_output_ffi(unit_id: u64, kind: u32, hwnd: isize) -> i32 {
     mixer_unit_detach_native(unit_id, kind, NATIVE_WIN32_HWND, hwnd)
 }
 
@@ -2011,6 +2284,12 @@ pub extern "C" fn mixer_unit_detach_native(
     native_kind: u32,
     handle: isize,
 ) -> i32 {
+    ffi_guard("mixer_unit_detach_native", ERR_DEVICE, || {
+        mixer_unit_detach_native_ffi(unit_id, kind, native_kind, handle)
+    })
+}
+
+fn mixer_unit_detach_native_ffi(unit_id: u64, kind: u32, native_kind: u32, handle: isize) -> i32 {
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
         return ERR_INVALID_ARGUMENT;
     };
@@ -2042,6 +2321,18 @@ pub extern "C" fn mixer_attach_monitor(
     width: u32,
     height: u32,
 ) -> i32 {
+    ffi_guard("mixer_attach_monitor", ERR_DEVICE, || {
+        mixer_attach_monitor_ffi(monitor_id, source_id, hwnd, width, height)
+    })
+}
+
+fn mixer_attach_monitor_ffi(
+    monitor_id: u64,
+    source_id: u64,
+    hwnd: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
     mixer_attach_monitor_native(
         monitor_id,
         source_id,
@@ -2054,6 +2345,19 @@ pub extern "C" fn mixer_attach_monitor(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_attach_monitor_native(
+    monitor_id: u64,
+    source_id: u64,
+    native_kind: u32,
+    handle: isize,
+    width: u32,
+    height: u32,
+) -> i32 {
+    ffi_guard("mixer_attach_monitor_native", ERR_DEVICE, || {
+        mixer_attach_monitor_native_ffi(monitor_id, source_id, native_kind, handle, width, height)
+    })
+}
+
+fn mixer_attach_monitor_native_ffi(
     monitor_id: u64,
     source_id: u64,
     native_kind: u32,
@@ -2096,6 +2400,12 @@ pub extern "C" fn mixer_attach_monitor_native(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_resize_monitor(monitor_id: u64, width: u32, height: u32) -> i32 {
+    ffi_guard("mixer_resize_monitor", ERR_DEVICE, || {
+        mixer_resize_monitor_ffi(monitor_id, width, height)
+    })
+}
+
+fn mixer_resize_monitor_ffi(monitor_id: u64, width: u32, height: u32) -> i32 {
     if width == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2112,6 +2422,12 @@ pub extern "C" fn mixer_resize_monitor(monitor_id: u64, width: u32, height: u32)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_detach_monitor(monitor_id: u64) -> i32 {
+    ffi_guard("mixer_detach_monitor", ERR_DEVICE, || {
+        mixer_detach_monitor_ffi(monitor_id)
+    })
+}
+
+fn mixer_detach_monitor_ffi(monitor_id: u64) -> i32 {
     send_gpu_and_wait(|mixer, reply| {
         if mixer
             .cmds
@@ -2126,6 +2442,12 @@ pub extern "C" fn mixer_detach_monitor(monitor_id: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_monitor_set_source(monitor_id: u64, source_id: u64) -> i32 {
+    ffi_guard("mixer_monitor_set_source", ERR_DEVICE, || {
+        mixer_monitor_set_source_ffi(monitor_id, source_id)
+    })
+}
+
+fn mixer_monitor_set_source_ffi(monitor_id: u64, source_id: u64) -> i32 {
     with_mixer(|mixer| {
         let _ = mixer.cmds.send(GpuCmd::SetMonitorSource {
             monitor_id,
@@ -2138,6 +2460,12 @@ pub extern "C" fn mixer_monitor_set_source(monitor_id: u64, source_id: u64) -> i
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_register_source(id: u64, width: u32, height: u32, format: u32) -> i32 {
+    ffi_guard("mixer_register_source", ERR_DEVICE, || {
+        mixer_register_source_ffi(id, width, height, format)
+    })
+}
+
+fn mixer_register_source_ffi(id: u64, width: u32, height: u32, format: u32) -> i32 {
     let Some(format) = CpuFormat::from_abi(format) else {
         return ERR_INVALID_ARGUMENT;
     };
@@ -2156,6 +2484,12 @@ pub unsafe extern "C" fn mixer_push_frame(
     height: u32,
     pts: i64,
 ) -> i32 {
+    ffi_guard("mixer_push_frame", ERR_DEVICE, || unsafe {
+        mixer_push_frame_ffi(id, ptr, stride, height, pts)
+    })
+}
+
+unsafe fn mixer_push_frame_ffi(id: u64, ptr: *const u8, stride: u32, height: u32, pts: i64) -> i32 {
     if ptr.is_null() || stride == 0 || height == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2183,6 +2517,19 @@ pub unsafe extern "C" fn mixer_push_audio(
     pts: i64,
     planar: *const f32,
 ) -> i32 {
+    ffi_guard("mixer_push_audio", ERR_DEVICE, || unsafe {
+        mixer_push_audio_ffi(id, sample_rate, channels, frames, pts, planar)
+    })
+}
+
+unsafe fn mixer_push_audio_ffi(
+    id: u64,
+    sample_rate: i32,
+    channels: i32,
+    frames: u32,
+    pts: i64,
+    planar: *const f32,
+) -> i32 {
     if planar.is_null() || channels <= 0 || frames == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2190,8 +2537,8 @@ pub unsafe extern "C" fn mixer_push_audio(
     // SAFETY: caller keeps planar readable for this call only.
     let samples = unsafe { std::slice::from_raw_parts(planar, count) };
     with_mixer(|mixer| {
-        let audio = mixer.uploads.lock().expect("uploads").audio_store();
-        audio.lock().expect("audio").ingest_audio(
+        let audio = mixer.uploads.lock_or_recover().audio_store();
+        audio.lock_or_recover().ingest_audio(
             id,
             crate::upload::AudioPacket {
                 timestamp: pts,
@@ -2208,6 +2555,12 @@ pub unsafe extern "C" fn mixer_push_audio(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_load_still(id: u64, path: *const c_char) -> i32 {
+    ffi_guard("mixer_load_still", ERR_DEVICE, || unsafe {
+        mixer_load_still_ffi(id, path)
+    })
+}
+
+unsafe fn mixer_load_still_ffi(id: u64, path: *const c_char) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2256,6 +2609,12 @@ pub(crate) fn take_snapshot(unit_id: u64, kind: u32, path: &str) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_snapshot(unit_id: u64, kind: u32, path: *const c_char) -> i32 {
+    ffi_guard("mixer_snapshot", ERR_DEVICE, || unsafe {
+        mixer_snapshot_ffi(unit_id, kind, path)
+    })
+}
+
+unsafe fn mixer_snapshot_ffi(unit_id: u64, kind: u32, path: *const c_char) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2269,6 +2628,32 @@ pub unsafe extern "C" fn mixer_snapshot(unit_id: u64, kind: u32, path: *const c_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_start(
+    id: u64,
+    path: *const c_char,
+    capture: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    frame_buffer_frames: u32,
+) -> i32 {
+    ffi_guard("mixer_video_start", ERR_DEVICE, || unsafe {
+        mixer_video_start_ffi(
+            id,
+            path,
+            capture,
+            format,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            frame_buffer_frames,
+        )
+    })
+}
+
+unsafe fn mixer_video_start_ffi(
     id: u64,
     path: *const c_char,
     capture: u32,
@@ -2315,8 +2700,7 @@ pub unsafe extern "C" fn mixer_video_start(
         let depth = match with_mixer(|mixer| {
             let session = mixer
                 .shared
-                .lock()
-                .expect("shared")
+                .lock_or_recover()
                 .frame_buffer_frames
                 .clamp(1, 8);
             if frame_buffer_frames == 0 {
@@ -2351,7 +2735,7 @@ pub unsafe extern "C" fn mixer_video_start(
     {
         let (uploads, gpu, ingest, vulkan, depth, previous_video, previous_recv) =
             match with_mixer(|mixer| {
-                let mut shared = mixer.shared.lock().expect("shared");
+                let mut shared = mixer.shared.lock_or_recover();
                 let previous_video = shared.videos.remove(&id);
                 let previous_recv = shared.receivers.remove(&id);
                 let uploads = shared.uploads.clone();
@@ -2402,6 +2786,12 @@ pub unsafe extern "C" fn mixer_video_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
+    ffi_guard("mixer_video_set_playing", ERR_DEVICE, || {
+        mixer_video_set_playing_ffi(id, playing)
+    })
+}
+
+fn mixer_video_set_playing_ffi(id: u64, playing: u32) -> i32 {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, playing);
@@ -2409,7 +2799,7 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let Some(pump) = shared.videos.get(&id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2421,6 +2811,12 @@ pub extern "C" fn mixer_video_set_playing(id: u64, playing: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
+    ffi_guard("mixer_video_set_loop", ERR_DEVICE, || {
+        mixer_video_set_loop_ffi(id, looping)
+    })
+}
+
+fn mixer_video_set_loop_ffi(id: u64, looping: u32) -> i32 {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, looping);
@@ -2428,7 +2824,7 @@ pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let Some(pump) = shared.videos.get(&id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2440,6 +2836,12 @@ pub extern "C" fn mixer_video_set_loop(id: u64, looping: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
+    ffi_guard("mixer_video_seek", ERR_DEVICE, || {
+        mixer_video_seek_ffi(id, hns)
+    })
+}
+
+fn mixer_video_seek_ffi(id: u64, hns: i64) -> i32 {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (id, hns);
@@ -2447,7 +2849,7 @@ pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let Some(pump) = shared.videos.get(&id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2459,6 +2861,12 @@ pub extern "C" fn mixer_video_seek(id: u64, hns: i64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_enum_captures(out: *mut VideoCaptureInfo, cap: u32) -> i32 {
+    ffi_guard("mixer_video_enum_captures", -1, || unsafe {
+        mixer_video_enum_captures_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_video_enum_captures_ffi(out: *mut VideoCaptureInfo, cap: u32) -> i32 {
     if out.is_null() || cap == 0 {
         return 0;
     }
@@ -2484,6 +2892,16 @@ pub unsafe extern "C" fn mixer_video_enum_captures(out: *mut VideoCaptureInfo, c
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_enum_capture_modes(
+    device_id: *const c_char,
+    out: *mut VideoCaptureMode,
+    cap: u32,
+) -> i32 {
+    ffi_guard("mixer_video_enum_capture_modes", -1, || unsafe {
+        mixer_video_enum_capture_modes_ffi(device_id, out, cap)
+    })
+}
+
+unsafe fn mixer_video_enum_capture_modes_ffi(
     device_id: *const c_char,
     out: *mut VideoCaptureMode,
     cap: u32,
@@ -2521,6 +2939,12 @@ pub unsafe extern "C" fn mixer_video_enum_capture_modes(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo) -> i32 {
+    ffi_guard("mixer_video_copy_info", ERR_DEVICE, || unsafe {
+        mixer_video_copy_info_ffi(id, out)
+    })
+}
+
+unsafe fn mixer_video_copy_info_ffi(id: u64, out: *mut MixerVideoInfo) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2531,7 +2955,7 @@ pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo
     }
     #[cfg(any(windows, target_os = "macos"))]
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let Some(pump) = shared.videos.get(&id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2543,6 +2967,18 @@ pub unsafe extern "C" fn mixer_video_copy_info(id: u64, out: *mut MixerVideoInfo
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_omt_connect(
+    id: u64,
+    address: *const c_char,
+    use_gpu: u32,
+    frame_buffer_frames: u32,
+    quality: u32,
+) -> i32 {
+    ffi_guard("mixer_omt_connect", ERR_DEVICE, || unsafe {
+        mixer_omt_connect_ffi(id, address, use_gpu, frame_buffer_frames, quality)
+    })
+}
+
+unsafe fn mixer_omt_connect_ffi(
     id: u64,
     address: *const c_char,
     use_gpu: u32,
@@ -2562,7 +2998,7 @@ pub unsafe extern "C" fn mixer_omt_connect(
         use_gpu != 0
     ));
     let taken = match with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         #[cfg(any(windows, target_os = "macos"))]
         let previous_video = shared.videos.remove(&id);
         let previous_recv = shared.receivers.remove(&id);
@@ -2604,6 +3040,17 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     frame_buffer_frames: u32,
     low_bandwidth: u32,
 ) -> i32 {
+    ffi_guard("mixer_ndi_connect", ERR_DEVICE, || unsafe {
+        mixer_ndi_connect_ffi(id, address, frame_buffer_frames, low_bandwidth)
+    })
+}
+
+unsafe fn mixer_ndi_connect_ffi(
+    id: u64,
+    address: *const c_char,
+    frame_buffer_frames: u32,
+    low_bandwidth: u32,
+) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2625,7 +3072,7 @@ pub unsafe extern "C" fn mixer_ndi_connect(
     #[cfg(any(windows, target_os = "macos"))]
     {
         let (uploads, gpu, previous_video, previous_recv) = match with_mixer(|mixer| {
-            let mut shared = mixer.shared.lock().expect("shared");
+            let mut shared = mixer.shared.lock_or_recover();
             let previous_video = shared.videos.remove(&id);
             let previous_recv = shared.receivers.remove(&id);
             let uploads = shared.uploads.clone();
@@ -2646,11 +3093,17 @@ pub unsafe extern "C" fn mixer_ndi_connect(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_live_save(id: u64, mode: u32, flags: u32) -> i32 {
+    ffi_guard("mixer_set_live_save", ERR_DEVICE, || {
+        mixer_set_live_save_ffi(id, mode, flags)
+    })
+}
+
+fn mixer_set_live_save_ffi(id: u64, mode: u32, flags: u32) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").live_save.insert(
+        mixer.shared.lock_or_recover().live_save.insert(
             id,
             LiveSave {
                 mode,
@@ -2664,11 +3117,17 @@ pub extern "C" fn mixer_set_live_save(id: u64, mode: u32, flags: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_omt_set_quality(id: u64, quality: u32) -> i32 {
+    ffi_guard("mixer_omt_set_quality", ERR_DEVICE, || {
+        mixer_omt_set_quality_ffi(id, quality)
+    })
+}
+
+fn mixer_omt_set_quality_ffi(id: u64, quality: u32) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         if let Some(LiveReceiver::Omt(receiver)) = shared.receivers.get(&id) {
             receiver.set_quality(quality);
         }
@@ -2679,6 +3138,12 @@ pub extern "C" fn mixer_omt_set_quality(id: u64, quality: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char) -> i32 {
+    ffi_guard("mixer_omt_start_send", ERR_DEVICE, || unsafe {
+        mixer_omt_start_send_ffi(unit_id, name)
+    })
+}
+
+unsafe fn mixer_omt_start_send_ffi(unit_id: u64, name: *const c_char) -> i32 {
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2703,6 +3168,40 @@ pub unsafe extern "C" fn mixer_omt_start_send(unit_id: u64, name: *const c_char)
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_output_add(
+    output_id: u64,
+    transport: u32,
+    name: *const c_char,
+    source_kind: u32,
+    source_id: u64,
+    unit_id: u64,
+    use_gpu: u32,
+    audio_bus_id: u64,
+    skip_idle_encode: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> i32 {
+    ffi_guard("mixer_output_add", ERR_DEVICE, || unsafe {
+        mixer_output_add_ffi(
+            output_id,
+            transport,
+            name,
+            source_kind,
+            source_id,
+            unit_id,
+            use_gpu,
+            audio_bus_id,
+            skip_idle_encode,
+            width,
+            height,
+            fps_num,
+            fps_den,
+        )
+    })
+}
+
+unsafe fn mixer_output_add_ffi(
     output_id: u64,
     transport: u32,
     name: *const c_char,
@@ -2757,12 +3256,7 @@ pub unsafe extern "C" fn mixer_output_add(
     // fullname does not come back on macOS browse. Settings ApplyOutputs +
     // session publish hits this path for every Enable.
     let old = match with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .outputs
-            .remove(&output_id);
+        mixer.shared.lock_or_recover().outputs.remove(&output_id);
         mixer.send_workers.remove(&output_id)
     }) {
         Ok(old) => old,
@@ -2836,9 +3330,9 @@ pub unsafe extern "C" fn mixer_output_add(
             OutputHandle::Ndi(sender) => Arc::clone(&sender.connections),
             _ => Arc::new(AtomicU32::new(0)),
         };
-        let clock = mixer.shared.lock().expect("shared").clock;
+        let clock = mixer.shared.lock_or_recover().clock;
         let inherited = {
-            let shared = mixer.shared.lock().expect("shared");
+            let shared = mixer.shared.lock_or_recover();
             if fps_num > 0 && fps_den > 0 {
                 (fps_num, fps_den)
             } else {
@@ -2852,7 +3346,7 @@ pub unsafe extern "C" fn mixer_output_add(
         if crate::clock::Rate::new(inherited.0, inherited.1).is_err() {
             return ERR_INVALID_ARGUMENT;
         }
-        let worker = spawn_output_worker(
+        let worker = match spawn_output_worker(
             output_id,
             handle,
             Arc::clone(&video_sub),
@@ -2862,8 +3356,15 @@ pub unsafe extern "C" fn mixer_output_add(
             clock,
             inherited.0,
             inherited.1,
-        );
-        mixer.shared.lock().expect("shared").outputs.insert(
+        ) {
+            Ok(worker) => worker,
+            Err(error) => {
+                crate::diag::error(&error);
+                set_error(&mixer.telemetry, error);
+                return ERR_DEVICE;
+            }
+        };
+        mixer.shared.lock_or_recover().outputs.insert(
             output_id,
             LiveOutput {
                 source_kind,
@@ -2893,23 +3394,34 @@ pub unsafe extern "C" fn mixer_output_add(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_output_remove(output_id: u64) -> i32 {
-    with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock()
-            .expect("shared")
-            .outputs
-            .remove(&output_id);
-        if let Some(worker) = mixer.send_workers.remove(&output_id) {
-            shutdown_output_worker(worker);
-        }
-        OK
+    ffi_guard("mixer_output_remove", ERR_DEVICE, || {
+        mixer_output_remove_ffi(output_id)
     })
-    .unwrap_or_else(|code| code)
+}
+
+fn mixer_output_remove_ffi(output_id: u64) -> i32 {
+    let worker = match with_mixer(|mixer| {
+        mixer.shared.lock_or_recover().outputs.remove(&output_id);
+        mixer.send_workers.remove(&output_id)
+    }) {
+        Ok(worker) => worker,
+        Err(code) => return code,
+    };
+    // Joining the send thread can take seconds; never do it under the slot lock.
+    if let Some(worker) = worker {
+        shutdown_output_worker(worker);
+    }
+    OK
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_omt_discover(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_omt_discover", -1, || unsafe {
+        mixer_omt_discover_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_omt_discover_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2927,6 +3439,12 @@ pub unsafe extern "C" fn mixer_omt_discover(out: *mut u8, cap: usize) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_ndi_discover(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_ndi_discover", -1, || unsafe {
+        mixer_ndi_discover_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_ndi_discover_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2960,6 +3478,18 @@ pub unsafe extern "C" fn mixer_unit_acquire_frame(
     pts: *mut i64,
     length: *mut u32,
 ) -> i32 {
+    ffi_guard("mixer_unit_acquire_frame", ERR_DEVICE, || unsafe {
+        mixer_unit_acquire_frame_ffi(unit_id, ptr, stride, pts, length)
+    })
+}
+
+unsafe fn mixer_unit_acquire_frame_ffi(
+    unit_id: u64,
+    ptr: *mut *const u8,
+    stride: *mut u32,
+    pts: *mut i64,
+    length: *mut u32,
+) -> i32 {
     if ptr.is_null() || stride.is_null() || pts.is_null() || length.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -2968,7 +3498,7 @@ pub unsafe extern "C" fn mixer_unit_acquire_frame(
     }
     // The latest packed frame is stored on the render-thread readback cache and
     // copied into a process-wide acquire buffer so the pointer stays stable.
-    let Some(frame) = last_frames().lock().expect("frame").get(&unit_id).cloned() else {
+    let Some(frame) = last_frames().lock_or_recover().get(&unit_id).cloned() else {
         return ERR_IO;
     };
     unsafe {
@@ -2977,31 +3507,36 @@ pub unsafe extern "C" fn mixer_unit_acquire_frame(
         *pts = frame.pts;
         *length = frame.data.len() as u32;
     }
-    acquired().lock().expect("acq").insert(unit_id, frame);
+    acquired().lock_or_recover().insert(unit_id, frame);
     OK
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_unit_release_frame(unit_id: u64) -> i32 {
-    acquired().lock().expect("acq").remove(&unit_id);
+    ffi_guard("mixer_unit_release_frame", ERR_DEVICE, || {
+        mixer_unit_release_frame_ffi(unit_id)
+    })
+}
+
+fn mixer_unit_release_frame_ffi(unit_id: u64) -> i32 {
+    acquired().lock_or_recover().remove(&unit_id);
     OK
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_last_error", -1, || unsafe {
+        mixer_last_error_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_last_error_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    let error = match with_mixer(|mixer| {
-        mixer
-            .telemetry
-            .lock()
-            .expect("telemetry")
-            .last_error
-            .clone()
-    }) {
+    let error = match with_mixer(|mixer| mixer.telemetry.lock_or_recover().last_error.clone()) {
         Ok(error) if !error.is_empty() => error,
-        _ => session_error_slot().lock().expect("session error").clone(),
+        _ => session_error_slot().lock_or_recover().clone(),
     };
     let n = error.len().min(cap);
     unsafe { std::ptr::copy_nonoverlapping(error.as_ptr(), out, n) };
@@ -3010,6 +3545,12 @@ pub unsafe extern "C" fn mixer_last_error(out: *mut u8, cap: usize) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_take_fatal(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_take_fatal", -1, || unsafe {
+        mixer_take_fatal_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_take_fatal_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3023,6 +3564,12 @@ pub unsafe extern "C" fn mixer_take_fatal(out: *mut u8, cap: usize) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_has_assets(path: *const c_char) -> i32 {
+    ffi_guard("mixer_session_has_assets", ERR_DEVICE, || unsafe {
+        mixer_session_has_assets_ffi(path)
+    })
+}
+
+unsafe fn mixer_session_has_assets_ffi(path: *const c_char) -> i32 {
     if path.is_null() {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3038,6 +3585,18 @@ pub unsafe extern "C" fn mixer_session_has_assets(path: *const c_char) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_import(
+    export_path: *const c_char,
+    session_dest: *const c_char,
+    media_dir: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    ffi_guard("mixer_session_import", -1, || unsafe {
+        mixer_session_import_ffi(export_path, session_dest, media_dir, out, cap)
+    })
+}
+
+unsafe fn mixer_session_import_ffi(
     export_path: *const c_char,
     session_dest: *const c_char,
     media_dir: *const c_char,
@@ -3075,6 +3634,12 @@ pub unsafe extern "C" fn mixer_session_import(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_current_path(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_session_current_path", -1, || unsafe {
+        mixer_session_current_path_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_session_current_path_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3091,6 +3656,12 @@ pub unsafe extern "C" fn mixer_session_current_path(out: *mut u8, cap: usize) ->
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_load(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_session_load", -1, || unsafe {
+        mixer_session_load_ffi(path, out, cap)
+    })
+}
+
+unsafe fn mixer_session_load_ffi(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
     if path.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3117,6 +3688,12 @@ pub unsafe extern "C" fn mixer_session_save(
     json: *const u8,
     len: usize,
 ) -> i32 {
+    ffi_guard("mixer_session_save", ERR_DEVICE, || unsafe {
+        mixer_session_save_ffi(path, json, len)
+    })
+}
+
+unsafe fn mixer_session_save_ffi(path: *const c_char, json: *const u8, len: usize) -> i32 {
     if path.is_null() || json.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3144,6 +3721,12 @@ pub unsafe extern "C" fn mixer_session_export(
     json: *const u8,
     len: usize,
 ) -> i32 {
+    ffi_guard("mixer_session_export", ERR_DEVICE, || unsafe {
+        mixer_session_export_ffi(path, json, len)
+    })
+}
+
+unsafe fn mixer_session_export_ffi(path: *const c_char, json: *const u8, len: usize) -> i32 {
     if path.is_null() || json.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3167,6 +3750,17 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
     out: *mut u8,
     cap: usize,
 ) -> i32 {
+    ffi_guard("mixer_session_canonicalize", -1, || unsafe {
+        mixer_session_canonicalize_ffi(json, len, out, cap)
+    })
+}
+
+unsafe fn mixer_session_canonicalize_ffi(
+    json: *const u8,
+    len: usize,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
     if json.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3182,6 +3776,12 @@ pub unsafe extern "C" fn mixer_session_canonicalize(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_session_clear_current() -> i32 {
+    ffi_guard("mixer_session_clear_current", ERR_DEVICE, || {
+        mixer_session_clear_current_ffi()
+    })
+}
+
+fn mixer_session_clear_current_ffi() -> i32 {
     if let Ok(mut svc) = crate::control_service().lock() {
         svc.set_session_path(None);
     }
@@ -3194,6 +3794,12 @@ pub unsafe extern "C" fn mixer_session_history(
     out: *mut u8,
     cap: usize,
 ) -> i32 {
+    ffi_guard("mixer_session_history", -1, || unsafe {
+        mixer_session_history_ffi(path, out, cap)
+    })
+}
+
+unsafe fn mixer_session_history_ffi(path: *const c_char, out: *mut u8, cap: usize) -> i32 {
     if path.is_null() || out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3211,6 +3817,17 @@ pub unsafe extern "C" fn mixer_session_history(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_load_rev(
+    path: *const c_char,
+    index: u32,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    ffi_guard("mixer_session_load_rev", -1, || unsafe {
+        mixer_session_load_rev_ffi(path, index, out, cap)
+    })
+}
+
+unsafe fn mixer_session_load_rev_ffi(
     path: *const c_char,
     index: u32,
     out: *mut u8,
@@ -3234,6 +3851,12 @@ pub unsafe extern "C" fn mixer_session_load_rev(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_publish(json: *const u8, len: usize) -> i32 {
+    ffi_guard("mixer_session_publish", ERR_DEVICE, || unsafe {
+        mixer_session_publish_ffi(json, len)
+    })
+}
+
+unsafe fn mixer_session_publish_ffi(json: *const u8, len: usize) -> i32 {
     unsafe { crate::vmix_api::publish_c(json, len) }
 }
 
@@ -3243,6 +3866,12 @@ pub unsafe extern "C" fn mixer_session_replace(
     len: usize,
     expected_revision: u64,
 ) -> i32 {
+    ffi_guard("mixer_session_replace", ERR_DEVICE, || unsafe {
+        mixer_session_replace_ffi(json, len, expected_revision)
+    })
+}
+
+unsafe fn mixer_session_replace_ffi(json: *const u8, len: usize, expected_revision: u64) -> i32 {
     if json.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3252,6 +3881,12 @@ pub unsafe extern "C" fn mixer_session_replace(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_poll_events", -1, || unsafe {
+        mixer_poll_events_ffi(after, out, cap)
+    })
+}
+
+unsafe fn mixer_poll_events_ffi(after: u64, out: *mut u8, cap: usize) -> i32 {
     if out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3261,6 +3896,12 @@ pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize)
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_snapshot(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_copy_snapshot", -1, || unsafe {
+        mixer_copy_snapshot_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_snapshot_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() || cap == 0 {
         return -ERR_INVALID_ARGUMENT;
     }
@@ -3275,26 +3916,61 @@ pub unsafe extern "C" fn mixer_api_configure(
     user: *const c_char,
     pass: *const c_char,
 ) -> i32 {
+    ffi_guard("mixer_api_configure", ERR_DEVICE, || unsafe {
+        mixer_api_configure_ffi(enabled, port, user, pass)
+    })
+}
+
+unsafe fn mixer_api_configure_ffi(
+    enabled: u32,
+    port: u32,
+    user: *const c_char,
+    pass: *const c_char,
+) -> i32 {
     unsafe { crate::vmix_api::configure_c(enabled, port, user, pass) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_api_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_api_listen_owner", -1, || unsafe {
+        mixer_api_listen_owner_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_api_listen_owner_ffi(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::vmix_api::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_tcp_configure(enabled: u32) -> i32 {
+    ffi_guard("mixer_tcp_configure", ERR_DEVICE, || {
+        mixer_tcp_configure_ffi(enabled)
+    })
+}
+
+fn mixer_tcp_configure_ffi(enabled: u32) -> i32 {
     crate::vmix_tcp::configure(enabled != 0)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_tcp_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_tcp_listen_owner", -1, || unsafe {
+        mixer_tcp_listen_owner_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_tcp_listen_owner_ffi(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::vmix_tcp::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_ws_configure(enabled: u32, port: u32) -> i32 {
+    ffi_guard("mixer_ws_configure", ERR_DEVICE, || {
+        mixer_ws_configure_ffi(enabled, port)
+    })
+}
+
+fn mixer_ws_configure_ffi(enabled: u32, port: u32) -> i32 {
     crate::native_ws::configure(enabled != 0, port)
 }
 
@@ -3304,6 +3980,12 @@ pub unsafe extern "C" fn mixer_ws_configure_bind(
     host: *const c_char,
     port: u32,
 ) -> i32 {
+    ffi_guard("mixer_ws_configure_bind", ERR_DEVICE, || unsafe {
+        mixer_ws_configure_bind_ffi(enabled, host, port)
+    })
+}
+
+unsafe fn mixer_ws_configure_bind_ffi(enabled: u32, host: *const c_char, port: u32) -> i32 {
     let host = if host.is_null() {
         "127.0.0.1"
     } else {
@@ -3316,6 +3998,19 @@ pub unsafe extern "C" fn mixer_ws_configure_bind(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_ws_configure_owned(
+    enabled: u32,
+    host: *const c_char,
+    port: u32,
+    token: *const c_char,
+    max_role: *const c_char,
+    media_directory: *const c_char,
+) -> i32 {
+    ffi_guard("mixer_ws_configure_owned", ERR_DEVICE, || unsafe {
+        mixer_ws_configure_owned_ffi(enabled, host, port, token, max_role, media_directory)
+    })
+}
+
+unsafe fn mixer_ws_configure_owned_ffi(
     enabled: u32,
     host: *const c_char,
     port: u32,
@@ -3352,17 +4047,29 @@ pub unsafe extern "C" fn mixer_ws_configure_owned(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_ws_listen_owner(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_ws_listen_owner", -1, || unsafe {
+        mixer_ws_listen_owner_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_ws_listen_owner_ffi(out: *mut u8, cap: usize) -> i32 {
     unsafe { crate::native_ws::listen_owner_c(out, cap) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_source_status(id: u64, out: *mut MixerSourceStatus) -> i32 {
+    ffi_guard("mixer_source_status", ERR_DEVICE, || unsafe {
+        mixer_source_status_ffi(id, out)
+    })
+}
+
+unsafe fn mixer_source_status_ffi(id: u64, out: *mut MixerSourceStatus) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let (connected, has_video, uploads) = {
-            let shared = mixer.shared.lock().expect("shared");
+            let shared = mixer.shared.lock_or_recover();
             let (connected, has_video) = shared
                 .receivers
                 .get(&id)
@@ -3371,7 +4078,7 @@ pub unsafe extern "C" fn mixer_source_status(id: u64, out: *mut MixerSourceStatu
                 .unwrap_or((false, false));
             (connected, has_video, Arc::clone(&shared.uploads))
         };
-        let store = uploads.lock().expect("uploads");
+        let store = uploads.lock_or_recover();
         unsafe {
             *out = MixerSourceStatus {
                 connected: u32::from(connected),
@@ -3385,14 +4092,19 @@ pub unsafe extern "C" fn mixer_source_status(id: u64, out: *mut MixerSourceStatu
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_source_copy_error(id: u64, out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_source_copy_error", -1, || unsafe {
+        mixer_source_copy_error_ffi(id, out, cap)
+    })
+}
+
+unsafe fn mixer_source_copy_error_ffi(id: u64, out: *mut u8, cap: usize) -> i32 {
     if out.is_null() || cap == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     let error = with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .receivers
             .get(&id)
             .map(LiveReceiver::source_status)
@@ -3409,13 +4121,15 @@ pub unsafe extern "C" fn mixer_source_copy_error(id: u64, out: *mut u8, cap: usi
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
+    ffi_guard("mixer_destroy_source", ERR_DEVICE, || {
+        mixer_destroy_source_ffi(id)
+    })
+}
+
+fn mixer_destroy_source_ffi(id: u64) -> i32 {
     crate::diag::info(&format!("destroy_source id={id}"));
     let _ = with_mixer(|mixer| {
-        mixer
-            .audio_captures
-            .lock()
-            .expect("audio captures")
-            .stop(id);
+        mixer.audio_captures.lock_or_recover().stop(id);
         OK
     });
     match detach_source(id) {
@@ -3423,7 +4137,7 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
             drop(taken.receiver);
             #[cfg(any(windows, target_os = "macos"))]
             drop(taken.video);
-            taken.uploads.lock().expect("uploads").unregister(id);
+            taken.uploads.lock_or_recover().unregister(id);
             OK
         }
         Err(code) => code,
@@ -3432,9 +4146,15 @@ pub extern "C" fn mixer_destroy_source(id: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_flush_audio(id: u64) -> i32 {
+    ffi_guard("mixer_flush_audio", ERR_DEVICE, || {
+        mixer_flush_audio_ffi(id)
+    })
+}
+
+fn mixer_flush_audio_ffi(id: u64) -> i32 {
     with_mixer(|mixer| {
-        let audio = mixer.uploads.lock().expect("uploads").audio_store();
-        audio.lock().expect("audio").flush_audio(id);
+        let audio = mixer.uploads.lock_or_recover().audio_store();
+        audio.lock_or_recover().flush_audio(id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3450,13 +4170,27 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
     map_left: i32,
     map_right: i32,
 ) -> i32 {
+    ffi_guard("mixer_audio_bus_upsert", ERR_DEVICE, || unsafe {
+        mixer_audio_bus_upsert_ffi(id, name, role, device_kind, device_id, map_left, map_right)
+    })
+}
+
+unsafe fn mixer_audio_bus_upsert_ffi(
+    id: u64,
+    name: *const c_char,
+    role: u32,
+    device_kind: u32,
+    device_id: *const c_char,
+    map_left: i32,
+    map_right: i32,
+) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     let name = read_cstr(name);
     let device_id = read_cstr(device_id);
     with_mixer(|mixer| {
-        let audio = mixer.shared.lock().expect("shared").audio.clone();
+        let audio = mixer.shared.lock_or_recover().audio.clone();
         audio.upsert_bus(
             id,
             &name,
@@ -3473,8 +4207,14 @@ pub unsafe extern "C" fn mixer_audio_bus_upsert(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_bus_remove(id: u64) -> i32 {
+    ffi_guard("mixer_audio_bus_remove", ERR_DEVICE, || {
+        mixer_audio_bus_remove_ffi(id)
+    })
+}
+
+fn mixer_audio_bus_remove_ffi(id: u64) -> i32 {
     with_mixer(|mixer| {
-        let audio = mixer.shared.lock().expect("shared").audio.clone();
+        let audio = mixer.shared.lock_or_recover().audio.clone();
         audio.remove_bus(id);
         OK
     })
@@ -3483,15 +4223,19 @@ pub extern "C" fn mixer_audio_bus_remove(id: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_bus_count() -> i32 {
+    ffi_guard("mixer_audio_bus_count", ERR_DEVICE, || {
+        mixer_audio_bus_count_ffi()
+    })
+}
+
+fn mixer_audio_bus_count_ffi() -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .graph()
-            .lock()
-            .expect("audio")
+            .lock_or_recover()
             .buses
             .len() as i32
     })
@@ -3500,12 +4244,18 @@ pub extern "C" fn mixer_audio_bus_count() -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo) -> i32 {
+    ffi_guard("mixer_audio_bus_get", ERR_DEVICE, || unsafe {
+        mixer_audio_bus_get_ffi(index, out)
+    })
+}
+
+unsafe fn mixer_audio_bus_get_ffi(index: u32, out: *mut AudioBusInfo) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let graph = mixer.shared.lock().expect("shared").audio.graph();
-        let graph = graph.lock().expect("audio");
+        let graph = mixer.shared.lock_or_recover().audio.graph();
+        let graph = graph.lock_or_recover();
         let Some(bus) = graph.buses.get(index as usize) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -3528,11 +4278,16 @@ pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo)
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_input(id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
+    ffi_guard("mixer_audio_set_input", ERR_DEVICE, || {
+        mixer_audio_set_input_ffi(id, bus_mask, gain, mute)
+    })
+}
+
+fn mixer_audio_set_input_ffi(id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_input(id, bus_mask, gain, mute);
         OK
@@ -3542,11 +4297,16 @@ pub extern "C" fn mixer_audio_set_input(id: u64, bus_mask: u32, gain: f32, mute:
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_bus_gain(id: u64, gain: f32, mute: u32) -> i32 {
+    ffi_guard("mixer_audio_set_bus_gain", ERR_DEVICE, || {
+        mixer_audio_set_bus_gain_ffi(id, gain, mute)
+    })
+}
+
+fn mixer_audio_set_bus_gain_ffi(id: u64, gain: f32, mute: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_bus_gain(id, gain, mute);
         OK
@@ -3556,11 +4316,16 @@ pub extern "C" fn mixer_audio_set_bus_gain(id: u64, gain: f32, mute: u32) -> i32
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_unit_link(unit_id: u64, bus_id: u64, mode: u32) -> i32 {
+    ffi_guard("mixer_audio_set_unit_link", ERR_DEVICE, || {
+        mixer_audio_set_unit_link_ffi(unit_id, bus_id, mode)
+    })
+}
+
+fn mixer_audio_set_unit_link_ffi(unit_id: u64, bus_id: u64, mode: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_unit_link(unit_id, bus_id, mode);
         OK
@@ -3570,11 +4335,16 @@ pub extern "C" fn mixer_audio_set_unit_link(unit_id: u64, bus_id: u64, mode: u32
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_headphone_cue(unit_id: u64) -> i32 {
+    ffi_guard("mixer_audio_set_headphone_cue", ERR_DEVICE, || {
+        mixer_audio_set_headphone_cue_ffi(unit_id)
+    })
+}
+
+fn mixer_audio_set_headphone_cue_ffi(unit_id: u64) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_headphone_cue(unit_id);
         OK
@@ -3584,11 +4354,16 @@ pub extern "C" fn mixer_audio_set_headphone_cue(unit_id: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_headphone_copy_master(enabled: u32) -> i32 {
+    ffi_guard("mixer_audio_set_headphone_copy_master", ERR_DEVICE, || {
+        mixer_audio_set_headphone_copy_master_ffi(enabled)
+    })
+}
+
+fn mixer_audio_set_headphone_copy_master_ffi(enabled: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .audio
             .set_headphone_copy_master(enabled);
         OK
@@ -3602,6 +4377,12 @@ pub unsafe extern "C" fn mixer_audio_enum_devices(
     out: *mut AudioDeviceInfo,
     cap: u32,
 ) -> i32 {
+    ffi_guard("mixer_audio_enum_devices", -1, || unsafe {
+        mixer_audio_enum_devices_ffi(kind, out, cap)
+    })
+}
+
+unsafe fn mixer_audio_enum_devices_ffi(kind: u32, out: *mut AudioDeviceInfo, cap: u32) -> i32 {
     if out.is_null() || cap == 0 {
         return 0;
     }
@@ -3611,11 +4392,28 @@ pub unsafe extern "C" fn mixer_audio_enum_devices(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_device_channels(kind: u32, device_id: *const c_char) -> i32 {
+    ffi_guard("mixer_audio_device_channels", ERR_DEVICE, || unsafe {
+        mixer_audio_device_channels_ffi(kind, device_id)
+    })
+}
+
+unsafe fn mixer_audio_device_channels_ffi(kind: u32, device_id: *const c_char) -> i32 {
     audio::device_channels(kind, &read_cstr(device_id))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_device_io_channels(
+    kind: u32,
+    device_id: *const c_char,
+    inputs: *mut i32,
+    outputs: *mut i32,
+) -> i32 {
+    ffi_guard("mixer_audio_device_io_channels", ERR_DEVICE, || unsafe {
+        mixer_audio_device_io_channels_ffi(kind, device_id, inputs, outputs)
+    })
+}
+
+unsafe fn mixer_audio_device_io_channels_ffi(
     kind: u32,
     device_id: *const c_char,
     inputs: *mut i32,
@@ -3634,6 +4432,12 @@ pub unsafe extern "C" fn mixer_audio_device_io_channels(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_audio_process_list(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_audio_process_list", -1, || unsafe {
+        mixer_audio_process_list_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_audio_process_list_ffi(out: *mut u8, cap: usize) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3659,6 +4463,30 @@ pub unsafe extern "C" fn mixer_audio_capture_start(
     process_exe: *const c_char,
     process_aumid: *const c_char,
 ) -> i32 {
+    ffi_guard("mixer_audio_capture_start", ERR_DEVICE, || unsafe {
+        mixer_audio_capture_start_ffi(
+            id,
+            kind,
+            device_id,
+            mode,
+            map_left,
+            map_right,
+            process_exe,
+            process_aumid,
+        )
+    })
+}
+
+unsafe fn mixer_audio_capture_start_ffi(
+    id: u64,
+    kind: u32,
+    device_id: *const c_char,
+    mode: u32,
+    map_left: i32,
+    map_right: i32,
+    process_exe: *const c_char,
+    process_aumid: *const c_char,
+) -> i32 {
     if id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3673,13 +4501,8 @@ pub unsafe extern "C" fn mixer_audio_capture_start(
         process_aumid: read_cstr(process_aumid),
     };
     with_mixer(|mixer| {
-        let uploads = mixer.uploads.lock().expect("uploads").audio_store();
-        match mixer
-            .audio_captures
-            .lock()
-            .expect("audio captures")
-            .start(spec, uploads)
-        {
+        let uploads = mixer.uploads.lock_or_recover().audio_store();
+        match mixer.audio_captures.lock_or_recover().start(spec, uploads) {
             Ok(()) => OK,
             Err(error) => {
                 set_error(&mixer.telemetry, error);
@@ -3692,12 +4515,14 @@ pub unsafe extern "C" fn mixer_audio_capture_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_capture_stop(id: u64) -> i32 {
+    ffi_guard("mixer_audio_capture_stop", ERR_DEVICE, || {
+        mixer_audio_capture_stop_ffi(id)
+    })
+}
+
+fn mixer_audio_capture_stop_ffi(id: u64) -> i32 {
     with_mixer(|mixer| {
-        mixer
-            .audio_captures
-            .lock()
-            .expect("audio captures")
-            .stop(id);
+        mixer.audio_captures.lock_or_recover().stop(id);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3723,11 +4548,16 @@ pub(crate) fn write_fixed<const N: usize>(text: &str) -> [u8; N] {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_bind_multiview(scene_id: u64, preview_unit: u64, program_unit: u64) -> i32 {
+    ffi_guard("mixer_bind_multiview", ERR_DEVICE, || {
+        mixer_bind_multiview_ffi(scene_id, preview_unit, program_unit)
+    })
+}
+
+fn mixer_bind_multiview_ffi(scene_id: u64, preview_unit: u64, program_unit: u64) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
-            .lock()
-            .expect("shared")
+            .lock_or_recover()
             .multiview_binds
             .insert(scene_id, (preview_unit, program_unit));
         OK
@@ -3737,22 +4567,23 @@ pub extern "C" fn mixer_bind_multiview(scene_id: u64, preview_unit: u64, program
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_follow_audio(out: *mut f32, cap: u32) -> i32 {
+    ffi_guard("mixer_copy_follow_audio", -1, || unsafe {
+        mixer_copy_follow_audio_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_follow_audio_ffi(out: *mut f32, cap: u32) -> i32 {
     if out.is_null() || cap == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let dest = unsafe { std::slice::from_raw_parts_mut(out, cap as usize) };
-        let monitor = mixer
-            .telemetry
-            .lock()
-            .expect("telemetry")
-            .audio_monitor
-            .clone();
+        let monitor = mixer.telemetry.lock_or_recover().audio_monitor.clone();
         if !monitor.primed.load(Ordering::Relaxed) {
             dest.fill(0.0);
             return 0;
         }
-        let mut pcm = monitor.pcm.lock().expect("monitor pcm");
+        let mut pcm = monitor.pcm.lock_or_recover();
         let n = dest.len().min(pcm.len());
         for slot in dest.iter_mut().take(n) {
             *slot = pcm.pop_front().unwrap_or(0.0);
@@ -3777,6 +4608,18 @@ pub unsafe extern "C" fn mixer_copy_monitor_audio(
     sample_rate: *mut i32,
     channels: *mut i32,
 ) -> i32 {
+    ffi_guard("mixer_copy_monitor_audio", -1, || unsafe {
+        mixer_copy_monitor_audio_ffi(id, out, cap, sample_rate, channels)
+    })
+}
+
+unsafe fn mixer_copy_monitor_audio_ffi(
+    id: u64,
+    out: *mut f32,
+    cap: u32,
+    sample_rate: *mut i32,
+    channels: *mut i32,
+) -> i32 {
     if out.is_null() || sample_rate.is_null() || channels.is_null() || cap == 0 {
         return ERR_INVALID_ARGUMENT;
     }
@@ -3791,12 +4634,18 @@ pub unsafe extern "C" fn mixer_copy_monitor_audio(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -> i32 {
+    ffi_guard("mixer_copy_audio_peaks", -1, || unsafe {
+        mixer_copy_audio_peaks_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_audio_peaks_ffi(out: *mut AudioPeak, cap: u32) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let (master, buses, mix_peaks, uploads) = {
-            let shared = mixer.shared.lock().expect("shared");
+            let shared = mixer.shared.lock_or_recover();
             let master = shared.audio.master_peak();
             let buses = shared.audio.bus_peaks();
             let mix_peaks = shared.audio.mix_input_peaks();
@@ -3804,8 +4653,8 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
             drop(shared);
             (master, buses, mix_peaks, uploads)
         };
-        let audio_in = uploads.lock().expect("uploads").audio_store();
-        let audio_in = audio_in.lock().expect("audio");
+        let audio_in = uploads.lock_or_recover().audio_store();
+        let audio_in = audio_in.lock_or_recover();
         let mut n = 0u32;
         if n < cap {
             let (left, right) = master;
@@ -3870,20 +4719,26 @@ pub unsafe extern "C" fn mixer_copy_audio_peaks(out: *mut AudioPeak, cap: u32) -
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32) -> i32 {
+    ffi_guard("mixer_copy_source_usage", -1, || unsafe {
+        mixer_copy_source_usage_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_source_usage_ffi(out: *mut SourceUsage, cap: u32) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let (uploads_arc, generator_ids, scenes) = {
-            let shared = mixer.shared.lock().expect("shared");
-            let tel = mixer.telemetry.lock().expect("telemetry");
+            let shared = mixer.shared.lock_or_recover();
+            let tel = mixer.telemetry.lock_or_recover();
             (
                 Arc::clone(&shared.uploads),
                 shared.generators.keys().copied().collect::<Vec<_>>(),
                 tel.scene_usage.clone(),
             )
         };
-        let uploads = uploads_arc.lock().expect("uploads");
+        let uploads = uploads_arc.lock_or_recover();
         let mut n = 0u32;
         let mut seen = std::collections::HashSet::new();
         for id in uploads.ids() {
@@ -3968,15 +4823,21 @@ pub unsafe extern "C" fn mixer_copy_source_usage(out: *mut SourceUsage, cap: u32
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_stats(out: *mut MixerStats) -> i32 {
+    ffi_guard("mixer_copy_stats", ERR_DEVICE, || unsafe {
+        mixer_copy_stats_ffi(out)
+    })
+}
+
+unsafe fn mixer_copy_stats_ffi(out: *mut MixerStats) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let (num, den) = {
-            let shared = mixer.shared.lock().expect("shared");
+            let shared = mixer.shared.lock_or_recover();
             (shared.master_fps_num, shared.master_fps_den)
         };
-        let tel = mixer.telemetry.lock().expect("telemetry");
+        let tel = mixer.telemetry.lock_or_recover();
         let render_ms = tel.last_render_ms;
         let budget = 1000.0 * den as f32 / num.max(1) as f32;
         unsafe {
@@ -4001,12 +4862,18 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_runtime_stats(out: *mut MixerRuntimeStats) -> i32 {
+    ffi_guard("mixer_copy_runtime_stats", ERR_DEVICE, || unsafe {
+        mixer_copy_runtime_stats_ffi(out)
+    })
+}
+
+unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let uploads = shared.uploads.lock().expect("uploads");
+        let shared = mixer.shared.lock_or_recover();
+        let uploads = shared.uploads.lock_or_recover();
         let input_queue_dropped = uploads.runtime_rows().map(|(_, _, dropped)| dropped).sum();
         let mut output_omt = 0u32;
         let mut output_ndi = 0u32;
@@ -4022,8 +4889,8 @@ pub unsafe extern "C" fn mixer_copy_runtime_stats(out: *mut MixerRuntimeStats) -
                 }
                 OUT_NDI => {
                     output_ndi += 1;
-                    output_ndi_connections =
-                        output_ndi_connections.saturating_add(output.connections.load(Ordering::Relaxed));
+                    output_ndi_connections = output_ndi_connections
+                        .saturating_add(output.connections.load(Ordering::Relaxed));
                 }
                 OUT_DECKLINK => output_decklink += 1,
                 _ => {}
@@ -4047,16 +4914,19 @@ pub unsafe extern "C" fn mixer_copy_runtime_stats(out: *mut MixerRuntimeStats) -
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_copy_input_stats(
-    out: *mut InputRuntimeStats,
-    cap: u32,
-) -> i32 {
+pub unsafe extern "C" fn mixer_copy_input_stats(out: *mut InputRuntimeStats, cap: u32) -> i32 {
+    ffi_guard("mixer_copy_input_stats", -1, || unsafe {
+        mixer_copy_input_stats_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_input_stats_ffi(out: *mut InputRuntimeStats, cap: u32) -> i32 {
     if out.is_null() && cap != 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
-        let uploads = shared.uploads.lock().expect("uploads");
+        let shared = mixer.shared.lock_or_recover();
+        let uploads = shared.uploads.lock_or_recover();
         let mut n = 0u32;
         for (source_id, uptime_ms, queue_dropped) in uploads.runtime_rows() {
             if n >= cap {
@@ -4077,15 +4947,18 @@ pub unsafe extern "C" fn mixer_copy_input_stats(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_copy_output_stats(
-    out: *mut OutputRuntimeStats,
-    cap: u32,
-) -> i32 {
+pub unsafe extern "C" fn mixer_copy_output_stats(out: *mut OutputRuntimeStats, cap: u32) -> i32 {
+    ffi_guard("mixer_copy_output_stats", -1, || unsafe {
+        mixer_copy_output_stats_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_copy_output_stats_ffi(out: *mut OutputRuntimeStats, cap: u32) -> i32 {
     if out.is_null() && cap != 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let mut n = 0u32;
         for (&output_id, output) in &shared.outputs {
             if n >= cap {
@@ -4120,8 +4993,24 @@ pub extern "C" fn mixer_set_bus_colors(
     in_g: u8,
     in_b: u8,
 ) -> i32 {
+    ffi_guard("mixer_set_bus_colors", ERR_DEVICE, || {
+        mixer_set_bus_colors_ffi(prv_r, prv_g, prv_b, pgm_r, pgm_g, pgm_b, in_r, in_g, in_b)
+    })
+}
+
+fn mixer_set_bus_colors_ffi(
+    prv_r: u8,
+    prv_g: u8,
+    prv_b: u8,
+    pgm_r: u8,
+    pgm_g: u8,
+    pgm_b: u8,
+    in_r: u8,
+    in_g: u8,
+    in_b: u8,
+) -> i32 {
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").bus_colors = BusColors {
+        mixer.shared.lock_or_recover().bus_colors = BusColors {
             preview: [prv_r, prv_g, prv_b],
             program: [pgm_r, pgm_g, pgm_b],
             inactive: [in_r, in_g, in_b],
@@ -4133,13 +5022,19 @@ pub extern "C" fn mixer_set_bus_colors(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_mv_label(scene_id: u64, size: f32, percent: u32, top: u32) -> i32 {
+    ffi_guard("mixer_set_mv_label", ERR_DEVICE, || {
+        mixer_set_mv_label_ffi(scene_id, size, percent, top)
+    })
+}
+
+fn mixer_set_mv_label_ffi(scene_id: u64, size: f32, percent: u32, top: u32) -> i32 {
     with_mixer(|mixer| {
         let style = MvLabelStyle {
             size: crate::labels::clamp_size(size),
             percent: percent != 0,
             top: top != 0,
         };
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         if scene_id == 0 {
             shared.mv_label = style;
         } else if let Some(spec) = shared.scenes.get_mut(&scene_id) {
@@ -4164,9 +5059,15 @@ pub(crate) fn copy_c_label(ptr: *const c_char) -> String {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
+    ffi_guard("mixer_set_frame_buffer", ERR_DEVICE, || {
+        mixer_set_frame_buffer_ffi(frames)
+    })
+}
+
+fn mixer_set_frame_buffer_ffi(frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
-        mixer.shared.lock().expect("shared").frame_buffer_frames = frames;
+        mixer.shared.lock_or_recover().frame_buffer_frames = frames;
         OK
     })
     .unwrap_or_else(|code| code)
@@ -4174,11 +5075,17 @@ pub extern "C" fn mixer_set_frame_buffer(frames: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_master_fps(fps_num: u32, fps_den: u32) -> i32 {
+    ffi_guard("mixer_set_master_fps", ERR_DEVICE, || {
+        mixer_set_master_fps_ffi(fps_num, fps_den)
+    })
+}
+
+fn mixer_set_master_fps_ffi(fps_num: u32, fps_den: u32) -> i32 {
     let Ok(rate) = crate::clock::Rate::new(fps_num, fps_den) else {
         return ERR_INVALID_ARGUMENT;
     };
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         shared.master_fps_num = rate.num;
         shared.master_fps_den = rate.den;
         OK
@@ -4188,11 +5095,17 @@ pub extern "C" fn mixer_set_master_fps(fps_num: u32, fps_den: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 {
+    ffi_guard("mixer_copy_rebar_info", ERR_DEVICE, || unsafe {
+        mixer_copy_rebar_info_ffi(out)
+    })
+}
+
+unsafe fn mixer_copy_rebar_info_ffi(out: *mut MixerRebarInfo) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        let shared = mixer.shared.lock().expect("shared");
+        let shared = mixer.shared.lock_or_recover();
         let snap = shared.rebar;
         let active = snap.available && shared.rebar_optimization;
         unsafe {
@@ -4213,8 +5126,14 @@ pub unsafe extern "C" fn mixer_copy_rebar_info(out: *mut MixerRebarInfo) -> i32 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
+    ffi_guard("mixer_set_rebar_optimization", ERR_DEVICE, || {
+        mixer_set_rebar_optimization_ffi(enabled)
+    })
+}
+
+fn mixer_set_rebar_optimization_ffi(enabled: u32) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         shared.rebar_optimization = enabled != 0;
         shared
             .gpu_ingest
@@ -4227,8 +5146,14 @@ pub extern "C" fn mixer_set_rebar_optimization(enabled: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_ndi_gpu_upload(enabled: u32) -> i32 {
+    ffi_guard("mixer_set_ndi_gpu_upload", ERR_DEVICE, || {
+        mixer_set_ndi_gpu_upload_ffi(enabled)
+    })
+}
+
+fn mixer_set_ndi_gpu_upload_ffi(enabled: u32) -> i32 {
     with_mixer(|mixer| {
-        let mut shared = mixer.shared.lock().expect("shared");
+        let mut shared = mixer.shared.lock_or_recover();
         shared.ndi_gpu_upload = enabled != 0;
         shared
             .gpu_ingest
@@ -4241,6 +5166,12 @@ pub extern "C" fn mixer_set_ndi_gpu_upload(enabled: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u32) -> i32 {
+    ffi_guard("mixer_set_monitor_present_interval", ERR_DEVICE, || {
+        mixer_set_monitor_present_interval_ffi(monitor_id, frames)
+    })
+}
+
+fn mixer_set_monitor_present_interval_ffi(monitor_id: u64, frames: u32) -> i32 {
     let frames = frames.clamp(1, 8);
     with_mixer(|mixer| {
         let _ = mixer
@@ -4253,8 +5184,14 @@ pub extern "C" fn mixer_set_monitor_present_interval(monitor_id: u64, frames: u3
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_thumb_set(source_id: u64, width: u32, height: u32, interval: u32) -> i32 {
+    ffi_guard("mixer_thumb_set", ERR_DEVICE, || {
+        mixer_thumb_set_ffi(source_id, width, height, interval)
+    })
+}
+
+fn mixer_thumb_set_ffi(source_id: u64, width: u32, height: u32, interval: u32) -> i32 {
     with_mixer(|mixer| {
-        let mut guard = mixer.shared.lock().expect("shared");
+        let mut guard = mixer.shared.lock_or_recover();
         match crate::thumb::ThumbSub::clamp(width, height, interval) {
             Some(sub) => {
                 guard.thumbs.insert(source_id, sub);
@@ -4277,11 +5214,24 @@ pub unsafe extern "C" fn mixer_thumb_read(
     out_h: *mut u32,
     out_stride: *mut u32,
 ) -> i32 {
+    ffi_guard("mixer_thumb_read", -1, || unsafe {
+        mixer_thumb_read_ffi(source_id, buf, cap, out_w, out_h, out_stride)
+    })
+}
+
+unsafe fn mixer_thumb_read_ffi(
+    source_id: u64,
+    buf: *mut u8,
+    cap: usize,
+    out_w: *mut u32,
+    out_h: *mut u32,
+    out_stride: *mut u32,
+) -> i32 {
     if buf.is_null() || out_w.is_null() || out_h.is_null() || out_stride.is_null() {
         return 0;
     }
     with_mixer(|mixer| {
-        let pixels = mixer.thumb_pixels.lock().expect("thumb pixels");
+        let pixels = mixer.thumb_pixels.lock_or_recover();
         let Some(frame) = pixels.get(&source_id) else {
             return 0;
         };

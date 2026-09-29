@@ -295,7 +295,7 @@ fn run_loop(
                 seek_to(&reader, seek);
                 prefetch.clear();
                 {
-                    let mut store = uploads.lock().expect("uploads");
+                    let mut store = uploads.lock_or_recover();
                     store.flush_audio(source_id);
                     store.flush_video(source_id);
                 }
@@ -325,7 +325,7 @@ fn run_loop(
                     need_frame,
                     is_playing,
                 );
-                if need_frame && uploads.lock().expect("uploads").has_video_frame(source_id) {
+                if need_frame && uploads.lock_or_recover().has_video_frame(source_id) {
                     need_frame = false;
                 }
             }
@@ -568,7 +568,7 @@ fn push_live_frame(
     depth: u32,
     ring_vram: u64,
 ) {
-    let mut store = uploads.lock().expect("uploads");
+    let mut store = uploads.lock_or_recover();
     match frame {
         Prefetched::Gpu(gpu) => {
             store.ensure_playout(
@@ -601,7 +601,7 @@ fn push_file_frame(
     frame: Prefetched,
     ring_vram: u64,
 ) {
-    let mut store = uploads.lock().expect("uploads");
+    let mut store = uploads.lock_or_recover();
     match frame {
         Prefetched::Gpu(gpu) => {
             store.ensure_playout(
@@ -1024,7 +1024,7 @@ fn drain_audio(
     let deadline = Instant::now() + Duration::from_millis(6);
     let mut packets = 0u32;
     while Instant::now() < deadline && packets < 16 {
-        let frames = uploads.lock().expect("uploads").fifo_frames(source_id);
+        let frames = uploads.lock_or_recover().fifo_frames(source_id);
         if frames >= AUDIO_LIVE_FRAMES {
             break;
         }
@@ -1452,7 +1452,7 @@ fn run_vulkan_h264_file(
             seek_to(&reader, seek);
             prefetch.clear();
             {
-                let mut store = uploads.lock().expect("uploads");
+                let mut store = uploads.lock_or_recover();
                 store.flush_audio(source_id);
                 store.flush_video(source_id);
             }
@@ -1487,7 +1487,7 @@ fn run_vulkan_h264_file(
             need_frame,
             is_playing,
         );
-        if need_frame && uploads.lock().expect("uploads").has_video_frame(source_id) {
+        if need_frame && uploads.lock_or_recover().has_video_frame(source_id) {
             need_frame = false;
         }
         if !is_playing && !need_frame {

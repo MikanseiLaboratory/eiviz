@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -142,7 +143,7 @@ impl NdiReceiver {
             .name(format!("eiviz-ndi-{source_id}"))
             .spawn(move || {
                 {
-                    let mut store = uploads.lock().expect("uploads lock");
+                    let mut store = uploads.lock_or_recover();
                     store.ensure_playout(
                         source_id,
                         16,
@@ -632,7 +633,7 @@ fn ingest_video(
     }
     let opaque_x = matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX);
     let (mut pixels, format, width, height) = {
-        let mut store = uploads.lock().expect("uploads lock");
+        let mut store = uploads.lock_or_recover();
         match store.take_playout_buf(source_id, width, height, format, depth) {
             Some(ready) => ready,
             None => return,
@@ -647,7 +648,7 @@ fn ingest_video(
         format,
         opaque_x,
     );
-    let mut store = uploads.lock().expect("uploads lock");
+    let mut store = uploads.lock_or_recover();
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
 }
 
@@ -672,7 +673,7 @@ fn finish_gpu_frame(
         );
         *gpu_warned = true;
     }
-    let mut store = uploads.lock().expect("uploads lock");
+    let mut store = uploads.lock_or_recover();
     store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
     store.set_ring_vram(source_id, ring_vram);
     let _ = store.push_playout_gpu(source_id, uploaded);

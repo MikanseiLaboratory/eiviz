@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -73,7 +74,7 @@ impl BusRing {
     }
 
     pub fn push(&self, interleaved: &[f32]) {
-        let mut pcm = self.pcm.lock().expect("bus ring");
+        let mut pcm = self.pcm.lock_or_recover();
         pcm.extend(interleaved.iter().copied());
         if pcm.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.primed.store(true, Ordering::Relaxed);
@@ -85,7 +86,7 @@ impl BusRing {
         if frames == 0 {
             return;
         }
-        let mut pcm = self.pcm.lock().expect("bus ring");
+        let mut pcm = self.pcm.lock_or_recover();
         let n = frames.saturating_mul(2).min(pcm.len());
         if n > 0 {
             pcm.drain_front(n);
@@ -98,15 +99,15 @@ impl BusRing {
             out.resize(frames * 2, 0.0);
             return out;
         }
-        let mut pcm = self.pcm.lock().expect("bus ring");
+        let mut pcm = self.pcm.lock_or_recover();
         pcm.pop_into(frames * 2, &mut out);
-        let hold = *self.last.lock().expect("bus last");
+        let hold = *self.last.lock_or_recover();
         while out.len() < frames * 2 {
             out.push(hold.0);
             out.push(hold.1);
         }
         if out.len() >= 2 {
-            *self.last.lock().expect("bus last") = (out[out.len() - 2], out[out.len() - 1]);
+            *self.last.lock_or_recover() = (out[out.len() - 2], out[out.len() - 1]);
         }
         out
     }

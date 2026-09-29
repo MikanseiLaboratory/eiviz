@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::{Arc, Mutex};
 
 use windows::Win32::Foundation::CloseHandle;
@@ -163,7 +164,7 @@ impl DxgiVideo {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             tex11.GetDesc(&mut desc);
             {
-                let ctx = self.context.lock().expect("d3d11 context");
+                let ctx = self.context.lock_or_recover();
                 ctx.Flush();
             }
             if let Ok(resource) = tex11.cast::<ID3D11Resource>() {
