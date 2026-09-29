@@ -463,70 +463,25 @@ fn axis_offset(amount: f32, dir: u32) -> vec2<f32> {
     return dir_sign(dir) * amount;
 }
 
-fn pixel_sort_swap(me: vec4<f32>, nei: vec4<f32>, n_uv: vec2<f32>, side: i32, descending: bool, thresh: f32) -> vec4<f32> {
-    let me_l = luma(me);
-    let nei_l = luma(nei);
-    if !in_bounds(n_uv) || me_l < thresh || nei_l < thresh {
-        return me;
-    }
-    let want_brighter = (side > 0) != descending;
-    if want_brighter {
-        if nei_l > me_l {
-            return nei;
-        }
-    } else if nei_l < me_l {
-        return nei;
-    }
-    return me;
-}
-
-// Whole sort lines switch to the incoming bus so dark incoming pixels never break a span.
-fn pixel_sort_live(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
-    let res = max(params.resolution, vec2<f32>(1.0));
-    let horiz = dir == 0u || dir == 1u;
-    let line = floor(select(uv.y * res.y, uv.x * res.x, !horiz));
-    let key = 0.2 + 0.5 * hash21(vec2<f32>(line, f32(dir) + 0.7));
-    return select(sample_pgm(uv), sample_pvw(uv), t > key);
-}
-
-// Last frame's sorted field with a random share of pixels replaced by the live buses.
-// Replacing instead of blending keeps sorted streaks crisp while motion keeps showing.
-fn pixel_sort_state(uv: vec2<f32>, t: f32, dir: u32, live: f32) -> vec4<f32> {
-    let cell = floor(uv * max(params.resolution, vec2<f32>(1.0)));
-    let r = hash21(cell + vec2<f32>(fract(params.time * 7.31) * 97.0, 2.9));
-    return select(sample_prev_n(uv), pixel_sort_live(uv, t, dir), r < live);
-}
-
+// aux_tex / aux2_tex hold this frame's span-sorted PGM / PVW (sort.wgsl). The outgoing bus
+// melts over the first half, sort lines hand over inside [0.31, 0.69], then the incoming
+// bus un-sorts. The handover window must stay inside the sort windows in prepare_mix_fx.
 fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let a = sample_pgm(uv);
     let b = sample_pvw(uv);
+    let sorted_a = textureSample(aux_tex, src_samp_n, uv);
+    let sorted_b = textureSample(aux2_tex, src_samp_n, uv);
     if t <= 0.001 {
         return a;
     }
     if t >= 0.999 {
         return b;
     }
-    let thresh = params.softness;
-    let horiz = dir == 0u || dir == 1u;
-    let descending = dir == 1u || dir == 3u;
     let res = max(params.resolution, vec2<f32>(1.0));
-    let pix = select(vec2<f32>(1.0 / res.x, 0.0), vec2<f32>(0.0, 1.0 / res.y), !horiz);
-    let axis = i32(select(uv.x * res.x, uv.y * res.y, !horiz));
-    let jump = max(1, i32(round(1.0 + 5.0 * clamp(params.param, 0.0, 1.0))));
-    // One odd-even transposition step per frame; both pixels of a pair must agree on it.
-    let frame = i32(floor(params.time * 60.0));
-    let dist = select(1, jump, ((frame >> 1u) & 1) == 1);
-    let side = select(-1, 1, ((axis / dist + frame) & 1) == 0);
-    let live = mix(1.0, 0.08, smoothstep(0.0, 0.1, t));
-    let me = pixel_sort_state(uv, t, dir, live);
-    let n = uv + pix * f32(dist * side);
-    let nei = pixel_sort_state(n, t, dir, live);
-    let field = pixel_sort_swap(me, nei, n, side, descending, thresh);
-    let src = pixel_sort_live(uv, t, dir);
-    let fade = pow(saturate((t - 0.88) / 0.12), 1.5);
-    let effect = saturate(t / 0.05) * (1.0 - fade);
-    let plate = mix(src, b, fade);
-    return mix(plate, field, effect);
+    let horiz = dir == 0u || dir == 1u;
+    let line = floor(select(uv.y * res.y, uv.x * res.x, !horiz));
+    let key = 0.35 + 0.3 * hash21(vec2<f32>(line, f32(dir) + 0.7));
+    return mix(sorted_a, sorted_b, smoothstep(key - 0.04, key + 0.04, t));
 }
 
 fn optical_flow_mix(uv: vec2<f32>, t: f32) -> vec4<f32> {

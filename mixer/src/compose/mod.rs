@@ -4,12 +4,16 @@ use std::sync::Arc;
 use crate::abi::{
     GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
-    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER, UnitState, is_multiview,
-    is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_preview, mixing_unit_source,
+    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_PIXEL_SORT, TRANSITION_STINGER,
+    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
+    mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
 use crate::pool::{UniformPool, uniform_dyn};
 use crate::upload::{CpuFormat, CpuFrameSnap, texture_bytes};
+
+/// Pixels per PixelSort workgroup segment. Must match `SEG` in `sort.wgsl`.
+const SORT_SEGMENT: u32 = 1024;
 
 const KEY_TALLY_RED: u64 = LABEL_BASE + 0xFF01;
 const KEY_TALLY_GREEN: u64 = LABEL_BASE + 0xFF02;
@@ -330,6 +334,7 @@ impl Composer {
             include_str!("../../shaders/sort.wgsl"),
             &fx1_layout,
             "cs_main",
+            false,
         )?;
         let flow_cs = compute_pipeline(
             device,
@@ -337,6 +342,7 @@ impl Composer {
             include_str!("../../shaders/flow.wgsl"),
             &fx2_layout,
             "cs_main",
+            true,
         )?;
         let mosh_mv_cs = compute_pipeline(
             device,
@@ -344,6 +350,7 @@ impl Composer {
             include_str!("../../shaders/mosh_mv.wgsl"),
             &fx2_layout,
             "cs_main",
+            true,
         )?;
         let bloom_cs = compute_pipeline(
             device,
@@ -351,6 +358,7 @@ impl Composer {
             include_str!("../../shaders/bloom.wgsl"),
             &fx2_layout,
             "cs_main",
+            true,
         )?;
         let bloom_blur_cs = compute_pipeline(
             device,
@@ -358,6 +366,7 @@ impl Composer {
             include_str!("../../shaders/bloom_blur.wgsl"),
             &fx1_layout,
             "cs_main",
+            true,
         )?;
         let pool = UniformPool::new(device);
         let color_group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1119,6 +1128,7 @@ impl Composer {
                     &cs,
                     &self.user_cs_layout,
                     "cs_user",
+                    true,
                 )?,
             );
         } else {
@@ -1388,7 +1398,7 @@ impl Composer {
     ) -> Result<(), String> {
         let kind = state.transition_kind;
         let custom = kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
-        let need_sort = false;
+        let need_sort = kind == TRANSITION_PIXEL_SORT;
         let need_flow = kind == TRANSITION_OPTICAL_FLOW || custom;
         let need_mosh = kind == TRANSITION_DATAMOSH;
         let need_bloom = matches!(kind, TRANSITION_BLOOM | TRANSITION_FILM_BURN) || custom;
@@ -1399,18 +1409,29 @@ impl Composer {
         let half_w = (width * 0.5).max(1.0);
         let half_h = (height * 0.5).max(1.0);
         if need_sort {
-            let offset = self.pool.push(
-                &device.queue,
-                &Self::mix_params(state, self.mix_time, width, height, None),
-            );
-            let lines = if state.transition_direction <= 1 {
-                height as u32
+            let horiz = state.transition_direction <= 1;
+            let (len, lines) = if horiz {
+                (width as u32, height as u32)
             } else {
-                width as u32
+                (height as u32, width as u32)
             };
-            let gx = lines.div_ceil(64);
-            self.dispatch_fx1(device, encoder, true, unit_id, offset, gx, 1);
-            self.dispatch_fx1(device, encoder, false, unit_id, offset, gx, 1);
+            let segments = len.div_ceil(SORT_SEGMENT) + 1;
+            // Outgoing melts over the first half, incoming un-sorts over the second half.
+            // These windows must cover the line handover window in mix.wgsl `pixel_sort`.
+            let t = state.mix;
+            let passes = [
+                (true, t < 0.7, (t / 0.5).min(1.0)),
+                (false, t > 0.3, ((1.0 - t) / 0.5).min(1.0)),
+            ];
+            for (program, active, amount) in passes {
+                if !active {
+                    continue;
+                }
+                let mut params = Self::mix_params(state, self.mix_time, width, height, None);
+                params.mix = amount;
+                let offset = self.pool.push(&device.queue, &params);
+                self.dispatch_fx1(device, encoder, program, unit_id, offset, segments, lines);
+            }
         }
         if need_flow {
             let offset = self.pool.push(

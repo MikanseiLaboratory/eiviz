@@ -1650,7 +1650,7 @@ fn shader_transitions_emit_frames() {
 }
 
 #[test]
-fn feedback_transitions_track_live_buses() {
+fn live_shader_transitions_track_buses() {
     for kind in [TRANSITION_PIXEL_SORT, TRANSITION_DATAMOSH] {
         mixer_destroy();
         assert_eq!(mixer_create(0, 60_000, 1_001), OK);
@@ -1739,7 +1739,7 @@ fn outgoing_motion(a: &image::RgbImage, b: &image::RgbImage) -> f32 {
 }
 
 #[test]
-fn feedback_transitions_keep_outgoing_motion() {
+fn live_shader_transitions_keep_outgoing_motion() {
     for kind in [TRANSITION_PIXEL_SORT, TRANSITION_DATAMOSH] {
         mixer_destroy();
         assert_eq!(mixer_create(0, 60_000, 1_001), OK);
@@ -1778,6 +1778,59 @@ fn feedback_transitions_keep_outgoing_motion() {
         let _ = std::fs::remove_file(path);
     }
     mixer_destroy();
+}
+
+/// PixelSort is a pure function of the buses and mix: a held T-bar must not keep evolving.
+#[test]
+fn pixel_sort_is_stable_at_fixed_mix() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(
+        mixer_define_generator(SRC_BARS, GEN_BARS, 0.0, 0.0, 0.0, 1.0, 0),
+        OK
+    );
+    assert_eq!(
+        mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+        OK
+    );
+    let path = std::env::temp_dir().join("eiviz-pixel-sort-stable.png");
+    let mut state = UnitState {
+        program_source: SRC_BARS,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_PIXEL_SORT,
+        transition_direction: 0,
+        softness: 0.4,
+        param: 0.25,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let clean = snapshot_rgb(1, &path);
+    state.mix = 0.3;
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let first = snapshot_rgb(1, &path);
+    thread::sleep(Duration::from_millis(300));
+    let second = snapshot_rgb(1, &path);
+    let _ = std::fs::remove_file(path);
+    mixer_destroy();
+
+    let drift = outgoing_motion(&first, &second);
+    assert!(
+        drift == 0.0,
+        "PixelSort kept changing at a fixed mix: {drift}"
+    );
+    let sorted = outgoing_motion(&clean, &first);
+    assert!(
+        sorted > 2.0,
+        "PixelSort did not sort the outgoing bus: {sorted}"
+    );
 }
 
 #[test]

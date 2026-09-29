@@ -238,12 +238,15 @@ pub(crate) fn pipeline(
         }))
 }
 
+/// `zero_init_workgroup` may only be false when the shader writes every workgroup variable
+/// before reading it; FXC turns the injected zero-fill of large arrays into a very slow compile.
 pub(crate) fn compute_pipeline(
     device: &GpuDevice,
     label: &str,
     source: &str,
     layout: &wgpu::BindGroupLayout,
     entry: &str,
+    zero_init_workgroup: bool,
 ) -> Result<wgpu::ComputePipeline, String> {
     let shader = device
         .device
@@ -265,7 +268,10 @@ pub(crate) fn compute_pipeline(
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some(entry),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                zero_initialize_workgroup_memory: zero_init_workgroup,
+                ..Default::default()
+            },
             cache: None,
         }))
 }
