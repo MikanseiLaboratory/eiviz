@@ -10,9 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::abi::MixerVideoInfo;
-use crate::upload::{
-    AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked, ingest_audio_throttled,
-};
+use crate::upload::{AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked, ingest_audio_live};
 
 const KIND_VIDEO: i32 = 1;
 const KIND_AUDIO: i32 = 2;
@@ -421,7 +419,7 @@ fn run_loop(
                     if is_playing {
                         if let Some(packet) = audio_packet(&sample) {
                             if capture {
-                                ingest_audio_throttled(&uploads, source_id, packet);
+                                ingest_audio_live(&uploads, source_id, packet);
                             } else {
                                 ingest_audio_clocked(&uploads, source_id, packet);
                             }

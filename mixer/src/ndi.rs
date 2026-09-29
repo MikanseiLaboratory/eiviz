@@ -31,7 +31,7 @@ use grafton_ndi::{
 use crate::abi::FMT_BGRA;
 use crate::upload::{
     AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, GpuVideoFrame, UploadStore,
-    ingest_audio_throttled, write_slot,
+    ingest_audio_live, write_slot,
 };
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
@@ -177,7 +177,7 @@ impl NdiReceiver {
                     loop {
                         match receiver.audio().try_capture(Duration::ZERO) {
                             Ok(Some(audio)) => {
-                                ingest_audio_throttled(&uploads, source_id, to_audio(&audio));
+                                ingest_audio_live(&uploads, source_id, to_audio(&audio));
                             }
                             _ => break,
                         }
@@ -383,8 +383,10 @@ impl NdiSender {
 
 impl Drop for NdiSender {
     fn drop(&mut self) {
+        // Never block in drop: if the control queue is full, dropping `video_tx` below
+        // disconnects the worker, which flushes and exits on its own.
         if let Some(tx) = self.ctrl_tx.take() {
-            let _ = tx.send(NdiCtrl::Shutdown);
+            let _ = tx.try_send(NdiCtrl::Shutdown);
         }
         self.video_tx.take();
         self.audio_tx.take();
@@ -693,14 +695,31 @@ fn finish_gpu_frame(
 }
 
 fn to_audio(frame: &AudioFrame) -> AudioPacket {
-    let channels = frame.num_channels().max(1);
-    let samples = frame.num_samples().max(1);
-    let pcm = frame.data().to_vec();
+    let channels = frame.num_channels().max(1) as usize;
+    let samples = frame.num_samples().max(0) as usize;
+    let stride = frame.channel_stride_in_bytes().max(0) as usize / std::mem::size_of::<f32>();
+    let data = frame.data();
+    // NDI may pad each channel plane; compact them so downstream sees `channels * samples`.
+    let pcm = if stride == samples || stride == 0 {
+        data.get(..channels * samples)
+            .map(<[f32]>::to_vec)
+            .unwrap_or_else(|| data.to_vec())
+    } else {
+        let mut pcm = Vec::with_capacity(channels * samples);
+        for channel in 0..channels {
+            let start = channel * stride;
+            match data.get(start..start + samples) {
+                Some(plane) => pcm.extend_from_slice(plane),
+                None => pcm.resize(pcm.len() + samples, 0.0),
+            }
+        }
+        pcm
+    };
     AudioPacket {
         timestamp: frame.timestamp(),
-        sample_rate: frame.sample_rate().max(1),
-        channels,
-        samples_per_channel: samples,
+        sample_rate: frame.sample_rate(),
+        channels: channels as i32,
+        samples_per_channel: samples as i32,
         pcm_planar_f32: pcm,
     }
 }

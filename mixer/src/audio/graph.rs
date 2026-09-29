@@ -255,9 +255,14 @@ impl AudioGraph {
         } else if role == ROLE_HEADPHONE {
             1
         } else {
-            (2..32)
-                .find(|bit| self.buses.iter().all(|bus| bus.bit != *bit))
-                .unwrap_or(31)
+            // Input routing is a 32-bit mask; sharing a bit would silently feed two buses.
+            let Some(bit) = (2..32).find(|bit| self.buses.iter().all(|bus| bus.bit != *bit)) else {
+                crate::diag::error(&format!(
+                    "audio: bus '{name}' rejected, all 30 aux bus slots are in use"
+                ));
+                return;
+            };
+            bit
         };
         self.buses.push(AudioBus {
             id,
@@ -848,6 +853,23 @@ mod tests {
     use super::*;
     use crate::audio::AudioDelay;
     use crate::upload::AudioInputStore;
+
+    #[test]
+    fn aux_buses_never_share_a_routing_bit() {
+        let mut graph = AudioGraph::with_defaults();
+        for id in 100..140u64 {
+            graph.upsert_bus(id, "aux", ROLE_AUX, DEVICE_NONE, "", 0, 1);
+        }
+        let aux: Vec<u32> = graph
+            .buses
+            .iter()
+            .filter(|bus| bus.role == ROLE_AUX)
+            .map(|bus| bus.bit)
+            .collect();
+        assert_eq!(aux.len(), 30);
+        let unique: std::collections::HashSet<u32> = aux.iter().copied().collect();
+        assert_eq!(unique.len(), aux.len());
+    }
 
     #[test]
     fn resolve_output_audio_bus_keeps_none() {

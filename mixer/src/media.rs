@@ -33,7 +33,7 @@ use crate::dxgi::GpuVideoContext;
 use crate::guard::LockExt;
 use crate::upload::{
     AUDIO_LIVE_FRAMES, AudioPacket, CpuFormat, GpuIngest, GpuVideoFrame, UploadStore,
-    ingest_audio_clocked, ingest_audio_throttled,
+    ingest_audio_clocked, ingest_audio_live, ingest_audio_throttled,
 };
 
 static MF_ONCE: Once = Once::new();
@@ -404,7 +404,7 @@ fn run_loop(
                 Decoded::Audio { pts, packet } => {
                     if is_playing {
                         if capture {
-                            ingest_audio_throttled(&uploads, source_id, packet);
+                            ingest_audio_live(&uploads, source_id, packet);
                         } else {
                             ingest_audio_clocked(&uploads, source_id, packet);
                         }

@@ -14,7 +14,7 @@ use openmediatransport::{
 use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
 use crate::save::debounce_want_full;
-use crate::upload::{AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_throttled};
+use crate::upload::{AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_live};
 
 pub type OmtGpu = GpuVideoContext;
 
@@ -240,7 +240,7 @@ impl OmtReceiver {
                                 store_omt_error(&last_error_thread, source_id, detail);
                             }
                             while let Some(audio) = session.try_recv_audio() {
-                                ingest_audio_throttled(&uploads, source_id, to_audio(audio));
+                                ingest_audio_live(&uploads, source_id, to_audio(audio));
                             }
                         }
                         session.disconnect();

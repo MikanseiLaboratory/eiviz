@@ -1106,6 +1106,15 @@ impl UploadStore {
     }
 }
 
+/// Live sources (NDI, OMT, capture devices) must never wait on the mixer: the receive
+/// thread also carries the video. When the consumer is behind, the ring drops the oldest
+/// audio instead.
+pub fn ingest_audio_live(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
+    let audio = uploads.lock_or_recover().audio_store();
+    audio.lock_or_recover().ingest_audio(id, packet);
+}
+
+/// Decoder-driven sources may run ahead of the mix, so they wait (bounded) for room.
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
     let audio = uploads.lock_or_recover().audio_store();
     wait_fifo_below(&audio, id, AUDIO_FIFO_HIGH_FRAMES);
