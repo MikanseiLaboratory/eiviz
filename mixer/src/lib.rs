@@ -1657,82 +1657,112 @@ unsafe fn mixer_unit_set_state_ffi(unit_id: u64, state: *const UnitState) -> i32
     code
 }
 
-pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
+fn validate_unit_state(unit_id: u64, state: &UnitState) -> Result<(), i32> {
     if state.overlay_count > state.overlays.len() as u32
         || state.mv_slot_count > state.mv_slots.len() as u32
         || !(0.0..=1.0).contains(&state.mix)
     {
-        return ERR_INVALID_ARGUMENT;
+        return Err(ERR_INVALID_ARGUMENT);
     }
     let overlays = &state.overlays[..state.overlay_count as usize];
     if let Some(reason) = invalid_overlays(overlays) {
         report_session_error(format!("unit {unit_id:#x} state: {reason}"));
+        return Err(ERR_INVALID_ARGUMENT);
+    }
+    Ok(())
+}
+
+fn apply_unit_state(shared: &mut Shared, unit_id: u64, state: UnitState) -> i32 {
+    if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
         return ERR_INVALID_ARGUMENT;
+    }
+    {
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        let keep = state.keep_preview != 0
+            || unit
+                .auto
+                .as_ref()
+                .is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
+        if unit.auto.is_some() && keep {
+            let mix = unit.state.mix;
+            let program = unit.state.program_source;
+            let keep_preview = unit.state.keep_preview;
+            let dip = (
+                unit.state.dip_r,
+                unit.state.dip_g,
+                unit.state.dip_b,
+                unit.state.dip_a,
+            );
+            let look = (unit.state.softness, unit.state.param);
+            let frozen = unit.frozen_preview;
+            unit.state = state;
+            unit.state.mix = mix;
+            unit.state.program_source = program;
+            unit.state.keep_preview = keep_preview;
+            unit.state.dip_r = dip.0;
+            unit.state.dip_g = dip.1;
+            unit.state.dip_b = dip.2;
+            unit.state.dip_a = dip.3;
+            unit.state.softness = look.0;
+            unit.state.param = look.1;
+            unit.frozen_preview = frozen;
+        } else {
+            let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
+            unit.state = state;
+            if mix_changed {
+                unit.auto = None;
+            }
+        }
+        unit.state.incoming_source = 0;
+        if unit
+            .auto
+            .as_ref()
+            .is_some_and(|auto| auto.keep_preview || auto.incoming_locked)
+        {
+            unit.frozen_preview.get_or_insert(unit.state.preview_source);
+        } else if unit.state.mix > 0.001 {
+            if unit.state.keep_preview != 0 {
+                unit.frozen_preview.get_or_insert(unit.state.preview_source);
+            } else {
+                unit.frozen_preview = None;
+            }
+        } else {
+            unit.frozen_preview = None;
+        }
+    }
+    shared.compose_dirty = true;
+    OK
+}
+
+pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
+    if let Err(code) = validate_unit_state(unit_id, state) {
+        return code;
     }
     let state = *state;
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
-        if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
+        apply_unit_state(&mut shared, unit_id, state)
+    })
+    .unwrap_or_else(|code| code)
+}
+
+/// Read-modify-write of one unit's state under a single lock. Reading the state, releasing the
+/// lock and writing it back would overwrite the mix that a running transition advanced meanwhile,
+/// which the mix-changed check then treats as a manual override and cancels the transition.
+pub(crate) fn unit_update_state_inner(unit_id: u64, update: impl FnOnce(&mut UnitState)) -> i32 {
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock_or_recover();
+        let Some(unit) = shared.units.get(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
+        };
+        let mut state = unit.state;
+        update(&mut state);
+        if let Err(code) = validate_unit_state(unit_id, &state) {
+            return code;
         }
-        {
-            let Some(unit) = shared.units.get_mut(&unit_id) else {
-                return ERR_INVALID_ARGUMENT;
-            };
-            let keep = state.keep_preview != 0
-                || unit
-                    .auto
-                    .as_ref()
-                    .is_some_and(|auto| auto.keep_preview || auto.incoming_locked);
-            if unit.auto.is_some() && keep {
-                let mix = unit.state.mix;
-                let program = unit.state.program_source;
-                let keep_preview = unit.state.keep_preview;
-                let dip = (
-                    unit.state.dip_r,
-                    unit.state.dip_g,
-                    unit.state.dip_b,
-                    unit.state.dip_a,
-                );
-                let look = (unit.state.softness, unit.state.param);
-                let frozen = unit.frozen_preview;
-                unit.state = state;
-                unit.state.mix = mix;
-                unit.state.program_source = program;
-                unit.state.keep_preview = keep_preview;
-                unit.state.dip_r = dip.0;
-                unit.state.dip_g = dip.1;
-                unit.state.dip_b = dip.2;
-                unit.state.dip_a = dip.3;
-                unit.state.softness = look.0;
-                unit.state.param = look.1;
-                unit.frozen_preview = frozen;
-            } else {
-                let mix_changed = (unit.state.mix - state.mix).abs() > 0.0001;
-                unit.state = state;
-                if mix_changed {
-                    unit.auto = None;
-                }
-            }
-            unit.state.incoming_source = 0;
-            if unit
-                .auto
-                .as_ref()
-                .is_some_and(|auto| auto.keep_preview || auto.incoming_locked)
-            {
-                unit.frozen_preview.get_or_insert(unit.state.preview_source);
-            } else if unit.state.mix > 0.001 {
-                if unit.state.keep_preview != 0 {
-                    unit.frozen_preview.get_or_insert(unit.state.preview_source);
-                } else {
-                    unit.frozen_preview = None;
-                }
-            } else {
-                unit.frozen_preview = None;
-            }
-        }
-        shared.compose_dirty = true;
-        OK
+        apply_unit_state(&mut shared, unit_id, state)
     })
     .unwrap_or_else(|code| code)
 }
@@ -1770,6 +1800,18 @@ pub(crate) fn merge_overlay(state: &mut UnitState, desc: OverlayDesc) {
     }
 }
 
+pub(crate) fn remove_overlay(state: &mut UnitState, source_id: u64) {
+    let count = (state.overlay_count as usize).min(state.overlays.len());
+    let Some(index) = state.overlays[..count]
+        .iter()
+        .position(|item| item.source_id == source_id)
+    else {
+        return;
+    };
+    state.overlays.copy_within(index + 1..count, index);
+    state.overlay_count = (count - 1) as u32;
+}
+
 pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
     if let Some(auto) = unit.auto.take() {
         let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
@@ -1793,6 +1835,8 @@ pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
             item.desc.opacity = item.to;
             if item.to > 0.001 {
                 merge_overlay(&mut unit.state, item.desc);
+            } else {
+                remove_overlay(&mut unit.state, item.desc.source_id);
             }
         } else {
             item.desc.opacity = item.from + (item.to - item.from) * t;
@@ -2055,6 +2099,10 @@ pub(crate) fn overlay_auto_inner(
     duration_ms: u32,
     desc: OverlayDesc,
 ) -> i32 {
+    if let Some(reason) = invalid_overlays(std::slice::from_ref(&desc)) {
+        report_session_error(format!("overlay auto: {reason}"));
+        return ERR_INVALID_ARGUMENT;
+    }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
         let Some(unit) = shared.units.get_mut(&unit_id) else {
@@ -5360,6 +5408,79 @@ mod tests {
         assert!(invalid_scene_layer(7, &[layer(7, 0.0)]).is_some());
         assert!(invalid_scene_layer(7, &[layer(8, f32::NAN)]).is_some());
         assert!(invalid_scene_layer(7, &[layer(8, 0.0)]).is_none());
+    }
+
+    #[test]
+    fn remove_overlay_compacts_list() {
+        let mut state = UnitState::default();
+        let desc = |source_id: u64| OverlayDesc {
+            source_id,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            crop: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            opacity: 1.0,
+            z: 0,
+            audio_follow: 0,
+            hidden: 0,
+            label: std::ptr::null(),
+        };
+        for id in [1, 2, 3] {
+            merge_overlay(&mut state, desc(id));
+        }
+        remove_overlay(&mut state, 2);
+        assert_eq!(state.overlay_count, 2);
+        assert_eq!(state.overlays[0].source_id, 1);
+        assert_eq!(state.overlays[1].source_id, 3);
+        remove_overlay(&mut state, 99);
+        assert_eq!(state.overlay_count, 2);
+    }
+
+    #[test]
+    #[serial(mixer)]
+    fn preview_update_during_auto_keeps_transition_running() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        assert_eq!(mixer_create_unit(1, 320, 180), OK);
+        assert_eq!(
+            unit_auto_inner(
+                1,
+                crate::abi::TRANSITION_FADE,
+                60_000,
+                0,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0,
+                0.0,
+                0.0
+            ),
+            OK
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            unit_update_state_inner(1, |state| state.preview_source = 5),
+            OK
+        );
+        let auto_running = with_mixer(|mixer| {
+            let shared = mixer.shared.lock_or_recover();
+            shared.units.get(&1).is_some_and(|unit| unit.auto.is_some())
+        })
+        .unwrap_or(false);
+        assert!(auto_running);
+        mixer_destroy();
     }
 
     #[test]

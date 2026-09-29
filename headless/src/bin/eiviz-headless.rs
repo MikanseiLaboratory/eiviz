@@ -196,7 +196,7 @@ fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
         eprintln!("eiviz-headless error=session {error}");
         EXIT_SESSION
     })?;
-    std::fs::write(output, bytes).map_err(|error| {
+    session::atomic_write(output, &bytes).map_err(|error| {
         eprintln!("eiviz-headless error=session {error}");
         EXIT_SESSION
     })?;

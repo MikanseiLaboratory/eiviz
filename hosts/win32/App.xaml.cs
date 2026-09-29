@@ -44,6 +44,7 @@ public partial class App : Application
                 Backend = new LocalEivizBackend();
                 BootMixer();
             }
+            _started = true;
         }
         catch (Exception ex)
         {
@@ -173,26 +174,24 @@ public partial class App : Application
         Backend = new DisconnectedRemoteBackend();
     }
 
-    internal bool TryConnectRemote(string url, string token, out string error)
+    internal async Task<(bool Ok, string Error)> TryConnectRemoteAsync(string url, string token)
     {
         var endpoint = url.Trim();
         try
         {
-            var next = RemoteEivizBackend.Open(endpoint, token ?? "");
+            var next = await RemoteEivizBackend.OpenAsync(endpoint, token ?? "");
             Backend?.Dispose();
             Backend = next;
             CredentialStore.Save(endpoint, token ?? "");
             AppPrefs.Current.RemoteUrl = endpoint;
             AppPrefs.Current.RememberRemote(endpoint);
-            error = "";
-            return true;
+            return (true, "");
         }
         catch (Exception ex)
         {
             HostLog.Write("ERROR", ex.Message);
-            error = ex.Message;
             Backend ??= new DisconnectedRemoteBackend();
-            return false;
+            return (false, ex.Message);
         }
     }
 
@@ -423,9 +422,28 @@ public partial class App : Application
         }
     }
 
+    private bool _started;
+    private DateTime _lastErrorToastUtc = DateTime.MinValue;
+
     private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         HostLog.WriteCrash(e.Exception);
+        // A failed startup leaves no usable session, so only a running switcher keeps going.
+        if (!_started)
+            return;
+        e.Handled = true;
+        var now = DateTime.UtcNow;
+        if (now - _lastErrorToastUtc < TimeSpan.FromSeconds(3))
+            return;
+        _lastErrorToastUtc = now;
+        try
+        {
+            StatusToast.Show(MainWindow, $"{Loc.T("msg.unexpectedError")}: {e.Exception.Message}");
+        }
+        catch (Exception toastError)
+        {
+            HostLog.WriteException(toastError);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

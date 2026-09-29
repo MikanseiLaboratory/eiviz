@@ -320,7 +320,7 @@ public partial class MainWindow : Window
         var token = CredentialStore.Load(url);
         if (!ConnectWindow.TryPrompt(this, url, token, out var nextUrl, out var nextToken))
             return;
-        ConnectTo(nextUrl, nextToken);
+        _ = ConnectTo(nextUrl, nextToken);
     }
 
     private void Disconnect_Click(object sender, RoutedEventArgs e)
@@ -337,10 +337,25 @@ public partial class MainWindow : Window
         RefreshStatusBar();
     }
 
-    private void ConnectTo(string url, string token)
+    private bool _connecting;
+
+    private async Task ConnectTo(string url, string token)
     {
+        if (_connecting)
+            return;
+        _connecting = true;
         var app = (App)Application.Current;
-        if (!app.TryConnectRemote(url, token, out var error))
+        bool ok;
+        string error;
+        try
+        {
+            (ok, error) = await app.TryConnectRemoteAsync(url, token);
+        }
+        finally
+        {
+            _connecting = false;
+        }
+        if (!ok)
         {
             MessageBox.Show(this, error, Loc.T("msg.remoteConnectFailed"));
             RefreshStatusBar();

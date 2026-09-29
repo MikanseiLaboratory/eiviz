@@ -214,12 +214,20 @@ fn run<T: Send + 'static>(
     handle: i32,
     fut: impl std::future::Future<Output = T> + Send + 'static,
 ) -> Option<T> {
+    run_for(handle, Duration::from_secs(30), fut)
+}
+
+fn run_for<T: Send + 'static>(
+    handle: i32,
+    timeout: Duration,
+    fut: impl std::future::Future<Output = T> + Send + 'static,
+) -> Option<T> {
     let rt = with_slot(handle, |slot| slot.handle.clone())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     rt.spawn(async move {
         let _ = tx.send(fut.await);
     });
-    rx.recv_timeout(Duration::from_secs(30)).ok()
+    rx.recv_timeout(timeout).ok()
 }
 
 fn spawn_live(handle: i32, fut: impl std::future::Future<Output = i32> + Send + 'static) -> i32 {
@@ -509,7 +517,9 @@ pub unsafe fn upload(
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
-    run(handle, async move {
+    // The client enforces its own deadline (and aborts the upload) before this wait gives up.
+    let wait = eiviz_api::client::UPLOAD_DEADLINE + Duration::from_secs(15);
+    run_for(handle, wait, async move {
         map_result(
             session
                 .upload_file(

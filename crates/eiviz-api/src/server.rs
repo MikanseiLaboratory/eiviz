@@ -99,6 +99,7 @@ pub async fn listen(
         control,
         auth: config.auth.clone(),
         clients: std::sync::atomic::AtomicUsize::new(0),
+        subscribers: std::sync::atomic::AtomicUsize::new(0),
         max_clients: config.max_clients,
         idle_timeout: config.idle_timeout,
         media: config.media.clone(),
@@ -106,6 +107,7 @@ pub async fn listen(
         stop: stop_rx,
         shutdown: shutdown_tx,
     });
+    tokio::spawn(meter_loop(Arc::clone(&state)));
     let accept_state = Arc::clone(&state);
     let task = tokio::spawn(async move { accept_loop(ws, accept_state).await });
     Ok(ServerHandle {
@@ -120,24 +122,33 @@ async fn accept_loop(ws: TcpListener, state: Arc<State>) -> std::io::Result<()> 
     let mut connections = JoinSet::new();
     let mut stop_rx = state.stop.clone();
     loop {
+        let mut accept_failed = false;
         tokio::select! {
-            result = ws.accept() => {
-                let (stream, _) = result?;
-                let state = Arc::clone(&state);
-                connections.spawn(async move {
-                    let mut stop_rx = state.stop.clone();
-                    tokio::select! {
-                        result = handle_ws(Arc::clone(&state), stream) => {
-                            if let Err(error) = result {
-                                eprintln!("eiviz api ws: {error}");
+            result = ws.accept() => match result {
+                Ok((stream, _)) => {
+                    let state = Arc::clone(&state);
+                    connections.spawn(async move {
+                        let mut stop_rx = state.stop.clone();
+                        tokio::select! {
+                            result = handle_ws(Arc::clone(&state), stream) => {
+                                if let Err(error) = result {
+                                    eprintln!("eiviz api ws: {error}");
+                                }
                             }
+                            _ = stop_rx.wait_for(|stop| *stop) => {}
                         }
-                        _ = stop_rx.wait_for(|stop| *stop) => {}
-                    }
-                });
-            }
+                    });
+                }
+                Err(error) => {
+                    eprintln!("eiviz api accept: {error}");
+                    accept_failed = true;
+                }
+            },
             _ = stop_rx.wait_for(|stop| *stop) => break,
             Some(_) = connections.join_next() => {}
+        }
+        if accept_failed {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
     connections.abort_all();
@@ -151,8 +162,47 @@ struct PendingUpload {
     video_loop: bool,
 }
 
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const METER_INTERVAL: Duration = Duration::from_millis(48);
+
+struct SubscriberGuard(Arc<State>);
+
+impl SubscriberGuard {
+    fn new(state: &Arc<State>) -> Self {
+        state
+            .subscribers
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self(Arc::clone(state))
+    }
+}
+
+impl Drop for SubscriberGuard {
+    fn drop(&mut self) {
+        self.0
+            .subscribers
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+async fn meter_loop(state: Arc<State>) {
+    let mut stop_rx = state.stop.clone();
+    let mut tick = tokio::time::interval(METER_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                if state.subscribers.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                    state.control.publish_meters();
+                }
+            }
+            _ = stop_rx.wait_for(|stop| *stop) => break,
+        }
+    }
+}
+
 struct State {
     control: Arc<dyn ControlFacade>,
+    subscribers: std::sync::atomic::AtomicUsize,
     auth: AuthConfig,
     clients: std::sync::atomic::AtomicUsize,
     max_clients: usize,
@@ -200,17 +250,22 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
                 .unwrap())
         }
     };
-    let mut ws = accept_hdr_async_with_config(
-        stream,
-        callback,
-        Some(
-            WebSocketConfig::default()
-                .max_message_size(Some(MAX_MESSAGE_BYTES))
-                .max_frame_size(Some(MAX_MESSAGE_BYTES)),
+    let mut ws = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        accept_hdr_async_with_config(
+            stream,
+            callback,
+            Some(
+                WebSocketConfig::default()
+                    .max_message_size(Some(MAX_MESSAGE_BYTES))
+                    .max_frame_size(Some(MAX_MESSAGE_BYTES)),
+            ),
         ),
     )
     .await
+    .map_err(|_| "websocket handshake timed out".to_string())?
     .map_err(|error| error.to_string())?;
+    let mut _subscription: Option<SubscriberGuard> = None;
     let mut instance = String::new();
     let mut role = Role::Read;
     let mut authed = !state.auth.require_auth;
@@ -219,7 +274,6 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
     let mut last_activity = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_millis(16));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut meter_ticks = 0u8;
     loop {
         if last_activity.elapsed() > state.idle_timeout {
             return Err("idle timeout".into());
@@ -262,12 +316,25 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
                                 if let Some(request::Payload::Subscribe(sub)) = &request.payload {
                                     last_seq = sub.after_sequence;
                                     subscribed = true;
+                                    if _subscription.is_none() {
+                                        _subscription = Some(SubscriberGuard::new(&state));
+                                    }
                                 }
                                 let shutdown_cmd = matches!(
                                     request.payload,
                                     Some(request::Payload::Shutdown(_))
                                 );
-                                let response = dispatch(&state, &instance, role, request);
+                                let request_id = request.request_id.clone();
+                                let blocking_state = Arc::clone(&state);
+                                let blocking_instance = instance.clone();
+                                let response = tokio::task::spawn_blocking(move || {
+                                    dispatch(&blocking_state, &blocking_instance, role, request)
+                                })
+                                .await
+                                .unwrap_or_else(|error| {
+                                    eprintln!("eiviz api dispatch failed: {error}");
+                                    status_envelope(&request_id, "INTERNAL", "request handler failed")
+                                });
                                 let shutdown_ok = shutdown_cmd
                                     && response
                                         .kind
@@ -303,10 +370,6 @@ async fn handle_ws(state: Arc<State>, stream: TcpStream) -> Result<(), String> {
             _ = tick.tick() => {
                 if !subscribed {
                     continue;
-                }
-                meter_ticks = meter_ticks.wrapping_add(1);
-                if meter_ticks.is_multiple_of(3) {
-                    state.control.publish_meters();
                 }
                 last_activity = Instant::now();
                 let events = drain_events(&state, &mut last_seq);

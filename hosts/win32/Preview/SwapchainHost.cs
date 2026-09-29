@@ -101,11 +101,20 @@ internal sealed partial class SwapchainHost : HwndHost
 
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
-        DetachNative();
-        if (_attached)
-            throw new InvalidOperationException("Preview surface detach did not complete; HWND was not destroyed");
+        // Throwing here would abort WPF's teardown of the visual tree, so failures are logged and
+        // destruction continues.
+        try
+        {
+            DetachNative();
+            if (_attached)
+                HostLog.Write("ERROR", "Preview surface detach did not complete; destroying HWND anyway");
+        }
+        catch (Exception ex)
+        {
+            HostLog.WriteException(ex);
+        }
         if (!DestroyWindow(hwnd.Handle))
-            throw new InvalidOperationException($"Could not destroy preview HWND: {Marshal.GetLastWin32Error()}");
+            HostLog.Write("ERROR", $"Could not destroy preview HWND: {Marshal.GetLastWin32Error()}");
         _hwnd = nint.Zero;
     }
 
