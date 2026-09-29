@@ -89,14 +89,14 @@ internal static class TransitionCatalog
 
     internal static float DefaultSoftness(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.4f,
+        MixerNative.TransitionPixelSort => 0.1f,
         MixerNative.TransitionBloom => 0.45f,
         _ => 0.02f
     };
 
     internal static float DefaultParam(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.25f,
+        MixerNative.TransitionPixelSort => 0.1f,
         MixerNative.TransitionDatamosh => 1f,
         MixerNative.TransitionMetamix => 8f,
         MixerNative.TransitionTile => 8f,

@@ -97,7 +97,7 @@ enum TransitionCatalog {
 
     static func defaultSoftness(_ kind: UInt32) -> Float {
         switch kind {
-        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.4
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.1
         case EIVIZ_TRANSITION_BLOOM: return 0.45
         default: return 0.02
         }
@@ -105,7 +105,7 @@ enum TransitionCatalog {
 
     static func defaultParam(_ kind: UInt32) -> Float {
         switch kind {
-        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.25
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.1
         case EIVIZ_TRANSITION_DATAMOSH: return 1
         case EIVIZ_TRANSITION_METAMIX: return 8
         case EIVIZ_TRANSITION_TILE: return 8
