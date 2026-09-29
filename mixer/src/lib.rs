@@ -3533,20 +3533,22 @@ unsafe fn mixer_ndi_discover_ffi(out: *mut u8, cap: usize) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+/// Borrows the latest packed frame sent on `output_id`. The pointer stays valid until
+/// `mixer_unit_release_frame` is called for the same output or the next acquire replaces it.
 pub unsafe extern "C" fn mixer_unit_acquire_frame(
-    unit_id: u64,
+    output_id: u64,
     ptr: *mut *const u8,
     stride: *mut u32,
     pts: *mut i64,
     length: *mut u32,
 ) -> i32 {
     ffi_guard("mixer_unit_acquire_frame", ERR_DEVICE, || unsafe {
-        mixer_unit_acquire_frame_ffi(unit_id, ptr, stride, pts, length)
+        mixer_unit_acquire_frame_ffi(output_id, ptr, stride, pts, length)
     })
 }
 
 unsafe fn mixer_unit_acquire_frame_ffi(
-    unit_id: u64,
+    output_id: u64,
     ptr: *mut *const u8,
     stride: *mut u32,
     pts: *mut i64,
@@ -3560,7 +3562,7 @@ unsafe fn mixer_unit_acquire_frame_ffi(
     }
     // The latest packed frame is stored on the render-thread readback cache and
     // copied into a process-wide acquire buffer so the pointer stays stable.
-    let Some(frame) = last_frames().lock_or_recover().get(&unit_id).cloned() else {
+    let Some(frame) = last_frames().lock_or_recover().get(&output_id).cloned() else {
         return ERR_IO;
     };
     unsafe {
@@ -3569,19 +3571,19 @@ unsafe fn mixer_unit_acquire_frame_ffi(
         *pts = frame.pts;
         *length = frame.data.len() as u32;
     }
-    acquired().lock_or_recover().insert(unit_id, frame);
+    acquired().lock_or_recover().insert(output_id, frame);
     OK
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_release_frame(unit_id: u64) -> i32 {
+pub extern "C" fn mixer_unit_release_frame(output_id: u64) -> i32 {
     ffi_guard("mixer_unit_release_frame", ERR_DEVICE, || {
-        mixer_unit_release_frame_ffi(unit_id)
+        mixer_unit_release_frame_ffi(output_id)
     })
 }
 
-fn mixer_unit_release_frame_ffi(unit_id: u64) -> i32 {
-    acquired().lock_or_recover().remove(&unit_id);
+fn mixer_unit_release_frame_ffi(output_id: u64) -> i32 {
+    acquired().lock_or_recover().remove(&output_id);
     OK
 }
 

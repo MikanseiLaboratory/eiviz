@@ -128,6 +128,7 @@ impl OmtReceiver {
                     let mut pts_seq = 0i64;
                     let live_since = Instant::now();
                     let mut missing_video_logged = false;
+                    let mut jitter = JitterRing::default();
                     let run = panic::catch_unwind(AssertUnwindSafe(|| {
                         while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
                             let full = debounce_want_full(
@@ -153,10 +154,31 @@ impl OmtReceiver {
                                     let height = frame.height.max(2);
                                     let pts = next_pts(&mut pts_seq, frame.timestamp);
                                     let gpu_frame = if depth > 1 {
-                                        if let Some(ctx) = gpu.as_ref() {
-                                            copy_gpu_frame(ctx, &frame.texture, width, height, pts)
-                                        } else {
-                                            gpu_frame_from_omt(frame, pts)
+                                        let Some(ctx) = gpu.as_ref() else {
+                                            store_omt_error(
+                                                &last_error_thread,
+                                                source_id,
+                                                "jitter buffering needs a GPU context".into(),
+                                            );
+                                            continue;
+                                        };
+                                        match jitter.copy(
+                                            ctx,
+                                            &frame.texture,
+                                            width,
+                                            height,
+                                            pts,
+                                            depth as usize,
+                                        ) {
+                                            Ok(copied) => copied,
+                                            Err(error) => {
+                                                store_omt_error(
+                                                    &last_error_thread,
+                                                    source_id,
+                                                    error,
+                                                );
+                                                continue;
+                                            }
                                         }
                                     } else {
                                         gpu_frame_from_omt(frame, pts)
@@ -575,6 +597,10 @@ pub struct GpuSendStore {
 }
 
 impl GpuSendStore {
+    pub fn retain(&mut self, live: &std::collections::HashSet<u64>) {
+        self.rings.retain(|id, _| live.contains(id));
+    }
+
     pub fn copy(
         &mut self,
         device: &GpuDevice,
@@ -841,59 +867,110 @@ fn gpu_frame_from_omt(frame: openmediatransport::DecodedVideoGpuFrame, pts: i64)
     }
 }
 
-fn copy_gpu_frame(
-    ctx: &OmtGpu,
-    src: &wgpu::Texture,
-    width: u32,
-    height: u32,
-    pts: i64,
-) -> GpuVideoFrame {
-    let width = width.max(1);
-    let height = height.max(1);
-    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("eiviz omt jitter"),
-        size: wgpu::Extent3d {
+struct JitterSlot {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    lease: crate::upload::FrameLease,
+}
+
+/// Textures that hold received frames while they wait in the playout FIFO. A slot is rewritten
+/// only after every frame that referenced it is gone, so the ring is reused instead of
+/// allocating a texture per frame.
+#[derive(Default)]
+struct JitterRing {
+    slots: Vec<JitterSlot>,
+}
+
+impl JitterRing {
+    fn copy(
+        &mut self,
+        ctx: &OmtGpu,
+        src: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        pts: i64,
+        depth: usize,
+    ) -> Result<GpuVideoFrame, String> {
+        let width = width.max(1);
+        let height = height.max(1);
+        let format = src.format();
+        if self.slots.iter().any(|slot| {
+            let size = slot.texture.size();
+            size.width != width || size.height != height || slot.texture.format() != format
+        }) {
+            self.slots.clear();
+        }
+        let index = match self
+            .slots
+            .iter()
+            .position(|slot| std::sync::Arc::strong_count(&slot.lease) == 1)
+        {
+            Some(index) => index,
+            None => {
+                let limit = depth + 4;
+                if self.slots.len() >= limit {
+                    return Err(format!(
+                        "omt jitter ring exhausted: all {} textures are still queued",
+                        self.slots.len()
+                    ));
+                }
+                let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("eiviz omt jitter"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&Default::default());
+                self.slots.push(JitterSlot {
+                    texture,
+                    view,
+                    lease: std::sync::Arc::new(()),
+                });
+                self.slots.len() - 1
+            }
+        };
+        let slot = &self.slots[index];
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("eiviz omt jitter copy"),
+            });
+        encoder.copy_texture_to_texture(
+            src.as_image_copy(),
+            slot.texture.as_image_copy(),
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        {
+            let _guard = crate::device::lock_gpu_queue();
+            ctx.queue.submit(Some(encoder.finish()));
+        }
+        Ok(GpuVideoFrame {
+            pts,
             width,
             height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: src.format(),
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("eiviz omt jitter copy"),
-        });
-    encoder.copy_texture_to_texture(
-        src.as_image_copy(),
-        texture.as_image_copy(),
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    let _guard = crate::device::lock_gpu_queue();
-    ctx.queue.submit(Some(encoder.finish()));
-    GpuVideoFrame {
-        pts,
-        width,
-        height,
-        packed: false,
-        bgra: matches!(
-            texture.format(),
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        ),
-        view: texture.create_view(&Default::default()),
-        texture,
-        lease: None,
+            packed: false,
+            bgra: matches!(
+                format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            ),
+            view: slot.view.clone(),
+            texture: slot.texture.clone(),
+            lease: Some(std::sync::Arc::clone(&slot.lease)),
+        })
     }
 }
 

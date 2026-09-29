@@ -383,6 +383,11 @@ pub fn is_scene(source_id: u64) -> bool {
     source_id >= SCENE_BASE && source_id < MULTIVIEW_BASE
 }
 
+/// Scenes and multiview surfaces are both composed from layers into their own texture.
+pub fn is_composed_surface(source_id: u64) -> bool {
+    is_scene(source_id) || is_multiview(source_id)
+}
+
 pub fn is_multiview(source_id: u64) -> bool {
     source_id >= MULTIVIEW_BASE && source_id < LABEL_BASE
 }

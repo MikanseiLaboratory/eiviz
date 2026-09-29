@@ -367,6 +367,16 @@ pub(crate) fn render_loop(
                     receiver.apply_save(want_full(save, role), role.on_program, role.on_preview);
                 }
             }
+            {
+                let live_units: HashSet<u64> = snapshot.iter().map(|(id, ..)| *id).collect();
+                let live_outputs: HashSet<u64> =
+                    outputs_snap.iter().map(|item| item.output_id).collect();
+                let live_sources: HashSet<u64> = uploads.lock_or_recover().ids().collect();
+                composer.retain_live(&live_sources, &live_units, &live_outputs);
+                frame_delay.retain(&live_units);
+                readbacks.retain(&live_outputs);
+                gpu_sends.retain(&live_outputs);
+            }
             let frame_begin = Instant::now();
             let secs = frame_i as f64 * f64::from(fps_den) / f64::from(fps_num.max(1));
             let phase = ((secs * 0.12) % 1.0) as f32;
@@ -486,6 +496,7 @@ pub(crate) fn render_loop(
                             &mut packed_copies,
                             output,
                             &src,
+                            false,
                             pts,
                         );
                     } else if output.gpu_video() {
@@ -599,6 +610,7 @@ pub(crate) fn render_loop(
                         &mut packed_copies,
                         output,
                         &src,
+                        packed_src,
                         pts,
                     );
                 } else if output.gpu_video() {
@@ -694,7 +706,7 @@ pub(crate) fn snapshot_texture<'a>(
     source_id: u64,
     kind: u32,
 ) -> Option<&'a wgpu::Texture> {
-    if crate::abi::is_scene(source_id) {
+    if crate::abi::is_composed_surface(source_id) {
         return composer.scene_texture(source_id);
     }
     if kind == OUTPUT_SOURCE {
@@ -808,6 +820,17 @@ pub(crate) fn push_gpu_encode(
     });
 }
 
+/// Size of the picture in `src`. Packed 4:2:2 textures store two pixels per texel.
+fn logical_size(src: &wgpu::Texture, packed_src: bool) -> (u32, u32) {
+    let size = src.size();
+    let width = if packed_src {
+        size.width.saturating_mul(2)
+    } else {
+        size.width
+    };
+    (width, size.height)
+}
+
 fn push_cpu_packed(
     composer: &mut Composer,
     device: &GpuDevice,
@@ -816,10 +839,31 @@ fn push_cpu_packed(
     packed_copies: &mut Vec<(u64, u32, u32)>,
     output: &OutputSnap,
     src: &wgpu::Texture,
+    packed_src: bool,
     pts: i64,
 ) {
-    let (width, height) = output.video_size(src.size().width, src.size().height);
-    let src_view = src.create_view(&Default::default());
+    let (src_w, src_h) = logical_size(src, packed_src);
+    let (width, height) = output.video_size(src_w, src_h);
+    if packed_src && (width, height) == (src_w, src_h) {
+        // Already UYVY at the requested size: read it back untouched.
+        let rb = readbacks.ensure(device, output.output_id, src_w, src_h);
+        rb.copy_from(encoder, src, pts);
+        packed_copies.push((output.output_id, src_w, src_h));
+        return;
+    }
+    let rgba_src = if packed_src {
+        // Decode to RGBA at the output size first; the pack shader expects RGB input.
+        let Some(scaled) = composer
+            .scale_rgba(device, encoder, output.output_id, src, width, height, true)
+            .cloned()
+        else {
+            return;
+        };
+        scaled
+    } else {
+        src.clone()
+    };
+    let src_view = rgba_src.create_view(&Default::default());
     let Some(packed) =
         composer.pack_rgba_sized(device, encoder, output.output_id, &src_view, width, height)
     else {
@@ -842,7 +886,8 @@ fn push_scaled_gpu(
     src: &wgpu::Texture,
     packed_src: bool,
 ) {
-    let (width, height) = output.video_size(src.size().width, src.size().height);
+    let (src_w, src_h) = logical_size(src, packed_src);
+    let (width, height) = output.video_size(src_w, src_h);
     if let Some(scaled) = composer.scale_rgba(
         device,
         encoder,
@@ -853,7 +898,7 @@ fn push_scaled_gpu(
         packed_src,
     ) {
         push_gpu_encode(gpu_sends, device, encoder, copies, output, scaled);
-    } else {
+    } else if !packed_src {
         push_gpu_encode(gpu_sends, device, encoder, copies, output, src);
     }
 }

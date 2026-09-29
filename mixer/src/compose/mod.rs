@@ -5,7 +5,7 @@ use crate::abi::{
     GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
     TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_PIXEL_SORT, TRANSITION_STINGER,
-    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
+    UnitState, is_composed_surface, is_multiview, mixing_unit_bus, mixing_unit_from_source,
     mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
@@ -131,6 +131,19 @@ struct MixParams {
     resolution: [f32; 2],
 }
 
+struct LabelTexture {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    last_used: u64,
+}
+
+/// Rasterized labels kept before the least recently used ones are dropped.
+const LABEL_CACHE_MAX: usize = 256;
+
+fn is_builtin_source(id: u64) -> bool {
+    matches!(id, SRC_COLOR | SRC_BLACK | SRC_BLUE | SRC_BARS)
+}
+
 struct SourceGpu {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -173,7 +186,6 @@ pub struct Composer {
     scenes: HashMap<u64, SceneGpu>,
     generators: HashMap<u64, Generator>,
     generator_bake: HashMap<u64, Generator>,
-    input_packed: HashMap<u64, wgpu::Texture>,
     output_scaled: HashMap<u64, wgpu::Texture>,
     output_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
@@ -183,7 +195,8 @@ pub struct Composer {
     preview_rgb: [u8; 3],
     program_rgb: [u8; 3],
     inactive_rgb: [u8; 3],
-    label_cache: HashMap<LabelTexKey, (wgpu::Texture, wgpu::TextureView)>,
+    label_cache: HashMap<LabelTexKey, LabelTexture>,
+    frame: u64,
     pool: UniformPool,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
@@ -413,7 +426,6 @@ impl Composer {
             scenes: HashMap::new(),
             generators: HashMap::new(),
             generator_bake: HashMap::new(),
-            input_packed: HashMap::new(),
             output_scaled: HashMap::new(),
             output_packed: HashMap::new(),
             scroll_phase: 0.0,
@@ -424,6 +436,7 @@ impl Composer {
             program_rgb: [255, 0, 0],
             inactive_rgb: [64, 64, 64],
             label_cache: HashMap::new(),
+            frame: 0,
             pool,
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
@@ -450,8 +463,91 @@ impl Composer {
         })
     }
 
+    fn push_uniform<T: bytemuck::Pod>(&mut self, device: &GpuDevice, value: &T) -> u32 {
+        if self.pool.is_full() && self.pool.can_grow() {
+            self.grow_uniform_pool(device);
+        }
+        self.pool.push(&device.queue, value)
+    }
+
+    fn grow_uniform_pool(&mut self, device: &GpuDevice) {
+        self.pool.grow(device);
+        self.blit_groups.clear();
+        self.uyvy_groups.clear();
+        self.mix_groups.clear();
+        self.pack_groups.clear();
+        self.color_group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("color pool"),
+            layout: &self.color.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.pool.slot_binding(),
+            }],
+        });
+        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+    }
+
+    /// Drops GPU state for sources, units and outputs that no longer exist.
+    pub fn retain_live(
+        &mut self,
+        sources: &HashSet<u64>,
+        units: &HashSet<u64>,
+        outputs: &HashSet<u64>,
+    ) {
+        let generators = &self.generators;
+        let stale_sources: Vec<u64> = self
+            .sources
+            .keys()
+            .copied()
+            .filter(|id| {
+                !sources.contains(id) && !is_builtin_source(*id) && !generators.contains_key(id)
+            })
+            .collect();
+        for id in stale_sources {
+            self.sources.remove(&id);
+            self.blit_groups.remove(&id);
+            self.uyvy_groups.remove(&id);
+            self.pack_groups.remove(&(0x4000_0000_0000_0000 | id));
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+        }
+        let stale_units: Vec<u64> = self
+            .units
+            .keys()
+            .copied()
+            .filter(|id| !units.contains(id))
+            .collect();
+        for id in stale_units {
+            self.units.remove(&id);
+            self.mix_groups.remove(&id);
+            self.pack_groups.remove(&id);
+            self.pack_groups.remove(&mixing_unit_preview(id));
+            self.blit_groups.remove(&mixing_unit_source(id));
+            self.blit_groups.remove(&mixing_unit_preview(id));
+            self.custom_mix.remove(&id);
+            self.custom_mix_src.remove(&id);
+            self.custom_mix_failed.remove(&id);
+            self.custom_compute.remove(&id);
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+        }
+        let stale_outputs: Vec<u64> = self
+            .output_scaled
+            .keys()
+            .chain(self.output_packed.keys())
+            .copied()
+            .filter(|id| !outputs.contains(id))
+            .collect();
+        for id in stale_outputs {
+            self.output_scaled.remove(&id);
+            self.output_packed.remove(&id);
+            self.blit_groups.remove(&(0x5100_0000_0000_0000 | id));
+            self.uyvy_groups.remove(&(0x5100_0000_0000_0000 | id));
+            self.pack_groups.remove(&(0x5200_0000_0000_0000 | id));
+        }
+    }
+
     pub fn begin_frame(&mut self, dt: f32) {
         self.pool.reset();
+        self.frame = self.frame.wrapping_add(1);
         self.mix_time += dt;
     }
 
@@ -740,7 +836,32 @@ impl Composer {
         self.inactive_rgb = inactive;
         self.tally_red = None;
         self.tally_green = None;
+        self.blit_groups.remove(&KEY_TALLY_RED);
+        self.blit_groups.remove(&KEY_TALLY_GREEN);
         self.clear_labels();
+    }
+
+    fn evict_labels(&mut self) {
+        if self.label_cache.len() < LABEL_CACHE_MAX {
+            return;
+        }
+        let mut ages: Vec<u64> = self
+            .label_cache
+            .values()
+            .map(|entry| entry.last_used)
+            .collect();
+        ages.sort_unstable();
+        let cutoff = ages[ages.len() / 4];
+        let stale: Vec<LabelTexKey> = self
+            .label_cache
+            .iter()
+            .filter(|(_, entry)| entry.last_used <= cutoff)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in stale {
+            self.blit_groups.remove(&label_cache_key(&key));
+            self.label_cache.remove(&key);
+        }
     }
 
     fn clear_labels(&mut self) {
@@ -865,7 +986,7 @@ impl Composer {
         }
         if let Some(scene) = self.scenes.get(&id) {
             for layer in scene.layers.iter() {
-                if is_scene(layer.source_id) {
+                if is_composed_surface(layer.source_id) {
                     self.visit_scene(layer.source_id, used, visited, order);
                 }
             }
@@ -1002,9 +1123,12 @@ impl Composer {
         dest_h: u32,
     ) -> Option<wgpu::TextureView> {
         let key = LabelTexKey::new(text, rgb, font_px, dest_w);
-        if let Some((_, view)) = self.label_cache.get(&key) {
-            return Some(view.clone());
+        let frame = self.frame;
+        if let Some(entry) = self.label_cache.get_mut(&key) {
+            entry.last_used = frame;
+            return Some(entry.view.clone());
         }
+        self.evict_labels();
         let raster = crate::labels::raster(text, rgb, font_px, dest_w, dest_h);
         let texture = make_texture(
             device,
@@ -1024,7 +1148,14 @@ impl Composer {
         );
         let view = texture.create_view(&Default::default());
         self.blit_groups.remove(&label_cache_key(&key));
-        self.label_cache.insert(key, (texture, view.clone()));
+        self.label_cache.insert(
+            key,
+            LabelTexture {
+                texture,
+                view: view.clone(),
+                last_used: frame,
+            },
+        );
         Some(view)
     }
 
@@ -1475,13 +1606,13 @@ impl Composer {
                 }
                 let mut params = Self::mix_params(state, self.mix_time, width, height, None);
                 params.mix = amount;
-                let offset = self.pool.push(&device.queue, &params);
+                let offset = self.push_uniform(device, &params);
                 self.dispatch_fx1(device, encoder, program, unit_id, offset, segments, lines);
             }
         }
         if need_flow {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
             self.dispatch_fx2(
@@ -1495,8 +1626,8 @@ impl Composer {
             );
         }
         if need_mosh {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, width, height, None),
             );
             let blocks_w = (width as u32).div_ceil(MOSH_BLOCK) as f32;
@@ -1512,8 +1643,8 @@ impl Composer {
             );
         }
         if need_bloom {
-            let extract = self.pool.push(
-                &device.queue,
+            let extract = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
             self.dispatch_fx2(
@@ -1525,20 +1656,20 @@ impl Composer {
                 half_w,
                 half_h,
             );
-            let blur_h = self.pool.push(
-                &device.queue,
+            let blur_h = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, Some(0)),
             );
             self.dispatch_bloom_blur(device, encoder, unit_id, true, blur_h, half_w, half_h);
-            let blur_v = self.pool.push(
-                &device.queue,
+            let blur_v = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, Some(1)),
             );
             self.dispatch_bloom_blur(device, encoder, unit_id, false, blur_v, half_w, half_h);
         }
         if need_user {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, width, height, None),
             );
             self.dispatch_user_compute(device, encoder, unit_id, offset, width, height);
@@ -1775,8 +1906,8 @@ impl Composer {
             .map(|unit| (unit.width as f32, unit.height as f32))
             .unwrap_or((1920.0, 1080.0));
         self.prepare_mix_fx(device, encoder, unit_id, state, width, height)?;
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &MixParams {
                 mix: state.mix,
                 kind: if state.transition_kind == TRANSITION_STINGER {
@@ -1856,7 +1987,7 @@ impl Composer {
             self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
             return Ok(());
         }
-        if is_scene(source_id) {
+        if is_composed_surface(source_id) {
             if let Some(view) = self.scenes.get(&source_id).map(|scene| scene.view.clone()) {
                 self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
                 return Ok(());
@@ -1967,8 +2098,8 @@ impl Composer {
         opacity: f32,
         uyvy: bool,
     ) {
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &BlitParams {
                 dst,
                 src: uv,
@@ -2120,8 +2251,8 @@ impl Composer {
         bars: bool,
         scroll: bool,
     ) {
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &ColorParams {
                 color,
                 scroll: if scroll { self.scroll_phase } else { 0.0 },
@@ -2430,16 +2561,13 @@ impl Composer {
         for texture in self.mix_textures.values() {
             total += texture_bytes(texture);
         }
-        for texture in self.input_packed.values() {
-            total += texture_bytes(texture);
-        }
         for texture in self.output_scaled.values() {
             total += texture_bytes(texture);
         }
         for texture in self.output_packed.values() {
             total += texture_bytes(texture);
         }
-        for (texture, _) in self.label_cache.values() {
+        for LabelTexture { texture, .. } in self.label_cache.values() {
             total += texture_bytes(texture);
         }
         if let Some((texture, _)) = &self.tally_red {
@@ -2505,7 +2633,7 @@ impl Composer {
     ) -> Option<&wgpu::Texture> {
         let width = width.max(2);
         let height = height.max(1);
-        if src.size().width == width && src.size().height == height {
+        if !packed_src && src.size().width == width && src.size().height == height {
             return None;
         }
         let key = 0x5100_0000_0000_0000 | output_id;
@@ -2594,84 +2722,6 @@ impl Composer {
         self.pack_groups.remove(&key);
         self.pack_to(device, encoder, key, src, &dest);
         self.output_packed.get(&output_id)
-    }
-
-    pub fn pack_source(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        source_id: u64,
-        width: u32,
-        height: u32,
-    ) -> Option<&wgpu::Texture> {
-        let view = self.view_for_source(source_id)?;
-        let packed_w = (width / 2).max(1);
-        let packed_h = height.max(1);
-        let reuse = self
-            .input_packed
-            .get(&source_id)
-            .is_some_and(|tex| tex.size().width == packed_w && tex.size().height == packed_h);
-        if !reuse {
-            let packed = make_texture(
-                device,
-                packed_w,
-                packed_h,
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-            );
-            self.input_packed.insert(source_id, packed);
-            self.pack_groups
-                .remove(&(0x4000_0000_0000_0000 | source_id));
-        }
-        let dest = self
-            .input_packed
-            .get(&source_id)?
-            .create_view(&Default::default());
-        self.pack_to(
-            device,
-            encoder,
-            0x4000_0000_0000_0000 | source_id,
-            &view,
-            &dest,
-        );
-        self.input_packed.get(&source_id)
-    }
-
-    pub fn pack_scene(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        scene_id: u64,
-    ) -> Option<&wgpu::Texture> {
-        self.ensure_scene_packed(device, scene_id);
-        let (src, dest) = {
-            let scene = self.scenes.get(&scene_id)?;
-            (scene.view.clone(), scene.packed_view.clone()?)
-        };
-        self.pack_to(device, encoder, scene_id, &src, &dest);
-        self.scenes
-            .get(&scene_id)
-            .and_then(|scene| scene.packed.as_ref())
-    }
-
-    fn ensure_scene_packed(&mut self, device: &GpuDevice, scene_id: u64) {
-        let Some(scene) = self.scenes.get_mut(&scene_id) else {
-            return;
-        };
-        if scene.packed.is_some() {
-            return;
-        }
-        let packed = make_texture(
-            device,
-            scene.width / 2,
-            scene.height,
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-        );
-        scene.packed_view = Some(packed.create_view(&Default::default()));
-        scene.packed = Some(packed);
     }
 
     fn pack_to(
