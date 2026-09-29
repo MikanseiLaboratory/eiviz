@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
     BACKEND_DX12, BACKEND_METAL, EASING_IN_OUT, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_SOLID, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo, MixerStats,
-    NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
+    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo,
+    MixerStats, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
     OUTPUT_SOURCE, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
     SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM,
     TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
@@ -1012,6 +1012,26 @@ fn wait_snapshot_rgb(unit: u64, path: &std::path::Path, budget: Duration) -> (f3
     last
 }
 
+fn wait_snapshot_until(
+    unit: u64,
+    path: &std::path::Path,
+    done: impl Fn((f32, f32)) -> bool,
+    budget: Duration,
+) -> (f32, f32) {
+    let started = Instant::now();
+    let mut last = (0.0, 0.0);
+    while started.elapsed() < budget {
+        if let Some(sample) = snapshot_rgb_mean(unit, path) {
+            last = sample;
+            if done(sample) {
+                return sample;
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    last
+}
+
 fn wait_omt_sample(session: &ReceiverSession, budget: Duration) -> (f32, f32) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -1627,6 +1647,190 @@ fn shader_transitions_emit_frames() {
         }
     }
     mixer_destroy();
+}
+
+#[test]
+fn live_shader_transitions_track_buses() {
+    for kind in [TRANSITION_PIXEL_SORT, TRANSITION_DATAMOSH] {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        assert_eq!(mixer_create_unit(1, 320, 180), OK);
+        assert_eq!(
+            mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+            OK
+        );
+        assert_eq!(
+            mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+            OK
+        );
+
+        let path = std::env::temp_dir().join(format!("eiviz-live-transition-{kind}.png"));
+        let mut state = UnitState {
+            program_source: SRC_COLOR,
+            preview_source: SRC_COLOR,
+            mix: 0.2,
+            transition_kind: kind,
+            softness: 0.02,
+            param: 0.25,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+        }
+        let red = wait_snapshot_until(
+            1,
+            &path,
+            |sample| sample.0 > 150.0 && sample.0 > sample.1 + 40.0,
+            Duration::from_secs(3),
+        );
+        assert!(
+            red.0 > 150.0 && red.0 > red.1 + 40.0,
+            "transition {kind} did not render the initial red buses: r={} b={}",
+            red.0,
+            red.1
+        );
+
+        state.program_source = SRC_BLUE;
+        state.preview_source = SRC_BLUE;
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+        }
+        let blue = wait_snapshot_until(1, &path, looks_blue, Duration::from_secs(3));
+        assert!(
+            looks_blue(blue),
+            "transition {kind} kept stale bus content: r={} b={}",
+            blue.0,
+            blue.1
+        );
+        let _ = std::fs::remove_file(path);
+    }
+    mixer_destroy();
+}
+
+fn snapshot_rgb(unit: u64, path: &std::path::Path) -> image::RgbImage {
+    let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    for _ in 0..50 {
+        let _ = std::fs::remove_file(path);
+        if unsafe { mixer_snapshot(unit, OUTPUT_PROGRAM, cpath.as_ptr()) } == OK
+            && let Ok(img) = image::open(path)
+        {
+            return img.to_rgb8();
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("program snapshot failed");
+}
+
+/// Mean per-channel change between two frames, ignoring pixels that are the solid-blue PVW.
+fn outgoing_motion(a: &image::RgbImage, b: &image::RgbImage) -> f32 {
+    let is_blue = |p: &image::Rgb<u8>| p[2] > 200 && p[0] < 40 && p[1] < 40;
+    let mut diff = 0u64;
+    let mut n = 0u64;
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        if is_blue(pa) && is_blue(pb) {
+            continue;
+        }
+        for c in 0..3 {
+            diff += u64::from(pa[c].abs_diff(pb[c]));
+        }
+        n += 3;
+    }
+    if n == 0 { 0.0 } else { diff as f32 / n as f32 }
+}
+
+#[test]
+fn live_shader_transitions_keep_outgoing_motion() {
+    for kind in [TRANSITION_PIXEL_SORT, TRANSITION_DATAMOSH] {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        assert_eq!(mixer_create_unit(1, 320, 180), OK);
+        assert_eq!(
+            mixer_define_generator(SRC_BARS, GEN_BARS, 0.0, 0.0, 0.0, 1.0, 1),
+            OK
+        );
+        assert_eq!(
+            mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+            OK
+        );
+        let state = UnitState {
+            program_source: SRC_BARS,
+            preview_source: SRC_BLUE,
+            mix: 0.3,
+            transition_kind: kind,
+            transition_direction: 3,
+            softness: 0.4,
+            param: 0.25,
+            ..UnitState::default()
+        };
+        unsafe {
+            assert_eq!(mixer_unit_set_state(1, &state), OK);
+        }
+        let path = std::env::temp_dir().join(format!("eiviz-outgoing-motion-{kind}.png"));
+        thread::sleep(Duration::from_millis(300));
+        let first = snapshot_rgb(1, &path);
+        thread::sleep(Duration::from_millis(400));
+        let second = snapshot_rgb(1, &path);
+        let motion = outgoing_motion(&first, &second);
+        assert!(
+            motion > 5.0,
+            "transition {kind} froze the outgoing bus: motion={motion}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+    mixer_destroy();
+}
+
+/// PixelSort is a pure function of the buses and mix: a held T-bar must not keep evolving.
+#[test]
+fn pixel_sort_is_stable_at_fixed_mix() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    assert_eq!(
+        mixer_define_generator(SRC_BARS, GEN_BARS, 0.0, 0.0, 0.0, 1.0, 0),
+        OK
+    );
+    assert_eq!(
+        mixer_define_generator(SRC_BLUE, GEN_SOLID, 0.0, 0.0, 1.0, 1.0, 0),
+        OK
+    );
+    let path = std::env::temp_dir().join("eiviz-pixel-sort-stable.png");
+    let mut state = UnitState {
+        program_source: SRC_BARS,
+        preview_source: SRC_BLUE,
+        mix: 0.0,
+        transition_kind: TRANSITION_PIXEL_SORT,
+        transition_direction: 0,
+        softness: 0.4,
+        param: 0.25,
+        ..UnitState::default()
+    };
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let clean = snapshot_rgb(1, &path);
+    state.mix = 0.3;
+    unsafe {
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+    thread::sleep(Duration::from_millis(200));
+    let first = snapshot_rgb(1, &path);
+    thread::sleep(Duration::from_millis(300));
+    let second = snapshot_rgb(1, &path);
+    let _ = std::fs::remove_file(path);
+    mixer_destroy();
+
+    let drift = outgoing_motion(&first, &second);
+    assert!(
+        drift == 0.0,
+        "PixelSort kept changing at a fixed mix: {drift}"
+    );
+    let sorted = outgoing_motion(&clean, &first);
+    assert!(
+        sorted > 2.0,
+        "PixelSort did not sort the outgoing bus: {sorted}"
+    );
 }
 
 #[test]

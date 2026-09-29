@@ -64,7 +64,7 @@ internal static class TransitionCatalog
         new(MixerNative.TransitionFilmBurn, "FilmBurn", TransitionGroup.Shader, false, true, true, true, "Edge", "Intensity"),
         new(MixerNative.TransitionZoomBlur, "ZoomBlur", TransitionGroup.Shader, false, false, false, true, "", "Intensity"),
         new(MixerNative.TransitionPixelSort, "PixelSort", TransitionGroup.Shader, true, false, true, true, "Threshold", "Span"),
-        new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, true, false, false, true, "", "Intensity"),
+        new(MixerNative.TransitionDatamosh, "Datamosh", TransitionGroup.Shader, false, false, false, true, "", "Intensity"),
         new(MixerNative.TransitionVisualDissolve, "VisualDissolve", TransitionGroup.Shader, false, false, true, true, "Edge", "Flow"),
         new(MixerNative.TransitionOpticalFlow, "OpticalFlow", TransitionGroup.Shader, false, false, false, true, "", "Amount"),
         new(MixerNative.TransitionBloom, "Bloom", TransitionGroup.Shader, false, false, true, true, "Threshold", "Intensity"),
@@ -89,14 +89,14 @@ internal static class TransitionCatalog
 
     internal static float DefaultSoftness(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.4f,
+        MixerNative.TransitionPixelSort => 0.1f,
         MixerNative.TransitionBloom => 0.45f,
         _ => 0.02f
     };
 
     internal static float DefaultParam(uint kind) => kind switch
     {
-        MixerNative.TransitionPixelSort => 0.25f,
+        MixerNative.TransitionPixelSort => 0.1f,
         MixerNative.TransitionDatamosh => 1f,
         MixerNative.TransitionMetamix => 8f,
         MixerNative.TransitionTile => 8f,

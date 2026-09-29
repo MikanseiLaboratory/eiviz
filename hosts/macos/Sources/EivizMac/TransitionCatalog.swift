@@ -72,7 +72,7 @@ enum TransitionCatalog {
         .init(kind: EIVIZ_TRANSITION_FILM_BURN, label: "FilmBurn", group: .shader, hasDirection: false, hasDipColor: true, hasSoftness: true, hasParam: true, softnessLabel: "Edge", paramLabel: "Intensity"),
         .init(kind: EIVIZ_TRANSITION_ZOOM_BLUR, label: "ZoomBlur", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
         .init(kind: EIVIZ_TRANSITION_PIXEL_SORT, label: "PixelSort", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Threshold", paramLabel: "Span"),
-        .init(kind: EIVIZ_TRANSITION_DATAMOSH, label: "Datamosh", group: .shader, hasDirection: true, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
+        .init(kind: EIVIZ_TRANSITION_DATAMOSH, label: "Datamosh", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Intensity"),
         .init(kind: EIVIZ_TRANSITION_VISUAL_DISSOLVE, label: "VisualDissolve", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Edge", paramLabel: "Flow"),
         .init(kind: EIVIZ_TRANSITION_OPTICAL_FLOW, label: "OpticalFlow", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: false, hasParam: true, softnessLabel: "", paramLabel: "Amount"),
         .init(kind: EIVIZ_TRANSITION_BLOOM, label: "Bloom", group: .shader, hasDirection: false, hasDipColor: false, hasSoftness: true, hasParam: true, softnessLabel: "Threshold", paramLabel: "Intensity"),
@@ -97,7 +97,7 @@ enum TransitionCatalog {
 
     static func defaultSoftness(_ kind: UInt32) -> Float {
         switch kind {
-        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.4
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.1
         case EIVIZ_TRANSITION_BLOOM: return 0.45
         default: return 0.02
         }
@@ -105,7 +105,7 @@ enum TransitionCatalog {
 
     static func defaultParam(_ kind: UInt32) -> Float {
         switch kind {
-        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.25
+        case EIVIZ_TRANSITION_PIXEL_SORT: return 0.1
         case EIVIZ_TRANSITION_DATAMOSH: return 1
         case EIVIZ_TRANSITION_METAMIX: return 8
         case EIVIZ_TRANSITION_TILE: return 8

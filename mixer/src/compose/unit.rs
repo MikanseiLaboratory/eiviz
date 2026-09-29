@@ -3,6 +3,9 @@ use crate::upload::texture_bytes;
 
 use super::pipeline::make_texture;
 
+/// Macroblock edge in pixels. Must match `BLOCK` in `mosh_mv.wgsl` and `MOSH_BLOCK` in `mix.wgsl`.
+pub(crate) const MOSH_BLOCK: u32 = 16;
+
 pub struct UnitTargets {
     pub width: u32,
     pub height: u32,
@@ -16,6 +19,8 @@ pub struct UnitTargets {
     pub(crate) bloom_a: wgpu::Texture,
     pub(crate) bloom_b: wgpu::Texture,
     pub(crate) aux: wgpu::Texture,
+    pub(crate) pvw_prev: wgpu::Texture,
+    pub(crate) mosh_mv: wgpu::Texture,
     pub packed: Option<wgpu::Texture>,
     pub packed_prv: Option<wgpu::Texture>,
     pub(crate) program_view: wgpu::TextureView,
@@ -27,6 +32,8 @@ pub struct UnitTargets {
     pub(crate) bloom_a_view: wgpu::TextureView,
     pub(crate) bloom_b_view: wgpu::TextureView,
     pub(crate) aux_view: wgpu::TextureView,
+    pub(crate) pvw_prev_view: wgpu::TextureView,
+    pub(crate) mosh_mv_view: wgpu::TextureView,
     pub(crate) prev_seeded: bool,
     pub(crate) packed_view: Option<wgpu::TextureView>,
 }
@@ -52,6 +59,18 @@ impl UnitTargets {
         let flow = make_texture(device, half_w, half_h, fx);
         let bloom_a = make_texture(device, half_w, half_h, fx);
         let bloom_b = make_texture(device, half_w, half_h, fx);
+        let pvw_prev = make_texture(
+            device,
+            width,
+            height,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let mosh_mv = make_texture(
+            device,
+            width.div_ceil(MOSH_BLOCK),
+            height.div_ceil(MOSH_BLOCK),
+            fx,
+        );
         Self {
             width,
             height,
@@ -64,6 +83,8 @@ impl UnitTargets {
             bloom_a_view: bloom_a.create_view(&Default::default()),
             bloom_b_view: bloom_b.create_view(&Default::default()),
             aux_view: aux.create_view(&Default::default()),
+            pvw_prev_view: pvw_prev.create_view(&Default::default()),
+            mosh_mv_view: mosh_mv.create_view(&Default::default()),
             prev_seeded: false,
             packed_view: None,
             program,
@@ -76,6 +97,8 @@ impl UnitTargets {
             bloom_a,
             bloom_b,
             aux,
+            pvw_prev,
+            mosh_mv,
             packed: None,
             packed_prv: None,
         }
@@ -91,7 +114,9 @@ impl UnitTargets {
             + texture_bytes(&self.flow)
             + texture_bytes(&self.bloom_a)
             + texture_bytes(&self.bloom_b)
-            + texture_bytes(&self.aux);
+            + texture_bytes(&self.aux)
+            + texture_bytes(&self.pvw_prev)
+            + texture_bytes(&self.mosh_mv);
         if let Some(tex) = &self.packed {
             total += texture_bytes(tex);
         }
