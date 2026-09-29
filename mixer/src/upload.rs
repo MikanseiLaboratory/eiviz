@@ -796,11 +796,19 @@ impl AudioInputStore {
         ring.trim_to_live();
         let want = frames * 2;
         ring.fifo.pop_into(want, out);
-        while out.len() < want {
-            out.push(ring.last_hold.0);
-            out.push(ring.last_hold.1);
-        }
-        if want >= 2 {
+        let got = out.len() & !1;
+        if got < want {
+            let last = if got >= 2 {
+                (out[got - 2], out[got - 1])
+            } else {
+                ring.last_hold
+            };
+            out.truncate(got);
+            out.resize(want, 0.0);
+            crate::audio_in::fill_underrun(&mut out[got..], last);
+            ring.last_hold = (0.0, 0.0);
+            ring.fifo_primed = false;
+        } else if want >= 2 {
             ring.last_hold = (out[want - 2], out[want - 1]);
         }
         notify_fifo();

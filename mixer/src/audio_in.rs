@@ -80,6 +80,21 @@ pub fn planar_to_stereo(planar: &[f32], frames: usize, channels: usize, out: &mu
     }
 }
 
+/// Frames over which a starved stream ramps down to silence (about 2 ms at 48 kHz).
+const UNDERFLOW_FADE_FRAMES: usize = 96;
+
+/// Fills the missing tail of an interleaved stereo block after a buffer underrun.
+///
+/// Holding the last sample would leave a DC offset and a click when audio resumes, so the
+/// tail ramps from `last` to zero and stays silent.
+pub fn fill_underrun(tail: &mut [f32], last: (f32, f32)) {
+    for (i, frame) in tail.chunks_exact_mut(2).enumerate() {
+        let gain = 1.0 - ((i + 1) as f32 / UNDERFLOW_FADE_FRAMES as f32).min(1.0);
+        frame[0] = last.0 * gain;
+        frame[1] = last.1 * gain;
+    }
+}
+
 /// Streaming linear-interpolation resampler from an arbitrary rate to 48 kHz stereo.
 #[derive(Default)]
 pub struct StreamResampler {
@@ -214,6 +229,21 @@ mod tests {
         let mut out = Vec::new();
         resampler.process(&[0.1, 0.2, 0.3, 0.4], 48_000, &mut out);
         assert_eq!(out, vec![0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn underrun_ramps_to_silence() {
+        let mut tail = vec![9.0f32; 400];
+        fill_underrun(&mut tail, (1.0, -1.0));
+        assert!(tail[0] > 0.9 && tail[1] < -0.9);
+        for pair in tail.chunks_exact(2).skip(UNDERFLOW_FADE_FRAMES) {
+            assert_eq!(pair, [0.0, 0.0]);
+        }
+        let mut previous = 1.0f32;
+        for pair in tail.chunks_exact(2).take(UNDERFLOW_FADE_FRAMES) {
+            assert!(pair[0] <= previous);
+            previous = pair[0];
+        }
     }
 
     #[test]

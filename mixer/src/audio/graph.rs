@@ -121,7 +121,7 @@ impl BusRing {
     }
 
     /// Consumer side. Fills `out` (interleaved stereo) without allocating. Before the ring
-    /// has primed it yields silence; if the ring runs dry the last frame is held.
+    /// has primed it yields silence; if the ring runs dry it fades out and the ring re-primes.
     pub fn pop_into(&self, out: &mut [f32]) {
         let out_len = out.len() & !1;
         let (out, _) = out.split_at_mut(out_len);
@@ -134,7 +134,7 @@ impl BusRing {
             return;
         }
         let got = self.pcm.pop_slice(out) & !1;
-        let (left, right) = if got >= 2 {
+        let last = if got >= 2 {
             (out[got - 2], out[got - 1])
         } else {
             (
@@ -142,12 +142,17 @@ impl BusRing {
                 f32::from_bits(self.last[1].load(Ordering::Relaxed)),
             )
         };
-        for frame in out[got..].chunks_exact_mut(2) {
-            frame[0] = left;
-            frame[1] = right;
+        if got < out.len() {
+            // Ran dry: ramp down and wait for the ring to refill to the priming level so
+            // playback restarts from a safe cushion instead of stuttering.
+            crate::audio_in::fill_underrun(&mut out[got..], last);
+            self.primed.store(false, Ordering::Relaxed);
+            self.last[0].store(0, Ordering::Relaxed);
+            self.last[1].store(0, Ordering::Relaxed);
+        } else {
+            self.last[0].store(last.0.to_bits(), Ordering::Relaxed);
+            self.last[1].store(last.1.to_bits(), Ordering::Relaxed);
         }
-        self.last[0].store(left.to_bits(), Ordering::Relaxed);
-        self.last[1].store(right.to_bits(), Ordering::Relaxed);
     }
 }
 

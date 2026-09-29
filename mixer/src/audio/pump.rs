@@ -302,6 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn underrun_fades_to_silence_and_reprimes() {
+        let ring = BusRing::new();
+        ring.push(&vec![0.5f32; AUDIO_PRIME_FRAMES * 2]);
+        let mut out = vec![9.0f32; AUDIO_PRIME_FRAMES * 4];
+        ring.pop_into(&mut out);
+        let starved = AUDIO_PRIME_FRAMES;
+        assert!((out[starved * 2 - 2] - 0.5).abs() < 1e-6);
+        assert!(out[starved * 2] < 0.5, "tail must ramp down");
+        assert_eq!(out[out.len() - 1], 0.0);
+        assert!(!ring.is_primed());
+        // Below the priming level the ring stays silent.
+        ring.push(&vec![0.5f32; 100 * 2]);
+        let mut quiet = vec![9.0f32; 64];
+        ring.pop_into(&mut quiet);
+        assert!(quiet.iter().all(|v| *v == 0.0));
+        ring.push(&vec![0.5f32; AUDIO_PRIME_FRAMES * 2]);
+        assert!(ring.is_primed());
+    }
+
+    #[test]
     fn pump_maps_routes_to_device_channels() {
         let ring = BusRing::new();
         let mut phase = 0.0;
