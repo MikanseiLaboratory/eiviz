@@ -537,14 +537,15 @@ fn datamosh(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let dragged = sample_prev_n(uv + mv * pval(1.0));
     let residual = b.rgb - sample_pvw_prev(uv + mv).rgb;
     let decoded = clamp(dragged.rgb + residual, vec3<f32>(0.0), vec3<f32>(1.0));
-    // A small live share keeps the outgoing bus moving instead of freezing at the switch.
-    let live = mix(1.0, 0.1, smoothstep(0.0, 0.15, t));
+    // A small live share keeps the outgoing bus moving instead of freezing at the switch,
+    // then hands over to the incoming bus.
+    let live = mix(1.0, 0.1, smoothstep(0.0, 0.15, t)) * (1.0 - smoothstep(0.3, 0.7, t));
     let held = mix(decoded, a.rgb, live);
-    let center = (block + vec2<f32>(0.5)) * MOSH_BLOCK / res;
-    let h = hash21(block + vec2<f32>(1.7, 4.3));
-    let key = 0.35 + 0.5 * (0.55 * axis_coord(center, dir) + 0.45 * h);
-    let reveal = max(smoothstep(key, key + 0.06, t), smoothstep(0.92, 1.0, t));
-    return vec4<f32>(mix(held, b.rgb, reveal), 1.0);
+    // The mosh never stops; the incoming bus is refreshed into it at a per-frame rate that
+    // rises to 1, jittered per macroblock so it emerges unevenly instead of as a wipe.
+    let jitter = mix(0.6, 1.4, hash21(block + vec2<f32>(1.7, 4.3)));
+    let refresh = saturate(pow(smoothstep(0.3, 1.0, t), 3.0) * jitter);
+    return vec4<f32>(mix(held, b.rgb, max(refresh, smoothstep(0.97, 1.0, t))), 1.0);
 }
 
 fn visual_dissolve(uv: vec2<f32>, t: f32) -> vec4<f32> {
