@@ -23,7 +23,9 @@ fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "7711da45e2ed83330c2e1fced06c5d1673e4d502", features = ["wgpu"] }
 pollster = "0.4"
+arc-swap = "1.9"
 raw-window-handle = "0.6"
+rtrb = "0.3.5"
 base64 = "0.22"
 serde.workspace = true
 serde_json.workspace = true
