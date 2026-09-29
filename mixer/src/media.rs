@@ -27,6 +27,7 @@ use windows::Win32::System::Variant::VT_I8;
 use windows::core::{GUID, PCWSTR};
 
 use crate::abi::{FMT_BGRA, MixerVideoInfo};
+use crate::guard::LockExt;
 use crate::convert::VideoGpuRing;
 use crate::dxgi::GpuVideoContext;
 use crate::upload::{
