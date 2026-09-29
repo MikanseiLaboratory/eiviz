@@ -7,12 +7,15 @@ mod coreaudio;
 mod cpal_io;
 #[cfg(windows)]
 mod device;
+mod feed;
 mod graph;
 mod info;
 mod pcm;
 mod process;
+mod pump;
 #[cfg(windows)]
 mod rsac_process;
+mod rt;
 mod scheduler;
 
 use crate::guard::LockExt;
@@ -27,8 +30,8 @@ use crate::upload::{AUDIO_RATE, AudioInputStore};
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, BusRing, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW,
-    MASTER_BUS, MixedAudio,
+    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS,
+    MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;
@@ -134,6 +137,7 @@ pub struct AudioEngine {
 
 struct DeviceOutput {
     key: DeviceKey,
+    routes: Arc<rt::Published<Vec<pump::Route>>>,
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -299,7 +303,8 @@ impl AudioEngine {
             let mut outputs = self.outputs.lock_or_recover();
             let mut keep = Vec::new();
             for mut output in outputs.drain(..) {
-                if desired.iter().any(|(key, _)| *key == output.key) {
+                if let Some((_, maps)) = desired.iter().find(|(key, _)| *key == output.key) {
+                    output.routes.set(maps.clone());
                     keep.push(output);
                 } else {
                     output.stop.store(true, Ordering::Relaxed);
@@ -334,13 +339,16 @@ impl AudioEngine {
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_t = Arc::clone(&stop);
                 let key_t = key.clone();
+                let routes = rt::Published::new(maps);
+                let routes_t = Arc::clone(&routes);
                 let join = std::thread::Builder::new()
                     .name(format!("eiviz-audio-{}", key.kind))
-                    .spawn(move || run_device(key_t, maps, stop_t))
+                    .spawn(move || run_device(key_t, routes_t, stop_t))
                     .ok();
                 if let Some(join) = join {
                     keep.push(DeviceOutput {
                         key,
+                        routes,
                         stop,
                         join: Some(join),
                     });
@@ -358,17 +366,17 @@ impl AudioEngine {
     }
 }
 
-fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<AtomicBool>) {
+fn run_device(key: DeviceKey, routes: Arc<rt::Published<Vec<pump::Route>>>, stop: Arc<AtomicBool>) {
     #[cfg(windows)]
     {
         match key.kind {
             DEVICE_WASAPI => {
-                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                if let Err(error) = cpal_io::run_output(&key.id, &routes, &stop) {
                     crate::diag::error(&format!("eiviz cpal output: {error}"));
                 }
             }
             DEVICE_ASIO => {
-                let _ = (maps, stop);
+                let _ = (routes, stop);
             }
             DEVICE_COREAUDIO => {
                 crate::diag::error("Core Audio output is only available on macOS");
@@ -380,7 +388,7 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
     {
         match key.kind {
             DEVICE_COREAUDIO => {
-                if let Err(error) = cpal_io::run_output(&key.id, &maps, &stop) {
+                if let Err(error) = cpal_io::run_output(&key.id, &routes, &stop) {
                     crate::diag::error(&format!("eiviz cpal output: {error}"));
                 }
             }
@@ -393,47 +401,8 @@ fn run_device(key: DeviceKey, maps: Vec<(Arc<BusRing>, i32, i32)>, stop: Arc<Ato
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (key, maps, stop);
+        let _ = (key, routes, stop);
     }
-}
-
-pub fn resample_stereo(src: &[f32], src_rate: u32, dst_frames: usize, dst_rate: u32) -> Vec<f32> {
-    if dst_frames == 0 {
-        return Vec::new();
-    }
-    let mut out = vec![0.0f32; dst_frames * 2];
-    crate::simd::resample_stereo(src, src_rate, dst_frames, dst_rate, &mut out);
-    out
-}
-
-pub fn pop_stereo_rate(
-    maps: &[(Arc<BusRing>, i32, i32)],
-    dst_frames: usize,
-    dst_rate: u32,
-) -> HashMap<(i32, i32), Vec<(f32, f32)>> {
-    let src_frames = ((dst_frames as u64 * AUDIO_RATE as u64 + u64::from(dst_rate.max(1)) / 2)
-        / u64::from(dst_rate.max(1))) as usize;
-    let mut by_map = HashMap::new();
-    for (ring, left, right) in maps {
-        let interleaved = ring.pop_interleaved(src_frames.max(1));
-        let resampled = resample_stereo(&interleaved, AUDIO_RATE as u32, dst_frames, dst_rate);
-        let stereo: Vec<(f32, f32)> = resampled
-            .chunks_exact(2)
-            .map(|chunk| (chunk[0], chunk[1]))
-            .collect();
-        by_map
-            .entry((*left, *right))
-            .and_modify(|acc: &mut Vec<(f32, f32)>| {
-                for (i, sample) in stereo.iter().enumerate() {
-                    if let Some(slot) = acc.get_mut(i) {
-                        slot.0 += sample.0;
-                        slot.1 += sample.1;
-                    }
-                }
-            })
-            .or_insert(stereo);
-    }
-    by_map
 }
 
 pub fn enumerate_devices(kind: u32, dest: &mut [AudioDeviceInfo]) -> usize {

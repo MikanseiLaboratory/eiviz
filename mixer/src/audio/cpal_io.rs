@@ -1,5 +1,5 @@
 use crate::guard::LockExt;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -11,10 +11,11 @@ use cpal::{DeviceId, HostId, SampleFormat, Stream, StreamConfig, SupportedStream
 use crate::upload::AudioInputStore;
 
 use super::capture::{AudioCaptureSpec, send_ready};
-use super::graph::BusRing;
+use super::feed::CaptureFeed;
 use super::info::{CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_MIC};
-use super::pcm::{f32_to_i16, f32_to_i32, interleaved_f32_packet, mix_mapped_f32};
-use super::pop_stereo_rate;
+use super::pcm::{f32_to_i16, f32_to_i32};
+use super::pump::{OutputPump, Route};
+use super::rt::{Published, guard_callback};
 
 pub fn run_capture(
     spec: &AudioCaptureSpec,
@@ -32,13 +33,15 @@ pub fn run_capture(
 
     let mut started = false;
     let mut last_default = String::new();
+    let feed = Arc::new(CaptureFeed::new(48_000));
+    let mut pts = 0i64;
     while !stop.load(Ordering::Relaxed) {
         if follow_default {
             last_default = default_id(&host, loopback);
         }
         let failed = Arc::new(Mutex::new(None::<String>));
-        match open_input(spec, &host, loopback, uploads, &failed) {
-            Ok(_stream) => {
+        match open_input(spec, &host, loopback, &feed, &failed) {
+            Ok(stream) => {
                 send_ready(ready, signaled, Ok(()))?;
                 started = true;
                 wait_stream(
@@ -48,7 +51,11 @@ pub fn run_capture(
                     &host,
                     &last_default,
                     &failed,
+                    INPUT_POLL,
+                    &mut || feed.drain(uploads, spec.id, &mut pts),
                 );
+                drop(stream);
+                feed.drain(uploads, spec.id, &mut pts);
             }
             Err(error) => {
                 if !started {
@@ -64,12 +71,11 @@ pub fn run_capture(
 
 pub fn run_output(
     device_id: &str,
-    maps: &[(Arc<BusRing>, i32, i32)],
+    routes: &Arc<Published<Vec<Route>>>,
     stop: &AtomicBool,
 ) -> Result<(), String> {
     let follow_default = device_id.is_empty();
     let host = platform_host()?;
-    let maps = maps.to_vec();
 
     let mut started = false;
     let mut last_default = String::new();
@@ -78,10 +84,19 @@ pub fn run_output(
             last_default = default_id(&host, true);
         }
         let failed = Arc::new(Mutex::new(None::<String>));
-        match open_output(device_id, &host, &maps, &failed) {
+        match open_output(device_id, &host, routes, &failed) {
             Ok(_stream) => {
                 started = true;
-                wait_stream(stop, follow_default, true, &host, &last_default, &failed);
+                wait_stream(
+                    stop,
+                    follow_default,
+                    true,
+                    &host,
+                    &last_default,
+                    &failed,
+                    OUTPUT_POLL,
+                    &mut || {},
+                );
             }
             Err(error) => {
                 if !started {
@@ -113,6 +128,9 @@ fn platform_host_id() -> HostId {
     }
 }
 
+const INPUT_POLL: Duration = Duration::from_millis(2);
+const OUTPUT_POLL: Duration = Duration::from_millis(10);
+
 fn wait_stream(
     stop: &AtomicBool,
     follow_default: bool,
@@ -120,9 +138,12 @@ fn wait_stream(
     host: &cpal::Host,
     last_default: &str,
     failed: &Mutex<Option<String>>,
+    poll: Duration,
+    tick: &mut dyn FnMut(),
 ) {
     let mut follow_check = Instant::now();
     while !stop.load(Ordering::Relaxed) {
+        tick();
         if failed.lock_or_recover().is_some() {
             break;
         }
@@ -133,7 +154,7 @@ fn wait_stream(
                 break;
             }
         }
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(poll);
     }
 }
 
@@ -188,73 +209,53 @@ fn open_input(
     spec: &AudioCaptureSpec,
     host: &cpal::Host,
     loopback: bool,
-    uploads: &Arc<Mutex<AudioInputStore>>,
+    feed: &Arc<CaptureFeed>,
     failed: &Arc<Mutex<Option<String>>>,
 ) -> Result<Stream, String> {
     let device = resolve_device(host, loopback, &spec.device_id)?;
     let supported = stream_config(&device, loopback)?;
     let config: StreamConfig = supported.config();
-    let channels = config.channels.max(1) as usize;
-    let rate = config.sample_rate.max(1);
+    if config.channels == 0 || config.sample_rate == 0 {
+        return Err(format!(
+            "cpal input reports {} channels at {} Hz",
+            config.channels, config.sample_rate
+        ));
+    }
+    let channels = usize::from(config.channels);
     let map_left = spec.map_left.max(0) as usize;
     let map_right = spec.map_right.max(0) as usize;
-    let id = spec.id;
-    let uploads = Arc::clone(uploads);
-    let pts = Arc::new(AtomicI64::new(0));
+    feed.set_rate(config.sample_rate);
+    let feed = Arc::clone(feed);
     let err_flag = Arc::clone(failed);
     let err_cb = move |error| {
         *err_flag.lock_or_recover() = Some(format!("cpal stream: {error}"));
     };
 
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => {
-            let pts = Arc::clone(&pts);
-            let uploads = Arc::clone(&uploads);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _| {
-                    ingest(
-                        id, &uploads, &pts, data, channels, rate, map_left, map_right,
-                    );
-                },
-                err_cb,
-                None,
-            )
-        }
-        SampleFormat::I16 => {
-            let pts = Arc::clone(&pts);
-            let uploads = Arc::clone(&uploads);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _| {
-                    let converted: Vec<f32> =
-                        data.iter().map(|sample| *sample as f32 / 32768.0).collect();
-                    ingest(
-                        id, &uploads, &pts, &converted, channels, rate, map_left, map_right,
-                    );
-                },
-                err_cb,
-                None,
-            )
-        }
-        SampleFormat::I32 => {
-            let pts = Arc::clone(&pts);
-            let uploads = Arc::clone(&uploads);
-            device.build_input_stream(
-                config,
-                move |data: &[i32], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|sample| *sample as f32 / 2_147_483_648.0)
-                        .collect();
-                    ingest(
-                        id, &uploads, &pts, &converted, channels, rate, map_left, map_right,
-                    );
-                },
-                err_cb,
-                None,
-            )
-        }
+        SampleFormat::F32 => build_input::<f32>(
+            &device,
+            config,
+            feed,
+            (channels, map_left, map_right),
+            |sample| sample,
+            err_cb,
+        ),
+        SampleFormat::I16 => build_input::<i16>(
+            &device,
+            config,
+            feed,
+            (channels, map_left, map_right),
+            |sample| sample as f32 / 32768.0,
+            err_cb,
+        ),
+        SampleFormat::I32 => build_input::<i32>(
+            &device,
+            config,
+            feed,
+            (channels, map_left, map_right),
+            |sample| sample as f32 / 2_147_483_648.0,
+            err_cb,
+        ),
         other => {
             return Err(format!("cpal sample format {other:?} is not supported"));
         }
@@ -266,69 +267,73 @@ fn open_input(
     Ok(stream)
 }
 
+fn build_input<T>(
+    device: &cpal::Device,
+    config: StreamConfig,
+    feed: Arc<CaptureFeed>,
+    (channels, map_left, map_right): (usize, usize, usize),
+    convert: fn(T) -> f32,
+    err_cb: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<Stream, cpal::Error>
+where
+    T: cpal::SizedSample + Send + 'static,
+{
+    let mut converted: Vec<f32> = Vec::with_capacity(16_384);
+    let mut scratch: Vec<f32> = Vec::with_capacity(16_384);
+    let panicked = AtomicBool::new(false);
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            guard_callback("cpal input", &panicked, || {
+                converted.clear();
+                converted.extend(data.iter().map(|sample| convert(*sample)));
+                feed.push_mapped(&converted, channels, map_left, map_right, &mut scratch);
+            });
+        },
+        err_cb,
+        None,
+    )
+}
+
 fn open_output(
     device_id: &str,
     host: &cpal::Host,
-    maps: &[(Arc<BusRing>, i32, i32)],
+    routes: &Arc<Published<Vec<Route>>>,
     failed: &Arc<Mutex<Option<String>>>,
 ) -> Result<Stream, String> {
     let device = resolve_device(host, true, device_id)?;
     let supported = stream_config(&device, true)?;
     let config: StreamConfig = supported.config();
-    let channels = config.channels.max(1) as usize;
-    let rate = config.sample_rate.max(1);
-    let maps = maps.to_vec();
+    if config.channels == 0 || config.sample_rate == 0 {
+        return Err(format!(
+            "cpal output reports {} channels at {} Hz",
+            config.channels, config.sample_rate
+        ));
+    }
+    let channels = usize::from(config.channels);
+    let rate = config.sample_rate;
+    let routes = Arc::clone(routes);
     let err_flag = Arc::clone(failed);
     let err_cb = move |error| {
         *err_flag.lock_or_recover() = Some(format!("cpal stream: {error}"));
     };
 
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => device.build_output_stream(
+        SampleFormat::F32 => build_output::<f32>(
+            &device,
             config,
-            {
-                let maps = maps.clone();
-                move |data: &mut [f32], _| {
-                    let frames = data.len() / channels;
-                    let mapped = pop_stereo_rate(&maps, frames, rate);
-                    mix_mapped_f32(data, channels, &mapped);
-                }
-            },
+            routes,
+            channels,
+            rate,
+            |src, dst| dst.copy_from_slice(src),
             err_cb,
-            None,
         ),
-        SampleFormat::I16 => device.build_output_stream(
-            config,
-            {
-                let maps = maps.clone();
-                let mut scratch = Vec::new();
-                move |data: &mut [i16], _| {
-                    scratch.resize(data.len(), 0.0);
-                    let frames = data.len() / channels;
-                    let mapped = pop_stereo_rate(&maps, frames, rate);
-                    mix_mapped_f32(&mut scratch, channels, &mapped);
-                    f32_to_i16(&scratch, data);
-                }
-            },
-            err_cb,
-            None,
-        ),
-        SampleFormat::I32 => device.build_output_stream(
-            config,
-            {
-                let maps = maps;
-                let mut scratch = Vec::new();
-                move |data: &mut [i32], _| {
-                    scratch.resize(data.len(), 0.0);
-                    let frames = data.len() / channels;
-                    let mapped = pop_stereo_rate(&maps, frames, rate);
-                    mix_mapped_f32(&mut scratch, channels, &mapped);
-                    f32_to_i32(&scratch, data);
-                }
-            },
-            err_cb,
-            None,
-        ),
+        SampleFormat::I16 => {
+            build_output::<i16>(&device, config, routes, channels, rate, f32_to_i16, err_cb)
+        }
+        SampleFormat::I32 => {
+            build_output::<i32>(&device, config, routes, channels, rate, f32_to_i32, err_cb)
+        }
         other => {
             return Err(format!("cpal sample format {other:?} is not supported"));
         }
@@ -340,32 +345,34 @@ fn open_output(
     Ok(stream)
 }
 
-fn ingest(
-    id: u64,
-    uploads: &Mutex<AudioInputStore>,
-    pts: &AtomicI64,
-    interleaved: &[f32],
+fn build_output<T>(
+    device: &cpal::Device,
+    config: StreamConfig,
+    routes: Arc<Published<Vec<Route>>>,
     channels: usize,
     rate: u32,
-    map_left: usize,
-    map_right: usize,
-) {
-    if interleaved.is_empty() {
-        return;
-    }
-    let timestamp = pts.load(Ordering::Relaxed);
-    let packet = interleaved_f32_packet(
-        timestamp,
-        rate as i32,
-        interleaved,
-        channels,
-        map_left,
-        map_right,
-    );
-    let frames = packet.samples_per_channel.max(0) as i64;
-    uploads.lock_or_recover().ingest_audio(id, packet);
-    pts.store(
-        timestamp.saturating_add(frames * 10_000_000 / i64::from(rate.max(1))),
-        Ordering::Relaxed,
-    );
+    convert: fn(&[f32], &mut [T]),
+    err_cb: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<Stream, cpal::Error>
+where
+    T: cpal::SizedSample + Send + 'static,
+{
+    let mut pump = OutputPump::new();
+    let mut mix: Vec<f32> = Vec::with_capacity(16_384);
+    let panicked = AtomicBool::new(false);
+    device.build_output_stream(
+        config,
+        move |data: &mut [T], _| {
+            let rendered = guard_callback("cpal output", &panicked, || {
+                mix.resize(data.len(), 0.0);
+                pump.render(&routes, &mut mix, channels, rate);
+                convert(&mix, data);
+            });
+            if !rendered {
+                data.fill(T::EQUILIBRIUM);
+            }
+        },
+        err_cb,
+        None,
+    )
 }

@@ -1,29 +1,34 @@
 use crate::guard::LockExt;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::AudioCaptureSpec;
-use super::graph::{BusRing, DEVICE_ASIO};
+use super::feed::CaptureFeed;
+use super::graph::DEVICE_ASIO;
 use super::info::{
     CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_MIC, CAPTURE_MODE_PROCESS_LOOPBACK,
 };
-use super::pop_stereo_rate;
+use super::pump::{OutputPump, Route};
+use super::rt::{Published, PublishedReader, guard_callback};
 use crate::upload::AudioInputStore;
 
 struct AsioCapture {
     id: u64,
-    map_left: i32,
-    map_right: i32,
+    map_left: usize,
+    map_right: usize,
     uploads: Arc<Mutex<AudioInputStore>>,
-    pts: AtomicI64,
+    feed: CaptureFeed,
+    pts: Mutex<i64>,
 }
 
 struct AsioShared {
-    outputs: Vec<(Arc<BusRing>, i32, i32)>,
+    outputs: Vec<Route>,
     captures: HashMap<u64, Arc<AsioCapture>>,
+    routes: Arc<Published<Vec<Route>>>,
+    capture_list: Arc<Published<Vec<Arc<AsioCapture>>>>,
     ins: i32,
     outs: i32,
     error: Option<String>,
@@ -251,7 +256,15 @@ fn read_reg_sz(key: windows::Win32::System::Registry::HKEY, name: &str) -> Optio
     }
 }
 
-pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
+impl AsioShared {
+    fn publish(&self) {
+        self.routes.set(self.outputs.clone());
+        self.capture_list
+            .set(self.captures.values().cloned().collect());
+    }
+}
+
+pub fn set_outputs(device_id: &str, maps: Vec<Route>) {
     let key = norm(device_id);
     if key.is_empty() {
         return;
@@ -259,7 +272,10 @@ pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
     let mut hub = hub().lock_or_recover();
     if maps.is_empty() {
         if let Some(device) = hub.devices.get_mut(&key) {
-            device.shared.lock_or_recover().outputs.clear();
+            let mut shared = device.shared.lock_or_recover();
+            shared.outputs.clear();
+            shared.publish();
+            drop(shared);
             if device.is_idle() {
                 stop_device(hub.devices.remove(&key));
             }
@@ -267,7 +283,9 @@ pub fn set_outputs(device_id: &str, maps: Vec<(Arc<BusRing>, i32, i32)>) {
         return;
     }
     let device = hub.ensure(&key, device_id);
-    device.shared.lock_or_recover().outputs = maps;
+    let mut shared = device.shared.lock_or_recover();
+    shared.outputs = maps;
+    shared.publish();
 }
 
 pub fn retain_outputs(keep: &HashSet<String>) {
@@ -279,7 +297,10 @@ pub fn retain_outputs(keep: &HashSet<String>) {
             continue;
         }
         if let Some(device) = hub.devices.get_mut(&key) {
-            device.shared.lock_or_recover().outputs.clear();
+            let mut shared = device.shared.lock_or_recover();
+            shared.outputs.clear();
+            shared.publish();
+            drop(shared);
             if device.is_idle() {
                 stop_device(hub.devices.remove(&key));
             }
@@ -325,12 +346,14 @@ pub fn start_capture(
             spec.id,
             Arc::new(AsioCapture {
                 id: spec.id,
-                map_left: spec.map_left,
-                map_right: spec.map_right,
+                map_left: spec.map_left as usize,
+                map_right: spec.map_right as usize,
                 uploads,
-                pts: AtomicI64::new(0),
+                feed: CaptureFeed::new(48_000),
+                pts: Mutex::new(0),
             }),
         );
+        shared.publish();
     }
     for _ in 0..80 {
         if let Some(error) = snapshot_error(&key) {
@@ -355,7 +378,10 @@ pub fn stop_capture(id: u64) {
     let keys: Vec<String> = hub.devices.keys().cloned().collect();
     for key in keys {
         let idle = if let Some(device) = hub.devices.get_mut(&key) {
-            device.shared.lock_or_recover().captures.remove(&id);
+            let mut shared = device.shared.lock_or_recover();
+            shared.captures.remove(&id);
+            shared.publish();
+            drop(shared);
             device.is_idle()
         } else {
             false
@@ -472,6 +498,8 @@ impl AsioHub {
             Arc::new(Mutex::new(AsioShared {
                 outputs: Vec::new(),
                 captures: HashMap::new(),
+                routes: Published::new(Vec::new()),
+                capture_list: Published::new(Vec::new()),
                 ins: 0,
                 outs: 0,
                 error: None,
@@ -552,7 +580,8 @@ fn run_driver(
             continue;
         }
         if opened {
-            thread::sleep(Duration::from_millis(20));
+            drain_captures(&shared);
+            thread::sleep(Duration::from_millis(2));
             continue;
         }
 
@@ -661,13 +690,27 @@ fn asio_stream_config(
     Ok((config, format, rate, channels))
 }
 
+fn drain_captures(shared: &Mutex<AsioShared>) {
+    let captures: Vec<Arc<AsioCapture>> = shared
+        .lock_or_recover()
+        .captures
+        .values()
+        .cloned()
+        .collect();
+    for capture in captures {
+        let mut pts = capture.pts.lock_or_recover();
+        capture.feed.drain(&capture.uploads, capture.id, &mut pts);
+    }
+}
+
 fn open_cpal_asio_input(
     device: &cpal::Device,
     shared: Arc<Mutex<AsioShared>>,
 ) -> Result<cpal::Stream, String> {
-    use cpal::traits::{DeviceTrait, StreamTrait};
+    use cpal::traits::StreamTrait;
 
     let (config, format, rate, channels) = asio_stream_config(device, false)?;
+    let capture_list = Arc::clone(&shared.lock_or_recover().capture_list);
     let err_cb = {
         let shared = Arc::clone(&shared);
         move |error| {
@@ -678,57 +721,35 @@ fn open_cpal_asio_input(
     };
     let stream = match format {
         cpal::SampleFormat::F32 => {
-            let shared = Arc::clone(&shared);
-            device.build_input_stream(
-                config,
-                move |data: &[f32], _| ingest_asio_input(&shared, data, channels, rate),
-                err_cb,
-                None,
-            )
+            build_asio_input::<f32>(device, config, capture_list, channels, rate, |s| s, err_cb)
         }
-        cpal::SampleFormat::I16 => {
-            let shared = Arc::clone(&shared);
-            device.build_input_stream(
-                config,
-                move |data: &[i16], _| {
-                    let converted: Vec<f32> =
-                        data.iter().map(|sample| *sample as f32 / 32768.0).collect();
-                    ingest_asio_input(&shared, &converted, channels, rate);
-                },
-                err_cb,
-                None,
-            )
-        }
-        cpal::SampleFormat::I32 => {
-            let shared = Arc::clone(&shared);
-            device.build_input_stream(
-                config,
-                move |data: &[i32], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|sample| *sample as f32 / 2_147_483_648.0)
-                        .collect();
-                    ingest_asio_input(&shared, &converted, channels, rate);
-                },
-                err_cb,
-                None,
-            )
-        }
-        cpal::SampleFormat::I24 => {
-            let shared = Arc::clone(&shared);
-            device.build_input_stream(
-                config,
-                move |data: &[cpal::I24], _| {
-                    let converted: Vec<f32> = data
-                        .iter()
-                        .map(|sample| sample.inner() as f32 / 8_388_608.0)
-                        .collect();
-                    ingest_asio_input(&shared, &converted, channels, rate);
-                },
-                err_cb,
-                None,
-            )
-        }
+        cpal::SampleFormat::I16 => build_asio_input::<i16>(
+            device,
+            config,
+            capture_list,
+            channels,
+            rate,
+            |s| s as f32 / 32768.0,
+            err_cb,
+        ),
+        cpal::SampleFormat::I32 => build_asio_input::<i32>(
+            device,
+            config,
+            capture_list,
+            channels,
+            rate,
+            |s| s as f32 / 2_147_483_648.0,
+            err_cb,
+        ),
+        cpal::SampleFormat::I24 => build_asio_input::<cpal::I24>(
+            device,
+            config,
+            capture_list,
+            channels,
+            rate,
+            |s| s.inner() as f32 / 8_388_608.0,
+            err_cb,
+        ),
         other => return Err(format!("ASIO input format {other:?} is not supported")),
     }
     .map_err(|error| format!("ASIO input stream: {error}"))?;
@@ -738,13 +759,59 @@ fn open_cpal_asio_input(
     Ok(stream)
 }
 
+fn build_asio_input<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    capture_list: Arc<Published<Vec<Arc<AsioCapture>>>>,
+    channels: usize,
+    rate: u32,
+    convert: fn(T) -> f32,
+    err_cb: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample + Send + 'static,
+{
+    use cpal::traits::DeviceTrait;
+
+    let mut captures = PublishedReader::<Vec<Arc<AsioCapture>>>::new();
+    let mut converted: Vec<f32> = Vec::with_capacity(16_384);
+    let mut scratch: Vec<f32> = Vec::with_capacity(16_384);
+    let panicked = AtomicBool::new(false);
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            guard_callback("asio input", &panicked, || {
+                let (list, _) = captures.get(&capture_list);
+                if list.is_empty() {
+                    return;
+                }
+                converted.clear();
+                converted.extend(data.iter().map(|sample| convert(*sample)));
+                for capture in list {
+                    capture.feed.set_rate(rate);
+                    capture.feed.push_mapped(
+                        &converted,
+                        channels,
+                        capture.map_left,
+                        capture.map_right,
+                        &mut scratch,
+                    );
+                }
+            });
+        },
+        err_cb,
+        None,
+    )
+}
+
 fn open_cpal_asio_output(
     device: &cpal::Device,
     shared: Arc<Mutex<AsioShared>>,
 ) -> Result<cpal::Stream, String> {
-    use cpal::traits::{DeviceTrait, StreamTrait};
+    use cpal::traits::StreamTrait;
 
     let (config, format, rate, channels) = asio_stream_config(device, true)?;
+    let routes = Arc::clone(&shared.lock_or_recover().routes);
     let err_cb = {
         let shared = Arc::clone(&shared);
         move |error| {
@@ -754,57 +821,47 @@ fn open_cpal_asio_output(
         }
     };
     let stream = match format {
-        cpal::SampleFormat::F32 => {
-            let shared = Arc::clone(&shared);
-            device.build_output_stream(
-                config,
-                move |data: &mut [f32], _| render_asio_output(&shared, data, channels, rate),
-                err_cb,
-                None,
-            )
-        }
-        cpal::SampleFormat::I16 => {
-            let shared = Arc::clone(&shared);
-            device.build_output_stream(
-                config,
-                move |data: &mut [i16], _| {
-                    let mut mixed = vec![0.0f32; data.len()];
-                    render_asio_output(&shared, &mut mixed, channels, rate);
-                    super::pcm::f32_to_i16(&mixed, data);
-                },
-                err_cb,
-                None,
-            )
-        }
-        cpal::SampleFormat::I32 => {
-            let shared = Arc::clone(&shared);
-            device.build_output_stream(
-                config,
-                move |data: &mut [i32], _| {
-                    let mut mixed = vec![0.0f32; data.len()];
-                    render_asio_output(&shared, &mut mixed, channels, rate);
-                    super::pcm::f32_to_i32(&mixed, data);
-                },
-                err_cb,
-                None,
-            )
-        }
-        cpal::SampleFormat::I24 => {
-            let shared = Arc::clone(&shared);
-            device.build_output_stream(
-                config,
-                move |data: &mut [cpal::I24], _| {
-                    let mut mixed = vec![0.0f32; data.len()];
-                    render_asio_output(&shared, &mut mixed, channels, rate);
-                    for (slot, sample) in data.iter_mut().zip(mixed) {
-                        let code = (sample.clamp(-1.0, 1.0) * 8_388_607.0) as i32;
-                        *slot = cpal::I24::new_unchecked(code);
-                    }
-                },
-                err_cb,
-                None,
-            )
-        }
+        cpal::SampleFormat::F32 => build_asio_output::<f32>(
+            device,
+            config,
+            routes,
+            channels,
+            rate,
+            |src, dst| dst.copy_from_slice(src),
+            err_cb,
+        ),
+        cpal::SampleFormat::I16 => build_asio_output::<i16>(
+            device,
+            config,
+            routes,
+            channels,
+            rate,
+            super::pcm::f32_to_i16,
+            err_cb,
+        ),
+        cpal::SampleFormat::I32 => build_asio_output::<i32>(
+            device,
+            config,
+            routes,
+            channels,
+            rate,
+            super::pcm::f32_to_i32,
+            err_cb,
+        ),
+        cpal::SampleFormat::I24 => build_asio_output::<cpal::I24>(
+            device,
+            config,
+            routes,
+            channels,
+            rate,
+            |src, dst| {
+                for (slot, sample) in dst.iter_mut().zip(src) {
+                    let code = (sample.clamp(-1.0, 1.0) * 8_388_607.0) as i32;
+                    *slot = cpal::I24::new_unchecked(code);
+                }
+            },
+            err_cb,
+        ),
         other => return Err(format!("ASIO output format {other:?} is not supported")),
     }
     .map_err(|error| format!("ASIO output stream: {error}"))?;
@@ -814,48 +871,38 @@ fn open_cpal_asio_output(
     Ok(stream)
 }
 
-fn ingest_asio_input(shared: &Mutex<AsioShared>, interleaved: &[f32], channels: usize, rate: u32) {
-    let captures = {
-        let Ok(guard) = shared.lock() else {
-            return;
-        };
-        guard.captures.values().cloned().collect::<Vec<_>>()
-    };
-    for capture in captures {
-        let packet = super::pcm::interleaved_f32_packet(
-            capture.pts.load(Ordering::Relaxed),
-            rate as i32,
-            interleaved,
-            channels,
-            capture.map_left.max(0) as usize,
-            capture.map_right.max(0) as usize,
-        );
-        let frames = i64::from(packet.samples_per_channel.max(0));
-        capture
-            .uploads
-            .lock_or_recover()
-            .ingest_audio(capture.id, packet);
-        capture.pts.store(
-            capture
-                .pts
-                .load(Ordering::Relaxed)
-                .saturating_add(frames * 10_000_000 / i64::from(rate.max(1))),
-            Ordering::Relaxed,
-        );
-    }
-}
+fn build_asio_output<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    routes: Arc<Published<Vec<Route>>>,
+    channels: usize,
+    rate: u32,
+    convert: fn(&[f32], &mut [T]),
+    err_cb: impl FnMut(cpal::Error) + Send + 'static,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample + Send + 'static,
+{
+    use cpal::traits::DeviceTrait;
 
-fn render_asio_output(shared: &Mutex<AsioShared>, dest: &mut [f32], channels: usize, rate: u32) {
-    let maps = {
-        let Ok(guard) = shared.lock() else {
-            dest.fill(0.0);
-            return;
-        };
-        guard.outputs.clone()
-    };
-    let frames = dest.len() / channels.max(1);
-    let mapped = pop_stereo_rate(&maps, frames, rate);
-    super::pcm::mix_mapped_f32(dest, channels, &mapped);
+    let mut pump = OutputPump::new();
+    let mut mix: Vec<f32> = Vec::with_capacity(16_384);
+    let panicked = AtomicBool::new(false);
+    device.build_output_stream(
+        config,
+        move |data: &mut [T], _| {
+            let rendered = guard_callback("asio output", &panicked, || {
+                mix.resize(data.len(), 0.0);
+                pump.render(&routes, &mut mix, channels, rate);
+                convert(&mix, data);
+            });
+            if !rendered {
+                data.fill(T::EQUILIBRIUM);
+            }
+        },
+        err_cb,
+        None,
+    )
 }
 
 fn norm(id: &str) -> String {

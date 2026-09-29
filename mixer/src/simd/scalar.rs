@@ -174,36 +174,6 @@ pub fn resample_planar_to_stereo(
     }
 }
 
-pub fn resample_stereo(
-    src: &[f32],
-    src_rate: u32,
-    dst_frames: usize,
-    dst_rate: u32,
-    out: &mut [f32],
-) {
-    let src_frames = src.len() / 2;
-    if dst_frames == 0 || out.len() < dst_frames * 2 {
-        return;
-    }
-    if src_frames == 0 {
-        out[..dst_frames * 2].fill(0.0);
-        return;
-    }
-    if src_rate == dst_rate && src_frames == dst_frames {
-        out[..dst_frames * 2].copy_from_slice(&src[..dst_frames * 2]);
-        return;
-    }
-    let last = src_frames.saturating_sub(1);
-    for i in 0..dst_frames {
-        let src_pos = i as f64 * f64::from(src_rate) / f64::from(dst_rate.max(1));
-        let idx = (src_pos.floor() as usize).min(last);
-        let frac = (src_pos - idx as f64) as f32;
-        let nxt = (idx + 1).min(last);
-        out[i * 2] = src[idx * 2] * (1.0 - frac) + src[nxt * 2] * frac;
-        out[i * 2 + 1] = src[idx * 2 + 1] * (1.0 - frac) + src[nxt * 2 + 1] * frac;
-    }
-}
-
 pub fn blend_u8(bg: u8, fg: u8, cover: u16) -> u8 {
     ((fg as u16 * cover + bg as u16 * (255 - cover)) / 255) as u8
 }

@@ -126,16 +126,6 @@ pub fn resample_planar_to_stereo(
     scalar::resample_planar_to_stereo(planar, src_frames, channels, src_rate, dst_rate, out);
 }
 
-pub fn resample_stereo(
-    src: &[f32],
-    src_rate: u32,
-    dst_frames: usize,
-    dst_rate: u32,
-    out: &mut [f32],
-) {
-    scalar::resample_stereo(src, src_rate, dst_frames, dst_rate, out);
-}
-
 pub fn blend_u8(bg: u8, fg: u8, cover: u16) -> u8 {
     scalar::blend_u8(bg, fg, cover)
 }
