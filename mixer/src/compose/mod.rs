@@ -4,9 +4,8 @@ use std::sync::Arc;
 use crate::abi::{
     GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
-    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_PIXEL_SORT, TRANSITION_STINGER,
-    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
-    mixing_unit_preview, mixing_unit_source,
+    TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_STINGER, UnitState, is_multiview,
+    is_scene, mixing_unit_bus, mixing_unit_from_source, mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
 use crate::pool::{UniformPool, uniform_dyn};
@@ -97,6 +96,7 @@ struct BlitParams {
 enum Fx2Kind {
     Flow,
     Bloom,
+    MoshMotion,
 }
 
 #[repr(C)]
@@ -132,6 +132,7 @@ mod unit;
 use cache::{LabelTexKey, label_cache_key, mv_label_rgb, mv_tally_program};
 use pipeline::*;
 use scene::SceneGpu;
+use unit::MOSH_BLOCK;
 pub use unit::UnitTargets;
 pub struct Composer {
     color: wgpu::RenderPipeline,
@@ -171,6 +172,7 @@ pub struct Composer {
     custom_compute: HashMap<u64, wgpu::ComputePipeline>,
     sort_cs: wgpu::ComputePipeline,
     flow_cs: wgpu::ComputePipeline,
+    mosh_mv_cs: wgpu::ComputePipeline,
     bloom_cs: wgpu::ComputePipeline,
     bloom_blur_cs: wgpu::ComputePipeline,
     fx1_layout: wgpu::BindGroupLayout,
@@ -217,6 +219,8 @@ impl Composer {
                         sampled(7),
                         sampled(8),
                         sampled(9),
+                        sampled(10),
+                        sampled(11),
                     ],
                 });
         let fx1_layout = device
@@ -334,6 +338,13 @@ impl Composer {
             &fx2_layout,
             "cs_main",
         )?;
+        let mosh_mv_cs = compute_pipeline(
+            device,
+            "mosh-mv",
+            include_str!("../../shaders/mosh_mv.wgsl"),
+            &fx2_layout,
+            "cs_main",
+        )?;
         let bloom_cs = compute_pipeline(
             device,
             "bloom",
@@ -395,6 +406,7 @@ impl Composer {
             custom_compute: HashMap::new(),
             sort_cs,
             flow_cs,
+            mosh_mv_cs,
             bloom_cs,
             bloom_blur_cs,
             fx1_layout,
@@ -1190,6 +1202,7 @@ impl Composer {
         } else {
             self.draw_mix(device, encoder, unit_id, state)?;
         }
+        self.store_mix_history(encoder, unit_id, state.transition_kind);
         if state.preview_source != mix_source {
             self.draw_bus(
                 device,
@@ -1206,7 +1219,6 @@ impl Composer {
             self.ensure_packed(device, unit_id);
             self.draw_pack(device, encoder, unit_id)?;
         }
-        self.store_mix_history(encoder, unit_id);
         Ok(())
     }
 
@@ -1313,19 +1325,28 @@ impl Composer {
         unit.prev_seeded = true;
     }
 
-    fn store_mix_history(&mut self, encoder: &mut wgpu::CommandEncoder, unit_id: u64) {
+    /// Runs before overlays so feedback transitions never smear DSK/overlay layers.
+    fn store_mix_history(&mut self, encoder: &mut wgpu::CommandEncoder, unit_id: u64, kind: u32) {
         let Some(unit) = self.units.get(&unit_id) else {
             return;
+        };
+        let extent = wgpu::Extent3d {
+            width: unit.width.max(1),
+            height: unit.height.max(1),
+            depth_or_array_layers: 1,
         };
         encoder.copy_texture_to_texture(
             unit.mixed.as_image_copy(),
             unit.prev.as_image_copy(),
-            wgpu::Extent3d {
-                width: unit.width.max(1),
-                height: unit.height.max(1),
-                depth_or_array_layers: 1,
-            },
+            extent,
         );
+        if kind == TRANSITION_DATAMOSH {
+            encoder.copy_texture_to_texture(
+                unit.preview.as_image_copy(),
+                unit.pvw_prev.as_image_copy(),
+                extent,
+            );
+        }
     }
 
     fn mix_params(
@@ -1367,11 +1388,12 @@ impl Composer {
     ) -> Result<(), String> {
         let kind = state.transition_kind;
         let custom = kind == TRANSITION_CUSTOM && self.custom_mix.contains_key(&unit_id);
-        let need_sort = kind == TRANSITION_PIXEL_SORT;
-        let need_flow = matches!(kind, TRANSITION_DATAMOSH | TRANSITION_OPTICAL_FLOW) || custom;
+        let need_sort = false;
+        let need_flow = kind == TRANSITION_OPTICAL_FLOW || custom;
+        let need_mosh = kind == TRANSITION_DATAMOSH;
         let need_bloom = matches!(kind, TRANSITION_BLOOM | TRANSITION_FILM_BURN) || custom;
         let need_user = custom && self.custom_compute.contains_key(&unit_id);
-        if !need_sort && !need_flow && !need_bloom && !need_user {
+        if !need_sort && !need_flow && !need_mosh && !need_bloom && !need_user {
             return Ok(());
         }
         let half_w = (width * 0.5).max(1.0);
@@ -1403,6 +1425,23 @@ impl Composer {
                 offset,
                 half_w,
                 half_h,
+            );
+        }
+        if need_mosh {
+            let offset = self.pool.push(
+                &device.queue,
+                &Self::mix_params(state, self.mix_time, width, height, None),
+            );
+            let blocks_w = (width as u32).div_ceil(MOSH_BLOCK) as f32;
+            let blocks_h = (height as u32).div_ceil(MOSH_BLOCK) as f32;
+            self.dispatch_fx2(
+                device,
+                encoder,
+                Fx2Kind::MoshMotion,
+                unit_id,
+                offset,
+                blocks_w,
+                blocks_h,
             );
         }
         if need_bloom {
@@ -1498,9 +1537,10 @@ impl Composer {
         let Some(unit) = self.units.get(&unit_id) else {
             return;
         };
-        let dst = match kind {
-            Fx2Kind::Flow => &unit.flow_view,
-            Fx2Kind::Bloom => &unit.bloom_a_view,
+        let (tex_a, tex_b, dst) = match kind {
+            Fx2Kind::Flow => (&unit.program_view, &unit.preview_view, &unit.flow_view),
+            Fx2Kind::Bloom => (&unit.program_view, &unit.preview_view, &unit.bloom_a_view),
+            Fx2Kind::MoshMotion => (&unit.preview_view, &unit.pvw_prev_view, &unit.mosh_mv_view),
         };
         let group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fx2"),
@@ -1508,11 +1548,11 @@ impl Composer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&unit.program_view),
+                    resource: wgpu::BindingResource::TextureView(tex_a),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&unit.preview_view),
+                    resource: wgpu::BindingResource::TextureView(tex_b),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -1533,6 +1573,7 @@ impl Composer {
         pass.set_pipeline(match kind {
             Fx2Kind::Flow => &self.flow_cs,
             Fx2Kind::Bloom => &self.bloom_cs,
+            Fx2Kind::MoshMotion => &self.mosh_mv_cs,
         });
         pass.set_bind_group(0, &group, &[offset]);
         pass.dispatch_workgroups(gx, gy, 1);
@@ -1965,6 +2006,14 @@ impl Composer {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: wgpu::BindingResource::TextureView(&unit.sort_b_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&unit.mosh_mv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&unit.pvw_prev_view),
                 },
             ],
         });

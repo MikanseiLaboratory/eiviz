@@ -24,8 +24,12 @@ struct MixParams {
 @group(0) @binding(7) var bloom_tex: texture_2d<f32>;
 @group(0) @binding(8) var aux_tex: texture_2d<f32>;
 @group(0) @binding(9) var aux2_tex: texture_2d<f32>;
+@group(0) @binding(10) var mosh_mv_tex: texture_2d<f32>;
+@group(0) @binding(11) var pvw_prev_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
+const MOSH_BLOCK: f32 = 16.0;
+const MOSH_RANGE: f32 = 16.0;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
@@ -459,6 +463,40 @@ fn axis_offset(amount: f32, dir: u32) -> vec2<f32> {
     return dir_sign(dir) * amount;
 }
 
+fn pixel_sort_swap(me: vec4<f32>, nei: vec4<f32>, n_uv: vec2<f32>, side: i32, descending: bool, thresh: f32) -> vec4<f32> {
+    let me_l = luma(me);
+    let nei_l = luma(nei);
+    if !in_bounds(n_uv) || me_l < thresh || nei_l < thresh {
+        return me;
+    }
+    let want_brighter = (side > 0) != descending;
+    if want_brighter {
+        if nei_l > me_l {
+            return nei;
+        }
+    } else if nei_l < me_l {
+        return nei;
+    }
+    return me;
+}
+
+// Whole sort lines switch to the incoming bus so dark incoming pixels never break a span.
+fn pixel_sort_live(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
+    let res = max(params.resolution, vec2<f32>(1.0));
+    let horiz = dir == 0u || dir == 1u;
+    let line = floor(select(uv.y * res.y, uv.x * res.x, !horiz));
+    let key = 0.2 + 0.5 * hash21(vec2<f32>(line, f32(dir) + 0.7));
+    return select(sample_pgm(uv), sample_pvw(uv), t > key);
+}
+
+// Last frame's sorted field with a random share of pixels replaced by the live buses.
+// Replacing instead of blending keeps sorted streaks crisp while motion keeps showing.
+fn pixel_sort_state(uv: vec2<f32>, t: f32, dir: u32, live: f32) -> vec4<f32> {
+    let cell = floor(uv * max(params.resolution, vec2<f32>(1.0)));
+    let r = hash21(cell + vec2<f32>(fract(params.time * 7.31) * 97.0, 2.9));
+    return select(sample_prev_n(uv), pixel_sort_live(uv, t, dir), r < live);
+}
+
 fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     let a = sample_pgm(uv);
     let b = sample_pvw(uv);
@@ -468,14 +506,23 @@ fn pixel_sort(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
     if t >= 0.999 {
         return b;
     }
+    let thresh = params.softness;
+    let horiz = dir == 0u || dir == 1u;
+    let descending = dir == 1u || dir == 3u;
     let res = max(params.resolution, vec2<f32>(1.0));
-    let cell = floor(uv * res);
-    let gate = hash21(cell + vec2<f32>(f32(dir) + 0.7, 4.1));
-    let take_b = gate < saturate((t - 0.08) / 0.76);
-    let src = select(a, b, take_b);
-    let sorted_a = textureSample(aux_tex, src_samp_n, uv);
-    let sorted_b = textureSample(aux2_tex, src_samp_n, uv);
-    let field = select(sorted_a, sorted_b, take_b);
+    let pix = select(vec2<f32>(1.0 / res.x, 0.0), vec2<f32>(0.0, 1.0 / res.y), !horiz);
+    let axis = i32(select(uv.x * res.x, uv.y * res.y, !horiz));
+    let jump = max(1, i32(round(1.0 + 5.0 * clamp(params.param, 0.0, 1.0))));
+    // One odd-even transposition step per frame; both pixels of a pair must agree on it.
+    let frame = i32(floor(params.time * 60.0));
+    let dist = select(1, jump, ((frame >> 1u) & 1) == 1);
+    let side = select(-1, 1, ((axis / dist + frame) & 1) == 0);
+    let live = mix(1.0, 0.08, smoothstep(0.0, 0.1, t));
+    let me = pixel_sort_state(uv, t, dir, live);
+    let n = uv + pix * f32(dist * side);
+    let nei = pixel_sort_state(n, t, dir, live);
+    let field = pixel_sort_swap(me, nei, n, side, descending, thresh);
+    let src = pixel_sort_live(uv, t, dir);
     let fade = pow(saturate((t - 0.88) / 0.12), 1.5);
     let effect = saturate(t / 0.05) * (1.0 - fade);
     let plate = mix(src, b, fade);
@@ -508,38 +555,41 @@ fn bloom_mix(uv: vec2<f32>, t: f32) -> vec4<f32> {
     return vec4<f32>(min(body + haze * peak * 1.1 + flash, vec3<f32>(1.0)), 1.0);
 }
 
+fn mosh_vector(block: vec2<f32>) -> vec2<f32> {
+    let dims = vec2<i32>(textureDimensions(mosh_mv_tex));
+    let p = clamp(vec2<i32>(block), vec2<i32>(0), dims - vec2<i32>(1));
+    let enc = textureLoad(mosh_mv_tex, p, 0).xy;
+    return round(enc * (MOSH_RANGE * 2.0) - MOSH_RANGE);
+}
+
+fn sample_pvw_prev(uv: vec2<f32>) -> vec4<f32> {
+    return textureSample(pvw_prev_tex, src_samp_n, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)));
+}
+
+// I-frame drop: the held picture is decoded with the incoming bus's motion vectors and residual.
 fn datamosh(uv: vec2<f32>, t: f32, dir: u32) -> vec4<f32> {
-    let peak = pow(max(1.0 - abs(t * 2.0 - 1.0), 0.0), 0.45);
-    let chaos = peak * pval(1.0);
-    let blocks = mix(48.0, 16.0, chaos);
-    let cell = floor(uv * vec2<f32>(blocks, blocks * 0.56));
-    let tick = floor(params.time * 10.0);
-    let h = hash21(cell + vec2<f32>(tick * 0.15, 1.7));
-    let h2 = hash21(cell.yx + vec2<f32>(3.1, 4.4));
-    var flow = flow_offset(uv) * mix(0.35, 1.25, chaos);
-    flow = flow + vec2<f32>((h - 0.5) * 0.04, (h2 - 0.5) * 0.02) * chaos;
-    if dir == 2u || dir == 3u {
-        flow = flow.yx;
+    let a = sample_pgm(uv);
+    let b = sample_pvw(uv);
+    if t <= 0.001 {
+        return a;
     }
-    if dir == 1u || dir == 3u {
-        flow = -flow;
+    if t >= 0.999 {
+        return b;
     }
-    let slide_a = axis_offset(0.12 * t, dir);
-    let slide_b = axis_offset(-0.12 * (1.0 - t), dir);
-    let uv_a = uv + flow * t + slide_a;
-    let uv_b = uv - flow * (1.0 - t) + slide_b;
-    let ca = sample_pgm(uv_a);
-    let cb = sample_pvw(uv_b);
-    let held_uv = uv + flow + slide_a * 0.35;
-    let held = mix(sample_pgm(held_uv), sample_pvw(held_uv), t);
-    let q = (cell + vec2<f32>(0.5)) / vec2<f32>(blocks, blocks * 0.56);
-    let block_uv = q + flow * 0.5;
-    let blocky = mix(sample_pgm(block_uv), sample_pvw(block_uv), t);
-    let moshed_a = mix(ca, mix(held, blocky, 0.4), chaos * 0.72);
-    let torn_a = vec4<f32>(moshed_a.r, mix(moshed_a.g, ca.g, 0.22), moshed_a.b, 1.0);
-    let torn_b = vec4<f32>(cb.r, mix(cb.g, sample_pvw(uv_b + flow * 0.25).g, 0.2), cb.b, 1.0);
-    let reveal = smoothstep(h * 0.7, h * 0.7 + 0.28, t);
-    return mix(torn_a, torn_b, reveal);
+    let res = max(params.resolution, vec2<f32>(1.0));
+    let block = floor(uv * res / MOSH_BLOCK);
+    let mv = mosh_vector(block) / res;
+    let dragged = sample_prev_n(uv + mv * pval(1.0));
+    let residual = b.rgb - sample_pvw_prev(uv + mv).rgb;
+    let decoded = clamp(dragged.rgb + residual, vec3<f32>(0.0), vec3<f32>(1.0));
+    // A small live share keeps the outgoing bus moving instead of freezing at the switch.
+    let live = mix(1.0, 0.1, smoothstep(0.0, 0.15, t));
+    let held = mix(decoded, a.rgb, live);
+    let center = (block + vec2<f32>(0.5)) * MOSH_BLOCK / res;
+    let h = hash21(block + vec2<f32>(1.7, 4.3));
+    let key = 0.35 + 0.5 * (0.55 * axis_coord(center, dir) + 0.45 * h);
+    let reveal = max(smoothstep(key, key + 0.06, t), smoothstep(0.92, 1.0, t));
+    return vec4<f32>(mix(held, b.rgb, reveal), 1.0);
 }
 
 fn visual_dissolve(uv: vec2<f32>, t: f32) -> vec4<f32> {
