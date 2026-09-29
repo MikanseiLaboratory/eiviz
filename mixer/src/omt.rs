@@ -247,8 +247,16 @@ impl OmtReceiver {
                         session_live_thread.store(false, Ordering::Relaxed);
                     }));
                     if run.is_err() {
-                        crate::diag::mark_fatal(format!("omt recv panicked id={source_id}"));
-                        return;
+                        // A misbehaving remote (e.g. a source that stops mid-stream) must
+                        // only take down its own receiver, never the whole mixer output.
+                        session_live_thread.store(false, Ordering::Relaxed);
+                        store_omt_error(
+                            &last_error_thread,
+                            source_id,
+                            "receiver panicked; reconnecting".into(),
+                        );
+                        wait_stop(&stop_thread, Duration::from_secs(1));
+                        continue;
                     }
                     if stop_thread.load(Ordering::Relaxed) || crate::diag::is_fatal() {
                         return;
