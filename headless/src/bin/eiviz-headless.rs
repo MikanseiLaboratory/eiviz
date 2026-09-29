@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -187,7 +187,7 @@ fn history(path: &PathBuf) -> Result<(), u8> {
     Ok(())
 }
 
-fn restore(input: &PathBuf, index: u32, output: &PathBuf) -> Result<(), u8> {
+fn restore(input: &PathBuf, index: u32, output: &Path) -> Result<(), u8> {
     let doc = session::extract_history(input, index).map_err(|error| {
         eprintln!("eiviz-headless error=session {error}");
         EXIT_SESSION
