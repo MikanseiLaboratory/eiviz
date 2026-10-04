@@ -380,6 +380,31 @@ impl SceneRuntime {
         Some(self.sample(base, base_camera, frame))
     }
 
+    /// Cuts the picture to this pose. The saved layout stays put, and the next
+    /// move starts from here instead of from a transition that is still running.
+    pub fn hold_pose(&mut self, pose: &[OverlayDesc], camera: Option<SceneCamera>, state_id: u64) {
+        self.moves.clear();
+        self.owner.clear();
+        self.camera_owner = None;
+        self.playing.clear();
+        self.presented.clear();
+        self.reached.clear();
+        for layer in pose {
+            if layer.layer_id == 0 {
+                continue;
+            }
+            let mut stored = *layer;
+            stored.label = std::ptr::null();
+            self.presented.insert(stored.layer_id, stored);
+            self.reached.insert(stored.layer_id, state_id);
+        }
+        if let Some(camera) = camera {
+            self.presented_camera = Some(camera);
+            self.reached_camera = Some(state_id);
+        }
+        self.dirty = false;
+    }
+
     /// Drops camera playback when the saved camera changed.
     pub fn note_camera_edit(&mut self, previous: SceneCamera, next: SceneCamera) {
         if previous == next {
@@ -1229,6 +1254,32 @@ mod tests {
 
     fn camera(zoom: f32, x: f32) -> SceneCamera {
         SceneCamera { x, y: 0.5, zoom }
+    }
+
+    #[test]
+    fn holding_a_pose_stops_playback_and_the_next_move_starts_there() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([(
+            1,
+            StateDef {
+                layers: HashMap::from([(1, layer(1, 0.0))]),
+                camera: Some(camera(4.0, 0.5)),
+                enter: linear(30),
+            },
+        )]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 10);
+        rt.hold_pose(&[layer(1, 0.4)], Some(camera(2.0, 0.6)), 3);
+        assert!(rt.moves.is_empty());
+        let shown = rt.sample(&base, CAM, 10);
+        assert!((x_of(&shown.layers, 1) - 0.4).abs() < 1.0e-4);
+        assert!((shown.camera.zoom - 2.0).abs() < 1.0e-4);
+        assert_eq!(rt.camera_reached(), 3);
+        rt.go_to(1, &base, CAM, 10).unwrap();
+        let start = rt.tick(&base, CAM, 11).unwrap();
+        assert!(x_of(&start.layers, 1) > 0.3);
+        assert!(start.camera.zoom > 1.8);
     }
 
     #[test]

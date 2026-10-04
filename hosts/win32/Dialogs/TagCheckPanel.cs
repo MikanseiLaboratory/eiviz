@@ -11,13 +11,15 @@ internal sealed class TagCheckPanel
     private readonly List<string> _catalog;
     private readonly HashSet<string> _selected;
     private readonly Window _owner;
+    private readonly Action? _changed;
 
-    public TagCheckPanel(WrapPanel panel, List<string> catalog, IEnumerable<string>? selected, Window owner)
+    public TagCheckPanel(WrapPanel panel, List<string> catalog, IEnumerable<string>? selected, Window owner, Action? changed = null)
     {
         _panel = panel;
         _catalog = catalog;
         _selected = new HashSet<string>(TagCatalog.NormalizeList(selected), StringComparer.Ordinal);
         _owner = owner;
+        _changed = changed;
         Rebuild();
     }
 
@@ -35,6 +37,7 @@ internal sealed class TagCheckPanel
         }
         _selected.Add(normalized);
         Rebuild();
+        _changed?.Invoke();
     }
 
     private void Rebuild()
@@ -50,8 +53,16 @@ internal sealed class TagCheckPanel
                 Margin = new Thickness(0, 0, 8, 4),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            box.Checked += (_, _) => _selected.Add(tag);
-            box.Unchecked += (_, _) => _selected.Remove(tag);
+            box.Checked += (_, _) =>
+            {
+                _selected.Add(tag);
+                _changed?.Invoke();
+            };
+            box.Unchecked += (_, _) =>
+            {
+                _selected.Remove(tag);
+                _changed?.Invoke();
+            };
             _panel.Children.Add(box);
         }
     }

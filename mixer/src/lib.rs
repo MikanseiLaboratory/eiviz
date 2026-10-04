@@ -1488,6 +1488,70 @@ fn mixer_destroy_scene_ffi(scene_id: u64) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+/// Shows a pose immediately. Playback stops and the saved layout is left alone,
+/// so the next move starts from the picture on screen.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_show_pose(
+    scene_id: u64,
+    count: u32,
+    layers: *const OverlayDesc,
+    camera: abi::EivizSceneCamera,
+    has_camera: u32,
+    state_id: u64,
+) -> i32 {
+    ffi_guard("mixer_scene_show_pose", ERR_DEVICE, || {
+        if count > 64 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        if count > 0 && layers.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let shown_camera = if has_camera == 0 {
+            None
+        } else if let Err(message) = abi::validate_camera(camera) {
+            report_session_error(message);
+            return ERR_INVALID_ARGUMENT;
+        } else {
+            Some(camera)
+        };
+        let copied: Arc<[OverlayDesc]> = if count == 0 {
+            Arc::from([])
+        } else {
+            // SAFETY: caller keeps count OverlayDesc values readable for this call.
+            let slice = unsafe { std::slice::from_raw_parts(layers, count as usize) };
+            if let Some(reason) = invalid_scene_layer(scene_id, slice) {
+                report_session_error(format!("scene {scene_id:#x}: {reason}"));
+                return ERR_INVALID_ARGUMENT;
+            }
+            let mut descs = slice.to_vec();
+            for desc in &mut descs {
+                desc.label = std::ptr::null();
+            }
+            Arc::from(descs)
+        };
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            {
+                let Some(spec) = shared.scenes.get_mut(&scene_id) else {
+                    return scene_anim_error("scene does not exist");
+                };
+                spec.layers = Arc::clone(&copied);
+                if let Some(camera) = shown_camera {
+                    spec.camera = camera;
+                }
+            }
+            shared
+                .scene_anims
+                .entry(scene_id)
+                .or_default()
+                .hold_pose(copied.as_ref(), shown_camera, state_id);
+            shared.compose_dirty = true;
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
 /// Sets the saved camera and the camera on screen. A camera edit ends camera playback.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_scene_camera_define(

@@ -8,6 +8,9 @@ struct SceneAnimView: View {
     let persist: Bool
     @State private var selectedState: UInt64 = 0
     @State private var selectedSequence: UInt64 = 0
+    @State private var selectedLayer: UUID?
+    @State private var poseMonitor: UInt64 = 0
+    @State private var lastPose = Date.distantPast
     @State private var live = SceneAnimLive.idle
     @State private var status = ""
 
@@ -36,6 +39,7 @@ struct SceneAnimView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            poseStage
             HStack(alignment: .top, spacing: 16) {
                 stateColumn
                     .frame(maxWidth: .infinity)
@@ -53,13 +57,20 @@ struct SceneAnimView: View {
             }
         }
         .padding(12)
-        .frame(minWidth: 1040, minHeight: 720)
+        .frame(minWidth: 1040, minHeight: 900)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .buttonStyle(MixerButtonStyle())
         .onAppear {
+            if !mixer.isRemote, poseMonitor == 0 {
+                poseMonitor = mixer.allocateMonitorId()
+            }
             selectedState = scene?.states.first?.id ?? 0
             selectedSequence = scene?.sequences.first?.id ?? 0
+            showSelectedPose(force: true)
+        }
+        .onChange(of: selectedState) { _, _ in
+            showSelectedPose(force: true)
         }
         .onReceive(tally) { _ in
             if let scene {
@@ -71,6 +82,58 @@ struct SceneAnimView: View {
                 _ = mixer.commitRemoteScene(scene)
             }
         }
+    }
+
+    private var poseStage: some View {
+        let aspect = CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height))
+        return HStack(alignment: .center, spacing: 12) {
+            WireCanvasView(
+                items: poseItems,
+                aspect: aspect,
+                snapEnabled: true,
+                selected: $selectedLayer,
+                onChange: { id, x, y, width, height, ended in
+                    applyPose(id, x: x, y: y, width: width, height: height, ended: ended)
+                },
+                camera: poseCamera,
+                onCamera: { camera, ended in
+                    applyPoseCamera(camera, ended: ended)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !mixer.isRemote, poseMonitor != 0, let gpuId = scene?.gpuId, gpuId != 0 {
+                let previewWidth = min(360, 250 * aspect)
+                let previewHeight = min(250, previewWidth / aspect)
+                MetalPreviewRepresentable(role: .monitor(monitorId: poseMonitor, sourceId: gpuId))
+                    .id(poseMonitor)
+                    .frame(width: previewWidth, height: previewHeight)
+                    .background(Color.black)
+            }
+        }
+        .frame(height: 250)
+    }
+
+    private var poseItems: [WireRect<UUID>] {
+        guard let scene else { return [] }
+        let state = scene.states.first { $0.id == selectedState }
+        return scene.layers.sorted { $0.z < $1.z }.map { layer in
+            let geom = state?.layers.first { $0.layerId == layer.layerId }?.geom ?? SceneLayerGeom.from(layer)
+            return WireRect(
+                id: layer.id,
+                x: geom.x,
+                y: geom.y,
+                width: geom.width,
+                height: geom.height,
+                enabled: !layer.hidden,
+                locked: layer.locked || state == nil,
+                sizeLinked: layer.sizeLinked
+            )
+        }
+    }
+
+    private var poseCamera: SceneCamera? {
+        guard let scene, let state = scene.states.first(where: { $0.id == selectedState }) else { return nil }
+        return state.camera ?? scene.camera
     }
 
     // MARK: States
@@ -454,6 +517,59 @@ struct SceneAnimView: View {
     }
 
     // MARK: Edits
+
+    private func applyPose(_ id: UUID, x: Float, y: Float, width: Float, height: Float, ended: Bool) {
+        editPose(ended: ended) { scene, index in
+            guard let layer = scene.layers.first(where: { $0.id == id }) else { return }
+            var geom = scene.states[index].layers.first { $0.layerId == layer.layerId }?.geom ?? SceneLayerGeom.from(layer)
+            geom.x = x
+            geom.y = y
+            geom.width = width
+            geom.height = height
+            if let key = scene.states[index].layers.firstIndex(where: { $0.layerId == layer.layerId }) {
+                scene.states[index].layers[key].geom = geom
+            } else if layer.layerId != 0 {
+                scene.states[index].layers.append(LayerKey(layerId: layer.layerId, geom: geom))
+            }
+        }
+    }
+
+    private func applyPoseCamera(_ camera: SceneCamera, ended: Bool) {
+        editPose(ended: ended) { scene, index in
+            scene.states[index].camera = camera
+        }
+    }
+
+    /// Writes the selected state. Local drags cut the preview to the new pose; the saved scene layout stays put.
+    private func editPose(ended: Bool, _ body: (inout SceneEntry, Int) -> Void) {
+        guard let index = sceneIndex else { return }
+        guard let stateIndex = mixer.session.scenes[index].states.firstIndex(where: { $0.id == selectedState }) else { return }
+        body(&mixer.session.scenes[index], stateIndex)
+        mixer.session.scenes[index].assignLayerIds()
+        let scene = mixer.session.scenes[index]
+        if mixer.isRemote {
+            if ended {
+                go(selectedState)
+            }
+            return
+        }
+        showSelectedPose(force: ended)
+        if ended {
+            mixer.pushSceneAnim(scene)
+            if persist {
+                mixer.publishSession()
+            }
+        }
+    }
+
+    private func showSelectedPose(force: Bool) {
+        guard !mixer.isRemote, let scene, scene.states.contains(where: { $0.id == selectedState }) else { return }
+        if !force, Date().timeIntervalSince(lastPose) < 0.05 {
+            return
+        }
+        lastPose = Date()
+        mixer.showScenePose(scene, stateId: selectedState)
+    }
 
     private func update(_ body: (inout SceneEntry) -> Void) {
         guard let index = sceneIndex else { return }

@@ -2,9 +2,13 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
+using Eiviz.Host;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Preview;
+using MixerRect = Eiviz.Host.Interop.Rect;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -36,9 +40,21 @@ internal sealed class SceneAnimWindow : Window
     private readonly Grid _timeline = new() { Height = 28, Margin = new Thickness(0, 4, 0, 2) };
     private readonly TextBlock _total = new() { FontSize = 11, Foreground = Brushes.Silver };
     private readonly TextBlock _status = new() { Foreground = Brushes.Goldenrod, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
+    private readonly Canvas _wire = new() { Background = Brushes.Black, ClipToBounds = true };
+    private readonly SwapchainHost? _preview = App.IsRemote ? null : new();
     private readonly DispatcherTimer _tally;
     private SceneAnimLive _live = SceneAnimLive.Idle;
     private bool _filling;
+    private SceneLayer? _picked;
+    private bool _moving;
+    private bool _sizing;
+    private bool _panning;
+    private bool _zooming;
+    private float _grabX;
+    private float _grabY;
+    private float? _snapX;
+    private float? _snapY;
+    private DateTime _lastShow;
 
     public SceneAnimWindow(SceneEntry scene, bool persist)
     {
@@ -46,7 +62,7 @@ internal sealed class SceneAnimWindow : Window
         _persist = persist;
         Title = Loc.Format("anim.title", scene.Name);
         Width = 1040;
-        Height = 720;
+        Height = 900;
         Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A));
         Foreground = Brushes.White;
         Content = Build();
@@ -55,12 +71,23 @@ internal sealed class SceneAnimWindow : Window
         Loaded += (_, _) =>
         {
             _scene.AssignLayerIds();
+            var (width, height) = ProjectSize();
+            _wire.Width = width;
+            _wire.Height = height;
             Reload();
             _tally.Start();
+            if (_preview is not null && Application.Current is App app)
+            {
+                var monitorId = app.Session.NextMonitorId++;
+                Dispatcher.BeginInvoke(
+                    () => _preview.RetargetMonitor(monitorId, _scene.GpuId),
+                    DispatcherPriority.Loaded);
+            }
         };
         Closed += (_, _) =>
         {
             _tally.Stop();
+            _preview?.ReleaseNative();
             if (_persist && Remote)
                 Push(publish: true);
         };
@@ -71,6 +98,9 @@ internal sealed class SceneAnimWindow : Window
         var root = new DockPanel { Margin = new Thickness(12) };
         root.Children.Add(_status);
         DockPanel.SetDock(_status, Dock.Bottom);
+        var stage = BuildStage();
+        DockPanel.SetDock(stage, Dock.Top);
+        root.Children.Add(stage);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
@@ -237,6 +267,8 @@ internal sealed class SceneAnimWindow : Window
     private void ShowState()
     {
         _stateForm.Children.Clear();
+        DrawWire();
+        ShowPose(true);
         var state = SelectedState();
         if (state is null)
             return;
@@ -658,6 +690,8 @@ internal sealed class SceneAnimWindow : Window
         state.Layers = CurrentLayout();
         state.Camera = _scene.Camera.Clone();
         Persist();
+        DrawWire();
+        ShowPose(true);
         _status.Text = Loc.T("anim.captured");
     }
 
@@ -797,6 +831,384 @@ internal sealed class SceneAnimWindow : Window
         var settings = (Application.Current as App)?.Session.Settings;
         var fps = settings is null ? 60.0 : settings.MasterFpsNum / (double)Math.Max(1, settings.MasterFpsDen);
         return Loc.Format("anim.seconds", frames / Math.Max(1.0, fps));
+    }
+
+    private UIElement BuildStage()
+    {
+        _wire.MouseLeftButtonDown += WireDown;
+        _wire.MouseMove += WireMove;
+        _wire.MouseLeftButtonUp += WireUp;
+        var (width, height) = ProjectSize();
+        _wire.Width = width;
+        _wire.Height = height;
+        var view = new Viewbox
+        {
+            Stretch = Stretch.Uniform,
+            Child = _wire,
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var grid = new Grid { Height = 250, Margin = new Thickness(0, 0, 0, 10) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        if (_preview is not null)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
+            _preview.IsMonitor = true;
+            var aspect = new AspectBox
+            {
+                RatioWidth = width,
+                RatioHeight = height,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = _preview
+            };
+            Grid.SetColumn(aspect, 1);
+            grid.Children.Add(aspect);
+        }
+        grid.Children.Add(view);
+        return grid;
+    }
+
+    private static (uint Width, uint Height) ProjectSize()
+    {
+        if (Application.Current is App app)
+        {
+            var unit = app.Session.Units.FirstOrDefault(item => item.Id == app.Session.SelectedUnitId)
+                ?? app.Session.Units.FirstOrDefault();
+            if (unit is { Width: > 0, Height: > 0 })
+                return (unit.Width, unit.Height);
+        }
+        return (1920, 1080);
+    }
+
+    private SceneLayerGeom GeomOf(SceneState state, SceneLayer layer) =>
+        state.Layers.FirstOrDefault(key => key.LayerId == layer.LayerId)?.Geom ?? SceneLayerGeom.From(layer);
+
+    private SceneLayerGeom EnsureGeom(SceneState state, SceneLayer layer)
+    {
+        var key = state.Layers.FirstOrDefault(item => item.LayerId == layer.LayerId);
+        if (key is not null)
+            return key.Geom;
+        var geom = SceneLayerGeom.From(layer);
+        state.Layers.Add(new LayerKey { LayerId = layer.LayerId, Geom = geom });
+        return geom;
+    }
+
+    private SceneCamera CameraOf(SceneState state) => state.Camera ?? _scene.Camera;
+
+    private void DrawWire()
+    {
+        _wire.Children.Clear();
+        var state = SelectedState();
+        var ordered = _scene.Layers.OrderBy(layer => state is null ? layer.Z : GeomOf(state, layer).Z).ToList();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var layer = ordered[i];
+            var geom = state is null ? SceneLayerGeom.From(layer) : GeomOf(state, layer);
+            var color = WireColor(i);
+            var box = new Rectangle
+            {
+                Width = Math.Max(8, geom.Width * _wire.Width),
+                Height = Math.Max(8, geom.Height * _wire.Height),
+                Stroke = new SolidColorBrush(color),
+                StrokeThickness = layer == _picked ? 4 : 2,
+                Fill = new SolidColorBrush(Color.FromArgb(0x28, color.R, color.G, color.B)),
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(box, geom.X * _wire.Width);
+            Canvas.SetTop(box, geom.Y * _wire.Height);
+            _wire.Children.Add(box);
+            if (layer == _picked && !layer.Locked)
+            {
+                var handle = new Rectangle
+                {
+                    Width = 16,
+                    Height = 16,
+                    Fill = new SolidColorBrush(color),
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(handle, (geom.X + geom.Width) * _wire.Width - 16);
+                Canvas.SetTop(handle, (geom.Y + geom.Height) * _wire.Height - 16);
+                _wire.Children.Add(handle);
+            }
+        }
+        if (state is null || _wire.Width <= 0)
+            return;
+        var camera = CameraOf(state);
+        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        var width = _wire.Width / zoom;
+        var height = _wire.Height / zoom;
+        var left = camera.X * _wire.Width - width / 2;
+        var top = camera.Y * _wire.Height - height / 2;
+        var frame = new Rectangle
+        {
+            Width = Math.Max(8, width),
+            Height = Math.Max(8, height),
+            Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0xE0, 0x82)),
+            StrokeThickness = 3,
+            StrokeDashArray = new DoubleCollection { 8, 4 },
+            Fill = Brushes.Transparent,
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(frame, left);
+        Canvas.SetTop(frame, top);
+        _wire.Children.Add(frame);
+        var zoomHandle = new Rectangle
+        {
+            Width = 16,
+            Height = 16,
+            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xE0, 0x82)),
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(zoomHandle, left + width - 16);
+        Canvas.SetTop(zoomHandle, top + height - 16);
+        _wire.Children.Add(zoomHandle);
+    }
+
+    private static Color WireColor(int index)
+    {
+        Color[] colors =
+        [
+            Color.FromRgb(0xE8, 0x77, 0x22),
+            Color.FromRgb(0x42, 0xA5, 0xF5),
+            Color.FromRgb(0x66, 0xBB, 0x6A),
+            Color.FromRgb(0xAB, 0x47, 0xBC),
+            Color.FromRgb(0xEF, 0x53, 0x50)
+        ];
+        return colors[index % colors.Length];
+    }
+
+    private void WireDown(object sender, MouseButtonEventArgs e)
+    {
+        var state = SelectedState();
+        if (state is null)
+            return;
+        var pos = e.GetPosition(_wire);
+        _snapX = null;
+        _snapY = null;
+        if (OnLayerHandle(state, pos))
+        {
+            _sizing = true;
+            _wire.CaptureMouse();
+            return;
+        }
+        if (BeginCamera(state, pos))
+        {
+            _wire.CaptureMouse();
+            return;
+        }
+        _picked = HitPose(state, pos);
+        _moving = _picked is { Locked: false };
+        if (_moving && _picked is not null)
+        {
+            var geom = EnsureGeom(state, _picked);
+            _grabX = (float)(pos.X / _wire.Width) - geom.X;
+            _grabY = (float)(pos.Y / _wire.Height) - geom.Y;
+            _wire.CaptureMouse();
+        }
+        DrawWire();
+    }
+
+    private void WireMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed)
+            return;
+        var state = SelectedState();
+        if (state is null)
+            return;
+        var pos = e.GetPosition(_wire);
+        if (_zooming || _panning)
+        {
+            MovePoseCamera(state, pos);
+            return;
+        }
+        if (_sizing && _picked is { Locked: false } sized)
+        {
+            var geom = EnsureGeom(state, sized);
+            var width = Math.Max(0.02f, (float)(pos.X / _wire.Width) - geom.X);
+            var height = sized.SizeLinked && geom.Width > 0
+                ? width * (geom.Height / geom.Width)
+                : Math.Max(0.02f, (float)(pos.Y / _wire.Height) - geom.Y);
+            var x = geom.X;
+            var y = geom.Y;
+            var (px, py) = WirePixels();
+            SceneSnap.SnapResize(
+                ref x,
+                ref y,
+                ref width,
+                ref height,
+                moveLeft: false,
+                moveTop: false,
+                sized.SizeLinked,
+                PoseBoxes(state, sized),
+                (float)(SceneSnap.EngagePixels / px),
+                (float)(SceneSnap.EngagePixels / py));
+            geom.X = x;
+            geom.Y = y;
+            geom.Width = width;
+            geom.Height = height;
+            DrawWire();
+            ShowPose(false);
+            return;
+        }
+        if (_moving && _picked is { Locked: false } moving)
+        {
+            var geom = EnsureGeom(state, moving);
+            var x = (float)(pos.X / _wire.Width) - _grabX;
+            var y = (float)(pos.Y / _wire.Height) - _grabY;
+            var (px, py) = WirePixels();
+            var boxes = PoseBoxes(state, moving);
+            geom.X = SceneSnap.LatchMoveAxis(x, geom.Width, boxes, true, px, ref _snapX);
+            geom.Y = SceneSnap.LatchMoveAxis(y, geom.Height, boxes, false, py, ref _snapY);
+            DrawWire();
+            ShowPose(false);
+        }
+    }
+
+    private (double X, double Y) WirePixels()
+    {
+        var rendered = SceneSnap.RenderedSize(this, _wire);
+        return (Math.Max(rendered.Width, 1), Math.Max(rendered.Height, 1));
+    }
+
+    private List<SceneSnap.Box> PoseBoxes(SceneState state, SceneLayer self) =>
+        _scene.Layers.Select(layer =>
+        {
+            var geom = GeomOf(state, layer);
+            return new SceneSnap.Box(geom.X, geom.Y, geom.Width, geom.Height, layer.Hidden, layer == self);
+        }).ToList();
+
+    private void WireUp(object sender, MouseButtonEventArgs e)
+    {
+        var edited = _moving || _sizing || _panning || _zooming;
+        _moving = false;
+        _sizing = false;
+        _panning = false;
+        _zooming = false;
+        _snapX = null;
+        _snapY = null;
+        _wire.ReleaseMouseCapture();
+        if (!edited)
+            return;
+        if (Remote)
+        {
+            var id = SelectedState()?.Id ?? 0;
+            if (id != 0 && Push(publish: true))
+                SceneAnimPlayback.GoTo(_scene, id);
+            return;
+        }
+        Persist();
+        ShowPose(true);
+    }
+
+    private bool OnLayerHandle(SceneState state, Point pos)
+    {
+        if (_picked is not { Locked: false } layer)
+            return false;
+        var geom = GeomOf(state, layer);
+        var x = (geom.X + geom.Width) * _wire.Width;
+        var y = (geom.Y + geom.Height) * _wire.Height;
+        return pos.X >= x - 20 && pos.X <= x + 4 && pos.Y >= y - 20 && pos.Y <= y + 4;
+    }
+
+    private bool BeginCamera(SceneState state, Point pos)
+    {
+        var camera = CameraOf(state);
+        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        var width = _wire.Width / zoom;
+        var height = _wire.Height / zoom;
+        var left = camera.X * _wire.Width - width / 2;
+        var top = camera.Y * _wire.Height - height / 2;
+        var onZoom = pos.X >= left + width - 20 && pos.X <= left + width + 4
+            && pos.Y >= top + height - 20 && pos.Y <= top + height + 4;
+        if (onZoom)
+        {
+            _zooming = true;
+            _panning = false;
+            return true;
+        }
+        var inside = pos.X >= left - 4 && pos.X <= left + width + 4
+            && pos.Y >= top - 4 && pos.Y <= top + height + 4;
+        if (!inside || HitPose(state, pos) is not null)
+            return false;
+        _panning = true;
+        _zooming = false;
+        _grabX = (float)(pos.X / _wire.Width) - camera.X;
+        _grabY = (float)(pos.Y / _wire.Height) - camera.Y;
+        return true;
+    }
+
+    private void MovePoseCamera(SceneState state, Point pos)
+    {
+        var camera = state.Camera ??= _scene.Camera.Clone();
+        if (_zooming)
+        {
+            var dx = Math.Abs((float)(pos.X / _wire.Width) - camera.X);
+            var dy = Math.Abs((float)(pos.Y / _wire.Height) - camera.Y);
+            var half = Math.Max(dx, dy);
+            camera.Zoom = half < 1e-3f ? 8f : 0.5f / half;
+        }
+        else
+        {
+            camera.X = (float)(pos.X / _wire.Width) - _grabX;
+            camera.Y = (float)(pos.Y / _wire.Height) - _grabY;
+        }
+        camera.Zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        var margin = 0.5f / camera.Zoom;
+        camera.X = Math.Clamp(camera.X, margin, 1f - margin);
+        camera.Y = Math.Clamp(camera.Y, margin, 1f - margin);
+        DrawWire();
+        ShowPose(false);
+    }
+
+    private SceneLayer? HitPose(SceneState state, Point pos)
+    {
+        var hits = _scene.Layers.Where(layer =>
+        {
+            var geom = GeomOf(state, layer);
+            return pos.X >= geom.X * _wire.Width
+                && pos.X <= (geom.X + geom.Width) * _wire.Width
+                && pos.Y >= geom.Y * _wire.Height
+                && pos.Y <= (geom.Y + geom.Height) * _wire.Height;
+        }).ToList();
+        if (hits.Count == 0)
+            return null;
+        if (_picked is not null && hits.Contains(_picked))
+            return _picked;
+        return hits.OrderByDescending(layer => GeomOf(state, layer).Z).First();
+    }
+
+    private void ShowPose(bool force)
+    {
+        var state = SelectedState();
+        if (state is null || Remote)
+            return;
+        if (!force && DateTime.UtcNow - _lastShow < TimeSpan.FromMilliseconds(50))
+            return;
+        _lastShow = DateTime.UtcNow;
+        _scene.AssignLayerIds();
+        var layers = _scene.Layers.Select(layer =>
+        {
+            var geom = GeomOf(state, layer);
+            return new OverlayDesc
+            {
+                SourceId = layer.InputId,
+                Rect = new MixerRect { X = geom.X, Y = geom.Y, Width = geom.Width, Height = geom.Height },
+                Opacity = geom.Opacity,
+                Z = geom.Z,
+                AudioFollow = layer.AudioFollow ? 1u : 0u,
+                Hidden = layer.Hidden ? 1u : 0u,
+                Crop = new MixerRect { X = geom.CropX, Y = geom.CropY, Width = geom.CropWidth, Height = geom.CropHeight },
+                LayerId = layer.LayerId
+            };
+        }).ToArray();
+        try
+        {
+            MixerApply.ShowPose(_scene.GpuId, layers, CameraOf(state), state.Id);
+        }
+        catch (Exception ex)
+        {
+            _status.Text = ex.Message;
+        }
     }
 
     private static string MotionSummary(Motion motion)

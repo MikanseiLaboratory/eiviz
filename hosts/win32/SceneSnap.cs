@@ -64,23 +64,82 @@ internal static class SceneSnap
 
     public static void SnapResize(ref float width, ref float height, float x, float y, bool sizeLinked, IReadOnlyList<Box> boxes, float xThreshold, float yThreshold)
     {
+        var left = x;
+        var top = y;
+        SnapResize(ref left, ref top, ref width, ref height, moveLeft: false, moveTop: false, sizeLinked, boxes, xThreshold, yThreshold);
+    }
+
+    /// <summary>
+    /// Snaps the edges that are moving. A size can match the frame (1) or another
+    /// box even when that edge sits outside the frame.
+    /// </summary>
+    public static void SnapResize(
+        ref float x,
+        ref float y,
+        ref float width,
+        ref float height,
+        bool moveLeft,
+        bool moveTop,
+        bool sizeLinked,
+        IReadOnlyList<Box> boxes,
+        float xThreshold,
+        float yThreshold)
+    {
         var ratio = height / Math.Max(width, 0.0001f);
-        var xs = Axis(boxes, horizontal: true);
-        var right = SnapPoint(x + width, xs, xThreshold);
+        var right = x + width;
+        var bottom = y + height;
+        if (moveLeft)
+            x = ChooseEdge(x, right, Sizes(boxes, horizontal: true), Axis(boxes, horizontal: true), xThreshold, anchorIsEnd: true);
+        else
+            right = ChooseEdge(right, x, Sizes(boxes, horizontal: true), Axis(boxes, horizontal: true), xThreshold, anchorIsEnd: false);
         width = Math.Max(0.02f, right - x);
         if (sizeLinked)
         {
-            height = Math.Max(0.02f, width * ratio);
+            var nextHeight = Math.Max(0.02f, width * ratio);
+            if (moveTop)
+                y = bottom - nextHeight;
+            height = nextHeight;
             return;
         }
-        var ys = Axis(boxes, horizontal: false);
-        var bottom = SnapPoint(y + height, ys, yThreshold);
+        if (moveTop)
+            y = ChooseEdge(y, bottom, Sizes(boxes, horizontal: false), Axis(boxes, horizontal: false), yThreshold, anchorIsEnd: true);
+        else
+            bottom = ChooseEdge(bottom, y, Sizes(boxes, horizontal: false), Axis(boxes, horizontal: false), yThreshold, anchorIsEnd: false);
         height = Math.Max(0.02f, bottom - y);
     }
 
-    private static float SnapPoint(float value, List<float> guides, float threshold)
+    private static float ChooseEdge(float moving, float anchor, List<float> sizes, List<float> guides, float threshold, bool anchorIsEnd)
     {
-        return value + BestDelta([value], guides, threshold, out _);
+        var best = moving;
+        var bestAbs = threshold;
+        void Take(float candidate)
+        {
+            var abs = Math.Abs(candidate - moving);
+            if (abs <= bestAbs)
+            {
+                bestAbs = abs;
+                best = candidate;
+            }
+        }
+        foreach (var guide in guides)
+            Take(guide);
+        foreach (var size in sizes)
+            Take(anchorIsEnd ? anchor - size : anchor + size);
+        return best;
+    }
+
+    private static List<float> Sizes(IReadOnlyList<Box> boxes, bool horizontal)
+    {
+        var values = new List<float> { 1f };
+        foreach (var box in boxes)
+        {
+            if (box.Hidden || box.Self)
+                continue;
+            var size = horizontal ? box.Width : box.Height;
+            if (size > 0.02f)
+                values.Add(size);
+        }
+        return values;
     }
 
     private static float BestDelta(float[] points, List<float> guides, float threshold, out bool found)

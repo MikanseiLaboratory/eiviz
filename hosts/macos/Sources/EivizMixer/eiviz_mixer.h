@@ -341,6 +341,7 @@ int32_t mixer_destroy_unit(uint64_t unit_id);
 int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
 int32_t mixer_scene_camera_define(uint64_t scene_id, EivizSceneCamera camera);
+int32_t mixer_scene_show_pose(uint64_t scene_id, uint32_t count, const EivizOverlayDesc *layers, EivizSceneCamera camera, uint32_t has_camera, uint64_t state_id);
 int32_t mixer_scene_states_define(uint64_t scene_id, const EivizSceneStateDesc *states, uint32_t count);
 int32_t mixer_scene_sequences_define(uint64_t scene_id, const EivizSceneSequenceDesc *sequences, uint32_t count);
 int32_t mixer_scene_go_to(uint64_t scene_id, uint64_t state_id);

@@ -22,7 +22,7 @@ A Scene has one camera: a center (X, Y) and a zoom from 1x to 8x. It moves the v
 
 The camera only changes where each layer is drawn. Each source is still sampled from its own texture, so zooming in does not soften the picture. Detail is lost only when the zoom enlarges a source past its own pixels.
 
-In the Scene Editor, turn on Edit to drag the frame to pan or its corner to zoom. A State can store a camera, and a Sequence moves between them. Zoom eases on a logarithmic scale, so the speed feels even as it magnifies.
+Drag empty space inside the frame to pan, or its corner to zoom. A drag on a layer moves that layer. A State can store a camera, and a Sequence moves between them. The Animation window edits the selected state's layout and camera while you watch the preview. Zoom eases on a logarithmic scale, so the speed feels even as it magnifies.
 
 ## Tags and tiles
 

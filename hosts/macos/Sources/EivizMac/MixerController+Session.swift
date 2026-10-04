@@ -797,6 +797,40 @@ extension MixerController {
         )
     }
 
+    /// Cuts the scene to this state's pose without rewriting the saved layout.
+    func showScenePose(_ scene: SceneEntry, stateId: UInt64) {
+        if isRemote { return }
+        guard let state = scene.states.first(where: { $0.id == stateId }) else { return }
+        var layers = scene.layers.map { layer -> EivizOverlayDesc in
+            let geom = state.layers.first { $0.layerId == layer.layerId }?.geom ?? SceneLayerGeom.from(layer)
+            var desc = MixerFFI.emptyOverlay()
+            desc.source_id = layer.inputId
+            desc.rect = EivizRect(x: geom.x, y: geom.y, width: geom.width, height: geom.height)
+            desc.crop = EivizRect(x: geom.cropX, y: geom.cropY, width: geom.cropWidth, height: geom.cropHeight)
+            desc.opacity = geom.opacity
+            desc.z = geom.z
+            desc.audio_follow = layer.audioFollow ? 1 : 0
+            desc.hidden = layer.hidden ? 1 : 0
+            desc.layer_id = layer.layerId
+            return desc
+        }
+        let camera = (state.camera ?? scene.camera).clamped()
+        let count = UInt32(layers.count)
+        layers.withUnsafeMutableBufferPointer { ptr in
+            fail(
+                mixer_scene_show_pose(
+                    scene.gpuId,
+                    count,
+                    ptr.baseAddress,
+                    EivizSceneCamera(x: camera.x, y: camera.y, zoom: camera.zoom),
+                    1,
+                    stateId
+                ),
+                "Show scene pose"
+            )
+        }
+    }
+
     func pushSceneAnim(_ scene: SceneEntry) {
         if isRemote { return }
         var layerBufs: [[EivizOverlayDesc]] = scene.states.map { state in

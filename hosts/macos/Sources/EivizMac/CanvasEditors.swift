@@ -4,7 +4,6 @@ import SwiftUI
 struct SceneEditorView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
-    @State private var original: [SceneLayer] = []
     @State private var selectedLayer: UUID?
     @State private var name: String = ""
     @State private var copyFromId: UInt64 = 0
@@ -12,17 +11,13 @@ struct SceneEditorView: View {
     @State private var editorMonitor: UInt64 = 0
     @State private var selectedTags: [String] = []
     @State private var layoutSnap = true
+    @State private var showAnim = false
+    @State private var viewZoom: CGFloat = 0.8
     @State private var live = true
     @State private var working: [SceneLayer]?
+    @State private var draftCamera: SceneCamera?
     @State private var draftGpuId: UInt64 = 0
-    @State private var previewSource: UInt64 = 0
-    @State private var committed = false
-    @State private var showAnim = false
-    @State private var originalStates: [SceneState] = []
-    @State private var originalSequences: [SceneSequence] = []
-    @State private var originalCamera: SceneCamera = .identity
-    @State private var cameraEditing = false
-
+    @State private var held: SceneEntry?
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
     }
@@ -107,6 +102,10 @@ struct SceneEditorView: View {
                 HStack {
                     Text("Wireframe (\(mixer.selectedUnit.width)x\(mixer.selectedUnit.height))").fontWeight(.bold)
                     Spacer()
+                    Button("−") { viewZoom = min(1, max(0.5, viewZoom - 0.1)) }
+                        .help(L10n.t("editor.viewZoomHelp"))
+                    Button("+") { viewZoom = min(1, max(0.5, viewZoom + 0.1)) }
+                        .help(L10n.t("editor.viewZoomHelp"))
                     Toggle(isOn: $layoutSnap) {
                         Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
                     }
@@ -136,9 +135,9 @@ struct SceneEditorView: View {
                     onCrop: applyCrop,
                     selected: $selectedLayer,
                     onChange: applyWire,
-                    camera: current?.camera,
-                    cameraEditing: cameraEditing,
-                    onCamera: { camera, _ in setCamera(camera) }
+                    camera: displayedCamera,
+                    onCamera: { camera, _ in setCamera(camera) },
+                    viewZoom: viewZoom
                 )
                 .clipped()
             }
@@ -148,27 +147,35 @@ struct SceneEditorView: View {
                 HStack {
                     Text("Live preview").fontWeight(.bold)
                     Spacer()
-                    Toggle(isOn: Binding(get: { live }, set: { setLive($0) })) {
-                        Text(L10n.t("editor.live")).fontWeight(.bold)
-                    }
-                    .toggleStyle(OnOffToggleStyle())
-                    .disabled(mixer.isRemote)
-                    .help(L10n.t("editor.liveHelp"))
+                    Toggle(L10n.t("editor.live"), isOn: Binding(get: { live }, set: { setLive($0) }))
+                        .toggleStyle(OnOffToggleStyle())
+                        .disabled(mixer.isRemote)
+                        .help(L10n.t("editor.liveHelp"))
                 }
                 if mixer.isRemote {
                     Color.black
                         .aspectRatio(projectAspect, contentMode: .fit)
                         .frame(maxWidth: .infinity)
-                } else if editorMonitor != 0, previewSource != 0 {
-                    MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: previewSource))
-                        .id(editorMonitor)
+                } else if editorMonitor != 0, monitorSource != 0 {
+                    MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: monitorSource))
+                        .id(monitorSource)
                         .aspectRatio(projectAspect, contentMode: .fit)
                         .frame(maxWidth: .infinity)
                         .background(Color.black)
                 }
                 cameraFields
                 Text("Name").padding(.top, 8)
-                mixerTextField($name, placeholder: "Name")
+                mixerTextField(Binding(
+                    get: { name },
+                    set: { value in
+                        name = value
+                        guard live else { return }
+                        let trimmed = value.trimmingCharacters(in: .whitespaces)
+                        guard let i = sceneIndex, !trimmed.isEmpty else { return }
+                        mixer.session.scenes[i].name = trimmed
+                        push()
+                    }
+                ), placeholder: "Name")
                 TagCheckView(input: false, selected: $selectedTags)
                 if let index = layers.firstIndex(where: { $0.id == selectedLayer }) {
                     layerFields(index)
@@ -176,34 +183,8 @@ struct SceneEditorView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    Button("OK") {
-                        committed = true
-                        if !live {
-                            applyWorking()
-                        }
-                        if let i = sceneIndex {
-                            var scene = mixer.session.scenes[i]
-                            let trimmed = name.trimmingCharacters(in: .whitespaces)
-                            scene.name = trimmed.isEmpty ? scene.name : trimmed
-                            TagCatalog.replace(&scene.tags, selectedTags)
-                            mixer.session.scenes[i] = scene
-                            mixer.mergeSceneTags(scene.tags)
-                            if mixer.isRemote {
-                                _ = mixer.commitRemoteScene(scene)
-                            } else {
-                                mixer.pushScene(scene)
-                                mixer.pushSceneAnim(scene)
-                                if !scene.states.isEmpty || !scene.sequences.isEmpty {
-                                    mixer.publishSession()
-                                }
-                            }
-                        }
-                        releaseDraft()
-                        dismiss()
-                    }
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
                 }
             }
             .frame(width: 380)
@@ -225,70 +206,34 @@ struct SceneEditorView: View {
             } else if editorMonitor == 0 {
                 editorMonitor = mixer.allocateMonitorId()
             }
-            original = current?.layers ?? []
-            originalStates = current?.states ?? []
-            originalSequences = current?.sequences ?? []
             name = current?.name ?? ""
-            originalCamera = current?.camera ?? .identity
             selectedTags = current?.tags ?? []
             selectedLayer = current?.layers.first?.id
-            previewSource = current?.gpuId ?? 0
             mutate { scene in
                 scene.layers.sort { $0.z > $1.z }
             }
         }
+        .onChange(of: selectedTags) { _, tags in
+            guard live, let i = sceneIndex else { return }
+            TagCatalog.replace(&mixer.session.scenes[i].tags, tags)
+            mixer.mergeSceneTags(tags)
+            push()
+        }
         .onDisappear {
-            guard !committed else { return }
-            if let i = sceneIndex {
-                mixer.session.scenes[i].layers = original
-                mixer.session.scenes[i].states = originalStates
-                mixer.session.scenes[i].sequences = originalSequences
-                mixer.session.scenes[i].camera = originalCamera
-                if !mixer.isRemote {
-                    mixer.pushScene(mixer.session.scenes[i])
-                    mixer.pushSceneAnim(mixer.session.scenes[i])
-                }
+            if !live {
+                revertHeld()
+                releaseDraft()
+                return
             }
-            releaseDraft()
-        }
-    }
-
-    private func setLive(_ on: Bool) {
-        guard on != live, !mixer.isRemote else { return }
-        if on {
-            applyWorking()
-            if let scene = current {
+            guard let scene = current else { return }
+            if mixer.isRemote {
+                _ = mixer.commitRemoteScene(scene)
+            } else {
                 mixer.pushScene(scene)
-                previewSource = scene.gpuId
+                mixer.pushSceneAnim(scene)
+                mixer.publishSession()
             }
-            releaseDraft()
-            working = nil
-            live = true
-            return
         }
-        working = layers
-        ensureDraft()
-        live = false
-        push()
-        previewSource = draftGpuId
-    }
-
-    private func applyWorking() {
-        guard let working, let i = sceneIndex else { return }
-        mixer.session.scenes[i].layers = working
-    }
-
-    private func ensureDraft() {
-        if draftGpuId != 0 { return }
-        draftGpuId = EIVIZ_SCENE_BASE | mixer.session.nextSceneId
-        mixer.session.nextSceneId += 1
-    }
-
-    private func releaseDraft() {
-        if draftGpuId != 0 {
-            _ = mixer_destroy_scene(draftGpuId)
-        }
-        draftGpuId = 0
     }
 
     private var current: SceneEntry? {
@@ -296,7 +241,20 @@ struct SceneEditorView: View {
         return mixer.session.scenes[i]
     }
 
-    private var layers: [SceneLayer] { working ?? current?.layers ?? [] }
+    private var layers: [SceneLayer] {
+        if !live, let working { return working }
+        return current?.layers ?? []
+    }
+
+    private var displayedCamera: SceneCamera? {
+        if !live, let draftCamera { return draftCamera }
+        return current?.camera
+    }
+
+    /// Preview follows the real scene while LIVE is on, and a draft scene while it is off.
+    private var monitorSource: UInt64 {
+        live ? (current?.gpuId ?? 0) : draftGpuId
+    }
     private var projectAspect: CGFloat {
         CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height))
     }
@@ -314,6 +272,7 @@ struct SceneEditorView: View {
         var scene = mixer.session.scenes[i]
         if !live {
             scene.layers = working ?? scene.layers
+            if let draftCamera { scene.camera = draftCamera }
         }
         body(&scene)
         for index in scene.layers.indices {
@@ -323,6 +282,7 @@ struct SceneEditorView: View {
             mixer.session.scenes[i] = scene
         } else {
             working = scene.layers
+            draftCamera = scene.camera
         }
     }
 
@@ -404,40 +364,92 @@ struct SceneEditorView: View {
     }
 
     private func push() {
-        guard let scene = current else { return }
-        if live {
-            mixer.pushScene(scene)
+        guard var scene = current else { return }
+        if mixer.isRemote {
+            _ = mixer.commitRemoteScene(scene)
             return
         }
-        var copy = scene
-        copy.layers = working ?? scene.layers
-        mixer.pushScene(copy, gpuId: draftGpuId)
+        if !live {
+            scene.layers = working ?? scene.layers
+            if let draftCamera { scene.camera = draftCamera }
+            ensureDraft()
+            mixer.pushScene(scene, gpuId: draftGpuId)
+            return
+        }
+        mixer.pushScene(scene)
+    }
+
+    private func setLive(_ on: Bool) {
+        guard !mixer.isRemote, on != live, let i = sceneIndex else { return }
+        if on {
+            var scene = mixer.session.scenes[i]
+            if let working { scene.layers = working }
+            if let draftCamera { scene.camera = draftCamera }
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { scene.name = trimmed }
+            TagCatalog.replace(&scene.tags, selectedTags)
+            mixer.mergeSceneTags(selectedTags)
+            mixer.session.scenes[i] = scene
+            live = true
+            working = nil
+            draftCamera = nil
+            held = nil
+            mixer.pushScene(scene)
+            mixer.pushSceneAnim(scene)
+            mixer.publishSession()
+            releaseDraft()
+            return
+        }
+        let scene = mixer.session.scenes[i]
+        held = scene
+        working = scene.layers
+        draftCamera = scene.camera
+        ensureDraft()
+        live = false
+        push()
+    }
+
+    private func revertHeld() {
+        guard let held, let i = sceneIndex else { return }
+        mixer.session.scenes[i] = held
+        if mixer.isRemote {
+            _ = mixer.commitRemoteScene(held)
+            return
+        }
+        mixer.pushScene(held)
+        mixer.pushSceneAnim(held)
+        mixer.publishSession()
+    }
+
+    private func ensureDraft() {
+        if draftGpuId != 0 { return }
+        draftGpuId = EIVIZ_SCENE_BASE | mixer.session.nextSceneId
+        mixer.session.nextSceneId += 1
+    }
+
+    private func releaseDraft() {
+        guard draftGpuId != 0 else { return }
+        _ = mixer_destroy_scene(draftGpuId)
+        draftGpuId = 0
     }
 
     private var cameraFields: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(L10n.t("scene.camera")).fontWeight(.bold)
-                Spacer()
-                Toggle(isOn: $cameraEditing) {
-                    Text(L10n.t("scene.cameraEdit"))
-                }
-                .toggleStyle(OnOffToggleStyle())
+            Text(L10n.t("scene.camera")).fontWeight(.bold)
                 .help(L10n.t("scene.cameraEditHelp"))
-            }
             HStack {
-                cameraBox(L10n.t("scene.cameraX"), (current?.camera.x ?? 0.5) * projectW) { value in
-                    var camera = current?.camera ?? .identity
+                cameraBox(L10n.t("scene.cameraX"), (displayedCamera?.x ?? 0.5) * projectW) { value in
+                    var camera = displayedCamera ?? .identity
                     camera.x = value / projectW
                     setCamera(camera)
                 }
-                cameraBox(L10n.t("scene.cameraY"), (current?.camera.y ?? 0.5) * projectH) { value in
-                    var camera = current?.camera ?? .identity
+                cameraBox(L10n.t("scene.cameraY"), (displayedCamera?.y ?? 0.5) * projectH) { value in
+                    var camera = displayedCamera ?? .identity
                     camera.y = value / projectH
                     setCamera(camera)
                 }
-                cameraBox(L10n.t("scene.cameraZoom"), current?.camera.zoom ?? 1) { value in
-                    var camera = current?.camera ?? .identity
+                cameraBox(L10n.t("scene.cameraZoom"), displayedCamera?.zoom ?? 1) { value in
+                    var camera = displayedCamera ?? .identity
                     camera.zoom = value
                     setCamera(camera)
                 }
@@ -449,7 +461,7 @@ struct SceneEditorView: View {
 
     private func cameraBox(_ title: String, _ value: Float, _ apply: @escaping (Float) -> Void) -> some View {
         HStack(spacing: 4) {
-            Text(title).frame(width: 48, alignment: .leading)
+            Text(title).frame(width: 56, alignment: .leading)
             TextField("", value: Binding(get: { value }, set: apply), format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 64)
@@ -457,8 +469,13 @@ struct SceneEditorView: View {
     }
 
     private func setCamera(_ camera: SceneCamera) {
-        guard let i = sceneIndex else { return }
-        mixer.session.scenes[i].camera = camera.clamped()
+        let clamped = camera.clamped()
+        if live {
+            guard let i = sceneIndex else { return }
+            mixer.session.scenes[i].camera = clamped
+        } else {
+            draftCamera = clamped
+        }
         push()
     }
 
@@ -467,13 +484,13 @@ struct SceneEditorView: View {
         return VStack(alignment: .leading, spacing: 8) {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Pos X", index: index, axis: .x, range: -projectW ... projectW * 2)
-                layerMeter("Pos Y", index: index, axis: .y, range: -projectH ... projectH * 2)
+                layerMeter("Pos X ↔", index: index, axis: .x, range: -projectW ... projectW * 2)
+                layerMeter("Pos Y ↕", index: index, axis: .y, range: -projectH ... projectH * 2)
             }
             HStack(alignment: .top, spacing: 8) {
-                layerMeter("Size X", index: index, axis: .w, range: 1 ... projectW * 2)
+                layerMeter("Size X ↔", index: index, axis: .w, range: 1 ... projectW * 2)
                 Toggle("Link", isOn: boolBinding(index, \.sizeLinked)).disabled(locked)
-                layerMeter("Size Y", index: index, axis: .h, range: 1 ... projectH * 2)
+                layerMeter("Size Y ↕", index: index, axis: .h, range: 1 ... projectH * 2)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Crop").fontWeight(.bold)
@@ -564,8 +581,8 @@ struct SceneEditorView: View {
     }
 
     private func applyPixel(_ index: Int, axis: PixelAxis, value: Float) {
-        let source = live ? current?.layers : working
-        guard var list = source, list.indices.contains(index) else { return }
+        guard layers.indices.contains(index) else { return }
+        var list = layers
         var layer = list[index]
         guard !layer.locked else { return }
         switch axis {
@@ -713,10 +730,10 @@ struct SceneEditorView: View {
     }
 
     private func savePreset() {
-        guard let scene = current else { return }
+        guard current != nil else { return }
         mixer.session.scenePresets.append(SceneLayoutPreset(
             name: "Preset \(mixer.session.scenePresets.count + 1)",
-            layers: scene.layers
+            layers: layers
         ))
     }
 

@@ -34,6 +34,34 @@ internal static class MixerApply
             "Define scene camera");
     }
 
+    /// Cuts the scene to this pose without rewriting the saved layout.
+    public static void ShowPose(ulong gpuId, OverlayDesc[] layers, SceneCamera camera, ulong stateId)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        var pin = GCHandle.Alloc(layers, GCHandleType.Pinned);
+        try
+        {
+            unsafe
+            {
+                MixerNative.ThrowIfFailed(
+                    MixerNative.SceneShowPose(
+                        gpuId,
+                        (uint)layers.Length,
+                        layers.Length == 0 ? null : (OverlayDesc*)pin.AddrOfPinnedObject(),
+                        CameraDesc(camera),
+                        1,
+                        stateId),
+                    "Show scene pose");
+            }
+        }
+        finally
+        {
+            if (pin.IsAllocated)
+                pin.Free();
+        }
+    }
+
     private static EivizSceneCamera CameraDesc(SceneCamera camera) => new()
     {
         X = camera.X,

@@ -197,6 +197,15 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_scene_camera_define")]
     internal static partial int SceneCameraDefine(ulong sceneId, EivizSceneCamera camera);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_show_pose")]
+    internal static unsafe partial int SceneShowPose(
+        ulong sceneId,
+        uint count,
+        OverlayDesc* layers,
+        EivizSceneCamera camera,
+        uint hasCamera,
+        ulong stateId);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_scene_states_define")]
     internal static unsafe partial int SceneStatesDefine(ulong sceneId, EivizSceneStateDesc* states, uint count);
 

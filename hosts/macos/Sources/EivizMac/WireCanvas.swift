@@ -25,8 +25,9 @@ struct WireCanvasView<ID: Hashable>: View {
     @Binding var selected: ID?
     var onChange: (ID, Float, Float, Float, Float, Bool) -> Void
     var camera: SceneCamera? = nil
-    var cameraEditing = false
     var onCamera: ((SceneCamera, Bool) -> Void)? = nil
+    /// 1 fills the canvas with the frame. Smaller values show layers outside it.
+    var viewZoom: CGFloat = 1
 
     @State private var dragging = false
     @State private var resizing = false
@@ -43,6 +44,7 @@ struct WireCanvasView<ID: Hashable>: View {
     @State private var cropDraft: (ID, Float, Float, Float, Float)?
     @State private var cameraDragging = false
     @State private var cameraZooming = false
+    @State private var sizeCorner: SizeCorner?
     @State private var camGrab: CGPoint = .zero
     @State private var camDraft: SceneCamera?
 
@@ -58,13 +60,29 @@ struct WireCanvasView<ID: Hashable>: View {
         GeometryReader { geo in
             let size = fitted(geo.size)
             let origin = CGPoint(x: (geo.size.width - size.width) / 2, y: (geo.size.height - size.height) / 2)
+            let zoom = min(1, max(0.5, viewZoom))
+            let sceneSize = CGSize(width: size.width * zoom, height: size.height * zoom)
+            let sceneOrigin = CGPoint(
+                x: origin.x + (size.width - sceneSize.width) / 2,
+                y: origin.y + (size.height - sceneSize.height) / 2
+            )
             ZStack(alignment: .topLeading) {
                 Rectangle().fill(Color(red: 0.04, green: 0.04, blue: 0.04))
+                if zoom < 0.999 {
+                    Rectangle()
+                        .fill(Color(white: 0.08))
+                        .frame(width: sceneSize.width, height: sceneSize.height)
+                        .position(x: sceneOrigin.x + sceneSize.width / 2, y: sceneOrigin.y + sceneSize.height / 2)
+                    Rectangle()
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                        .frame(width: sceneSize.width, height: sceneSize.height)
+                        .position(x: sceneOrigin.x + sceneSize.width / 2, y: sceneOrigin.y + sceneSize.height / 2)
+                }
                 ForEach(Array(items.enumerated().reversed()), id: \.element.id) { index, item in
-                    itemMarks(index: index, item: item, origin: origin, canvas: size)
+                    itemMarks(index: index, item: item, origin: sceneOrigin, canvas: sceneSize)
                 }
                 if let camera {
-                    cameraMarks(camera, origin: origin, canvas: size)
+                    cameraMarks(camera, origin: sceneOrigin, canvas: sceneSize)
                 }
             }
             .clipped()
@@ -72,50 +90,58 @@ struct WireCanvasView<ID: Hashable>: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let local = CGPoint(x: value.location.x - origin.x, y: value.location.y - origin.y)
-                        if cameraEditing, camera != nil {
-                            dragCamera(at: local, canvas: size)
-                            return
-                        }
-                        if !dragging && !resizing && !cropping {
-                            begin(at: local, canvas: size)
+                        let local = CGPoint(x: value.location.x - sceneOrigin.x, y: value.location.y - sceneOrigin.y)
+                        if !dragging && !resizing && !cropping && !cameraDragging && !cameraZooming {
+                            if let hit = hitCorner(local, canvas: sceneSize) {
+                                selected = hit.0
+                                sizeCorner = hit.1
+                                resizing = true
+                                dragging = false
+                                cropping = false
+                            } else if beginCamera(at: local, canvas: sceneSize) {
+                                // The first event only chooses pan or zoom.
+                            } else {
+                                begin(at: local, canvas: sceneSize)
+                            }
                             last = local
                             return
                         }
+                        if cameraDragging || cameraZooming {
+                            moveCamera(at: local, canvas: sceneSize)
+                            return
+                        }
                         guard let id = selected, var item = items.first(where: { $0.id == id }), !item.locked else { return }
-                        let dx = Float((local.x - last.x) / size.width)
-                        let dy = Float((local.y - last.y) / size.height)
+                        let dx = Float((local.x - last.x) / sceneSize.width)
+                        let dy = Float((local.y - last.y) / sceneSize.height)
                         last = local
                         if cropping {
                             applyCrop(&item, dx: dx, dy: dy)
                             cropDraft = (id, item.cropX, item.cropY, item.cropWidth, item.cropHeight)
                             onCrop?(id, item.cropX, item.cropY, item.cropWidth, item.cropHeight, false)
                         } else if resizing {
-                            var width = max(0.02, item.width + dx)
-                            var height = item.sizeLinked && item.width > 0
-                                ? max(0.02, width * (item.height / item.width))
-                                : max(0.02, item.height + dy)
+                            var box = resized(item, corner: sizeCorner ?? .se, dx: dx, dy: dy)
                             if snapEnabled {
-                                snapResize(x: item.x, y: item.y, width: &width, height: &height, linked: item.sizeLinked, except: id, canvas: size)
+                                snapResize(corner: sizeCorner ?? .se, x: &box.x, y: &box.y, width: &box.width, height: &box.height, linked: item.sizeLinked, except: id, canvas: sceneSize)
                             }
-                            draft = (id, item.x, item.y, width, height)
-                            onChange(id, item.x, item.y, width, height, false)
+                            draft = (id, box.x, box.y, box.width, box.height)
+                            onChange(id, box.x, box.y, box.width, box.height, false)
                         } else if dragging {
-                            var x = Float(local.x / size.width - grab.x)
-                            var y = Float(local.y / size.height - grab.y)
+                            var x = Float(local.x / sceneSize.width - grab.x)
+                            var y = Float(local.y / sceneSize.height - grab.y)
                             if snapEnabled {
-                                snapMove(x: &x, y: &y, width: item.width, height: item.height, except: id, canvas: size)
+                                snapMove(x: &x, y: &y, width: item.width, height: item.height, except: id, canvas: sceneSize)
                             }
                             draft = (id, x, y, item.width, item.height)
                             onChange(id, x, y, item.width, item.height, false)
                         }
                     }
                     .onEnded { _ in
-                        if cameraEditing, cameraDragging || cameraZooming, let camDraft {
+                        if (cameraDragging || cameraZooming), let camDraft {
                             onCamera?(camDraft, true)
                         }
                         cameraDragging = false
                         cameraZooming = false
+                        sizeCorner = nil
                         camDraft = nil
                         if cropping, let crop = cropDraft {
                             onCrop?(crop.0, crop.1, crop.2, crop.3, crop.4, true)
@@ -178,27 +204,98 @@ struct WireCanvasView<ID: Hashable>: View {
             .foregroundStyle(.white)
             .position(x: frame.minX + 14, y: frame.minY + 12)
         if selected == item.id && !item.locked {
-            Rectangle()
-                .fill(color)
-                .frame(width: 16, height: 16)
-                .position(x: frame.maxX - 8, y: frame.maxY - 8)
+            ForEach(0..<4, id: \.self) { index in
+                let x = index % 2 == 0 ? frame.minX : frame.maxX
+                let y = index < 2 ? frame.minY : frame.maxY
+                Rectangle()
+                    .fill(color)
+                    .frame(width: 14, height: 14)
+                    .position(x: x, y: y)
+            }
         }
+    }
+
+    private enum SizeCorner { case se, sw, ne, nw }
+
+    private func hitCorner(_ pos: CGPoint, canvas: CGSize) -> (ID, SizeCorner)? {
+        let ordered: [WireRect<ID>] = {
+            if let id = selected, let item = items.first(where: { $0.id == id }) {
+                return [item] + items.filter { $0.id != id }
+            }
+            return items
+        }()
+        for item in ordered where !item.locked {
+            let rect = CGRect(
+                x: CGFloat(item.x) * canvas.width,
+                y: CGFloat(item.y) * canvas.height,
+                width: CGFloat(item.width) * canvas.width,
+                height: CGFloat(item.height) * canvas.height
+            )
+            let corners: [(SizeCorner, CGPoint)] = [
+                (.se, CGPoint(x: rect.maxX, y: rect.maxY)),
+                (.sw, CGPoint(x: rect.minX, y: rect.maxY)),
+                (.ne, CGPoint(x: rect.maxX, y: rect.minY)),
+                (.nw, CGPoint(x: rect.minX, y: rect.minY))
+            ]
+            for (corner, point) in corners where hypot(pos.x - point.x, pos.y - point.y) <= 22 {
+                return (item.id, corner)
+            }
+        }
+        return nil
+    }
+
+    private func resized(_ item: WireRect<ID>, corner: SizeCorner, dx: Float, dy: Float) -> (x: Float, y: Float, width: Float, height: Float) {
+        let linked = item.sizeLinked && item.width > 0
+        let ratio = item.width > 0 ? item.height / item.width : 1
+        var width = item.width
+        var height = item.height
+        switch corner {
+        case .se, .ne:
+            width = max(0.02, item.width + dx)
+        case .sw, .nw:
+            width = max(0.02, item.width - dx)
+        }
+        if linked {
+            height = max(0.02, width * ratio)
+        } else {
+            switch corner {
+            case .se, .sw:
+                height = max(0.02, item.height + dy)
+            case .ne, .nw:
+                height = max(0.02, item.height - dy)
+            }
+        }
+        let x: Float
+        let y: Float
+        switch corner {
+        case .se:
+            x = item.x
+            y = item.y
+        case .sw:
+            x = item.x + item.width - width
+            y = item.y
+        case .ne:
+            x = item.x
+            y = item.y + item.height - height
+        case .nw:
+            x = item.x + item.width - width
+            y = item.y + item.height - height
+        }
+        return (x, y, width, height)
     }
 
     @ViewBuilder
     private func cameraMarks(_ camera: SceneCamera, origin: CGPoint, canvas: CGSize) -> some View {
         let frame = cameraRect(camera, canvas: canvas)
-        let color = cameraEditing ? Color(red: 1, green: 0xE0 / 255, blue: 0x82 / 255) : EivizTheme.dim
+        let color = Color(red: 1, green: 0xE0 / 255, blue: 0x82 / 255)
         Rectangle()
-            .stroke(color, style: StrokeStyle(lineWidth: cameraEditing ? 3 : 1.5, dash: [8, 4]))
+            .stroke(color, style: StrokeStyle(lineWidth: 3, dash: [8, 4]))
             .frame(width: frame.width, height: frame.height)
             .position(x: origin.x + frame.midX, y: origin.y + frame.midY)
-        if cameraEditing {
-            Rectangle()
-                .fill(color)
-                .frame(width: 16, height: 16)
-                .position(x: origin.x + frame.maxX - 8, y: origin.y + frame.maxY - 8)
-        }
+        Rectangle()
+            .fill(color)
+            .frame(width: 16, height: 16)
+            .position(x: origin.x + frame.maxX - 8, y: origin.y + frame.maxY - 8)
     }
 
     private func cameraRect(_ camera: SceneCamera, canvas: CGSize) -> CGRect {
@@ -213,22 +310,36 @@ struct WireCanvasView<ID: Hashable>: View {
         )
     }
 
-    private func dragCamera(at local: CGPoint, canvas: CGSize) {
-        guard var camera else { return }
-        if !cameraDragging && !cameraZooming {
-            let frame = cameraRect(camera, canvas: canvas)
-            let handle = CGRect(x: frame.maxX - 20, y: frame.maxY - 20, width: 24, height: 24)
-            if handle.contains(local) {
-                cameraZooming = true
-            } else if frame.contains(local) {
-                cameraDragging = true
-                camGrab = CGPoint(
-                    x: local.x / canvas.width - CGFloat(camera.x),
-                    y: local.y / canvas.height - CGFloat(camera.y)
-                )
-            }
-            return
+    /// Zoom handle first. Empty space inside the frame pans, and a layer underneath keeps the drag.
+    private func beginCamera(at local: CGPoint, canvas: CGSize) -> Bool {
+        guard let camera else { return false }
+        let frame = cameraRect(camera, canvas: canvas)
+        let handle = CGRect(x: frame.maxX - 20, y: frame.maxY - 20, width: 24, height: 24)
+        if handle.contains(local) {
+            cameraZooming = true
+            cameraDragging = false
+            return true
         }
+        let onLayer = items.contains { item in
+            CGRect(
+                x: CGFloat(item.x) * canvas.width,
+                y: CGFloat(item.y) * canvas.height,
+                width: CGFloat(item.width) * canvas.width,
+                height: CGFloat(item.height) * canvas.height
+            ).contains(local)
+        }
+        guard frame.insetBy(dx: -4, dy: -4).contains(local), !onLayer else { return false }
+        cameraDragging = true
+        cameraZooming = false
+        camGrab = CGPoint(
+            x: local.x / canvas.width - CGFloat(camera.x),
+            y: local.y / canvas.height - CGFloat(camera.y)
+        )
+        return true
+    }
+
+    private func moveCamera(at local: CGPoint, canvas: CGSize) {
+        guard var camera else { return }
         if cameraZooming {
             let dx = abs(Float(local.x / canvas.width) - camera.x)
             let dy = abs(Float(local.y / canvas.height) - camera.y)
@@ -334,16 +445,59 @@ struct WireCanvasView<ID: Hashable>: View {
         snapY = vertical.latch
     }
 
-    private func snapResize(x: Float, y: Float, width: inout Float, height: inout Float, linked: Bool, except: ID, canvas: CGSize) {
+    private func snapResize(corner: SizeCorner, x: inout Float, y: inout Float, width: inout Float, height: inout Float, linked: Bool, except: ID, canvas: CGSize) {
         let xThreshold = Float(6 / max(canvas.width, 1))
         let yThreshold = Float(6 / max(canvas.height, 1))
-        let xs = guides(except: except, horizontal: true)
-        width = max(0.02, x + width + bestDelta([x + width], xs, xThreshold) - x)
+        let ratio = height / max(width, 0.0001)
+        let moveLeft = corner == .sw || corner == .nw
+        let moveTop = corner == .nw || corner == .ne
+        var right = x + width
+        var bottom = y + height
+        if moveLeft {
+            x = chooseEdge(moving: x, anchor: right, sizes: sizes(except: except, horizontal: true), guides: guides(except: except, horizontal: true), threshold: xThreshold, anchorIsEnd: true)
+        } else {
+            right = chooseEdge(moving: right, anchor: x, sizes: sizes(except: except, horizontal: true), guides: guides(except: except, horizontal: true), threshold: xThreshold, anchorIsEnd: false)
+        }
+        width = max(0.02, right - x)
         if linked {
+            let nextHeight = max(0.02, width * ratio)
+            if moveTop { y = bottom - nextHeight }
+            height = nextHeight
             return
         }
-        let ys = guides(except: except, horizontal: false)
-        height = max(0.02, y + height + bestDelta([y + height], ys, yThreshold) - y)
+        if moveTop {
+            y = chooseEdge(moving: y, anchor: bottom, sizes: sizes(except: except, horizontal: false), guides: guides(except: except, horizontal: false), threshold: yThreshold, anchorIsEnd: true)
+        } else {
+            bottom = chooseEdge(moving: bottom, anchor: y, sizes: sizes(except: except, horizontal: false), guides: guides(except: except, horizontal: false), threshold: yThreshold, anchorIsEnd: false)
+        }
+        height = max(0.02, bottom - y)
+    }
+
+    /// Frame size, plus the size of every other layer. Either can sit outside the frame.
+    private func sizes(except: ID, horizontal: Bool) -> [Float] {
+        var values: [Float] = [1]
+        for item in items where item.id != except && item.enabled {
+            let size = horizontal ? item.width : item.height
+            if size > 0.02 { values.append(size) }
+        }
+        return values
+    }
+
+    private func chooseEdge(moving: Float, anchor: Float, sizes: [Float], guides: [Float], threshold: Float, anchorIsEnd: Bool) -> Float {
+        var best = moving
+        var bestAbs = threshold
+        func take(_ candidate: Float) {
+            let absv = abs(candidate - moving)
+            if absv <= bestAbs {
+                bestAbs = absv
+                best = candidate
+            }
+        }
+        for guide in guides { take(guide) }
+        for size in sizes {
+            take(anchorIsEnd ? anchor - size : anchor + size)
+        }
+        return best
     }
 
     private func guides(except: ID, horizontal: Bool) -> [Float] {
@@ -373,10 +527,6 @@ struct WireCanvasView<ID: Hashable>: View {
             return (target, target)
         }
         return (raw, nil)
-    }
-
-    private func bestDelta(_ points: [Float], _ guides: [Float], _ threshold: Float) -> Float {
-        snapDelta(points, guides, threshold) ?? 0
     }
 
     private func snapDelta(_ points: [Float], _ guides: [Float], _ threshold: Float) -> Float? {
