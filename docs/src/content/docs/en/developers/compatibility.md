@@ -35,7 +35,7 @@ UTF-8, `\r\n` terminated. Replies are `<command> <status> ...\r\n`. `XML` then w
 | --- | --- |
 | `TALLY` | `TALLY OK 0121...`. One digit per flat Input. 0 off, 1 Program, 2 Preview. Program wins |
 | `FUNCTION` | Same Shortcuts as HTTP, e.g. `FUNCTION Fade Duration=500`. Success is `FUNCTION OK Completed` |
-| `ACTS` | `Input` / `InputPreview` / `InputMix2`… / `Overlay1`–`8`. No InputNumber means the current assignment. Unsupported activators return 0 |
+| `ACTS` | `Input` / `InputPreview` / `InputMix2`… / `Overlay1`–`8`. Overlay1–8 follow the first eight On-Air overlays. Later overlays are not on this surface. No InputNumber means the current assignment. Unsupported activators return 0 |
 | `XML` / `XMLTEXT` | Same XML as HTTP. XPath is a subset (`vmix/version`, `preview`, `active`, `vmix/inputs/input[N]/@title`, …) |
 | `SUBSCRIBE` / `UNSUBSCRIBE` | Push `TALLY` and `ACTS` changes. Iryx uses this |
 | `VERSION` / `QUIT` | Version string and disconnect |

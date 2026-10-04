@@ -5,10 +5,10 @@ use crate::session::{Document, parse};
 const DEFAULT_JSON: &[u8] = br#"{
   "version": 2,
   "inputs": [
-    { "id": 1, "name": "Color Red", "kind": "Color", "colorR": 1, "colorG": 0, "colorB": 0 },
-    { "id": 2, "name": "SMPTE HD Bars", "kind": "Bars", "scroll": true, "toneHz": 1000 },
-    { "id": 3, "name": "Black", "kind": "Black", "colorR": 0, "colorG": 0, "colorB": 0 },
-    { "id": 4, "name": "Blue", "kind": "Color", "colorR": 0, "colorG": 0, "colorB": 1 }
+    { "id": 1, "name": "Color Red", "kind": "Color", "colorR": 1, "colorG": 0, "colorB": 0, "audioUnits": [1] },
+    { "id": 2, "name": "SMPTE HD Bars", "kind": "Bars", "scroll": true, "toneHz": 1000, "audioUnits": [1] },
+    { "id": 3, "name": "Black", "kind": "Black", "colorR": 0, "colorG": 0, "colorB": 0, "audioUnits": [1] },
+    { "id": 4, "name": "Blue", "kind": "Color", "colorR": 0, "colorG": 0, "colorB": 1, "audioUnits": [1] }
   ],
   "scenes": [
     { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
@@ -18,8 +18,7 @@ const DEFAULT_JSON: &[u8] = br#"{
     "id": 1,
     "name": "Mixing Unit 1",
     "previewSceneId": 1,
-    "programSceneId": 2,
-    "audioBusId": 1
+    "programSceneId": 2
   }],
   "outputs": [{
     "id": 100,
@@ -28,9 +27,8 @@ const DEFAULT_JSON: &[u8] = br#"{
     "sourceKind": "MuProgram",
     "unitId": 1,
     "useGpu": false,
-    "audioBusId": 1
-  }],
-  "buses": [{ "id": 1, "name": "Master", "role": "Master" }]
+    "audioUnitId": 1
+  }]
 }"#;
 
 pub fn default_document() -> Document {

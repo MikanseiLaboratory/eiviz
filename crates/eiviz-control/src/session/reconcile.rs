@@ -24,10 +24,8 @@ pub enum ReconcileOp {
     DestroyUnit {
         id: u64,
     },
-    UpsertBus(BusApply),
-    RemoveBus {
-        id: u64,
-    },
+    SetUnitAudio(UnitAudioApply),
+    SetHeadphone(HeadphoneApply),
     DefineGenerator(GeneratorApply),
     DefineMixInput(MixInputApply),
     LoadStill {
@@ -59,22 +57,25 @@ pub enum ReconcileOp {
         program: u64,
         preview: u64,
     },
+    SetUnitOverlays {
+        unit_id: u64,
+        layers: Vec<OverlayLayer>,
+    },
     AddOutput(OutputApply),
     RemoveOutput {
         id: u64,
     },
     AudioInput {
         id: u64,
-        bus_mask: u32,
+        units: Vec<u64>,
         gain: f32,
         mute: bool,
     },
     AudioUnitLink {
         unit_id: u64,
-        bus_id: u64,
         mode: u32,
     },
-    HeadphoneCopyMaster {
+    HeadphoneCopyMonitor {
         enabled: bool,
     },
     ConfigureVmixApi {
@@ -122,30 +123,14 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             });
         }
     }
-    for bus in &next.buses {
-        ops.push(ReconcileOp::UpsertBus(BusApply {
-            id: bus.id,
-            name: bus.name.clone(),
-            role: bus.role as u32,
-            device_kind: match bus.device_kind {
-                AudioDeviceKind::None => 0,
-                AudioDeviceKind::Wasapi => 1,
-                AudioDeviceKind::Asio => 2,
-                AudioDeviceKind::CoreAudio => 3,
-            },
-            device_id: bus.device_id.clone(),
-            map_left: bus.map_left.max(0) as u32,
-            map_right: bus.map_right.max(0) as u32,
-            gain: bus.gain,
-            mute: bus.mute,
-        }));
-    }
-    if let Some(prev) = previous {
-        for bus in &prev.buses {
-            if !next.buses.iter().any(|item| item.id == bus.id) {
-                ops.push(ReconcileOp::RemoveBus { id: bus.id });
-            }
+    for unit in &next.units {
+        let prev_audio = previous.and_then(|doc| doc.units.iter().find(|item| item.id == unit.id));
+        if prev_audio.is_none_or(|prev| prev.audio != unit.audio) {
+            ops.push(ReconcileOp::SetUnitAudio(unit_audio_apply(unit)));
         }
+    }
+    if previous.is_none_or(|prev| prev.headphone != next.headphone) {
+        ops.push(ReconcileOp::SetHeadphone(headphone_apply(&next.headphone)));
     }
 
     let prev_inputs = previous.map(|doc| doc.inputs.as_slice()).unwrap_or(&[]);
@@ -238,31 +223,44 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
                 preview,
             });
         }
-        ops.push(ReconcileOp::AudioUnitLink {
-            unit_id: unit.id,
-            bus_id: if unit.audio_bus_id == 0 {
-                1
-            } else {
-                unit.audio_bus_id
-            },
-            mode: match unit.audio_link {
-                AudioLinkMode::Follow => 0,
-                AudioLinkMode::Independent => 1,
-            },
+        let prev_link = previous.and_then(|doc| doc.units.iter().find(|item| item.id == unit.id));
+        if prev_link.is_none_or(|prev| prev.audio_link != unit.audio_link) {
+            ops.push(ReconcileOp::AudioUnitLink {
+                unit_id: unit.id,
+                mode: match unit.audio_link {
+                    AudioLinkMode::Follow => 0,
+                    AudioLinkMode::Independent => 1,
+                },
+            });
+        }
+        let layers = on_air_layers(next, unit);
+        let prev_layers = previous.and_then(|doc| {
+            doc.units
+                .iter()
+                .find(|item| item.id == unit.id)
+                .map(|prev| on_air_layers(doc, prev))
         });
+        if prev_layers.as_ref() != Some(&layers) {
+            ops.push(ReconcileOp::SetUnitOverlays {
+                unit_id: unit.id,
+                layers,
+            });
+        }
     }
 
     for input in &next.inputs {
         ops.push(ReconcileOp::AudioInput {
             id: input.id,
-            bus_mask: input.bus_mask,
+            units: input.audio_units.clone(),
             gain: input.gain,
             mute: input.mute,
         });
     }
-    ops.push(ReconcileOp::HeadphoneCopyMaster {
-        enabled: next.headphone_copy_master,
-    });
+    if previous.is_none_or(|prev| prev.headphone_copy_monitor != next.headphone_copy_monitor) {
+        ops.push(ReconcileOp::HeadphoneCopyMonitor {
+            enabled: next.headphone_copy_monitor,
+        });
+    }
 
     let prev_outputs = previous.map(|doc| doc.outputs.as_slice()).unwrap_or(&[]);
     for output in &next.outputs {
@@ -377,6 +375,59 @@ fn source_still_live(doc: &Document, source: u64) -> bool {
     doc.inputs.iter().any(|input| input.id == source)
 }
 
+fn on_air_layers(doc: &Document, unit: &crate::session::UnitDto) -> Vec<OverlayLayer> {
+    unit.overlays_on_air
+        .iter()
+        .filter_map(|id| doc.overlays.iter().find(|slot| slot.id == *id))
+        .map(|slot| OverlayLayer {
+            source_id: slot.scene_gpu_id,
+            x: slot.x,
+            y: slot.y,
+            width: slot.width,
+            height: slot.height,
+            crop_x: slot.crop_x,
+            crop_y: slot.crop_y,
+            crop_width: slot.crop_width,
+            crop_height: slot.crop_height,
+            opacity: slot.opacity,
+            z: slot.z,
+            audio_follow: slot.audio_follow,
+            hidden: slot.hidden,
+            label: String::new(),
+        })
+        .collect()
+}
+
+fn device_kind_code(kind: AudioDeviceKind) -> u32 {
+    match kind {
+        AudioDeviceKind::None => 0,
+        AudioDeviceKind::Wasapi => 1,
+        AudioDeviceKind::Asio => 2,
+        AudioDeviceKind::CoreAudio => 3,
+    }
+}
+
+fn unit_audio_apply(unit: &crate::session::UnitDto) -> UnitAudioApply {
+    UnitAudioApply {
+        unit_id: unit.id,
+        device_kind: device_kind_code(unit.audio.device_kind),
+        device_id: unit.audio.device_id.clone(),
+        map_left: unit.audio.map_left,
+        map_right: unit.audio.map_right,
+        gain: unit.audio.gain,
+        mute: unit.audio.mute,
+    }
+}
+
+fn headphone_apply(bus: &crate::session::HeadphoneDto) -> HeadphoneApply {
+    HeadphoneApply {
+        device_kind: device_kind_code(bus.device_kind),
+        device_id: bus.device_id.clone(),
+        map_left: bus.map_left,
+        map_right: bus.map_right,
+    }
+}
+
 #[inline(never)]
 pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
     port: &mut P,
@@ -389,8 +440,8 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         ReconcileOp::CreateUnit { .. }
         | ReconcileOp::ConfigureUnit { .. }
         | ReconcileOp::DestroyUnit { .. }
-        | ReconcileOp::UpsertBus(_)
-        | ReconcileOp::RemoveBus { .. } => apply_units(port, op),
+        | ReconcileOp::SetUnitAudio(_)
+        | ReconcileOp::SetHeadphone(_) => apply_units(port, op),
         ReconcileOp::DefineGenerator(_)
         | ReconcileOp::DefineMixInput(_)
         | ReconcileOp::LoadStill { .. }
@@ -422,8 +473,11 @@ fn apply_units<P: crate::port::MixerPort + ?Sized>(
             fps_den,
         } => port.configure_unit(*id, *width, *height, *fps_num, *fps_den),
         ReconcileOp::DestroyUnit { id } => port.destroy_unit(*id),
-        ReconcileOp::UpsertBus(spec) => port.audio_bus_upsert(spec.clone()),
-        ReconcileOp::RemoveBus { id } => port.audio_bus_remove(*id),
+        ReconcileOp::SetUnitAudio(spec) => {
+            port.audio_set_unit_device(spec.clone())?;
+            port.audio_set_bus_gain(spec.unit_id, spec.gain, spec.mute)
+        }
+        ReconcileOp::SetHeadphone(spec) => port.audio_set_headphone_device(spec.clone()),
         _ => Ok(()),
     }
 }
@@ -515,6 +569,9 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             program,
             preview,
         } => port.unit_set_state(*unit_id, *program, *preview, 0.0),
+        ReconcileOp::SetUnitOverlays { unit_id, layers } => {
+            port.set_unit_overlays(*unit_id, layers)
+        }
         ReconcileOp::AddOutput(spec) => accept_io(
             port.output_add(spec.clone()),
             statuses,
@@ -524,17 +581,13 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
         ReconcileOp::RemoveOutput { id } => port.output_remove(*id),
         ReconcileOp::AudioInput {
             id,
-            bus_mask,
+            units,
             gain,
             mute,
-        } => port.audio_set_input(*id, *bus_mask, *gain, *mute),
-        ReconcileOp::AudioUnitLink {
-            unit_id,
-            bus_id,
-            mode,
-        } => port.audio_set_unit_link(*unit_id, *bus_id, *mode),
-        ReconcileOp::HeadphoneCopyMaster { enabled } => {
-            port.audio_set_headphone_copy_master(*enabled)
+        } => port.audio_set_input(*id, units, *gain, *mute),
+        ReconcileOp::AudioUnitLink { unit_id, mode } => port.audio_set_unit_link(*unit_id, *mode),
+        ReconcileOp::HeadphoneCopyMonitor { enabled } => {
+            port.audio_set_headphone_copy_monitor(*enabled)
         }
         ReconcileOp::ConfigureVmixApi {
             http_enabled,
@@ -728,7 +781,6 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 target_id,
                 source_kind,
                 delay: input.frame_buffer_frames,
-                audio_bus_id: input.mix_audio_bus_id,
             })]
         }
         InputKind::Audio => vec![ReconcileOp::StartAudioCapture(AudioCaptureApply {
@@ -961,10 +1013,10 @@ fn output_apply(output: &OutputDto) -> OutputApply {
         source_id,
         unit_id: output.unit_id,
         use_gpu: output.use_gpu,
-        audio_bus_id: if output.source_kind == OutputSourceKind::Multiview {
+        audio_unit_id: if output.source_kind == OutputSourceKind::Multiview {
             0
         } else {
-            output.audio_bus_id
+            output.audio_unit_id
         },
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
         width: output.width,
@@ -999,7 +1051,7 @@ fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
         && a.unit_id == b.unit_id
         && a.use_gpu == b.use_gpu
         && a.enabled == b.enabled
-        && a.audio_bus_id == b.audio_bus_id
+        && a.audio_unit_id == b.audio_unit_id
         && a.skip_encode_when_no_receivers == b.skip_encode_when_no_receivers
         && a.width == b.width
         && a.height == b.height

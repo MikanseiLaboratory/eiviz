@@ -271,59 +271,58 @@ extension MixerController {
         }
     }
 
-    func setOverlayEnabled(_ id: UUID, enabled: Bool, unitId: UInt64? = nil) {
+    func setOverlayOn(_ unitIndex: Int, _ id: UInt64, _ on: Bool) {
+        if on {
+            if !session.units[unitIndex].overlaysOnAir.contains(id) {
+                session.units[unitIndex].overlaysOnAir.append(id)
+            }
+        } else {
+            session.units[unitIndex].overlaysOnAir.removeAll { $0 == id }
+        }
+        overlayOn[id] = on
+    }
+
+    func setOverlayEnabled(_ id: UInt64, enabled: Bool, unitId: UInt64? = nil) {
         let targetId = unitId ?? selectedUnitId
         guard let unitIndex = session.units.firstIndex(where: { $0.id == targetId }),
-              let slotIndex = session.units[unitIndex].overlays.firstIndex(where: { $0.id == id })
+              let slot = session.overlays.first(where: { $0.id == id })
         else { return }
-        let slot = session.units[unitIndex].overlays[slotIndex]
         let unit = session.units[unitIndex]
-        var desc = MixerFFI.emptyOverlay()
-        desc.source_id = slot.sceneGpuId
-        desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
-        desc.crop = EivizRect(x: slot.cropX, y: slot.cropY, width: slot.cropWidth, height: slot.cropHeight)
-        desc.opacity = slot.opacity
-        desc.z = slot.z
-        desc.audio_follow = slot.audioFollow ? 1 : 0
-        desc.hidden = slot.hidden ? 1 : 0
+        var desc = overlayDesc(slot)
         let ms = slot.durationUnit == EIVIZ_DURATION_MS
             ? max(1, slot.durationValue)
             : unit.durationMs(slot.durationValue)
         if slot.transitionKind == EIVIZ_TRANSITION_CUT || ms <= 1 {
-            session.units[unitIndex].overlays[slotIndex].enabled = enabled
-            overlayOn[id] = enabled
+            setOverlayOn(unitIndex, id, enabled)
             if isRemote {
-                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), 1, enabled ? 1 : 0)
+                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, id, 1, enabled ? 1 : 0)
             } else {
                 pushOverlays(unitId: unit.id)
             }
             return
         }
         if enabled {
-            session.units[unitIndex].overlays[slotIndex].enabled = true
-            overlayOn[id] = true
+            setOverlayOn(unitIndex, id, true)
             if isRemote {
-                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), ms, 1)
+                _ = mixer_remote_overlay_auto(remoteHandle, unit.id, id, ms, 1)
                 return
             }
             pushOverlays(unitId: unit.id)
             fail(mixer_unit_overlay_auto(unit.id, 1, ms, &desc), "overlay auto")
             return
         }
-        session.units[unitIndex].overlays[slotIndex].enabled = false
-        overlayOn[id] = false
+        setOverlayOn(unitIndex, id, false)
         if isRemote {
-            _ = mixer_remote_overlay_auto(remoteHandle, unit.id, UInt32(slotIndex), ms, 0)
+            _ = mixer_remote_overlay_auto(remoteHandle, unit.id, id, ms, 0)
             return
         }
         pushOverlays(forceEnabled: id, unitId: unit.id)
         fail(mixer_unit_overlay_auto(unit.id, 0, ms, &desc), "overlay auto")
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
             guard let self,
-                  let ui = self.session.units.firstIndex(where: { $0.id == unit.id }),
-                  let si = self.session.units[ui].overlays.firstIndex(where: { $0.id == id })
+                  let ui = self.session.units.firstIndex(where: { $0.id == unit.id })
             else { return }
-            if self.session.units[ui].overlays[si].enabled {
+            if self.session.units[ui].overlaysOnAir.contains(id) {
                 return
             }
             self.overlayOn[id] = false

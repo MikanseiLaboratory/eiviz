@@ -82,7 +82,7 @@ struct SwitcherView: View {
             Text("Transitions").fontWeight(.bold)
             ScrollView {
                 VStack(spacing: 4) {
-                    ForEach(Array(unit.transitions.enumerated()), id: \.element.id) { index, preset in
+                    ForEach(Array(mixer.session.transitions.enumerated()), id: \.element.id) { index, preset in
                         HStack {
                             Text("\(preset.label)  \(preset.durationLabel)")
                                 .font(.system(size: 12, weight: .semibold))
@@ -195,11 +195,11 @@ struct SwitcherView: View {
             }
             ScrollView(.horizontal, showsIndicators: true) {
                 HStack(alignment: .bottom, spacing: 12) {
-                    ForEach(unit.overlays) { slot in
+                    ForEach(mixer.session.overlays) { slot in
                         Toggle(isOn: Binding(
                             get: {
                                 mixer.session.units.first { $0.id == unitId }?
-                                    .overlays.first { $0.id == slot.id }?.enabled ?? slot.enabled
+                                    .overlaysOnAir.contains(slot.id) ?? false
                             },
                             set: { mixer.setOverlayEnabled(slot.id, enabled: $0, unitId: unitId) }
                         )) {

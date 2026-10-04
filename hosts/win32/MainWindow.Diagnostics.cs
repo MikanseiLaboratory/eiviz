@@ -22,22 +22,22 @@ public partial class MainWindow
     {
         MeterPanel.Children.Clear();
         _meters.Clear();
-        foreach (var bus in _session.Buses)
-            AddBusMeter(bus);
+        foreach (var unit in _session.Units)
+            AddUnitMeter(unit);
         foreach (var input in _session.Inputs)
             AddInputMeter(input);
     }
 
-    private void AddBusMeter(AudioBusEntry bus)
+    private void AddUnitMeter(MixingUnitEntry unit)
     {
-        var strip = new MeterStrip(MeterKind.Bus, bus.Id, bus.Name, bus.Gain, bus.Mute);
+        var strip = new MeterStrip(MeterKind.Bus, unit.Id, unit.Name, unit.Audio.Gain, unit.Audio.Mute, showRoutes: false);
         strip.FaderChanged += (_, gain, mute) =>
         {
-            bus.Gain = gain;
-            bus.Mute = mute;
-            ((App)Application.Current).Backend.SetBusGain(bus.Id, gain, mute);
+            unit.Audio.Gain = gain;
+            unit.Audio.Mute = mute;
+            ((App)Application.Current).Backend.SetBusGain(unit.Id, gain, mute);
         };
-        _meters[MixerNative.AudioBusPeakBase | bus.Id] = strip;
+        _meters[MixerNative.AudioBusPeakBase | unit.Id] = strip;
         MeterPanel.Children.Add(strip);
     }
 
@@ -45,18 +45,19 @@ public partial class MainWindow
     {
         var strip = new MeterStrip(
             MeterKind.Input, input.Id, input.ListLabel, input.Gain, input.Mute,
-            showFader: false, showOpen: true);
-        strip.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
-        strip.BusMaskChanged += (_, mask) => ApplyInputAudio(input, mask, input.Gain, input.Mute);
+            showFader: false, showOpen: true, showRoutes: input.Kind != InputKind.Mix);
+        if (input.Kind != InputKind.Mix)
+            strip.SetRoutes(_session.Units, input.AudioUnits);
+        strip.RoutesChanged += (_, routes) => ApplyInputAudio(input, routes, input.Gain, input.Mute);
         strip.FaderChanged += (_, gain, mute) =>
-            ApplyInputAudio(input, input.BusMask == 0 ? 1u : input.BusMask, gain, mute);
+            ApplyInputAudio(input, input.AudioUnits, gain, mute);
         strip.OpenRequested += _ => OpenAudioInput(input);
         _meters[input.Id] = strip;
         MeterPanel.Children.Add(strip);
         if (_audioInputs.TryGetValue(input.Id, out var window))
         {
-            window.SetBuses(_session.Buses, input.BusMask == 0 ? 1u : input.BusMask);
-            window.Sync(input.Gain, input.Mute, input.BusMask == 0 ? 1u : input.BusMask);
+            window.SetRoutes(input.AudioUnits);
+            window.Sync(input.Gain, input.Mute, input.AudioUnits);
         }
     }
 
@@ -67,7 +68,7 @@ public partial class MainWindow
             existing.Activate();
             return;
         }
-        var window = new AudioInputWindow(input, _session.Buses) { Owner = this };
+        var window = new AudioInputWindow(input, _session.Units) { Owner = this };
         window.Changed += ApplyInputAudio;
         window.Closed += (_, _) => _audioInputs.Remove(input.Id);
         _audioInputs[input.Id] = window;
@@ -82,21 +83,21 @@ public partial class MainWindow
         window.Close();
     }
 
-    private void ApplyInputAudio(InputEntry input, uint mask, float gain, bool mute)
+    private void ApplyInputAudio(InputEntry input, IReadOnlyList<ulong> routes, float gain, bool mute)
     {
-        input.BusMask = input.Kind == InputKind.Mix ? 0u : (mask == 0 ? 1u : mask);
+        input.AudioUnits = input.Kind == InputKind.Mix ? [] : routes.Distinct().Order().ToList();
         input.Gain = gain;
         input.Mute = mute;
         ((App)Application.Current).Backend.SetInputGain(
-            input.Id, input.BusMask, MixerNative.MixerGain(input.Gain), input.Mute);
+            input.Id, input.AudioUnits, MixerNative.MixerGain(input.Gain), input.Mute);
         if (_meters.TryGetValue(input.Id, out var strip))
         {
             strip.SyncFrom(input.Gain, input.Mute);
-            if (strip.BusMask != input.BusMask)
-                strip.SetBuses(_session.Buses, input.BusMask);
+            if (input.Kind != InputKind.Mix)
+                strip.SetRoutes(_session.Units, input.AudioUnits);
         }
         if (_audioInputs.TryGetValue(input.Id, out var window))
-            window.Sync(input.Gain, input.Mute, input.BusMask);
+            window.Sync(input.Gain, input.Mute, input.AudioUnits);
     }
 
     private void TickMeters()

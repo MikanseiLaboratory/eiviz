@@ -36,7 +36,9 @@ public partial class MainWindow
             Id = id,
             Name = dialog.ResultName ?? $"Input {id}",
             Kind = dialog.Kind,
-            BusMask = dialog.Kind == InputKind.Mix ? 0u : 1u
+            AudioUnits = dialog.Kind == InputKind.Mix
+                ? []
+                : [(_session.Units.FirstOrDefault()?.Id ?? 1)]
         };
         try
         {
@@ -91,7 +93,7 @@ public partial class MainWindow
             MessageBox.Show(this, ex.Message, Loc.T("msg.addInput"));
             return;
         }
-        MixerNative.AudioSetInput(input.Id, input.BusMask, 1, 0);
+        AudioGraphSync.SetInput(input.Id, input.AudioUnits, 1, false);
         RefreshInputList();
         RebuildMeters();
     }
@@ -206,7 +208,6 @@ public partial class MainWindow
                 || (dialog.Kind == InputKind.Mix
                     && input.MixSource == dialog.ResultMixSource
                     && input.MixTargetId == dialog.ResultMixTargetId
-                    && input.MixAudioBusId == dialog.ResultMixAudioBusId
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (!App.IsRemote && replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
@@ -230,7 +231,8 @@ public partial class MainWindow
             : 1;
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
-        input.MixAudioBusId = dialog.Kind == InputKind.Mix ? dialog.ResultMixAudioBusId : 0;
+        if (dialog.Kind == InputKind.Mix)
+            input.AudioUnits = [];
         if (dialog.Kind == InputKind.Audio)
         {
             input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
@@ -241,8 +243,6 @@ public partial class MainWindow
             input.AudioProcessExe = dialog.ResultAudioProcessExe ?? "";
             input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
         }
-        if (dialog.Kind == InputKind.Mix)
-            input.BusMask = 0;
         input.BandwidthSave = dialog.Kind == InputKind.OMT
             ? dialog.ResultSaveMode
             : BandwidthSave.NotOnPreviewOrProgram;
@@ -337,8 +337,7 @@ public partial class MainWindow
                     input.Id,
                     dialog.ResultMixTargetId,
                     InputKindNames.MixSourceKind(dialog.ResultMixSource),
-                    dialog.ResultFrameBufferFrames,
-                    dialog.ResultMixAudioBusId);
+                    dialog.ResultFrameBufferFrames);
                 break;
             case InputKind.Audio:
                 input.AudioCaptureMode = dialog.ResultAudioCaptureMode;
@@ -390,10 +389,11 @@ public partial class MainWindow
             }
             MixerApply.PushMultiview(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
+        _session.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id);
         foreach (var unit in _session.Units)
         {
-            unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id);
-            MixerApply.PatchAux(unit.Id, unit);
+            unit.OverlaysOnAir.RemoveAll(id => _session.Overlays.All(slot => slot.Id != id));
+            MixerApply.PatchAux(_session, unit);
         }
         foreach (var scene in _session.Scenes)
             MixerApply.TryDefineScene(scene, SceneWidth, SceneHeight);
@@ -463,10 +463,11 @@ public partial class MainWindow
             }
             MixerApply.PushMultiview(layout, SelectedUnit.Width, SelectedUnit.Height);
         }
+        _session.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Scene && slot.SceneGpuId == removed.GpuId);
         foreach (var unit in _session.Units)
         {
-            unit.Overlays.RemoveAll(slot => slot.SourceKind == OverlaySourceKind.Scene && slot.SceneGpuId == removed.GpuId);
-            MixerApply.PatchAux(unit.Id, unit);
+            unit.OverlaysOnAir.RemoveAll(id => _session.Overlays.All(slot => slot.Id != id));
+            MixerApply.PatchAux(_session, unit);
         }
         var fallback = _session.Scenes[0];
         unsafe
@@ -584,25 +585,28 @@ public partial class MainWindow
             FpsNum = _session.Settings.MasterFpsNum,
             FpsDen = _session.Settings.MasterFpsDen
         };
-        draft.EnsureDefaultTransitions();
-        var dialog = new MixingUnitWindow(draft, _session.Buses) { Owner = this };
+        var dialog = new MixingUnitWindow(draft) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         var unit = dialog.Result;
         unit.Id = _session.NextUnitId++;
-        unit.EnsureDefaultTransitions();
-        unit.AudioBusId = dialog.Result.AudioBusId == 0 ? 1 : dialog.Result.AudioBusId;
-        unit.AudioLink = dialog.Result.AudioLink;
         if (TryRemoteMutate(MutationJson.UpsertUnit(unit), Loc.T("chrome.mixingUnit")))
             return;
         MixerNative.ThrowIfFailed(MixerNative.CreateUnit(unit.Id, unit.Width, unit.Height), "Create Mixing Unit");
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
             "Configure Mixing Unit");
-        MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
+        MixerNative.AudioUnitBusSet(
+            unit.Id,
+            (uint)unit.Audio.DeviceKind,
+            unit.Audio.DeviceId ?? "",
+            unit.Audio.MapLeft,
+            unit.Audio.MapRight);
+        MixerNative.AudioSetUnitLink(unit.Id, (uint)unit.AudioLink);
         var preview = _session.Scenes.Count > 0 ? _session.Scenes[0].GpuId : MixerNative.Bars;
         var program = _session.Scenes.Count > 1 ? _session.Scenes[1].GpuId : preview;
         MixerApply.PushUnitState(unit.Id, MixerApply.BuildState(unit, program, preview, 0, MixerNative.TransitionFade));
+        MixerApply.PushOverlays(_session, unit);
         _session.Units.Add(unit);
         UnitBox.Items.Refresh();
         UnitBox.SelectedItem = unit;
@@ -611,7 +615,7 @@ public partial class MainWindow
     private void EditUnit_Click(object sender, RoutedEventArgs e)
     {
         var unit = SelectedUnit;
-        var dialog = new MixingUnitWindow(unit, _session.Buses) { Owner = this };
+        var dialog = new MixingUnitWindow(unit) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
         unit.Name = dialog.Result.Name;
@@ -619,14 +623,20 @@ public partial class MainWindow
         unit.Height = dialog.Result.Height;
         unit.FpsNum = dialog.Result.FpsNum;
         unit.FpsDen = dialog.Result.FpsDen;
-        unit.AudioBusId = dialog.Result.AudioBusId;
+        unit.Audio = dialog.Result.Audio.Clone();
         unit.AudioLink = dialog.Result.AudioLink;
         if (TryRemoteMutate(MutationJson.UpsertUnit(unit), Loc.T("chrome.mixingUnit")))
             return;
         MixerNative.ThrowIfFailed(
             MixerNative.ConfigureUnit(unit.Id, unit.Width, unit.Height, unit.FpsNum, unit.FpsDen),
             "Configure Mixing Unit");
-        MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId, (uint)unit.AudioLink);
+        MixerNative.AudioUnitBusSet(
+            unit.Id,
+            (uint)unit.Audio.DeviceKind,
+            unit.Audio.DeviceId ?? "",
+            unit.Audio.MapLeft,
+            unit.Audio.MapRight);
+        MixerNative.AudioSetUnitLink(unit.Id, (uint)unit.AudioLink);
         foreach (var scene in _session.Scenes)
             MixerApply.TryDefineScene(scene, unit.Width, unit.Height);
         foreach (var layout in _session.Multiviews)
@@ -1017,10 +1027,9 @@ public partial class MainWindow
                 MutationJson.SetSettings(
                     dialog.Settings,
                     dialog.Outputs,
-                    dialog.Buses,
-                    dialog.HeadphoneCopyMaster,
-                    dialog.NextOutputId,
-                    dialog.NextBusId),
+                    dialog.Headphone,
+                    dialog.HeadphoneCopyMonitor,
+                    dialog.NextOutputId),
                 Loc.T("chrome.settings"));
             return;
         }
@@ -1060,10 +1069,8 @@ public partial class MainWindow
         RebuildTransitions();
         foreach (var window in _switchers.Values)
             window.ApplyBusColors();
-        _session.HeadphoneCopyMaster = dialog.HeadphoneCopyMaster;
-        _session.Buses.Clear();
-        foreach (var bus in dialog.Buses)
-            _session.Buses.Add(bus);
+        _session.HeadphoneCopyMonitor = dialog.HeadphoneCopyMonitor;
+        _session.Headphone = dialog.Headphone.Clone();
         AudioGraphSync.Push(_session);
         MixerNative.ThrowIfFailed(
             MixerNative.SetFrameBuffer(_session.Settings.FrameBufferFrames),
@@ -1195,7 +1202,7 @@ public partial class MainWindow
         && left.UnitId == right.UnitId
         && left.UseGpu == right.UseGpu
         && left.Enabled == right.Enabled
-        && left.AudioBusId == right.AudioBusId
+        && left.AudioUnitId == right.AudioUnitId
         && left.SkipEncodeWhenNoReceivers == right.SkipEncodeWhenNoReceivers
         && left.Width == right.Width
         && left.Height == right.Height

@@ -44,18 +44,18 @@ pub trait MixerPort: Send {
     fn output_add(&mut self, spec: OutputApply) -> ControlResult<()>;
     fn output_remove(&mut self, id: u64) -> ControlResult<()>;
 
-    fn audio_bus_upsert(&mut self, spec: BusApply) -> ControlResult<()>;
-    fn audio_bus_remove(&mut self, id: u64) -> ControlResult<()>;
+    fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()>;
+    fn audio_set_headphone_device(&mut self, spec: HeadphoneApply) -> ControlResult<()>;
     fn audio_set_input(
         &mut self,
         id: u64,
-        bus_mask: u32,
+        units: &[u64],
         gain: f32,
         mute: bool,
     ) -> ControlResult<()>;
     fn audio_set_bus_gain(&mut self, id: u64, gain: f32, mute: bool) -> ControlResult<()>;
-    fn audio_set_unit_link(&mut self, unit_id: u64, bus_id: u64, mode: u32) -> ControlResult<()>;
-    fn audio_set_headphone_copy_master(&mut self, enabled: bool) -> ControlResult<()>;
+    fn audio_set_unit_link(&mut self, unit_id: u64, mode: u32) -> ControlResult<()>;
+    fn audio_set_headphone_copy_monitor(&mut self, enabled: bool) -> ControlResult<()>;
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()>;
     fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()>;
@@ -94,6 +94,10 @@ pub trait MixerPort: Send {
     ) -> ControlResult<()>;
     fn overlay_auto(&mut self, spec: OverlayAutoApply) -> ControlResult<()> {
         let _ = spec;
+        Ok(())
+    }
+    fn set_unit_overlays(&mut self, unit_id: u64, layers: &[OverlayLayer]) -> ControlResult<()> {
+        let _ = (unit_id, layers);
         Ok(())
     }
     fn unit_live(&self, unit_id: u64) -> ControlResult<UnitLiveState>;
@@ -188,7 +192,6 @@ pub struct MixInputApply {
     pub target_id: u64,
     pub source_kind: u32,
     pub delay: u32,
-    pub audio_bus_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,7 +241,7 @@ pub struct OutputApply {
     pub source_id: u64,
     pub unit_id: u64,
     pub use_gpu: bool,
-    pub audio_bus_id: u64,
+    pub audio_unit_id: u64,
     pub skip_encode_when_no_receivers: bool,
     pub width: u32,
     pub height: u32,
@@ -247,16 +250,22 @@ pub struct OutputApply {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct BusApply {
-    pub id: u64,
-    pub name: String,
-    pub role: u32,
+pub struct UnitAudioApply {
+    pub unit_id: u64,
     pub device_kind: u32,
     pub device_id: String,
-    pub map_left: u32,
-    pub map_right: u32,
+    pub map_left: i32,
+    pub map_right: i32,
     pub gain: f32,
     pub mute: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadphoneApply {
+    pub device_kind: u32,
+    pub device_id: String,
+    pub map_left: i32,
+    pub map_right: i32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -287,6 +296,10 @@ pub struct OverlayAutoApply {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub crop_x: f32,
+    pub crop_y: f32,
+    pub crop_width: f32,
+    pub crop_height: f32,
     pub opacity: f32,
     pub z: i32,
     pub audio_follow: bool,
@@ -378,16 +391,16 @@ impl MixerPort for NullMixer {
     fn output_remove(&mut self, _id: u64) -> ControlResult<()> {
         Ok(())
     }
-    fn audio_bus_upsert(&mut self, _spec: BusApply) -> ControlResult<()> {
+    fn audio_set_unit_device(&mut self, _spec: UnitAudioApply) -> ControlResult<()> {
         Ok(())
     }
-    fn audio_bus_remove(&mut self, _id: u64) -> ControlResult<()> {
+    fn audio_set_headphone_device(&mut self, _spec: HeadphoneApply) -> ControlResult<()> {
         Ok(())
     }
     fn audio_set_input(
         &mut self,
         _id: u64,
-        _bus_mask: u32,
+        _units: &[u64],
         _gain: f32,
         _mute: bool,
     ) -> ControlResult<()> {
@@ -396,15 +409,10 @@ impl MixerPort for NullMixer {
     fn audio_set_bus_gain(&mut self, _id: u64, _gain: f32, _mute: bool) -> ControlResult<()> {
         Ok(())
     }
-    fn audio_set_unit_link(
-        &mut self,
-        _unit_id: u64,
-        _bus_id: u64,
-        _mode: u32,
-    ) -> ControlResult<()> {
+    fn audio_set_unit_link(&mut self, _unit_id: u64, _mode: u32) -> ControlResult<()> {
         Ok(())
     }
-    fn audio_set_headphone_copy_master(&mut self, _enabled: bool) -> ControlResult<()> {
+    fn audio_set_headphone_copy_monitor(&mut self, _enabled: bool) -> ControlResult<()> {
         Ok(())
     }
     fn set_frame_buffer(&mut self, _frames: u32) -> ControlResult<()> {

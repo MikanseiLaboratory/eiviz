@@ -16,7 +16,7 @@ struct SettingsView: View {
                 Text("Performance").tag(1)
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
-                Text("Audio Auxiliary").tag(4)
+                Text("Headphone").tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
                 Text(L10n.t("settings.advanced")).tag(6)
             }
@@ -248,6 +248,7 @@ struct SettingsView: View {
                         id: mixer.session.nextOutputId,
                         name: "eiviz-out-\(mixer.session.nextOutputId)",
                         unitId: mixer.selectedUnitId,
+                        audioUnitId: mixer.selectedUnitId,
                         width: mixer.session.settings.defaultWidth,
                         height: mixer.session.settings.defaultHeight,
                         fpsNum: mixer.session.settings.masterFpsNum,
@@ -324,9 +325,9 @@ struct SettingsView: View {
                         let wasMultiview = output.wrappedValue.sourceKind == .multiview
                         output.wrappedValue.sourceKind = kind
                         if kind == .multiview {
-                            output.wrappedValue.audioBusId = 0
+                            output.wrappedValue.audioUnitId = 0
                         } else if wasMultiview {
-                            output.wrappedValue.audioBusId = 1
+                            output.wrappedValue.audioUnitId = output.wrappedValue.unitId == 0 ? 1 : output.wrappedValue.unitId
                         }
                         switch kind {
                         case .multiview:
@@ -356,10 +357,10 @@ struct SettingsView: View {
                 // Multiview senders stay silent (NDI and OMT). A bus could
                 // be attached, but mosaic encode vs PCM timing on the shared
                 // send thread is too messy, so the picker is locked to None.
-                Picker("Audio", selection: output.audioBusId) {
+                Picker("Audio", selection: output.audioUnitId) {
                     Text("None").tag(UInt64(0))
-                    ForEach(mixer.session.buses) { bus in
-                        Text(bus.name).tag(bus.id)
+                    ForEach(mixer.session.units) { unit in
+                        Text(unit.name).tag(unit.id)
                     }
                 }
                 .disabled(output.wrappedValue.sourceKind == .multiview)
@@ -538,84 +539,39 @@ struct SettingsView: View {
 
     private var audio: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Internal mix is 48 kHz stereo. Enabled keeps the bus in the mix with no hardware device. Core Audio sends that mix to a device. Master and Headphone cannot be removed.")
+            Text("Each Mixing Unit has its own MU Bus. This page sets the Headphone device, which cues the selected Mixing Unit. None keeps the mix internal. Core Audio sends it to a device.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle("Headphone copies Master", isOn: $mixer.session.headphoneCopyMaster)
-            HStack {
-                Spacer()
-                Button("+") { addAuxBus() }
-            }
-            ForEach($mixer.session.buses) { $bus in
-                busRow($bus)
-            }
+            Toggle("Headphone copies the cued MU Bus", isOn: $mixer.session.headphoneCopyMonitor)
+            headphoneRow
         }
     }
 
-    private func addAuxBus() {
-        let aux = mixer.session.buses.filter { $0.role == .aux }.count
-        guard aux < 8 else { return }
-        var bit: UInt32 = 2
-        while mixer.session.buses.contains(where: { $0.bit == bit }) && bit < 31 {
-            bit += 1
-        }
-        mixer.session.buses.append(AudioBusEntry(
-            id: mixer.session.nextBusId,
-            name: nextAuxName(),
-            role: .aux,
-            deviceKind: .none,
-            bit: bit
-        ))
-        mixer.session.nextBusId += 1
-    }
-
-    private func nextAuxName() -> String {
-        for letter in "ABCDEFGH" {
-            let name = "Bus \(letter)"
-            if mixer.session.buses.allSatisfy({ $0.name != name }) {
-                return name
-            }
-        }
-        return "Bus \(mixer.session.nextBusId)"
-    }
-
-    private func busRow(_ bus: Binding<AudioBusEntry>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var headphoneRow: some View {
+        let headphone = $mixer.session.headphone
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                mixerTextField(bus.name, placeholder: "Name")
-                    .disabled(bus.wrappedValue.role != .aux)
-                if bus.wrappedValue.role == .aux {
-                    Button("−") {
-                        mixer.session.buses.removeAll { $0.id == bus.wrappedValue.id }
-                    }
-                }
-            }
-            HStack {
-                Picker("", selection: bus.deviceKind) {
-                    Text("Enabled").tag(AudioDeviceKind.none)
+                Picker("", selection: headphone.deviceKind) {
+                    Text("None").tag(AudioDeviceKind.none)
                     Text("Core Audio").tag(AudioDeviceKind.coreAudio)
                 }
                 .frame(width: 140)
-                if bus.wrappedValue.deviceKind != .none {
-                    Picker("", selection: bus.deviceId) {
+                if headphone.wrappedValue.deviceKind != .none {
+                    Picker("", selection: headphone.deviceId) {
                         Text("Default").tag("")
-                        ForEach(devices(for: bus.wrappedValue.deviceKind)) { device in
+                        ForEach(devices(for: headphone.wrappedValue.deviceKind)) { device in
                             Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
                         }
                     }
                 }
             }
-            if bus.wrappedValue.deviceKind != .none {
+            if headphone.wrappedValue.deviceKind != .none {
                 HStack {
                     Text("L ch")
-                    mixerInt32Field(bus.mapLeft).frame(width: 48)
+                    mixerInt32Field(headphone.mapLeft).frame(width: 48)
                     Text("R ch")
-                    mixerInt32Field(bus.mapRight).frame(width: 48)
+                    mixerInt32Field(headphone.mapRight).frame(width: 48)
                 }
-            }
-            HStack {
-                Slider(value: bus.gain, in: 0 ... 2)
-                Toggle("Mute", isOn: bus.mute)
             }
         }
         .padding(8)
@@ -823,7 +779,6 @@ struct AddInputView: View {
     @State private var mixTargetId: UInt64 = 0
     @State private var mixIsMultiview = false
     @State private var mixPreview = false
-    @State private var mixAudioBusId: UInt64 = 0
     @State private var mixBuffer: UInt32 = 1
     @State private var selectedTags: [String] = []
 
@@ -975,14 +930,8 @@ struct AddInputView: View {
                     Text("Preview").tag(true)
                 }
             }
-            Picker("Audio", selection: $mixAudioBusId) {
-                Text("None").tag(UInt64(0))
-                ForEach(mixer.session.buses) { bus in
-                    Text(bus.name).tag(bus.id)
-                }
-            }
             frameBufferPicker($mixBuffer)
-            Text("Mix Input reads N frames ago from the existing delay ring. Audio is a delayed copy of the selected bus, or silence if None. Same Mixing Unit wiring is refused.")
+            Text("Mix Input reads N frames ago from the existing delay ring. Audio follows the referenced Mixing Unit. A session Multiview is silent. Same Mixing Unit wiring is refused.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1115,9 +1064,6 @@ struct AddInputView: View {
         mixTargetId = editing.mixTargetId
         mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == editing.mixTargetId }
         mixPreview = editing.mixSource == .muPreview
-        mixAudioBusId = mixer.session.buses.contains(where: { $0.id == editing.mixAudioBusId })
-            ? editing.mixAudioBusId
-            : 0
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
         selectedTags = editing.tags
     }
@@ -1213,10 +1159,7 @@ struct AddInputView: View {
             input.kind = .mix
             input.mixTargetId = mixTargetId
             input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
-            input.mixAudioBusId = mixer.session.buses.contains(where: { $0.id == mixAudioBusId })
-                ? mixAudioBusId
-                : 0
-            input.busMask = 0
+            input.audioUnits = []
             input.frameBufferFrames = max(1, min(8, mixBuffer))
         default:
             guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
@@ -1274,10 +1217,25 @@ struct MixingUnitView: View {
                     Text("120p").tag("120/1")
                 }
             }
-            labeled("Audio") {
-                Picker("", selection: $unit.audioBusId) {
-                    ForEach(mixer.session.buses) { bus in
-                        Text(bus.name).tag(bus.id)
+            labeled("MU Bus") {
+                Picker("", selection: $unit.audio.deviceKind) {
+                    Text("None").tag(AudioDeviceKind.none)
+                    Text("Core Audio").tag(AudioDeviceKind.coreAudio)
+                }
+            }
+            if unit.audio.deviceKind != .none {
+                labeled("Device") {
+                    Picker("", selection: $unit.audio.deviceId) {
+                        Text("Default").tag("")
+                        ForEach(muDevices(unit.audio.deviceKind)) { device in
+                            Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                        }
+                    }
+                }
+                labeled("L / R") {
+                    HStack {
+                        mixerInt32Field($unit.audio.mapLeft).frame(width: 48)
+                        mixerInt32Field($unit.audio.mapRight).frame(width: 48)
                     }
                 }
             }
@@ -1285,7 +1243,7 @@ struct MixingUnitView: View {
                 Text("Follow").tag(AudioLinkMode.follow)
                 Text("Independent").tag(AudioLinkMode.independent)
             }
-            Text("Audio bus is which mix this Mixing Unit feeds. Follow: the bus mix follows Preview/Program and the T-bar.")
+            Text("Each Mixing Unit has its own MU Bus. Follow: the bus mix follows Preview/Program and the T-bar. Independent: Program sources always go to the bus.")
                 .foregroundStyle(EivizTheme.dim)
             HStack {
                 Spacer()
@@ -1297,7 +1255,7 @@ struct MixingUnitView: View {
             }
         }
         .padding(16)
-        .frame(width: 420, height: 360)
+        .frame(width: 460, height: 520)
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
     }
@@ -1306,6 +1264,13 @@ struct MixingUnitView: View {
         HStack {
             Text(title).frame(width: 80, alignment: .leading)
             content()
+        }
+    }
+
+    private func muDevices(_ kind: AudioDeviceKind) -> [AudioDevice] {
+        MixerFFI.audioDevices().filter {
+            $0.kind == kind.rawUInt
+                || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
         }
     }
 }

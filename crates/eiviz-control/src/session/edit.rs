@@ -389,7 +389,7 @@ mod tests {
         edited.name = "Bars A".into();
         assert_eq!(edited.kind, original.kind);
         assert_eq!(edited.path_or_address, original.path_or_address);
-        assert_eq!(edited.bus_mask, original.bus_mask);
+        assert_eq!(edited.audio_units, original.audio_units);
         crate::session::mutate::apply(
             &mut doc,
             crate::SessionMutation::UpsertInput {

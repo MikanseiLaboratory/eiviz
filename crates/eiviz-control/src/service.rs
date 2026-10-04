@@ -285,15 +285,16 @@ impl ControlService {
             }
             Command::AudioSetInput {
                 input_id,
-                bus_mask,
+                units,
                 gain,
                 mute,
             } => {
-                self.port.audio_set_input(input_id, bus_mask, gain, mute)?;
+                self.port
+                    .audio_set_input(input_id, &units, gain, mute)?;
                 self.after_live("AudioSetInput", request_id, None, false)
             }
-            Command::AudioSetBus { bus_id, gain, mute } => {
-                self.port.audio_set_bus_gain(bus_id, gain, mute)?;
+            Command::AudioSetBus { unit_id, gain, mute } => {
+                self.port.audio_set_bus_gain(unit_id, gain, mute)?;
                 self.after_live("AudioSetBus", request_id, None, false)
             }
             Command::Snapshot {
@@ -336,11 +337,11 @@ impl ControlService {
             }
             Command::OverlayAuto {
                 unit_id,
-                index,
+                overlay_id,
                 duration_ms,
                 to_on,
             } => {
-                self.apply_overlay_auto(unit_id, index, duration_ms, to_on)?;
+                self.apply_overlay_auto(unit_id, overlay_id, duration_ms, to_on)?;
                 self.after_live("OverlayAuto", request_id, Some(unit_id), true)
             }
             Command::Shutdown => {
@@ -463,23 +464,36 @@ impl ControlService {
     fn apply_overlay_auto(
         &mut self,
         unit_id: u64,
-        index: u32,
+        overlay_id: u64,
         duration_ms: u32,
         to_on: bool,
     ) -> ControlResult<()> {
-        let doc = self
-            .store
-            .document()
-            .ok_or_else(|| ControlError::unavailable("session not published"))?;
-        let unit = doc
-            .units
-            .iter()
-            .find(|item| item.id == unit_id)
-            .ok_or_else(|| ControlError::not_found(format!("unit {unit_id}")))?;
-        let slot = unit
-            .overlays
-            .get(index as usize)
-            .ok_or_else(|| ControlError::not_found(format!("overlay {index}")))?;
+        let slot = {
+            let doc = self
+                .store
+                .document()
+                .ok_or_else(|| ControlError::unavailable("session not published"))?;
+            if !doc.units.iter().any(|item| item.id == unit_id) {
+                return Err(ControlError::not_found(format!("unit {unit_id}")));
+            }
+            doc.overlays
+                .iter()
+                .find(|item| item.id == overlay_id)
+                .ok_or_else(|| ControlError::not_found(format!("overlay {overlay_id}")))?
+                .clone()
+        };
+        if let Some(mut doc) = self.store.document_cloned() {
+            if let Some(unit) = doc.units.iter_mut().find(|item| item.id == unit_id) {
+                if to_on {
+                    if !unit.overlays_on_air.contains(&overlay_id) {
+                        unit.overlays_on_air.push(overlay_id);
+                    }
+                } else {
+                    unit.overlays_on_air.retain(|id| *id != overlay_id);
+                }
+            }
+            self.store.set_document_keep_revision(doc);
+        }
         self.port.overlay_auto(OverlayAutoApply {
             unit_id,
             to_on,
@@ -489,6 +503,10 @@ impl ControlService {
             y: slot.y,
             width: slot.width,
             height: slot.height,
+            crop_x: slot.crop_x,
+            crop_y: slot.crop_y,
+            crop_width: slot.crop_width,
+            crop_height: slot.crop_height,
             opacity: slot.opacity,
             z: slot.z,
             audio_follow: slot.audio_follow,
@@ -863,17 +881,17 @@ mod tests {
             self.push_op(format!("remove_output {id}"));
             Ok(())
         }
-        fn audio_bus_upsert(&mut self, spec: BusApply) -> ControlResult<()> {
-            self.push_op(format!("bus {}", spec.id));
+        fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()> {
+            self.push_op(format!("mu-bus {}", spec.unit_id));
             Ok(())
         }
-        fn audio_bus_remove(&mut self, _id: u64) -> ControlResult<()> {
+        fn audio_set_headphone_device(&mut self, _spec: HeadphoneApply) -> ControlResult<()> {
             Ok(())
         }
         fn audio_set_input(
             &mut self,
             _id: u64,
-            _m: u32,
+            _units: &[u64],
             _g: f32,
             _mute: bool,
         ) -> ControlResult<()> {
@@ -882,10 +900,10 @@ mod tests {
         fn audio_set_bus_gain(&mut self, _id: u64, _g: f32, _m: bool) -> ControlResult<()> {
             Ok(())
         }
-        fn audio_set_unit_link(&mut self, _u: u64, _b: u64, _m: u32) -> ControlResult<()> {
+        fn audio_set_unit_link(&mut self, _u: u64, _m: u32) -> ControlResult<()> {
             Ok(())
         }
-        fn audio_set_headphone_copy_master(&mut self, _e: bool) -> ControlResult<()> {
+        fn audio_set_headphone_copy_monitor(&mut self, _e: bool) -> ControlResult<()> {
             Ok(())
         }
         fn set_frame_buffer(&mut self, _f: u32) -> ControlResult<()> {
@@ -1175,7 +1193,7 @@ mod tests {
                     "unitId": 1,
                     "useGpu": true,
                     "enabled": true,
-                    "audioBusId": 1
+                    "audioUnitId": 1
                 }, {
                     "id": 101,
                     "name": "eiviz-prv",
@@ -1184,12 +1202,10 @@ mod tests {
                     "unitId": 1,
                     "useGpu": true,
                     "enabled": true,
-                    "audioBusId": 1
+                    "audioUnitId": 1
                 }],
-                "buses": [],
-                "headphoneCopyMaster": false,
-                "nextOutputId": 102,
-                "nextBusId": 3
+                "headphoneCopyMonitor": false,
+                "nextOutputId": 102
             }"#;
             let mutation: SessionMutation = serde_json::from_slice(json).unwrap();
             svc.mutate_session(mutation, Some(1), "settings").unwrap();
@@ -1211,7 +1227,8 @@ mod tests {
             let probe = fake.clone();
             let mut svc = ControlService::new(fake);
             let mut doc = bars_doc();
-            doc.units[0].overlays.push(crate::session::OverlaySlot {
+            doc.overlays.push(crate::session::OverlaySlot {
+                id: 1,
                 scene_gpu_id: crate::ids::scene_gpu_id(1),
                 x: 0.6,
                 y: 0.1,
@@ -1227,7 +1244,7 @@ mod tests {
                 },
                 Command::OverlayAuto {
                     unit_id: 1,
-                    index: 0,
+                    overlay_id: 1,
                     duration_ms: 200,
                     to_on: true,
                 },

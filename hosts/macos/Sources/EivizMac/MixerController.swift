@@ -44,7 +44,7 @@ final class MixerController: ObservableObject {
     @Published var warnText = ""
     @Published var resourceText = ""
     @Published var peaks: [UInt64: (Float, Float)] = [:]
-    @Published var overlayOn: [UUID: Bool] = [:]
+    @Published var overlayOn: [UInt64: Bool] = [:]
     @Published var videoFraction: Double = 0
     @Published var videoPlaying = false
     @Published var videoTitle = ""
@@ -631,22 +631,41 @@ final class MixerController: ObservableObject {
         audioInputControllers.removeValue(forKey: inputId)
     }
 
-    func applyInputAudio(id: UInt64, mask: UInt32, gain: Float, mute: Bool) {
+    func applyInputAudio(id: UInt64, units: [UInt64], gain: Float, mute: Bool) {
         guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { return }
-        session.inputs[index].busMask = session.inputs[index].kind == .mix ? 0 : (mask == 0 ? 1 : mask)
+        session.inputs[index].audioUnits = session.inputs[index].kind == .mix ? [] : units
         session.inputs[index].gain = max(0, gain)
         session.inputs[index].mute = mute
         let input = session.inputs[index]
-        let applied = audioMask(input)
-        if isRemote {
-            _ = mixer_remote_audio_set_input(remoteHandle, input.id, applied, input.gain, mute ? 1 : 0)
-        } else {
-            _ = mixer_audio_set_input(input.id, applied, input.gain, mute ? 1 : 0)
-        }
+        pushInputAudio(input)
         if let window = audioInputWindows[id] {
             window.title = L10n.format("audio.inputTitle", input.listLabel(in: session, localFiles: !isRemote))
         }
         objectWillChange.send()
+    }
+
+    func pushInputAudio(_ input: InputEntry) {
+        let units = input.kind == .mix ? [] : input.audioUnits
+        units.withUnsafeBufferPointer { buffer in
+            if isRemote {
+                _ = mixer_remote_audio_set_input(
+                    remoteHandle,
+                    input.id,
+                    buffer.baseAddress,
+                    UInt32(units.count),
+                    max(0, input.gain),
+                    input.mute ? 1 : 0
+                )
+            } else {
+                _ = mixer_audio_set_input(
+                    input.id,
+                    buffer.baseAddress,
+                    UInt32(units.count),
+                    max(0, input.gain),
+                    input.mute ? 1 : 0
+                )
+            }
+        }
     }
 
     func applySession() {
@@ -697,43 +716,32 @@ final class MixerController: ObservableObject {
 
     func pushAudio() {
         if isRemote { return }
-        var live: [UInt64] = []
-        let n = mixer_audio_bus_count()
-        if n > 0 {
-            for i in 0..<UInt32(n) {
-                var info = MixerFFI.zeroed() as EivizAudioBusInfo
-                if mixer_audio_bus_get(i, &info) != 0 { continue }
-                live.append(info.id)
+        for unit in session.units {
+            MixerFFI.withCString(unit.audio.deviceId) { device in
+                _ = mixer_audio_unit_bus_set(
+                    unit.id,
+                    unit.audio.deviceKind.rawUInt,
+                    device,
+                    unit.audio.mapLeft,
+                    unit.audio.mapRight
+                )
             }
+            _ = mixer_audio_set_bus_gain(unit.id, max(0, unit.audio.gain), unit.audio.mute ? 1 : 0)
+            _ = mixer_audio_set_unit_link(unit.id, unit.audioLink.rawUInt)
         }
-        let keep = Set(session.buses.map(\.id))
-        for id in live where !keep.contains(id) {
-            _ = mixer_audio_bus_remove(id)
-        }
-        for bus in session.buses {
-            MixerFFI.withCString(bus.name) { name in
-                MixerFFI.withCString(bus.deviceId) { device in
-                    _ = mixer_audio_bus_upsert(
-                        bus.id,
-                        name,
-                        bus.role.rawUInt,
-                        bus.deviceKind.rawUInt,
-                        device,
-                        bus.mapLeft,
-                        bus.mapRight
-                    )
-                }
-            }
-            _ = mixer_audio_set_bus_gain(bus.id, max(0, bus.gain), bus.mute ? 1 : 0)
+        MixerFFI.withCString(session.headphone.deviceId) { device in
+            _ = mixer_audio_headphone_set(
+                session.headphone.deviceKind.rawUInt,
+                device,
+                session.headphone.mapLeft,
+                session.headphone.mapRight
+            )
         }
         for input in session.inputs {
-            _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), input.mute ? 1 : 0)
-        }
-        for unit in session.units {
-            _ = mixer_audio_set_unit_link(unit.id, unit.audioBusId == 0 ? 1 : unit.audioBusId, unit.audioLink.rawUInt)
+            pushInputAudio(input)
         }
         _ = mixer_audio_set_headphone_cue(selectedUnitId)
-        _ = mixer_audio_set_headphone_copy_master(session.headphoneCopyMaster ? 1 : 0)
+        _ = mixer_audio_set_headphone_copy_monitor(session.headphoneCopyMonitor ? 1 : 0)
     }
 
 }

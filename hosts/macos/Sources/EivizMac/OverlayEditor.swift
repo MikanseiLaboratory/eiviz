@@ -4,7 +4,7 @@ import SwiftUI
 struct OverlayView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
-    @State private var selected: UUID?
+    @State private var selected: UInt64?
     @State private var lastGpuPush = Date.distantPast
     @State private var addKind: OverlaySourceKind = .scene
     @State private var addSourceId: UInt64 = 0
@@ -21,7 +21,7 @@ struct OverlayView: View {
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
-            selected = unit.overlays.first?.id
+            selected = mixer.session.overlays.first?.id
             addSourceId = mixer.session.scenes.first?.gpuId ?? 0
             reindexOverlays()
         }
@@ -53,10 +53,10 @@ struct OverlayView: View {
 
     private var overlayList: some View {
         List(selection: $selected) {
-            ForEach(Array(unit.overlays.enumerated()), id: \.element.id) { pair in
+            ForEach(Array(mixer.session.overlays.enumerated()), id: \.element.id) { pair in
                 OverlayListRow(
                     title: rowTitle(pair.offset, pair.element),
-                    enabled: mixer.overlayOn[pair.element.id] ?? pair.element.enabled,
+                    enabled: onAir(pair.element.id),
                     audioFollow: pair.element.audioFollow,
                     locked: pair.element.locked,
                     onToggleAudio: {
@@ -120,14 +120,14 @@ struct OverlayView: View {
     }
 
     private var overlayWireItems: [WireRect] {
-        unit.overlays.map {
+        mixer.session.overlays.map {
             WireRect(
                 id: $0.id,
                 x: $0.x,
                 y: $0.y,
                 width: $0.width,
                 height: $0.height,
-                enabled: $0.enabled,
+                enabled: onAir($0.id),
                 locked: $0.locked,
                 sizeLinked: $0.sizeLinked,
                 cropX: $0.cropX,
@@ -223,7 +223,7 @@ struct OverlayView: View {
     }
 
     private var unit: MixingUnitEntry { mixer.selectedUnit }
-    private var current: OverlaySlot? { unit.overlays.first { $0.id == selected } }
+    private var current: OverlaySlot? { mixer.session.overlays.first { $0.id == selected } }
 
     private func rowTitle(_ index: Int, _ slot: OverlaySlot) -> String {
         "\(index + 1). \(sourceName(slot))"
@@ -236,69 +236,76 @@ struct OverlayView: View {
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }
 
-    private func toggleOverlay(_ id: UUID, _ key: WritableKeyPath<OverlaySlot, Bool>) {
+    private func onAir(_ id: UInt64) -> Bool {
+        mixer.session.units.first { $0.id == mixer.selectedUnitId }?.overlaysOnAir.contains(id) ?? false
+    }
+
+    private func toggleOverlay(_ id: UInt64, _ key: WritableKeyPath<OverlaySlot, Bool>) {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
-              let si = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == id })
+              let si = mixer.session.overlays.firstIndex(where: { $0.id == id })
         else { return }
-        mixer.session.units[ui].overlays[si][keyPath: key].toggle()
+        mixer.session.overlays[si][keyPath: key].toggle()
         selected = id
         mixer.pushOverlays()
     }
 
     private func mutate(_ body: (inout OverlaySlot) -> Void) {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
-              let si = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == selected })
+              let si = mixer.session.overlays.firstIndex(where: { $0.id == selected })
         else { return }
-        body(&mixer.session.units[ui].overlays[si])
+        body(&mixer.session.overlays[si])
     }
 
     private func add() {
-        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
-        guard mixer.session.units[ui].overlays.count < 8 else { return }
         let source = addSourceId != 0
             ? addSourceId
             : (addKind == .input ? mixer.session.inputs.first?.id : mixer.session.scenes.first?.gpuId) ?? 0
-        let slot = OverlaySlot(sourceKind: addKind, sceneGpuId: source)
-        mixer.session.units[ui].overlays.insert(slot, at: 0)
+        let slot = OverlaySlot(id: mixer.session.nextOverlayId, sourceKind: addKind, sceneGpuId: source)
+        mixer.session.nextOverlayId += 1
+        mixer.session.overlays.insert(slot, at: 0)
         selected = slot.id
         reindexOverlays()
         mixer.pushOverlays()
     }
 
     private func delete() {
-        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
-        mixer.session.units[ui].overlays.removeAll { $0.id == selected }
-        selected = mixer.session.units[ui].overlays.first?.id
+        if let id = selected {
+            for index in mixer.session.units.indices {
+                mixer.session.units[index].overlaysOnAir.removeAll { $0 == id }
+            }
+        }
+        mixer.session.overlays.removeAll { $0.id == selected }
+        selected = mixer.session.overlays.first?.id
         reindexOverlays()
         mixer.pushOverlays()
     }
 
     private func shift(_ delta: Int) {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
-              let index = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == selected })
+              let index = mixer.session.overlays.firstIndex(where: { $0.id == selected })
         else { return }
         let target = index + delta
-        guard mixer.session.units[ui].overlays.indices.contains(target) else { return }
-        mixer.session.units[ui].overlays.swapAt(index, target)
+        guard mixer.session.overlays.indices.contains(target) else { return }
+        mixer.session.overlays.swapAt(index, target)
         reindexOverlays()
         mixer.pushOverlays()
     }
 
     private func moveOverlays(from offsets: IndexSet, to dest: Int) {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
-        mixer.session.units[ui].overlays.move(fromOffsets: offsets, toOffset: dest)
+        mixer.session.overlays.move(fromOffsets: offsets, toOffset: dest)
         reindexOverlays()
         mixer.pushOverlays()
     }
 
     private func reindexOverlays() {
         guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }) else { return }
-        for index in mixer.session.units[ui].overlays.indices {
-            mixer.session.units[ui].overlays[index].z = Int32(mixer.session.units[ui].overlays.count - 1 - index)
+        for index in mixer.session.overlays.indices {
+            mixer.session.overlays[index].z = Int32(mixer.session.overlays.count - 1 - index)
         }
     }
 
-    private func fitOverlayToScreen(id: UUID) {
+    private func fitOverlayToScreen(id: UInt64) {
         selected = id
         mutate { slot in
             guard !slot.locked else { return }
@@ -315,7 +322,7 @@ struct OverlayView: View {
         mixer.pushOverlays()
     }
 
-    private func applyCrop(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
+    private func applyCrop(id: UInt64, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
         selected = id
         mutate { slot in
             guard !slot.locked else { return }
@@ -330,16 +337,14 @@ struct OverlayView: View {
         }
     }
 
-    private func applyWire(id: UUID, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
+    private func applyWire(id: UInt64, x: Float, y: Float, w: Float, h: Float, ended: Bool) {
         selected = id
-        guard let ui = mixer.session.units.firstIndex(where: { $0.id == mixer.selectedUnitId }),
-              let si = mixer.session.units[ui].overlays.firstIndex(where: { $0.id == id })
-        else { return }
-        guard !mixer.session.units[ui].overlays[si].locked else { return }
-        mixer.session.units[ui].overlays[si].x = x
-        mixer.session.units[ui].overlays[si].y = y
-        mixer.session.units[ui].overlays[si].width = w
-        mixer.session.units[ui].overlays[si].height = h
+        guard let si = mixer.session.overlays.firstIndex(where: { $0.id == id }) else { return }
+        guard !mixer.session.overlays[si].locked else { return }
+        mixer.session.overlays[si].x = x
+        mixer.session.overlays[si].y = y
+        mixer.session.overlays[si].width = w
+        mixer.session.overlays[si].height = h
         if ended || Date().timeIntervalSince(lastGpuPush) >= 0.05 {
             lastGpuPush = Date()
             mixer.pushOverlays()

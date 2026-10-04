@@ -126,13 +126,6 @@ enum MixerFFI {
     static func emptyState() -> EivizUnitState { zeroed() }
     static func emptyOverlay() -> EivizOverlayDesc { zeroed() }
 
-    static func setOverlay(_ state: inout EivizUnitState, index: Int, _ desc: EivizOverlayDesc) {
-        guard (0..<8).contains(index) else { return }
-        withUnsafeMutableBytes(of: &state.overlays) { raw in
-            raw.bindMemory(to: EivizOverlayDesc.self)[index] = desc
-        }
-    }
-
     static func setMv(_ state: inout EivizUnitState, index: Int, _ id: UInt64) {
         guard (0..<16).contains(index) else { return }
         withUnsafeMutableBytes(of: &state.mv_slots) { raw in

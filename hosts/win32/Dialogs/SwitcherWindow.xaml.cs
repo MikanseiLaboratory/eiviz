@@ -106,14 +106,14 @@ public partial class SwitcherWindow : Window
     internal void RebuildOverlays()
     {
         OverlayTogglePanel.Children.Clear();
-        if (_unit.Overlays.Count == 0)
+        if (Session.Overlays.Count == 0)
             return;
         var main = Application.Current.MainWindow as MainWindow;
-        for (var i = 0; i < _unit.Overlays.Count; i++)
+        foreach (var slot in Session.Overlays)
         {
-            var slot = _unit.Overlays[i];
             var name = slot.DisplayName(Session);
-            OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
+            var on = _unit.OverlaysOnAir.Contains(slot.Id);
+            OverlayTogglePanel.Children.Add(new OverlayStrip(name, on, enabled =>
             {
                 main?.ToggleOverlay(_unit, slot, enabled);
             }));
@@ -413,10 +413,10 @@ public partial class SwitcherWindow : Window
     private void RebuildTransitions()
     {
         TransitionPanel.Children.Clear();
-        for (var i = 0; i < _unit.Transitions.Count; i++)
+        for (var i = 0; i < Session.Transitions.Count; i++)
         {
             var index = i;
-            var preset = _unit.Transitions[i];
+            var preset = Session.Transitions[i];
             var selected = index == _tbarPresetIndex;
             var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var fire = new Button { Content = "TAKE", Width = 48, Height = 22, Margin = new Thickness(4, 0, 0, 0), FontSize = 11 };
@@ -465,10 +465,10 @@ public partial class SwitcherWindow : Window
 
     private TransitionPreset TbarPreset()
     {
-        if (_unit.Transitions.Count == 0)
+        if (Session.Transitions.Count == 0)
             return new TransitionPreset { Kind = MixerNative.TransitionCut, Swap = true };
-        var index = Math.Clamp(_tbarPresetIndex, 0, _unit.Transitions.Count - 1);
-        return _unit.Transitions[index];
+        var index = Math.Clamp(_tbarPresetIndex, 0, Session.Transitions.Count - 1);
+        return Session.Transitions[index];
     }
 
     private void TBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

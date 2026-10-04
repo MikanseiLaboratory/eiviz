@@ -15,7 +15,7 @@ eivizのスイッチング操作は、M/E（Mix/Effects）に相当する**Mixin
 
 ## OverlayとMultiview
 
-- **[Overlay](/eiviz/ja/concepts/overlays/)**: 各Mixing UnitのProgram出力に対し、最大8系統のDSK（テロップやPinP）を重ねて合成できます。
+- **[Overlay](/eiviz/ja/concepts/overlays/)**: 定義はセッション共通です。各Mixing UnitのProgramへ、件数の上限なくDSK（テロップやPinP）を重ねられます。On-Airはユニットごとに独立します。
 - **[Multiviews](/eiviz/ja/concepts/multiviews/)**: 複数の入力や各ユニットのPreview/Programを一覧表示するマルチビュー画面を構築し、外部ディスプレイや別ウィンドウで常時監視できます。
 
 ## 多段M/E（リentrant構成）

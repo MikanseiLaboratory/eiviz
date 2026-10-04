@@ -35,14 +35,12 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     unique_ids(doc.units.iter().map(|item| item.id), "unit")?;
     unique_ids(doc.outputs.iter().map(|item| item.id), "output")?;
     unique_ids(doc.multiviews.iter().map(|item| item.id), "multiview")?;
-    unique_ids(doc.buses.iter().map(|item| item.id), "bus")?;
     unique_guids(doc.inputs.iter().map(|item| item.guid.as_str()), "input")?;
     unique_guids(doc.scenes.iter().map(|item| item.guid.as_str()), "scene")?;
 
     let input_ids: Vec<u64> = doc.inputs.iter().map(|item| item.id).collect();
     let unit_ids: Vec<u64> = doc.units.iter().map(|item| item.id).collect();
     let scene_ids: Vec<u64> = doc.scenes.iter().map(|item| item.id).collect();
-    let bus_ids: Vec<u64> = doc.buses.iter().map(|item| item.id).collect();
     let mv_ids: Vec<u64> = doc.multiviews.iter().map(|item| item.id).collect();
 
     for unit in &doc.units {
@@ -172,13 +170,10 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
         if output.transport == OutputTransport::DeckLink {
             // DeckLink stays host-owned; headless ignores it.
         }
-        if output.audio_bus_id != 0
-            && !bus_ids.is_empty()
-            && !bus_ids.contains(&output.audio_bus_id)
-        {
+        if output.audio_unit_id != 0 && !unit_ids.contains(&output.audio_unit_id) {
             return Err(ValidationError::new(format!(
-                "output {} references missing bus {}",
-                output.id, output.audio_bus_id
+                "output {} references missing mixing unit {}",
+                output.id, output.audio_unit_id
             )));
         }
         if (output.width == 0) != (output.height == 0) {

@@ -43,7 +43,7 @@ impl Default for AudioMixSnapshot {
 
 #[derive(Clone)]
 pub struct AudioOutputRoute {
-    pub audio_bus_id: u64,
+    pub audio_unit_id: u64,
     pub source_kind: u32,
     pub send: Arc<dyn Fn(AudioPacket) + Send + Sync>,
 }
@@ -184,7 +184,7 @@ fn publish_monitor(
     mixed: &MixedAudio,
 ) {
     let mut guard = monitor_pcm.lock_or_recover();
-    guard.extend(mixed.master.iter().copied());
+    guard.extend(mixed.monitor.iter().copied());
     let cap = AUDIO_RATE as usize;
     while guard.len() > cap {
         guard.pop_front();
@@ -196,10 +196,10 @@ fn publish_monitor(
 
 fn dispatch_outputs(routes: &[AudioOutputRoute], mixed: &MixedAudio, pts: i64) {
     for route in routes {
-        if route.audio_bus_id == 0 || route.source_kind == SRC_KIND_MU_MULTIVIEW {
+        if route.audio_unit_id == 0 || route.source_kind == SRC_KIND_MU_MULTIVIEW {
             continue;
         }
-        let packet = interleaved_to_packet(mixed.for_bus(route.audio_bus_id), pts);
+        let packet = interleaved_to_packet(mixed.for_unit(route.audio_unit_id), pts);
         if packet.samples_per_channel <= 0 {
             continue;
         }

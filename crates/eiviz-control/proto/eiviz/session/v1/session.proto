@@ -34,17 +34,21 @@ message Document {
   repeated Input inputs = 6;
   repeated Scene scenes = 7;
   repeated MixingUnit units = 8;
+  repeated TransitionPreset transitions = 20;
+  repeated OverlaySlot overlays = 21;
+  uint64 next_overlay_id = 22;
   repeated Output outputs = 9;
   repeated Multiview multiviews = 10;
-  repeated Bus buses = 11;
+  reserved 11, 17;
+  reserved "buses", "next_bus_id";
   uint64 next_input_id = 12;
   uint64 next_scene_id = 13;
   uint64 next_unit_id = 14;
   uint64 next_output_id = 15;
   uint64 next_multiview_id = 16;
-  uint64 next_bus_id = 17;
   uint64 selected_unit_id = 18;
-  bool headphone_copy_master = 19;
+  bool headphone_copy_monitor = 19;
+  Headphone headphone = 23;
 }
 
 message SessionSettings {
@@ -94,7 +98,8 @@ message Input {
   bool scroll = 9;
   float tone_hz = 10;
   float tone_level_dbfs = 11;
-  uint32 bus_mask = 12;
+  reserved 12, 32;
+  reserved "bus_mask", "mix_audio_bus_id";
   float gain = 13;
   bool mute = 14;
   bool use_gpu = 15;
@@ -114,7 +119,6 @@ message Input {
   repeated string tags = 29;
   MixSource mix_source = 30;
   uint64 mix_target_id = 31;
-  uint64 mix_audio_bus_id = 32;
   AudioCaptureMode audio_capture_mode = 33;
   AudioDeviceKind audio_device_kind = 34;
   string audio_device_id = 35;
@@ -122,6 +126,7 @@ message Input {
   int32 audio_map_right = 37;
   string audio_process_exe = 38;
   string audio_process_aumid = 39;
+  repeated uint64 audio_units = 40;
 }
 
 message SceneLayer {
@@ -195,7 +200,8 @@ message OverlaySlot {
   float height = 5;
   float opacity = 6;
   int32 z = 7;
-  bool enabled = 8;
+  reserved 8;
+  reserved "enabled";
   uint32 transition_kind = 9;
   uint32 duration_value = 10;
   uint32 duration_unit = 11;
@@ -208,6 +214,7 @@ message OverlaySlot {
   float crop_y = 18;
   float crop_width = 19;
   float crop_height = 20;
+  uint64 id = 21;
 }
 
 message MixingUnit {
@@ -217,15 +224,16 @@ message MixingUnit {
   uint32 height = 4;
   uint32 fps_num = 5;
   uint32 fps_den = 6;
-  repeated TransitionPreset transitions = 7;
-  repeated OverlaySlot overlays = 8;
-  uint64 audio_bus_id = 9;
+  reserved 7, 8, 9;
+  reserved "transitions", "overlays", "audio_bus_id";
   AudioLinkMode audio_link = 10;
   SwitcherSceneFilter switcher_scene_filter = 11;
   repeated uint64 switcher_scene_ids = 12;
   bool always_on_top = 13;
   uint64 preview_scene_id = 14;
   uint64 program_scene_id = 15;
+  repeated uint64 overlays_on_air = 16;
+  MuBus audio = 17;
 }
 
 message Output {
@@ -237,13 +245,15 @@ message Output {
   uint64 unit_id = 6;
   bool use_gpu = 7;
   bool enabled = 8;
-  uint64 audio_bus_id = 9;
+  reserved 9;
+  reserved "audio_bus_id";
   bool skip_encode_when_no_receivers = 10;
   // 0/0 follow the Mixing Unit (or session master) size and frame rate.
   uint32 width = 11;
   uint32 height = 12;
   uint32 fps_num = 13;
   uint32 fps_den = 14;
+  uint64 audio_unit_id = 15;
 }
 
 message MvSlot {
@@ -271,18 +281,20 @@ message Multiview {
   bool always_on_top = 15;
 }
 
-message Bus {
-  uint64 id = 1;
-  string name = 2;
-  AudioBusRole role = 3;
-  AudioDeviceKind device_kind = 4;
-  string device_id = 5;
-  int32 map_left = 6;
-  int32 map_right = 7;
-  reserved 8;
-  uint32 bit = 9;
-  float gain = 10;
-  bool mute = 11;
+message MuBus {
+  AudioDeviceKind device_kind = 1;
+  string device_id = 2;
+  int32 map_left = 3;
+  int32 map_right = 4;
+  float gain = 5;
+  bool mute = 6;
+}
+
+message Headphone {
+  AudioDeviceKind device_kind = 1;
+  string device_id = 2;
+  int32 map_left = 3;
+  int32 map_right = 4;
 }
 
 enum InternalColorFormat {
@@ -405,13 +417,6 @@ enum MultiviewTemplate {
   MULTIVIEW_TEMPLATE_GRID2X2 = 14;
   MULTIVIEW_TEMPLATE_GRID3X3 = 15;
   MULTIVIEW_TEMPLATE_GRID4X4 = 16;
-}
-
-enum AudioBusRole {
-  AUDIO_BUS_ROLE_UNSPECIFIED = 0;
-  AUDIO_BUS_ROLE_MASTER = 1;
-  AUDIO_BUS_ROLE_HEADPHONE = 2;
-  AUDIO_BUS_ROLE_AUX = 3;
 }
 
 enum AudioDeviceKind {

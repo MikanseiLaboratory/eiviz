@@ -214,10 +214,10 @@ flowchart TB
 
 ## Audio
 
-The internal mix is a 48 kHz graph. Master and Headphone are fixed; AUX buses can be added.  
-Inputs have a bus mask and gain. A Mixing Unit can send Program-follow audio (Audio Follow) onto a bus. Overlays can do the same.
+The internal mix is a 48 kHz graph. Every Mixing Unit has one MU Bus. Headphone cues the selected Mixing Unit.  
+Inputs route to a set of Mixing Units and have gain. Follow tracks Preview/Program. Overlays can follow too.
 
-Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/).
+Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/).
 
 ## Outputs
 

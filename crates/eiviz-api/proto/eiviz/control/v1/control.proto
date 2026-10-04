@@ -164,13 +164,15 @@ message VideoSeek {
 
 message AudioSetInput {
   ResourceRef input = 1;
-  uint32 bus_mask = 2;
+  reserved 2;
+  reserved "bus_mask";
   float gain = 3;
   bool mute = 4;
+  repeated uint64 units = 5;
 }
 
 message AudioSetBus {
-  ResourceRef bus = 1;
+  ResourceRef unit = 1;
   float gain = 2;
   bool mute = 3;
 }
@@ -225,7 +227,7 @@ message Snapshot {
 
 message OverlayAuto {
   ResourceRef unit = 1;
-  uint32 index = 2;
+  uint64 overlay_id = 2;
   uint32 duration_ms = 3;
   bool to_on = 4;
 }

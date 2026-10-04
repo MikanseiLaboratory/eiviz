@@ -11,11 +11,23 @@ namespace Eiviz.Host;
 
 internal static class MixerApply
 {
-    public static void DefineScene(SceneEntry scene, uint width, uint height)
+    public static void DefineScene(SceneEntry scene, uint width, uint height) =>
+        DefineSceneGpu(scene.GpuId, scene, width, height);
+
+    public static void DefineSceneGpu(ulong gpuId, SceneEntry scene, uint width, uint height)
     {
         if (Application.Current is App { Backend.IsRemote: true })
             return;
-        PushScene(scene, width, height);
+        PushLayers(gpuId, width, height, scene.Layers.Select(layer => new OverlayDesc
+        {
+            SourceId = layer.InputId,
+            Rect = new Rect { X = layer.X, Y = layer.Y, Width = layer.Width, Height = layer.Height },
+            Opacity = layer.Opacity,
+            Z = layer.Z,
+            AudioFollow = layer.AudioFollow ? 1u : 0u,
+            Hidden = layer.Hidden ? 1u : 0u,
+            Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight }
+        }).ToArray());
     }
 
     public static void PushMultiview(MultiviewLayout layout, uint width, uint height)
@@ -37,7 +49,7 @@ internal static class MixerApply
     public static void AddOutput(OutputEntry output)
     {
         NormalizeOutputSource(output);
-        var audioBusId = output.SourceKind == OutputSourceKind.Multiview ? 0uL : output.AudioBusId;
+        var audioUnitId = output.SourceKind == OutputSourceKind.Multiview ? 0uL : output.AudioUnitId;
         var code = MixerNative.OutputAdd(
             output.Id,
             (uint)output.Transport,
@@ -46,7 +58,7 @@ internal static class MixerApply
             output.SourceId,
             output.UnitId,
             output.UseGpu ? 1u : 0u,
-            audioBusId,
+            audioUnitId,
             output.SkipEncodeWhenNoReceivers ? 1u : 0u,
             output.Width,
             output.Height,
@@ -226,28 +238,29 @@ internal static class MixerApply
         }
     });
 
-    public static bool PatchAux(ulong unitId, MixingUnitEntry unit)
+    public static bool PatchAux(Session session, MixingUnitEntry unit)
     {
         if (Application.Current is App { Backend.IsRemote: true })
             return true;
         return Try(() =>
-    {
-        unsafe
         {
-            UnitState current = default;
-            if (MixerNative.GetUnitState(unitId, &current) != 0)
-                return;
-            var state = BuildState(unit, current.ProgramSource, current.PreviewSource, current.Mix, current.TransitionKind);
-            state.IncomingSource = current.IncomingSource;
-            state.Softness = current.Softness;
-            state.Param = current.Param;
-            MixerNative.SetUnitState(unitId, &state);
-        }
-    });
+            unsafe
+            {
+                UnitState current = default;
+                if (MixerNative.GetUnitState(unit.Id, &current) != 0)
+                    return;
+                var state = BuildState(unit, current.ProgramSource, current.PreviewSource, current.Mix, current.TransitionKind);
+                state.IncomingSource = current.IncomingSource;
+                state.Softness = current.Softness;
+                state.Param = current.Param;
+                MixerNative.SetUnitState(unit.Id, &state);
+            }
+            PushOverlays(session, unit);
+        });
     }
 
     public static bool TryDefineScene(SceneEntry scene, uint width, uint height) =>
-        Try(() => PushScene(scene, width, height));
+        Try(() => DefineScene(scene, width, height));
 
     public static bool DestroyScene(ulong gpuId) => Try(() => MixerNative.DestroyScene(gpuId));
 
@@ -376,9 +389,9 @@ internal static class MixerApply
         MixerNative.GeneratorSetTone(sourceId, toneHz, toneLevelDbfs);
     });
 
-    public static bool DefineMixInput(ulong sourceId, ulong targetId, uint sourceKind, uint delay, ulong audioBusId) =>
+    public static bool DefineMixInput(ulong sourceId, ulong targetId, uint sourceKind, uint delay) =>
         Try(() => MixerNative.ThrowIfFailed(
-            MixerNative.DefineMixInput(sourceId, targetId, sourceKind, delay, audioBusId),
+            MixerNative.DefineMixInput(sourceId, targetId, sourceKind, delay),
             "Define Mix Input"));
 
     public static void StartAudioCapture(InputEntry input) =>
@@ -414,29 +427,40 @@ internal static class MixerApply
             ProgramSource = program,
             PreviewSource = preview,
             Mix = mix,
-            TransitionKind = transitionKind,
-            OverlayCount = 0
+            TransitionKind = transitionKind
         };
-        var enabled = unit.Overlays.Where(slot => slot.Enabled).Take(8).ToList();
-        state.OverlayCount = (uint)enabled.Count;
-        for (var i = 0; i < 8; i++)
-        {
-            var slot = i < enabled.Count ? enabled[i] : null;
-            var desc = slot is null
-                ? default
-                : new OverlayDesc
-                {
-                    SourceId = slot.SceneGpuId,
-                    Rect = new Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
-                    Opacity = slot.Opacity,
-                    Z = slot.Z,
-                    AudioFollow = slot.AudioFollow ? 1u : 0u,
-                    Hidden = slot.Hidden ? 1u : 0u,
-                    Crop = new Rect { X = slot.CropX, Y = slot.CropY, Width = slot.CropWidth, Height = slot.CropHeight }
-                };
-            SetOverlay(ref state, i, desc);
-        }
         return state;
+    }
+
+    public static void PushOverlays(Session session, MixingUnitEntry unit)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        var enabled = session.Overlays.Where(slot => unit.OverlaysOnAir.Contains(slot.Id)).ToArray();
+        var layers = enabled.Select(slot => new OverlayDesc
+        {
+            SourceId = slot.SceneGpuId,
+            Rect = new Rect { X = slot.X, Y = slot.Y, Width = slot.Width, Height = slot.Height },
+            Opacity = slot.Opacity,
+            Z = slot.Z,
+            AudioFollow = slot.AudioFollow ? 1u : 0u,
+            Hidden = slot.Hidden ? 1u : 0u,
+            Crop = new Rect { X = slot.CropX, Y = slot.CropY, Width = slot.CropWidth, Height = slot.CropHeight }
+        }).ToArray();
+        unsafe
+        {
+            if (layers.Length == 0)
+            {
+                MixerNative.ThrowIfFailed(MixerNative.SetUnitOverlays(unit.Id, null, 0), "Set overlays");
+                return;
+            }
+            fixed (OverlayDesc* ptr = layers)
+            {
+                MixerNative.ThrowIfFailed(
+                    MixerNative.SetUnitOverlays(unit.Id, ptr, (uint)layers.Length),
+                    "Set overlays");
+            }
+        }
     }
 
     internal static ulong EncodeSlot(MvSlot slot) => slot.Kind switch
@@ -480,35 +504,6 @@ internal static class MixerApply
             && output.SourceId != 0
             && output.SourceId < MixerNative.SceneBase)
             output.SourceId = MixerNative.SceneGpuId(output.SourceId);
-    }
-
-    private static void SetOverlay(ref UnitState state, int index, OverlayDesc desc)
-    {
-        switch (index)
-        {
-            case 0: state.Overlay0 = desc; break;
-            case 1: state.Overlay1 = desc; break;
-            case 2: state.Overlay2 = desc; break;
-            case 3: state.Overlay3 = desc; break;
-            case 4: state.Overlay4 = desc; break;
-            case 5: state.Overlay5 = desc; break;
-            case 6: state.Overlay6 = desc; break;
-            default: state.Overlay7 = desc; break;
-        }
-    }
-
-    private static void PushScene(SceneEntry scene, uint width, uint height)
-    {
-        PushLayers(scene.GpuId, width, height, scene.Layers.Select(layer => new OverlayDesc
-        {
-            SourceId = layer.InputId,
-            Rect = new Rect { X = layer.X, Y = layer.Y, Width = layer.Width, Height = layer.Height },
-            Opacity = layer.Opacity,
-            Z = layer.Z,
-            AudioFollow = layer.AudioFollow ? 1u : 0u,
-            Hidden = layer.Hidden ? 1u : 0u,
-            Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight }
-        }).ToArray());
     }
 
     private static OverlayDesc BusLayer(ulong sourceId, float x, float y, float w, float h, int z) => new()

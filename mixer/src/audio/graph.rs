@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::abi::{MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
+use crate::abi::{MixInputSpec, OverlayDesc, is_scene, mixing_unit_from_source};
 use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, AudioInputStore};
 
 use super::AUDIO_PRIME_FRAMES;
@@ -10,48 +10,35 @@ use super::AudioDelay;
 use super::DeviceKey;
 use super::rt::SpscF32;
 
-pub const MASTER_BUS: u64 = 1;
-pub const HEADPHONE_BUS: u64 = 2;
-pub const ROLE_MASTER: u32 = 0;
-pub const ROLE_HEADPHONE: u32 = 1;
-pub const ROLE_AUX: u32 = 2;
+/// Gain and peak id for the headphone bus. It is not a Mixing Unit id.
+pub const HEADPHONE_BUS: u64 = u64::MAX;
 pub const DEVICE_NONE: u32 = 0;
 pub const DEVICE_WASAPI: u32 = 1;
 pub const DEVICE_ASIO: u32 = 2;
 pub const DEVICE_COREAUDIO: u32 = 3;
 
 pub struct MixedAudio {
-    pub master: Vec<f32>,
-    pub by_bus: HashMap<u64, Vec<f32>>,
+    /// PCM of the cued Mixing Unit. Local monitors play this.
+    pub monitor: Vec<f32>,
+    pub by_unit: HashMap<u64, Vec<f32>>,
 }
 
 impl Default for MixedAudio {
     fn default() -> Self {
         Self {
-            master: Vec::new(),
-            by_bus: HashMap::new(),
+            monitor: Vec::new(),
+            by_unit: HashMap::new(),
         }
     }
 }
 
 impl MixedAudio {
-    pub fn for_bus(&self, audio_bus_id: u64) -> &[f32] {
-        if audio_bus_id == 0 {
+    pub fn for_unit(&self, unit_id: u64) -> &[f32] {
+        if unit_id == 0 {
             return &[];
         }
-        let id = resolve_output_audio_bus(audio_bus_id);
-        if let Some(samples) = self.by_bus.get(&id) {
-            return samples.as_slice();
-        }
-        if id == MASTER_BUS {
-            return self.master.as_slice();
-        }
-        &[]
+        self.by_unit.get(&unit_id).map(Vec::as_slice).unwrap_or(&[])
     }
-}
-
-pub fn resolve_output_audio_bus(audio_bus_id: u64) -> u64 {
-    audio_bus_id
 }
 
 pub const LINK_FOLLOW: u32 = 0;
@@ -169,24 +156,12 @@ impl BusRing {
     }
 }
 
-/// Same predicate as [`AudioGraph::device_groups`]: a bus is armed when a real
-/// output callback will pop its ring. Master WASAPI may use the default device
-/// (empty id). Other WASAPI buses need an explicit device id.
 fn bus_output_armed(bus: &AudioBus) -> bool {
-    if bus.device_kind == DEVICE_NONE {
-        return false;
-    }
-    if bus.role != ROLE_MASTER && bus.device_id.is_empty() && bus.device_kind == DEVICE_WASAPI {
-        return false;
-    }
-    true
+    bus.device_kind != DEVICE_NONE
 }
 
 pub struct AudioBus {
     pub id: u64,
-    pub name: String,
-    pub role: u32,
-    pub bit: u32,
     pub device_kind: u32,
     pub device_id: String,
     pub map_left: i32,
@@ -197,26 +172,41 @@ pub struct AudioBus {
     pub ring: Arc<BusRing>,
 }
 
-#[derive(Clone, Copy)]
+impl AudioBus {
+    fn silent(id: u64) -> Self {
+        Self {
+            id,
+            device_kind: DEVICE_NONE,
+            device_id: String::new(),
+            map_left: 0,
+            map_right: 1,
+            gain: 1.0,
+            mute: false,
+            peak: (0.0, 0.0),
+            ring: BusRing::new(),
+        }
+    }
+}
+
 pub struct InputAudio {
-    pub bus_mask: u32,
+    pub units: Vec<u64>,
     pub gain: f32,
     pub mute: bool,
 }
 
 #[derive(Clone, Copy)]
 pub struct UnitLink {
-    pub bus_id: u64,
     pub mode: u32,
 }
 
 pub struct AudioGraph {
-    pub buses: Vec<AudioBus>,
+    pub unit_buses: HashMap<u64, AudioBus>,
+    pub headphone: AudioBus,
     pub inputs: HashMap<u64, InputAudio>,
     pub unit_links: HashMap<u64, UnitLink>,
     pub headphone_cue_unit: u64,
-    pub headphone_copy_master: bool,
-    pub master_peak: (f32, f32),
+    pub headphone_copy_monitor: bool,
+    pub monitor_peak: (f32, f32),
     scratch_master: Vec<f32>,
     scratch_mixed: Vec<f32>,
     popped: HashMap<u64, Vec<f32>>,
@@ -227,104 +217,78 @@ pub struct AudioGraph {
 
 impl AudioGraph {
     pub fn with_defaults() -> Self {
-        let mut graph = Self {
-            buses: Vec::new(),
+        Self {
+            unit_buses: HashMap::new(),
+            headphone: AudioBus::silent(HEADPHONE_BUS),
             inputs: HashMap::new(),
             unit_links: HashMap::new(),
             headphone_cue_unit: 1,
-            headphone_copy_master: false,
-            master_peak: (0.0, 0.0),
+            headphone_copy_monitor: false,
+            monitor_peak: (0.0, 0.0),
             scratch_master: Vec::new(),
             scratch_mixed: Vec::new(),
             popped: HashMap::new(),
             mix_fifos: HashMap::new(),
             mix_last: HashMap::new(),
             mix_peaks: HashMap::new(),
-        };
-        // Default Master is Enabled (no device). Opening WASAPI/HAL here
-        // grabbed the machine output before the host could apply session buses.
-        let master_kind = DEVICE_NONE;
-        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, master_kind, "", 0, 1);
-        graph.upsert_bus(
-            HEADPHONE_BUS,
-            "Headphone",
-            ROLE_HEADPHONE,
-            DEVICE_NONE,
-            "",
-            0,
-            1,
-        );
-        graph
+        }
     }
 
-    pub fn upsert_bus(
+    pub fn ensure_unit(&mut self, unit_id: u64) {
+        self.unit_buses
+            .entry(unit_id)
+            .or_insert_with(|| AudioBus::silent(unit_id));
+        self.unit_links
+            .entry(unit_id)
+            .or_insert(UnitLink { mode: LINK_FOLLOW });
+    }
+
+    pub fn remove_unit(&mut self, unit_id: u64) {
+        self.unit_buses.remove(&unit_id);
+        self.unit_links.remove(&unit_id);
+        for input in self.inputs.values_mut() {
+            input.units.retain(|id| *id != unit_id);
+        }
+        if self.headphone_cue_unit == unit_id {
+            self.headphone_cue_unit = self.unit_buses.keys().copied().next().unwrap_or(0);
+        }
+    }
+
+    pub fn set_unit_device(
         &mut self,
-        id: u64,
-        name: &str,
-        role: u32,
+        unit_id: u64,
         device_kind: u32,
         device_id: &str,
         map_left: i32,
         map_right: i32,
     ) {
-        if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == id) {
-            bus.name = name.to_string();
-            bus.role = role;
+        self.ensure_unit(unit_id);
+        if let Some(bus) = self.unit_buses.get_mut(&unit_id) {
             bus.device_kind = device_kind;
             bus.device_id = device_id.to_string();
             bus.map_left = map_left;
             bus.map_right = map_right;
-            return;
-        }
-        let bit = if role == ROLE_MASTER {
-            0
-        } else if role == ROLE_HEADPHONE {
-            1
-        } else {
-            // Input routing is a 32-bit mask; sharing a bit would silently feed two buses.
-            let Some(bit) = (2..32).find(|bit| self.buses.iter().all(|bus| bus.bit != *bit)) else {
-                crate::diag::error(&format!(
-                    "audio: bus '{name}' rejected, all 30 aux bus slots are in use"
-                ));
-                return;
-            };
-            bit
-        };
-        self.buses.push(AudioBus {
-            id,
-            name: name.to_string(),
-            role,
-            bit,
-            device_kind,
-            device_id: device_id.to_string(),
-            map_left,
-            map_right,
-            gain: 1.0,
-            mute: false,
-            peak: (0.0, 0.0),
-            ring: BusRing::new(),
-        });
-    }
-
-    pub fn remove_bus(&mut self, id: u64) {
-        self.buses
-            .retain(|bus| !(bus.id == id && bus.role == ROLE_AUX));
-        for link in self.unit_links.values_mut() {
-            if link.bus_id == id {
-                link.bus_id = MASTER_BUS;
-            }
         }
     }
 
-    pub fn set_input(&mut self, id: u64, bus_mask: u32, gain: f32, mute: bool) {
-        self.inputs.insert(
-            id,
-            InputAudio {
-                bus_mask,
-                gain,
-                mute,
-            },
-        );
+    pub fn set_headphone_device(
+        &mut self,
+        device_kind: u32,
+        device_id: &str,
+        map_left: i32,
+        map_right: i32,
+    ) {
+        self.headphone.device_kind = device_kind;
+        self.headphone.device_id = device_id.to_string();
+        self.headphone.map_left = map_left;
+        self.headphone.map_right = map_right;
+    }
+
+    pub fn set_input(&mut self, id: u64, units: &[u64], gain: f32, mute: bool) {
+        let mut units = units.to_vec();
+        units.sort_unstable();
+        units.dedup();
+        self.inputs.insert(id, InputAudio { units, gain, mute });
     }
 
     pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
@@ -335,21 +299,28 @@ impl AudioGraph {
     }
 
     pub fn set_bus_gain(&mut self, id: u64, gain: f32, mute: bool) {
-        if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == id) {
-            bus.gain = gain.max(0.0);
+        let gain = gain.max(0.0);
+        if id == HEADPHONE_BUS {
+            self.headphone.gain = gain;
+            self.headphone.mute = mute;
+            return;
+        }
+        if let Some(bus) = self.unit_buses.get_mut(&id) {
+            bus.gain = gain;
             bus.mute = mute;
         }
     }
 
-    pub fn set_unit_link(&mut self, unit_id: u64, bus_id: u64, mode: u32) {
-        self.unit_links.insert(unit_id, UnitLink { bus_id, mode });
+    pub fn set_unit_link(&mut self, unit_id: u64, mode: u32) {
+        self.ensure_unit(unit_id);
+        self.unit_links.insert(unit_id, UnitLink { mode });
     }
 
     pub fn device_groups(&self) -> Vec<(super::DeviceKey, Vec<(Arc<BusRing>, i32, i32)>)> {
         let mut groups: HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>> = HashMap::new();
-        for bus in &self.buses {
+        let push = |bus: &AudioBus, groups: &mut HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>>| {
             if !bus_output_armed(bus) {
-                continue;
+                return;
             }
             let key = DeviceKey {
                 kind: bus.device_kind,
@@ -360,7 +331,11 @@ impl AudioGraph {
                 bus.map_left,
                 bus.map_right,
             ));
+        };
+        for bus in self.unit_buses.values() {
+            push(bus, &mut groups);
         }
+        push(&self.headphone, &mut groups);
         groups.into_iter().collect()
     }
 
@@ -402,176 +377,162 @@ impl AudioGraph {
                 .map(|spec| (spec.0, spec.3.as_ref()))
                 .collect();
             self.pop_mix_inputs(mix_inputs, frames, fps_num, fps_den);
-            let bus_ids: Vec<u64> = self.buses.iter().map(|bus| bus.id).collect();
-            for bus_id in bus_ids {
-                let (role, bit, copy_master, fader) = {
-                    let Some(bus) = self.buses.iter().find(|bus| bus.id == bus_id) else {
+            let unit_ids: Vec<u64> = self.unit_buses.keys().copied().collect();
+            for unit_id in unit_ids {
+                let fader = {
+                    let Some(bus) = self.unit_buses.get(&unit_id) else {
                         continue;
                     };
-                    let fader = if bus.mute { 0.0 } else { bus.gain.max(0.0) };
-                    (
-                        bus.role,
-                        bus.bit,
-                        self.headphone_copy_master && bus.role == ROLE_HEADPHONE,
-                        fader,
-                    )
+                    if bus.mute { 0.0 } else { bus.gain.max(0.0) }
                 };
-                if copy_master {
-                    self.scratch_mixed.clear();
-                    self.scratch_mixed.extend_from_slice(&self.scratch_master);
-                    crate::simd::scale_f32(&mut self.scratch_mixed, fader);
-                    self.push_mix_from_bus(bus_id, mix_inputs);
-                    self.mix_self_copies(bus_id, role, snapshot, &spec_map, mix_inputs);
-                    if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
-                        bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
-                    }
-                    delay.push(bus_id, &self.scratch_mixed);
-                    continue;
+                self.render_bus(unit_id, false, fader, snapshot, &spec_map, mix_inputs, frames);
+                if unit_id == self.headphone_cue_unit {
+                    self.scratch_master.clear();
+                    self.scratch_master.extend_from_slice(&self.scratch_mixed);
+                    self.monitor_peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
-                let gains = self.gains_for_bus(bus_id, role, bit, snapshot, &spec_map, mix_inputs);
-                self.scratch_mixed.clear();
-                self.scratch_mixed.resize(frames * 2, 0.0);
-                for (id, gain) in gains {
-                    if gain.abs() < 1e-6 {
-                        continue;
-                    }
-                    let Some(samples) = self.popped.get(&id) else {
-                        continue;
-                    };
-                    crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
-                }
-                crate::simd::scale_f32(&mut self.scratch_mixed, fader);
-                self.push_mix_from_bus(bus_id, mix_inputs);
-                self.mix_self_copies(bus_id, role, snapshot, &spec_map, mix_inputs);
-                if role == ROLE_MASTER {
-                    self.scratch_master.copy_from_slice(&self.scratch_mixed);
-                    self.master_peak = crate::simd::peak_interleaved(&self.scratch_mixed);
-                }
-                if let Some(bus) = self.buses.iter_mut().find(|bus| bus.id == bus_id) {
+                if let Some(bus) = self.unit_buses.get_mut(&unit_id) {
                     bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
-                delay.push(bus_id, &self.scratch_mixed);
+                delay.push(unit_id, &self.scratch_mixed);
             }
+            let hp_fader = if self.headphone.mute {
+                0.0
+            } else {
+                self.headphone.gain.max(0.0)
+            };
+            if self.headphone_copy_monitor {
+                self.scratch_mixed.clear();
+                self.scratch_mixed.extend_from_slice(&self.scratch_master);
+                crate::simd::scale_f32(&mut self.scratch_mixed, hp_fader);
+            } else {
+                self.render_bus(
+                    self.headphone_cue_unit,
+                    true,
+                    hp_fader,
+                    snapshot,
+                    &spec_map,
+                    mix_inputs,
+                    frames,
+                );
+            }
+            self.headphone.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
+            delay.push(HEADPHONE_BUS, &self.scratch_mixed);
         }
-        let mut by_bus = HashMap::new();
-        let bus_ids: Vec<(u64, bool, Arc<BusRing>)> = self
-            .buses
+        let mut by_unit = HashMap::new();
+        let buses: Vec<(u64, bool, Arc<BusRing>)> = self
+            .unit_buses
             .iter()
-            .map(|bus| (bus.id, bus_output_armed(bus), Arc::clone(&bus.ring)))
+            .map(|(id, bus)| (*id, bus_output_armed(bus), Arc::clone(&bus.ring)))
             .collect();
-        for (bus_id, armed, ring) in bus_ids {
-            let delayed = delay.pop(bus_id, frames, !produce);
+        for (unit_id, armed, ring) in buses {
+            let delayed = delay.pop(unit_id, frames, !produce);
             if armed {
                 ring.push(&delayed);
             } else {
                 ring.release();
             }
-            by_bus.insert(bus_id, delayed);
+            by_unit.insert(unit_id, delayed);
         }
-        let master = by_bus
-            .get(&MASTER_BUS)
+        let hp_armed = bus_output_armed(&self.headphone);
+        let hp_ring = Arc::clone(&self.headphone.ring);
+        let headphone = delay.pop(HEADPHONE_BUS, frames, !produce);
+        if hp_armed {
+            hp_ring.push(&headphone);
+        } else {
+            hp_ring.release();
+        }
+        let monitor = by_unit
+            .get(&self.headphone_cue_unit)
             .cloned()
             .unwrap_or_else(|| vec![0.0; frames * 2]);
-        MixedAudio { master, by_bus }
+        MixedAudio { monitor, by_unit }
     }
 
-    fn gains_for_bus(
+    fn render_bus(
+        &mut self,
+        unit_id: u64,
+        headphone: bool,
+        fader: f32,
+        snapshot: &[crate::abi::UnitSnap],
+        spec_map: &HashMap<u64, &[OverlayDesc]>,
+        mix_inputs: &HashMap<u64, MixInputSpec>,
+        frames: usize,
+    ) {
+        let gains = self.gains_for_unit(unit_id, headphone, snapshot, spec_map, mix_inputs);
+        self.scratch_mixed.clear();
+        self.scratch_mixed.resize(frames * 2, 0.0);
+        for (id, gain) in gains {
+            if gain.abs() < 1e-6 {
+                continue;
+            }
+            let Some(samples) = self.popped.get(&id) else {
+                continue;
+            };
+            crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
+        }
+        crate::simd::scale_f32(&mut self.scratch_mixed, fader);
+        if !headphone {
+            self.push_mix_from_unit(unit_id, mix_inputs);
+            self.mix_self_copies(unit_id, snapshot, spec_map, mix_inputs);
+        }
+    }
+
+    fn gains_for_unit(
         &self,
-        bus_id: u64,
-        role: u32,
-        bit: u32,
+        unit_id: u64,
+        headphone: bool,
         snapshot: &[crate::abi::UnitSnap],
         spec_map: &HashMap<u64, &[OverlayDesc]>,
         mix_inputs: &HashMap<u64, MixInputSpec>,
     ) -> Vec<(u64, f32)> {
         let mut gains = HashMap::<u64, f32>::new();
-        let follow_units: Vec<(u64, UnitState, bool)> = if role == ROLE_HEADPHONE
-            && !self.headphone_copy_master
-        {
-            snapshot
-                .iter()
-                .filter(|(id, ..)| *id == self.headphone_cue_unit || self.headphone_cue_unit == 0)
-                .map(|(id, _, _, _, _, state, _, _)| (*id, *state, true))
-                .collect()
-        } else {
-            snapshot
-                .iter()
-                .filter_map(|(id, _, _, _, _, state, _, _)| {
-                    let link = self.unit_links.get(id).copied().unwrap_or(UnitLink {
-                        bus_id: MASTER_BUS,
-                        mode: LINK_FOLLOW,
-                    });
-                    if link.bus_id != bus_id {
-                        return None;
-                    }
-                    Some((*id, *state, link.mode == LINK_FOLLOW))
-                })
-                .collect()
+        let Some(snap) = snapshot.iter().find(|item| item.id == unit_id) else {
+            return Vec::new();
         };
-        let any_independent = follow_units.iter().any(|(_, _, follow)| !*follow)
-            || (role != ROLE_HEADPHONE
-                && snapshot.iter().all(|(id, ..)| {
-                    self.unit_links
-                        .get(id)
-                        .map(|link| link.bus_id != bus_id)
-                        .unwrap_or(true)
-                })
-                && follow_units.is_empty());
-        if any_independent && follow_units.iter().all(|(_, _, follow)| !*follow) {
-            self.add_independent(bit, mix_inputs, &mut gains);
+        let follow = headphone
+            || self
+                .unit_links
+                .get(&unit_id)
+                .is_none_or(|link| link.mode == LINK_FOLLOW);
+        if !follow {
+            self.add_routed(unit_id, mix_inputs, &mut gains);
             return gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect();
         }
-        if follow_units.is_empty() && role != ROLE_HEADPHONE {
-            self.add_independent(bit, mix_inputs, &mut gains);
-            return gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect();
-        }
-        for (_, state, follow) in &follow_units {
-            if *follow {
-                let mix = state.mix.clamp(0.0, 1.0);
-                let prv_gain = if role == ROLE_HEADPHONE { 0.35 } else { mix };
-                let pgm_gain = if role == ROLE_HEADPHONE {
-                    1.0
-                } else {
-                    1.0 - mix
-                };
-                add_source(
-                    state.program_source,
-                    pgm_gain,
-                    spec_map,
-                    &self.inputs,
-                    mix_inputs,
-                    bus_id,
-                    bit,
-                    &mut gains,
-                );
-                add_source(
-                    state.mix_incoming(),
-                    prv_gain,
-                    spec_map,
-                    &self.inputs,
-                    mix_inputs,
-                    bus_id,
-                    bit,
-                    &mut gains,
-                );
-                for overlay in state.overlays.iter().take(state.overlay_count as usize) {
-                    if overlay.audio_follow == 0 {
-                        continue;
-                    }
-                    add_source(
-                        overlay.source_id,
-                        overlay.opacity.max(0.0),
-                        spec_map,
-                        &self.inputs,
-                        mix_inputs,
-                        bus_id,
-                        bit,
-                        &mut gains,
-                    );
-                }
-            } else {
-                self.add_independent(bit, mix_inputs, &mut gains);
+        let mix = snap.state.mix.clamp(0.0, 1.0);
+        let prv_gain = if headphone { 0.35 } else { mix };
+        let pgm_gain = if headphone { 1.0 } else { 1.0 - mix };
+        add_source(
+            snap.state.program_source,
+            pgm_gain,
+            spec_map,
+            &self.inputs,
+            mix_inputs,
+            unit_id,
+            &mut gains,
+        );
+        add_source(
+            snap.state.mix_incoming(),
+            prv_gain,
+            spec_map,
+            &self.inputs,
+            mix_inputs,
+            unit_id,
+            &mut gains,
+        );
+        for overlay in snap.overlays.iter() {
+            if overlay.audio_follow == 0 {
+                continue;
             }
+            add_source(
+                overlay.source_id,
+                overlay.opacity.max(0.0),
+                spec_map,
+                &self.inputs,
+                mix_inputs,
+                unit_id,
+                &mut gains,
+            );
         }
         gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
     }
@@ -589,7 +550,7 @@ impl AudioGraph {
         for (mix_id, spec) in mix_inputs {
             let slot = self.popped.entry(*mix_id).or_default();
             slot.clear();
-            if spec.audio_bus_id == 0 {
+            if spec.audio_unit() == 0 {
                 slot.resize(frames * 2, 0.0);
                 self.mix_peaks.insert(*mix_id, (0.0, 0.0));
                 continue;
@@ -618,13 +579,12 @@ impl AudioGraph {
 
     fn mix_self_copies(
         &mut self,
-        bus_id: u64,
-        role: u32,
+        unit_id: u64,
         snapshot: &[crate::abi::UnitSnap],
         spec_map: &HashMap<u64, &[OverlayDesc]>,
         mix_inputs: &HashMap<u64, MixInputSpec>,
     ) {
-        let extras = self.self_mix_gains(bus_id, role, snapshot, spec_map, mix_inputs);
+        let extras = self.self_mix_gains(unit_id, snapshot, spec_map, mix_inputs);
         for (id, gain) in extras {
             if gain.abs() < 1e-6 {
                 continue;
@@ -638,92 +598,61 @@ impl AudioGraph {
 
     fn self_mix_gains(
         &self,
-        bus_id: u64,
-        role: u32,
+        unit_id: u64,
         snapshot: &[crate::abi::UnitSnap],
         spec_map: &HashMap<u64, &[OverlayDesc]>,
         mix_inputs: &HashMap<u64, MixInputSpec>,
     ) -> Vec<(u64, f32)> {
-        if !mix_inputs
-            .values()
-            .any(|spec| spec.audio_bus_id == bus_id && spec.audio_bus_id != 0)
+        if !mix_inputs.values().any(|spec| spec.audio_unit() == unit_id) {
+            return Vec::new();
+        }
+        let Some(snap) = snapshot.iter().find(|item| item.id == unit_id) else {
+            return Vec::new();
+        };
+        if self
+            .unit_links
+            .get(&unit_id)
+            .is_some_and(|link| link.mode != LINK_FOLLOW)
         {
             return Vec::new();
         }
-        let follow_units: Vec<(u64, UnitState, bool)> = if role == ROLE_HEADPHONE
-            && !self.headphone_copy_master
-        {
-            snapshot
-                .iter()
-                .filter(|(id, ..)| *id == self.headphone_cue_unit || self.headphone_cue_unit == 0)
-                .map(|(id, _, _, _, _, state, _, _)| (*id, *state, true))
-                .collect()
-        } else {
-            snapshot
-                .iter()
-                .filter_map(|(id, _, _, _, _, state, _, _)| {
-                    let link = self.unit_links.get(id).copied().unwrap_or(UnitLink {
-                        bus_id: MASTER_BUS,
-                        mode: LINK_FOLLOW,
-                    });
-                    if link.bus_id != bus_id {
-                        return None;
-                    }
-                    Some((*id, *state, link.mode == LINK_FOLLOW))
-                })
-                .collect()
-        };
         let mut gains = HashMap::<u64, f32>::new();
-        for (_, state, follow) in &follow_units {
-            if !*follow {
+        let mix = snap.state.mix.clamp(0.0, 1.0);
+        add_self_mix(
+            snap.state.program_source,
+            1.0 - mix,
+            spec_map,
+            mix_inputs,
+            unit_id,
+            &mut gains,
+        );
+        add_self_mix(
+            snap.state.mix_incoming(),
+            mix,
+            spec_map,
+            mix_inputs,
+            unit_id,
+            &mut gains,
+        );
+        for overlay in snap.overlays.iter() {
+            if overlay.audio_follow == 0 {
                 continue;
             }
-            let mix = state.mix.clamp(0.0, 1.0);
-            let prv_gain = if role == ROLE_HEADPHONE { 0.35 } else { mix };
-            let pgm_gain = if role == ROLE_HEADPHONE {
-                1.0
-            } else {
-                1.0 - mix
-            };
             add_self_mix(
-                state.program_source,
-                pgm_gain,
+                overlay.source_id,
+                overlay.opacity.max(0.0),
                 spec_map,
-                &self.inputs,
                 mix_inputs,
-                bus_id,
+                unit_id,
                 &mut gains,
             );
-            add_self_mix(
-                state.mix_incoming(),
-                prv_gain,
-                spec_map,
-                &self.inputs,
-                mix_inputs,
-                bus_id,
-                &mut gains,
-            );
-            for overlay in state.overlays.iter().take(state.overlay_count as usize) {
-                if overlay.audio_follow == 0 {
-                    continue;
-                }
-                add_self_mix(
-                    overlay.source_id,
-                    overlay.opacity.max(0.0),
-                    spec_map,
-                    &self.inputs,
-                    mix_inputs,
-                    bus_id,
-                    &mut gains,
-                );
-            }
         }
         gains.into_iter().filter(|(_, gain)| *gain > 1e-4).collect()
     }
 
-    fn push_mix_from_bus(&mut self, bus_id: u64, mix_inputs: &HashMap<u64, MixInputSpec>) {
+    fn push_mix_from_unit(&mut self, unit_id: u64, mix_inputs: &HashMap<u64, MixInputSpec>) {
         for (mix_id, spec) in mix_inputs {
-            if spec.audio_bus_id != bus_id {
+            if spec.audio_unit() != unit_id {
                 continue;
             }
             let fifo = self.mix_fifos.entry(*mix_id).or_default();
@@ -734,15 +663,14 @@ impl AudioGraph {
         }
     }
 
-    fn add_independent(
+    fn add_routed(
         &self,
-        bit: u32,
+        unit_id: u64,
         mix_inputs: &HashMap<u64, MixInputSpec>,
         gains: &mut HashMap<u64, f32>,
     ) {
-        let mask = 1u32 << bit;
         for (id, input) in &self.inputs {
-            if mix_inputs.contains_key(id) || input.mute || input.bus_mask & mask == 0 {
+            if mix_inputs.contains_key(id) || input.mute || !input.units.contains(&unit_id) {
                 continue;
             }
             *gains.entry(*id).or_insert(0.0) += input.gain.max(0.0);
@@ -761,8 +689,7 @@ fn add_source(
     spec_map: &HashMap<u64, &[OverlayDesc]>,
     inputs: &HashMap<u64, InputAudio>,
     mix_inputs: &HashMap<u64, MixInputSpec>,
-    bus_id: u64,
-    bit: u32,
+    unit_id: u64,
     gains: &mut HashMap<u64, f32>,
 ) {
     if gain.abs() < 1e-4 {
@@ -780,8 +707,7 @@ fn add_source(
                     spec_map,
                     inputs,
                     mix_inputs,
-                    bus_id,
-                    bit,
+                    unit_id,
                     gains,
                 );
             }
@@ -795,7 +721,7 @@ fn add_source(
         return;
     }
     if let Some(spec) = mix_inputs.get(&id) {
-        if spec.audio_bus_id == 0 || spec.audio_bus_id == bus_id {
+        if spec.audio_unit() == 0 || spec.audio_unit() == unit_id {
             return;
         }
         let level = gain
@@ -809,14 +735,13 @@ fn add_source(
             .or_insert(level);
         return;
     }
-    let mask = 1u32 << bit;
-    let (routed, level, mute) = match inputs.get(&id) {
-        Some(input) => (input.bus_mask & mask != 0, input.gain.max(0.0), input.mute),
-        None => (bit == 0, 1.0, false),
+    let Some(input) = inputs.get(&id) else {
+        return;
     };
-    if mute || !routed {
+    if input.mute || !input.units.contains(&unit_id) {
         return;
     }
+    let level = input.gain.max(0.0);
     let level = gain * level;
     gains
         .entry(id)
@@ -828,9 +753,8 @@ fn add_self_mix(
     id: u64,
     gain: f32,
     spec_map: &HashMap<u64, &[OverlayDesc]>,
-    inputs: &HashMap<u64, InputAudio>,
     mix_inputs: &HashMap<u64, MixInputSpec>,
-    bus_id: u64,
+    unit_id: u64,
     gains: &mut HashMap<u64, f32>,
 ) {
     if gain.abs() < 1e-4 {
@@ -846,9 +770,8 @@ fn add_self_mix(
                     layer.source_id,
                     gain * layer.opacity.max(0.0),
                     spec_map,
-                    inputs,
                     mix_inputs,
-                    bus_id,
+                    unit_id,
                     gains,
                 );
             }
@@ -858,23 +781,19 @@ fn add_self_mix(
     let Some(spec) = mix_inputs.get(&id) else {
         return;
     };
-    if spec.audio_bus_id == 0 || spec.audio_bus_id != bus_id {
+    if spec.audio_unit() != unit_id {
         return;
     }
-    let level = gain
-        * inputs
-            .get(&id)
-            .map(|input| input.gain.max(0.0))
-            .unwrap_or(1.0);
     gains
         .entry(id)
-        .and_modify(|current| *current = (*current).max(level))
-        .or_insert(level);
+        .and_modify(|current| *current = (*current).max(gain))
+        .or_insert(gain);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::abi::UnitState;
     use crate::audio::AudioDelay;
     use crate::upload::AudioInputStore;
 
@@ -894,17 +813,16 @@ mod tests {
             60,
             1,
         );
-        assert_eq!(mixed.master.len(), 128);
-        for bus in &graph.buses {
-            assert_eq!(bus.ring.fill_frames(), 0, "bus {}", bus.id);
-            assert!(!bus.ring.is_primed(), "bus {}", bus.id);
-        }
+        assert_eq!(mixed.monitor.len(), 128);
+        assert_eq!(graph.headphone.ring.fill_frames(), 0);
+        assert!(!graph.headphone.ring.is_primed());
     }
 
     #[test]
     fn armed_bus_queues_mixed_audio() {
         let mut graph = AudioGraph::with_defaults();
-        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, DEVICE_WASAPI, "", 0, 1);
+        graph.ensure_unit(1);
+        graph.set_unit_device(1, DEVICE_WASAPI, "", 0, 1);
         let mut uploads = AudioInputStore::default();
         let mut delay = AudioDelay::new();
         graph.mix(
@@ -918,38 +836,29 @@ mod tests {
             60,
             1,
         );
-        let master = graph.buses.iter().find(|bus| bus.id == MASTER_BUS).unwrap();
+        let master = graph.unit_buses.get(&1).unwrap();
         assert_eq!(master.ring.fill_frames(), 64);
-        let headphone = graph
-            .buses
-            .iter()
-            .find(|bus| bus.id == HEADPHONE_BUS)
-            .unwrap();
-        assert_eq!(headphone.ring.fill_frames(), 0);
+        assert_eq!(graph.headphone.ring.fill_frames(), 0);
     }
 
     #[test]
-    fn aux_buses_never_share_a_routing_bit() {
+    fn many_units_each_get_a_bus() {
         let mut graph = AudioGraph::with_defaults();
-        for id in 100..140u64 {
-            graph.upsert_bus(id, "aux", ROLE_AUX, DEVICE_NONE, "", 0, 1);
+        for id in 1..40u64 {
+            graph.ensure_unit(id);
         }
-        let aux: Vec<u32> = graph
-            .buses
-            .iter()
-            .filter(|bus| bus.role == ROLE_AUX)
-            .map(|bus| bus.bit)
-            .collect();
-        assert_eq!(aux.len(), 30);
-        let unique: std::collections::HashSet<u32> = aux.iter().copied().collect();
-        assert_eq!(unique.len(), aux.len());
+        assert_eq!(graph.unit_buses.len(), 39);
     }
 
     #[test]
-    fn resolve_output_audio_bus_keeps_none() {
-        assert_eq!(resolve_output_audio_bus(0), 0);
-        assert_eq!(resolve_output_audio_bus(MASTER_BUS), MASTER_BUS);
-        assert_eq!(resolve_output_audio_bus(3), 3);
+    fn for_unit_does_not_alias_unknown_to_monitor() {
+        let mixed = MixedAudio {
+            monitor: vec![0.5, -0.5],
+            by_unit: HashMap::from([(3, vec![0.25, 0.25])]),
+        };
+        assert!(mixed.for_unit(0).is_empty());
+        assert_eq!(mixed.for_unit(3), &[0.25, 0.25]);
+        assert!(mixed.for_unit(9).is_empty());
     }
 
     #[test]
@@ -957,7 +866,8 @@ mod tests {
         let mut graph = AudioGraph::with_defaults();
         let mut uploads = AudioInputStore::default();
         let mut delay = AudioDelay::new();
-        graph.set_input(10, 1, 1.0, false);
+        graph.ensure_unit(1);
+        graph.set_input(10, &[1], 1.0, false);
         uploads.ingest_audio(
             10,
             crate::upload::AudioPacket {
@@ -968,19 +878,13 @@ mod tests {
                 pcm_planar_f32: vec![0.25; AUDIO_RATE as usize * 2],
             },
         );
-        let snapshot = [(
+        let snapshot = [crate::abi::UnitSnap::bare(
             1,
-            1920,
-            1080,
-            60_000,
-            1_001,
             UnitState {
                 program_source: 10,
                 preview_source: 10,
                 ..UnitState::default()
             },
-            0,
-            None,
         )];
         for (fps_num, fps_den, frames) in [(60_000u32, 1_001u32, 300u32), (30_000, 1_001, 150)] {
             let mut carry = 0u64;
@@ -1003,24 +907,12 @@ mod tests {
                     fps_num,
                     fps_den,
                 );
-                assert_eq!(mixed.master.len(), audio_frames * 2);
+                assert_eq!(mixed.monitor.len(), audio_frames * 2);
                 total += audio_frames;
             }
             let expected = (AUDIO_RATE as u64 * u64::from(fps_den) * u64::from(frames)
                 / u64::from(fps_num)) as usize;
             assert_eq!(total, expected, "fps {fps_num}/{fps_den}");
         }
-    }
-
-    #[test]
-    fn mixed_audio_for_bus_does_not_alias_unknown_to_master() {
-        let mixed = MixedAudio {
-            master: vec![0.5, -0.5],
-            by_bus: HashMap::from([(3, vec![0.25, 0.25])]),
-        };
-        assert!(mixed.for_bus(0).is_empty());
-        assert_eq!(mixed.for_bus(1), &[0.5, -0.5]);
-        assert_eq!(mixed.for_bus(3), &[0.25, 0.25]);
-        assert!(mixed.for_bus(9).is_empty());
     }
 }

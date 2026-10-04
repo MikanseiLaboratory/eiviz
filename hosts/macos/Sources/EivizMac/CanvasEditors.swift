@@ -12,6 +12,11 @@ struct SceneEditorView: View {
     @State private var editorMonitor: UInt64 = 0
     @State private var selectedTags: [String] = []
     @State private var layoutSnap = true
+    @State private var live = true
+    @State private var working: [SceneLayer]?
+    @State private var draftGpuId: UInt64 = 0
+    @State private var previewSource: UInt64 = 0
+    @State private var committed = false
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -131,13 +136,22 @@ struct SceneEditorView: View {
             .clipped()
 
             VStack(alignment: .leading) {
-                Text("Live preview").fontWeight(.bold)
+                HStack {
+                    Text("Live preview").fontWeight(.bold)
+                    Spacer()
+                    Toggle(isOn: Binding(get: { live }, set: { setLive($0) })) {
+                        Text(L10n.t("editor.live")).fontWeight(.bold)
+                    }
+                    .toggleStyle(.button)
+                    .disabled(mixer.isRemote)
+                    .help(L10n.t("editor.liveHelp"))
+                }
                 if mixer.isRemote {
                     Color.black
                         .aspectRatio(projectAspect, contentMode: .fit)
                         .frame(maxWidth: .infinity)
-                } else if let scene = current, editorMonitor != 0 {
-                    MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: scene.gpuId))
+                } else if editorMonitor != 0, previewSource != 0 {
+                    MetalPreviewRepresentable(role: .monitor(monitorId: editorMonitor, sourceId: previewSource))
                         .id(editorMonitor)
                         .aspectRatio(projectAspect, contentMode: .fit)
                         .frame(maxWidth: .infinity)
@@ -153,6 +167,10 @@ struct SceneEditorView: View {
                 HStack {
                     Spacer()
                     Button("OK") {
+                        committed = true
+                        if !live {
+                            applyWorking()
+                        }
                         if let i = sceneIndex {
                             var scene = mixer.session.scenes[i]
                             let trimmed = name.trimmingCharacters(in: .whitespaces)
@@ -166,15 +184,10 @@ struct SceneEditorView: View {
                                 mixer.pushScene(scene)
                             }
                         }
+                        releaseDraft()
                         dismiss()
                     }
                     Button("Cancel") {
-                        if let i = sceneIndex {
-                            mixer.session.scenes[i].layers = original
-                            if !mixer.isRemote {
-                                mixer.pushScene(mixer.session.scenes[i])
-                            }
-                        }
                         dismiss()
                     }
                 }
@@ -196,10 +209,59 @@ struct SceneEditorView: View {
             name = current?.name ?? ""
             selectedTags = current?.tags ?? []
             selectedLayer = current?.layers.first?.id
+            previewSource = current?.gpuId ?? 0
             mutate { scene in
                 scene.layers.sort { $0.z > $1.z }
             }
         }
+        .onDisappear {
+            guard !committed else { return }
+            if let i = sceneIndex {
+                mixer.session.scenes[i].layers = original
+                if !mixer.isRemote {
+                    mixer.pushScene(mixer.session.scenes[i])
+                }
+            }
+            releaseDraft()
+        }
+    }
+
+    private func setLive(_ on: Bool) {
+        guard on != live, !mixer.isRemote else { return }
+        if on {
+            applyWorking()
+            if let scene = current {
+                mixer.pushScene(scene)
+                previewSource = scene.gpuId
+            }
+            releaseDraft()
+            working = nil
+            live = true
+            return
+        }
+        working = layers
+        ensureDraft()
+        live = false
+        push()
+        previewSource = draftGpuId
+    }
+
+    private func applyWorking() {
+        guard let working, let i = sceneIndex else { return }
+        mixer.session.scenes[i].layers = working
+    }
+
+    private func ensureDraft() {
+        if draftGpuId != 0 { return }
+        draftGpuId = EIVIZ_SCENE_BASE | mixer.session.nextSceneId
+        mixer.session.nextSceneId += 1
+    }
+
+    private func releaseDraft() {
+        if draftGpuId != 0 {
+            _ = mixer_destroy_scene(draftGpuId)
+        }
+        draftGpuId = 0
     }
 
     private var current: SceneEntry? {
@@ -207,7 +269,7 @@ struct SceneEditorView: View {
         return mixer.session.scenes[i]
     }
 
-    private var layers: [SceneLayer] { current?.layers ?? [] }
+    private var layers: [SceneLayer] { working ?? current?.layers ?? [] }
     private var projectAspect: CGFloat {
         CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height))
     }
@@ -223,11 +285,18 @@ struct SceneEditorView: View {
     private func mutate(_ body: (inout SceneEntry) -> Void) {
         guard let i = sceneIndex else { return }
         var scene = mixer.session.scenes[i]
+        if !live {
+            scene.layers = working ?? scene.layers
+        }
         body(&scene)
         for index in scene.layers.indices {
             scene.layers[index].z = Int32(scene.layers.count - 1 - index)
         }
-        mixer.session.scenes[i] = scene
+        if live {
+            mixer.session.scenes[i] = scene
+        } else {
+            working = scene.layers
+        }
     }
 
     private func addLayer() {
@@ -306,7 +375,14 @@ struct SceneEditorView: View {
     }
 
     private func push() {
-        if let scene = current { mixer.pushScene(scene) }
+        guard let scene = current else { return }
+        if live {
+            mixer.pushScene(scene)
+            return
+        }
+        var copy = scene
+        copy.layers = working ?? scene.layers
+        mixer.pushScene(copy, gpuId: draftGpuId)
     }
 
     private func layerFields(_ index: Int) -> some View {
@@ -411,8 +487,9 @@ struct SceneEditorView: View {
     }
 
     private func applyPixel(_ index: Int, axis: PixelAxis, value: Float) {
-        guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
-        var layer = mixer.session.scenes[i].layers[index]
+        let source = live ? current?.layers : working
+        guard var list = source, list.indices.contains(index) else { return }
+        var layer = list[index]
         guard !layer.locked else { return }
         switch axis {
         case .x: layer.x = value / projectW
@@ -435,12 +512,19 @@ struct SceneEditorView: View {
         case .ch: layer.setCropInset(value / projectH, edit: .down)
         case .op: layer.opacity = min(1, max(0, value))
         }
-        mixer.session.scenes[i].layers[index] = layer
+        list[index] = layer
+        if live {
+            guard let i = sceneIndex else { return }
+            mixer.session.scenes[i].layers = list
+        } else {
+            working = list
+        }
     }
 
     private func layer(_ index: Int) -> SceneLayer? {
-        guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return nil }
-        return mixer.session.scenes[i].layers[index]
+        let list = layers
+        guard list.indices.contains(index) else { return nil }
+        return list[index]
     }
 
     private func toggleLayer(_ id: UUID, _ key: WritableKeyPath<SceneLayer, Bool>) {
@@ -456,8 +540,14 @@ struct SceneEditorView: View {
         Binding(
             get: { layer(index)?[keyPath: key] ?? false },
             set: { value in
-                guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
-                mixer.session.scenes[i].layers[index][keyPath: key] = value
+                if live {
+                    guard let i = sceneIndex, mixer.session.scenes[i].layers.indices.contains(index) else { return }
+                    mixer.session.scenes[i].layers[index][keyPath: key] = value
+                } else {
+                    guard var list = working, list.indices.contains(index) else { return }
+                    list[index][keyPath: key] = value
+                    working = list
+                }
                 push()
             }
         )

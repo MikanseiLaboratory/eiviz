@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-struct WireRect: Identifiable, Equatable {
-    var id: UUID
+struct WireRect<ID: Hashable>: Identifiable, Equatable {
+    var id: ID
     var x: Float
     var y: Float
     var width: Float
@@ -16,14 +16,14 @@ struct WireRect: Identifiable, Equatable {
     var cropHeight: Float = 1
 }
 
-struct WireCanvasView: View {
-    var items: [WireRect]
+struct WireCanvasView<ID: Hashable>: View {
+    var items: [WireRect<ID>]
     var aspect: CGFloat = 16.0 / 9.0
     var snapEnabled = false
-    var onFit: ((UUID) -> Void)?
-    var onCrop: ((UUID, Float, Float, Float, Float, Bool) -> Void)?
-    @Binding var selected: UUID?
-    var onChange: (UUID, Float, Float, Float, Float, Bool) -> Void
+    var onFit: ((ID) -> Void)?
+    var onCrop: ((ID, Float, Float, Float, Float, Bool) -> Void)?
+    @Binding var selected: ID?
+    var onChange: (ID, Float, Float, Float, Float, Bool) -> Void
 
     @State private var dragging = false
     @State private var resizing = false
@@ -36,8 +36,8 @@ struct WireCanvasView: View {
     @State private var grab: CGPoint = .zero
     @State private var snapX: Float?
     @State private var snapY: Float?
-    @State private var draft: (UUID, Float, Float, Float, Float)?
-    @State private var cropDraft: (UUID, Float, Float, Float, Float)?
+    @State private var draft: (ID, Float, Float, Float, Float)?
+    @State private var cropDraft: (ID, Float, Float, Float, Float)?
 
     private let hues: [Color] = [
         Color(red: 0xE8 / 255, green: 0x77 / 255, blue: 0x22 / 255),
@@ -240,7 +240,7 @@ struct WireCanvasView: View {
         if cropDown { item.setCrop(.down, 1 - item.cropY - item.cropHeight - dy / item.height) }
     }
 
-    private func snapMove(x: inout Float, y: inout Float, width: Float, height: Float, except: UUID, canvas: CGSize) {
+    private func snapMove(x: inout Float, y: inout Float, width: Float, height: Float, except: ID, canvas: CGSize) {
         let xs = guides(except: except, horizontal: true)
         let ys = guides(except: except, horizontal: false)
         let horizontal = snappedAxis(raw: x, size: width, guides: xs, pixels: canvas.width, latched: snapX)
@@ -251,7 +251,7 @@ struct WireCanvasView: View {
         snapY = vertical.latch
     }
 
-    private func snapResize(x: Float, y: Float, width: inout Float, height: inout Float, linked: Bool, except: UUID, canvas: CGSize) {
+    private func snapResize(x: Float, y: Float, width: inout Float, height: inout Float, linked: Bool, except: ID, canvas: CGSize) {
         let xThreshold = Float(6 / max(canvas.width, 1))
         let yThreshold = Float(6 / max(canvas.height, 1))
         let xs = guides(except: except, horizontal: true)
@@ -263,7 +263,7 @@ struct WireCanvasView: View {
         height = max(0.02, y + height + bestDelta([y + height], ys, yThreshold) - y)
     }
 
-    private func guides(except: UUID, horizontal: Bool) -> [Float] {
+    private func guides(except: ID, horizontal: Bool) -> [Float] {
         var values: [Float] = [0, 0.5, 1]
         for item in items where item.id != except && item.enabled {
             if horizontal {

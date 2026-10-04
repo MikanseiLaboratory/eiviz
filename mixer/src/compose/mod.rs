@@ -90,6 +90,27 @@ fn crop_uv(crop: Rect) -> [f32; 4] {
     ]
 }
 
+/// Normalized destination rect that fits `src` inside `dst` without stretching.
+/// Wider sources get bars above and below; taller sources get bars on the sides.
+pub fn fit_rect(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> [f32; 4] {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let src_aspect = src_w as f32 / src_h as f32;
+    let dst_aspect = dst_w as f32 / dst_h as f32;
+    const ASPECT_EPS: f32 = 1.0e-4;
+    if (src_aspect - dst_aspect).abs() <= ASPECT_EPS {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    if src_aspect > dst_aspect {
+        let height = dst_aspect / src_aspect;
+        [0.0, (1.0 - height) * 0.5, 1.0, height]
+    } else {
+        let width = src_aspect / dst_aspect;
+        [(1.0 - width) * 0.5, 0.0, width, 1.0]
+    }
+}
+
 fn crop_blit(rect: [f32; 4], crop: Rect) -> ([f32; 4], [f32; 4]) {
     let uv = crop_uv(crop);
     (
@@ -1348,6 +1369,7 @@ impl Composer {
         device: &GpuDevice,
         unit_id: u64,
         state: &UnitState,
+        overlays: &[OverlayDesc],
         mix_preview: u64,
         encoder: &mut wgpu::CommandEncoder,
         pack_pgm: bool,
@@ -1411,7 +1433,7 @@ impl Composer {
                 height,
             )?;
         }
-        self.draw_overlays_on_program(device, encoder, unit_id, state)?;
+        self.draw_overlays_on_program(device, encoder, unit_id, overlays)?;
         if pack_pgm {
             self.ensure_packed(device, unit_id);
             self.draw_pack(device, encoder, unit_id)?;
@@ -1463,17 +1485,16 @@ impl Composer {
         device: &GpuDevice,
         encoder: &mut wgpu::CommandEncoder,
         unit_id: u64,
-        state: &UnitState,
+        overlays: &[OverlayDesc],
     ) -> Result<(), String> {
-        if state.overlay_count == 0 {
+        if overlays.is_empty() {
             return Ok(());
         }
         let dest = {
             let unit = self.units.get(&unit_id).ok_or("unit missing")?;
             unit.mixed_view.clone()
         };
-        let mut overlays: Vec<OverlayDesc> =
-            state.overlays[..state.overlay_count as usize].to_vec();
+        let mut overlays = overlays.to_vec();
         overlays.sort_by_key(|overlay| overlay.z);
         {
             let mut pass = begin(encoder, &dest);
@@ -2418,11 +2439,17 @@ impl Composer {
         encoder: &mut wgpu::CommandEncoder,
         source_id: u64,
         dest: &wgpu::TextureView,
+        dest_width: u32,
+        dest_height: u32,
     ) -> bool {
         let Some(src) = self.view_for_source(source_id) else {
             return false;
         };
         let packed = self.source_is_packed(source_id);
+        let dst = match self.source_rgba_size(source_id) {
+            Some((width, height)) => fit_rect(width, height, dest_width, dest_height),
+            None => [0.0, 0.0, 1.0, 1.0],
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("thumb"),
@@ -2440,15 +2467,7 @@ impl Composer {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-            self.blit_pass(
-                device,
-                &mut pass,
-                source_id,
-                &src,
-                [0.0, 0.0, 1.0, 1.0],
-                1.0,
-                packed,
-            );
+            self.blit_pass(device, &mut pass, source_id, &src, dst, 1.0, packed);
         }
         true
     }
@@ -2491,6 +2510,11 @@ impl Composer {
             let size = tex.size();
             return Some((size.width.max(1), size.height.max(1)));
         }
+        if let Some(unit_id) = mixing_unit_from_source(source_id) {
+            if let Some(unit) = self.units.get(&unit_id) {
+                return Some((unit.width.max(1), unit.height.max(1)));
+            }
+        }
         let gpu = self.sources.get(&source_id)?;
         let width = if gpu.packed {
             gpu.width.saturating_mul(2)
@@ -2516,7 +2540,7 @@ impl Composer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("eiviz snapshot blit"),
             });
-        if !self.blit_source_to(device, &mut encoder, source_id, &view) {
+        if !self.blit_source_to(device, &mut encoder, source_id, &view, width, height) {
             return None;
         }
         device.submit(Some(encoder.finish()));
@@ -2776,8 +2800,32 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL_UV, crop_blit, crop_uv, validate_wgsl_module};
+    use super::{FULL_UV, crop_blit, crop_uv, fit_rect, validate_wgsl_module};
     use crate::abi::Rect;
+
+    #[test]
+    fn fit_rect_letterboxes_wider_sources() {
+        let rect = fit_rect(1920, 1080, 1440, 1080);
+        assert!((rect[0]).abs() < 1.0e-5);
+        assert!((rect[2] - 1.0).abs() < 1.0e-5);
+        assert!(rect[1] > 0.1 && rect[1] < 0.2);
+        assert!((rect[1] * 2.0 + rect[3] - 1.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn fit_rect_pillarboxes_taller_sources() {
+        let rect = fit_rect(1440, 1080, 1920, 1080);
+        assert!((rect[1]).abs() < 1.0e-5);
+        assert!((rect[3] - 1.0).abs() < 1.0e-5);
+        assert!(rect[0] > 0.1 && rect[0] < 0.15);
+        assert!((rect[0] * 2.0 + rect[2] - 1.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn fit_rect_keeps_matching_aspect() {
+        assert_eq!(fit_rect(1920, 1080, 960, 540), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(fit_rect(1080, 1920, 540, 960), [0.0, 0.0, 1.0, 1.0]);
+    }
 
     #[test]
     fn crop_uv_never_panics_on_extreme_input() {

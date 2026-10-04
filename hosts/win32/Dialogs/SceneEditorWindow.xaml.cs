@@ -6,6 +6,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using Eiviz.Host;
 using Eiviz.Host.I18n;
+using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -32,12 +33,19 @@ public partial class SceneEditorWindow : Window
     private float? _snapY;
     private DateTime _lastGpuPush;
     private TagCheckPanel? _tags;
+    private bool _live = true;
+    private ulong _draftGpuId;
+    private bool _draftDefined;
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
         InitializeComponent();
         LayoutSnapButton.Content = "🧲";
         LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
+        LiveButton.Content = Loc.T("editor.live");
+        LiveButton.ToolTip = Loc.T("editor.liveHelp");
+        if (App.IsRemote)
+            LiveButton.IsEnabled = false;
         _scene = scene;
         _session = session;
         _width = width;
@@ -345,7 +353,49 @@ public partial class SceneEditorWindow : Window
     {
         if (App.IsRemote)
             return;
-        MixerApply.DefineScene(_scene, _width, _height);
+        if (_live)
+            MixerApply.DefineScene(_scene, _width, _height);
+        else
+            PushDraft();
+    }
+
+    private void PushDraft()
+    {
+        EnsureDraft();
+        MixerApply.DefineSceneGpu(_draftGpuId, _scene, _width, _height);
+        _draftDefined = true;
+    }
+
+    private void EnsureDraft()
+    {
+        if (_draftGpuId != 0)
+            return;
+        _draftGpuId = MixerNative.SceneGpuId(_session.NextSceneId++);
+    }
+
+    private void ReleaseDraft()
+    {
+        if (_draftDefined)
+            MixerApply.DestroyScene(_draftGpuId);
+        _draftGpuId = 0;
+        _draftDefined = false;
+    }
+
+    private void Live_Click(object sender, RoutedEventArgs e)
+    {
+        var on = LiveButton.IsChecked == true;
+        if (on == _live || App.IsRemote)
+            return;
+        _live = on;
+        if (_live)
+        {
+            MixerApply.DefineScene(_scene, _width, _height);
+            PreviewHost.UpdateMonitorSource(_scene.GpuId);
+            ReleaseDraft();
+            return;
+        }
+        PushDraft();
+        PreviewHost.UpdateMonitorSource(_draftGpuId);
     }
 
     private void AddLayer_Click(object sender, RoutedEventArgs e)
@@ -921,8 +971,8 @@ public partial class SceneEditorWindow : Window
             });
             return;
         }
-        else
-            PushGpu();
+        MixerApply.DefineScene(_scene, _width, _height);
+        ReleaseDraft();
         DialogResult = true;
     }
 
@@ -935,8 +985,10 @@ public partial class SceneEditorWindow : Window
         {
             _scene.Layers.Clear();
             _scene.Layers.AddRange(_original);
-            PushGpu();
+            if (!App.IsRemote)
+                MixerApply.DefineScene(_scene, _width, _height);
         }
+        ReleaseDraft();
         base.OnClosed(e);
     }
 }

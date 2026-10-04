@@ -35,9 +35,9 @@ Webブラウザからの接続時は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`�
 | コマンド | 必要ロール | 説明 |
 | --- | --- | --- |
 | `GetCapabilities` / `GetSnapshot` / `Subscribe` | read | 機能取得、状態取得、イベント購読 |
-| `Preview` / `Cut` / `Auto` / `SetMix` / `OverlayAuto` | operate | スイッチングおよびトランジション操作 |
+| `Preview` / `Cut` / `Auto` / `SetMix` / `OverlayAuto` | operate | スイッチングおよびトランジション操作。`OverlayAuto`はOverlayのIDを指定します |
 | `VideoPlay` / `VideoLoop` / `VideoSeek` | operate | 動画Inputの再生制御 |
-| `AudioSetInput` / `AudioSetBus` | operate | 音声フェーダーおよびバス設定 |
+| `AudioSetInput` / `AudioSetBus` | operate | 入力の送り先Mixing Unit、またはMU Bus/ヘッドホンのゲインとミュート |
 | `SnapshotCmd` / `Discover` | operate | スクリーンショット取得、ソース検出 |
 | `ReplaceSession` | configure | セッション全体の差し替え（リビジョン検証あり） |
 | `MutateSession` | configure | セッションの部分変更（リビジョン不整合時は拒否） |

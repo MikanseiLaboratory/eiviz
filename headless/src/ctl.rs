@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use eiviz_api::client::ControlSession;
 use eiviz_control::SessionMutation;
 use eiviz_control::session::{
-    BusDto, Document, InputDto, MultiviewDto, OutputDto, OverlaySlot, SceneDto, SceneLayer,
+    Document, HeadphoneDto, InputDto, MultiviewDto, OutputDto, OverlaySlot, SceneDto, SceneLayer,
     SceneLayoutPreset, SessionSettings, UnitDto,
 };
 use serde_json::{Value, json};
@@ -73,8 +73,6 @@ pub enum CtlCommand {
     Multiview(MultiviewCmd),
     #[command(subcommand)]
     Output(OutputCmd),
-    #[command(subcommand)]
-    Bus(BusCmd),
     #[command(subcommand)]
     Settings(SettingsCmd),
     #[command(subcommand)]
@@ -350,10 +348,6 @@ pub enum UnitCmd {
 #[derive(Debug, Subcommand)]
 pub enum OverlayCmd {
     Set {
-        #[arg(long, default_value_t = 1)]
-        unit: u64,
-        #[arg(long)]
-        index: u32,
         #[arg(long)]
         from_json: PathBuf,
         #[arg(long)]
@@ -365,7 +359,7 @@ pub enum OverlayCmd {
         #[arg(long, default_value_t = 1)]
         unit: u64,
         #[arg(long)]
-        index: u32,
+        id: u64,
         #[arg(long, default_value_t = 250)]
         duration_ms: u32,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -440,42 +434,27 @@ pub enum OutputCmd {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum BusCmd {
-    List,
-    Add {
-        #[arg(long)]
-        from_json: PathBuf,
-        #[arg(long)]
-        force: bool,
-        #[arg(long)]
-        expected_revision: Option<u64>,
-    },
-    Edit {
-        #[arg(long)]
-        id: u64,
-        #[arg(long)]
-        from_json: PathBuf,
-        #[arg(long)]
-        force: bool,
-        #[arg(long)]
-        expected_revision: Option<u64>,
-    },
-    Delete {
-        #[arg(long)]
-        id: u64,
-        #[arg(long)]
-        force: bool,
-        #[arg(long)]
-        expected_revision: Option<u64>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
 pub enum SettingsCmd {
     Get,
     Set {
         #[arg(long)]
         from_json: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
+    Headphone {
+        #[arg(long)]
+        from_json: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
+    CopyMonitor {
+        #[arg(long, action = clap::ArgAction::Set)]
+        on: bool,
         #[arg(long)]
         force: bool,
         #[arg(long)]
@@ -602,8 +581,8 @@ pub enum AudioCmd {
     Input {
         #[arg(long)]
         id: u64,
-        #[arg(long)]
-        bus_mask: u32,
+        #[arg(long, value_delimiter = ',')]
+        units: Vec<u64>,
         #[arg(long)]
         gain: f32,
         #[arg(long)]
@@ -671,7 +650,6 @@ impl CtlCommand {
             Self::Overlay(_) => "overlay",
             Self::Multiview(_) => "multiview",
             Self::Output(_) => "output",
-            Self::Bus(_) => "bus",
             Self::Settings(_) => "settings",
             Self::Tag(_) => "tag",
             Self::Preset(_) => "preset",
@@ -810,7 +788,6 @@ async fn execute(session: &ControlSession, cmd: CtlCommand) -> Result<CmdResult,
         CtlCommand::Overlay(cmd) => overlay_cmd(session, cmd).await,
         CtlCommand::Multiview(cmd) => multiview_cmd(session, cmd).await,
         CtlCommand::Output(cmd) => output_cmd(session, cmd).await,
-        CtlCommand::Bus(cmd) => bus_cmd(session, cmd).await,
         CtlCommand::Settings(cmd) => settings_cmd(session, cmd).await,
         CtlCommand::Tag(cmd) => tag_cmd(session, cmd).await,
         CtlCommand::Preset(cmd) => preset_cmd(session, cmd).await,
@@ -1278,8 +1255,6 @@ async fn unit_cmd(session: &ControlSession, cmd: UnitCmd) -> Result<CmdResult, S
 async fn overlay_cmd(session: &ControlSession, cmd: OverlayCmd) -> Result<CmdResult, String> {
     match cmd {
         OverlayCmd::Set {
-            unit,
-            index,
             from_json,
             force,
             expected_revision,
@@ -1287,9 +1262,7 @@ async fn overlay_cmd(session: &ControlSession, cmd: OverlayCmd) -> Result<CmdRes
             let slot = read_json::<OverlaySlot>(&from_json)?;
             mutate(
                 session,
-                SessionMutation::SetOverlaySlot {
-                    unit_id: unit,
-                    index,
+                SessionMutation::UpsertOverlay {
                     slot: Box::new(slot),
                 },
                 expected_revision,
@@ -1299,15 +1272,15 @@ async fn overlay_cmd(session: &ControlSession, cmd: OverlayCmd) -> Result<CmdRes
         }
         OverlayCmd::Auto {
             unit,
-            index,
+            id,
             duration_ms,
             on,
         } => {
             session
-                .overlay_auto(unit, index, duration_ms, on)
+                .overlay_auto(unit, id, duration_ms, on)
                 .await
                 .map_err(map_err)?;
-            ok_live(session, json!({ "unit": unit, "index": index, "toOn": on })).await
+            ok_live(session, json!({ "unit": unit, "id": id, "toOn": on })).await
         }
     }
 }
@@ -1421,56 +1394,6 @@ async fn output_cmd(session: &ControlSession, cmd: OutputCmd) -> Result<CmdResul
     }
 }
 
-async fn bus_cmd(session: &ControlSession, cmd: BusCmd) -> Result<CmdResult, String> {
-    match cmd {
-        BusCmd::List => list_field(session, |doc| &doc.buses).await,
-        BusCmd::Add {
-            from_json,
-            force,
-            expected_revision,
-        } => {
-            patch_outputs(session, expected_revision, force, |doc| {
-                doc.buses.push(read_json::<BusDto>(&from_json)?);
-                Ok(())
-            })
-            .await
-        }
-        BusCmd::Edit {
-            id,
-            from_json,
-            force,
-            expected_revision,
-        } => {
-            patch_outputs(session, expected_revision, force, |doc| {
-                let mut bus = read_json::<BusDto>(&from_json)?;
-                bus.id = id;
-                if let Some(existing) = doc.buses.iter_mut().find(|item| item.id == id) {
-                    *existing = bus;
-                } else {
-                    return Err(format!("bus {id} not found"));
-                }
-                Ok(())
-            })
-            .await
-        }
-        BusCmd::Delete {
-            id,
-            force,
-            expected_revision,
-        } => {
-            patch_outputs(session, expected_revision, force, |doc| {
-                let before = doc.buses.len();
-                doc.buses.retain(|item| item.id != id);
-                if doc.buses.len() == before {
-                    return Err(format!("bus {id} not found"));
-                }
-                Ok(())
-            })
-            .await
-        }
-    }
-}
-
 async fn settings_cmd(session: &ControlSession, cmd: SettingsCmd) -> Result<CmdResult, String> {
     match cmd {
         SettingsCmd::Get => {
@@ -1493,10 +1416,50 @@ async fn settings_cmd(session: &ControlSession, cmd: SettingsCmd) -> Result<CmdR
                 SessionMutation::SetSettings {
                     settings: Box::new(settings),
                     outputs: doc.outputs,
-                    buses: doc.buses,
-                    headphone_copy_master: Some(doc.headphone_copy_master),
+                    headphone: Some(doc.headphone),
+                    headphone_copy_monitor: Some(doc.headphone_copy_monitor),
                     next_output_id: doc.next_output_id,
-                    next_bus_id: doc.next_bus_id,
+                },
+                expected,
+            )
+            .await
+        }
+        SettingsCmd::Headphone {
+            from_json,
+            force,
+            expected_revision,
+        } => {
+            let headphone = read_json::<HeadphoneDto>(&from_json)?;
+            let (doc, revision) = load_doc(session).await?;
+            let expected = revision_or(revision, expected_revision, force);
+            apply_mutation(
+                session,
+                SessionMutation::SetSettings {
+                    settings: Box::new(doc.settings),
+                    outputs: doc.outputs,
+                    headphone: Some(headphone),
+                    headphone_copy_monitor: Some(doc.headphone_copy_monitor),
+                    next_output_id: doc.next_output_id,
+                },
+                expected,
+            )
+            .await
+        }
+        SettingsCmd::CopyMonitor {
+            on,
+            force,
+            expected_revision,
+        } => {
+            let (doc, revision) = load_doc(session).await?;
+            let expected = revision_or(revision, expected_revision, force);
+            apply_mutation(
+                session,
+                SessionMutation::SetSettings {
+                    settings: Box::new(doc.settings),
+                    outputs: doc.outputs,
+                    headphone: Some(doc.headphone),
+                    headphone_copy_monitor: Some(on),
+                    next_output_id: doc.next_output_id,
                 },
                 expected,
             )
@@ -1629,11 +1592,11 @@ async fn audio_cmd(session: &ControlSession, cmd: AudioCmd) -> Result<CmdResult,
     match cmd {
         AudioCmd::Input {
             id,
-            bus_mask,
+            units,
             gain,
             mute,
         } => session
-            .audio_set_input(id, bus_mask, gain, mute)
+            .audio_set_input(id, &units, gain, mute)
             .await
             .map_err(map_err)?,
         AudioCmd::Bus { id, gain, mute } => session
@@ -1717,10 +1680,9 @@ async fn patch_outputs(
         SessionMutation::SetSettings {
             settings: Box::new(doc.settings),
             outputs: doc.outputs,
-            buses: doc.buses,
-            headphone_copy_master: Some(doc.headphone_copy_master),
+            headphone: Some(doc.headphone),
+            headphone_copy_monitor: Some(doc.headphone_copy_monitor),
             next_output_id: doc.next_output_id,
-            next_bus_id: doc.next_bus_id,
         },
         expected,
     )

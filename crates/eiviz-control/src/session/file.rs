@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioBusRole, AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BusDto,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, HeadphoneDto, MuBusDto,
     Document, InputDto, InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate,
     MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto,
     OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
@@ -344,17 +344,19 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         inputs: doc.inputs.iter().map(input_to_pb).collect(),
         scenes: doc.scenes.iter().map(scene_to_pb).collect(),
         units: doc.units.iter().map(unit_to_pb).collect(),
+        transitions: doc.transitions.iter().map(transition_to_pb).collect(),
+        overlays: doc.overlays.iter().map(overlay_to_pb).collect(),
+        next_overlay_id: doc.next_overlay_id,
         outputs: doc.outputs.iter().map(output_to_pb).collect(),
         multiviews: doc.multiviews.iter().map(multiview_to_pb).collect(),
-        buses: doc.buses.iter().map(bus_to_pb).collect(),
         next_input_id: doc.next_input_id,
         next_scene_id: doc.next_scene_id,
         next_unit_id: doc.next_unit_id,
         next_output_id: doc.next_output_id,
         next_multiview_id: doc.next_multiview_id,
-        next_bus_id: doc.next_bus_id,
         selected_unit_id: doc.selected_unit_id,
-        headphone_copy_master: doc.headphone_copy_master,
+        headphone_copy_monitor: doc.headphone_copy_monitor,
+        headphone: Some(headphone_to_pb(&doc.headphone)),
     }
 }
 
@@ -376,6 +378,9 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .into_iter()
             .map(unit_from_pb)
             .collect::<Result<_, _>>()?,
+        transitions: doc.transitions.into_iter().map(transition_from_pb).collect(),
+        overlays: doc.overlays.into_iter().map(overlay_from_pb).collect(),
+        next_overlay_id: doc.next_overlay_id,
         outputs: doc
             .outputs
             .into_iter()
@@ -386,19 +391,18 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .into_iter()
             .map(multiview_from_pb)
             .collect::<Result<_, _>>()?,
-        buses: doc
-            .buses
-            .into_iter()
-            .map(bus_from_pb)
-            .collect::<Result<_, _>>()?,
         next_input_id: doc.next_input_id,
         next_scene_id: doc.next_scene_id,
         next_unit_id: doc.next_unit_id,
         next_output_id: doc.next_output_id,
         next_multiview_id: doc.next_multiview_id,
-        next_bus_id: doc.next_bus_id,
         selected_unit_id: doc.selected_unit_id,
-        headphone_copy_master: doc.headphone_copy_master,
+        headphone_copy_monitor: doc.headphone_copy_monitor,
+        headphone: doc
+            .headphone
+            .map(headphone_from_pb)
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
 
@@ -526,7 +530,7 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         scroll: input.scroll,
         tone_hz: input.tone_hz,
         tone_level_dbfs: input.tone_level_dbfs,
-        bus_mask: input.bus_mask,
+        audio_units: input.audio_units.clone(),
         gain: input.gain,
         mute: input.mute,
         use_gpu: input.use_gpu,
@@ -546,7 +550,6 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         tags: input.tags.clone(),
         mix_source: mix_source_to_pb(input.mix_source).into(),
         mix_target_id: input.mix_target_id,
-        mix_audio_bus_id: input.mix_audio_bus_id,
         audio_capture_mode: audio_capture_mode_to_pb(input.audio_capture_mode).into(),
         audio_device_kind: device_kind_to_pb(input.audio_device_kind).into(),
         audio_device_id: input.audio_device_id.clone(),
@@ -574,7 +577,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         } else {
             input.tone_level_dbfs
         },
-        bus_mask: input.bus_mask,
+        audio_units: input.audio_units,
         gain: input.gain,
         mute: input.mute,
         use_gpu: input.use_gpu,
@@ -594,7 +597,6 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         tags: input.tags,
         mix_source: mix_source_from_pb(input.mix_source)?,
         mix_target_id: input.mix_target_id,
-        mix_audio_bus_id: input.mix_audio_bus_id,
         audio_capture_mode: audio_capture_mode_from_pb(input.audio_capture_mode)?,
         audio_device_kind: device_kind_from_pb(input.audio_device_kind)?,
         audio_device_id: input.audio_device_id,
@@ -735,9 +737,8 @@ fn unit_to_pb(unit: &UnitDto) -> pb::MixingUnit {
         height: unit.height,
         fps_num: unit.fps_num,
         fps_den: unit.fps_den,
-        transitions: unit.transitions.iter().map(transition_to_pb).collect(),
-        overlays: unit.overlays.iter().map(overlay_to_pb).collect(),
-        audio_bus_id: unit.audio_bus_id,
+        overlays_on_air: unit.overlays_on_air.clone(),
+        audio: Some(mu_bus_to_pb(&unit.audio)),
         audio_link: audio_link_to_pb(unit.audio_link).into(),
         switcher_scene_filter: filter_to_pb(unit.switcher_scene_filter).into(),
         switcher_scene_ids: unit.switcher_scene_ids.clone(),
@@ -755,13 +756,12 @@ fn unit_from_pb(unit: pb::MixingUnit) -> Result<UnitDto, String> {
         height: unit.height,
         fps_num: unit.fps_num,
         fps_den: unit.fps_den,
-        transitions: unit
-            .transitions
-            .into_iter()
-            .map(transition_from_pb)
-            .collect(),
-        overlays: unit.overlays.into_iter().map(overlay_from_pb).collect(),
-        audio_bus_id: unit.audio_bus_id,
+        overlays_on_air: unit.overlays_on_air,
+        audio: unit
+            .audio
+            .map(mu_bus_from_pb)
+            .transpose()?
+            .unwrap_or_default(),
         audio_link: audio_link_from_pb(unit.audio_link)?,
         switcher_scene_filter: filter_from_pb(unit.switcher_scene_filter)?,
         switcher_scene_ids: unit.switcher_scene_ids,
@@ -828,7 +828,7 @@ fn overlay_to_pb(slot: &OverlaySlot) -> pb::OverlaySlot {
         height: slot.height,
         opacity: slot.opacity,
         z: slot.z,
-        enabled: slot.enabled,
+        id: slot.id,
         transition_kind: slot.transition_kind,
         duration_value: slot.duration_value,
         duration_unit: slot.duration_unit,
@@ -846,6 +846,7 @@ fn overlay_to_pb(slot: &OverlaySlot) -> pb::OverlaySlot {
 
 fn overlay_from_pb(slot: pb::OverlaySlot) -> OverlaySlot {
     OverlaySlot {
+        id: slot.id,
         scene_gpu_id: slot.scene_gpu_id,
         x: slot.x,
         y: slot.y,
@@ -853,7 +854,6 @@ fn overlay_from_pb(slot: pb::OverlaySlot) -> OverlaySlot {
         height: slot.height,
         opacity: slot.opacity,
         z: slot.z,
-        enabled: slot.enabled,
         transition_kind: slot.transition_kind,
         duration_value: slot.duration_value,
         duration_unit: slot.duration_unit,
@@ -879,7 +879,7 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         unit_id: output.unit_id,
         use_gpu: output.use_gpu,
         enabled: output.enabled,
-        audio_bus_id: output.audio_bus_id,
+        audio_unit_id: output.audio_unit_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
         width: output.width,
         height: output.height,
@@ -898,7 +898,7 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         unit_id: output.unit_id,
         use_gpu: output.use_gpu,
         enabled: output.enabled,
-        audio_bus_id: output.audio_bus_id,
+        audio_unit_id: output.audio_unit_id,
         skip_encode_when_no_receivers: output.skip_encode_when_no_receivers,
         width: output.width,
         height: output.height,
@@ -979,33 +979,43 @@ fn mv_slot_from_pb(slot: pb::MvSlot) -> Result<MvSlot, String> {
     })
 }
 
-fn bus_to_pb(bus: &BusDto) -> pb::Bus {
-    pb::Bus {
-        id: bus.id,
-        name: bus.name.clone(),
-        role: bus_role_to_pb(bus.role).into(),
+fn mu_bus_to_pb(bus: &MuBusDto) -> pb::MuBus {
+    pb::MuBus {
         device_kind: device_kind_to_pb(bus.device_kind).into(),
         device_id: bus.device_id.clone(),
         map_left: bus.map_left,
         map_right: bus.map_right,
-        bit: bus.bit,
         gain: bus.gain,
         mute: bus.mute,
     }
 }
 
-fn bus_from_pb(bus: pb::Bus) -> Result<BusDto, String> {
-    Ok(BusDto {
-        id: bus.id,
-        name: bus.name,
-        role: bus_role_from_pb(bus.role)?,
+fn mu_bus_from_pb(bus: pb::MuBus) -> Result<MuBusDto, String> {
+    Ok(MuBusDto {
         device_kind: device_kind_from_pb(bus.device_kind)?,
         device_id: bus.device_id,
         map_left: bus.map_left,
-        map_right: if bus.map_right == 0 { 1 } else { bus.map_right },
-        bit: bus.bit,
-        gain: bus.gain,
+        map_right: bus.map_right,
+        gain: if bus.gain == 0.0 { 1.0 } else { bus.gain },
         mute: bus.mute,
+    })
+}
+
+fn headphone_to_pb(bus: &HeadphoneDto) -> pb::Headphone {
+    pb::Headphone {
+        device_kind: device_kind_to_pb(bus.device_kind).into(),
+        device_id: bus.device_id.clone(),
+        map_left: bus.map_left,
+        map_right: bus.map_right,
+    }
+}
+
+fn headphone_from_pb(bus: pb::Headphone) -> Result<HeadphoneDto, String> {
+    Ok(HeadphoneDto {
+        device_kind: device_kind_from_pb(bus.device_kind)?,
+        device_id: bus.device_id,
+        map_left: bus.map_left,
+        map_right: bus.map_right,
     })
 }
 
@@ -1163,14 +1173,6 @@ proto_enum!(
     }
 );
 proto_enum!(
-    bus_role_to_pb,
-    bus_role_from_pb,
-    AudioBusRole,
-    pb::AudioBusRole,
-    "audio bus role",
-    { Master => Master, Headphone => Headphone, Aux => Aux }
-);
-proto_enum!(
     device_kind_to_pb,
     device_kind_from_pb,
     AudioDeviceKind,
@@ -1287,13 +1289,15 @@ mod tests {
     "alwaysOnTop": false,
     "previewSceneId": 1,
     "programSceneId": 1,
-    "overlays": [{
-      "sceneGpuId": 1,
-      "sizeLinked": false,
-      "cropY": 0.2,
-      "cropHeight": 0.5,
-      "enabled": false
-    }]
+    "overlaysOnAir": [1],
+    "audio": { "deviceKind": "Wasapi", "deviceId": "out", "mapRight": 1, "gain": 0.5 }
+  }],
+  "overlays": [{
+    "id": 1,
+    "sceneGpuId": 1,
+    "sizeLinked": false,
+    "cropY": 0.2,
+    "cropHeight": 0.5
   }],
   "outputs": [{
     "id": 100,
@@ -1304,11 +1308,11 @@ mod tests {
     "width": 1280,
     "height": 720,
     "fpsNum": 30,
-    "fpsDen": 1
+    "fpsDen": 1,
+    "audioUnitId": 1
   }],
-  "buses": [
-    { "id": 1, "name": "Master", "role": "Master", "deviceKind": "Wasapi", "mapRight": 1 }
-  ],
+  "headphone": { "deviceKind": "CoreAudio", "deviceId": "hp", "mapRight": 1 },
+  "headphoneCopyMonitor": true,
   "inputTags": ["VTR"],
   "nextInputId": 10,
   "nextSceneId": 2,
@@ -1329,13 +1333,23 @@ mod tests {
         assert_eq!(decoded.units[0].program_scene_id, 1);
         assert!(!decoded.scenes[0].layers[0].size_linked);
         assert!((decoded.scenes[0].layers[0].crop_x - 0.1).abs() < f32::EPSILON);
-        assert!(!decoded.units[0].overlays[0].size_linked);
-        assert!((decoded.units[0].overlays[0].crop_y - 0.2).abs() < f32::EPSILON);
+        assert_eq!(decoded.units[0].overlays_on_air, vec![1]);
+        assert!(!decoded.overlays[0].size_linked);
+        assert!((decoded.overlays[0].crop_y - 0.2).abs() < f32::EPSILON);
         assert!(!decoded.outputs[0].skip_encode_when_no_receivers);
         assert_eq!(decoded.outputs[0].width, 1280);
         assert_eq!(decoded.outputs[0].height, 720);
         assert_eq!(decoded.outputs[0].fps_num, 30);
         assert_eq!(decoded.outputs[0].fps_den, 1);
+        assert_eq!(decoded.outputs[0].audio_unit_id, 1);
+        assert_eq!(
+            decoded.units[0].audio.device_kind,
+            AudioDeviceKind::Wasapi
+        );
+        assert_eq!(decoded.units[0].audio.device_id, "out");
+        assert!((decoded.units[0].audio.gain - 0.5).abs() < f32::EPSILON);
+        assert_eq!(decoded.headphone.device_kind, AudioDeviceKind::CoreAudio);
+        assert!(decoded.headphone_copy_monitor);
         assert!(!decoded.settings.rebar_optimization);
         assert_eq!(decoded.settings.renderer, Renderer::Auto);
         assert_eq!(decoded.settings.last_session_path, None);

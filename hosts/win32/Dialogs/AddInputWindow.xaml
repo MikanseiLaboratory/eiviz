@@ -202,8 +202,6 @@
                         <ComboBoxItem Content="Preview" Tag="preview"/>
                         <ComboBoxItem Content="Program" Tag="program" IsSelected="True"/>
                     </ComboBox>
-                    <TextBlock Text="Audio" Margin="0,12,0,4"/>
-                    <ComboBox x:Name="MixAudioBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8"/>
                     <TextBlock Text="Frame buffer (frames)" Margin="0,0,0,4"/>
                     <ComboBox x:Name="MixBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
                         <ComboBoxItem Content="1" Tag="1" IsSelected="True"/>
@@ -214,7 +212,7 @@
                         <ComboBoxItem Content="8" Tag="8"/>
                     </ComboBox>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
-                               Text="Mix Input reads N frames ago from the existing delay ring. Audio is a delayed copy of the selected bus, or silence if None. Same Mixing Unit wiring is refused."/>
+                               Text="Mix Input reads N frames ago from the existing delay ring. Audio follows the referenced Mixing Unit. A session Multiview is silent. Same Mixing Unit wiring is refused."/>
                 </StackPanel>
                 <StackPanel x:Name="AudioPanel" Visibility="Collapsed">
                     <TextBlock Text="Audio capture" Margin="0,0,0,8"/>

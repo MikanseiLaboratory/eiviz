@@ -80,13 +80,14 @@ pub fn collect_source_roles(
         .map(|spec| (spec.0, spec.3.as_ref()))
         .collect();
     let mut roles = HashMap::<u64, SourceRoles>::new();
-    for (_, _, _, _, _, state, _, _) in snapshot {
+    for snap in snapshot {
+        let state = &snap.state;
         add(state.program_source, Role::Program, &spec_map, &mut roles);
         add(state.preview_source, Role::Preview, &spec_map, &mut roles);
         if state.mix > 0.001 {
             add(state.mix_incoming(), Role::Program, &spec_map, &mut roles);
         }
-        for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+        for overlay in snap.overlays.iter() {
             add(overlay.source_id, Role::Program, &spec_map, &mut roles);
         }
     }
@@ -180,21 +181,22 @@ mod tests {
     }
 
     fn unit(program: u64, preview: u64, mix: f32) -> crate::abi::UnitSnap {
-        (
-            1,
-            1920,
-            1080,
-            60_000,
-            1_001,
-            UnitState {
+        crate::abi::UnitSnap {
+            id: 1,
+            width: 1920,
+            height: 1080,
+            fps_num: 60_000,
+            fps_den: 1_001,
+            state: UnitState {
                 program_source: program,
                 preview_source: preview,
                 mix,
                 ..UnitState::default()
             },
-            0,
-            None,
-        )
+            mix_preview: 0,
+            custom_wgsl: None,
+            overlays: Arc::from([]),
+        }
     }
 
     fn mosaic(id: u64, layers: &[u64]) -> (u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle) {

@@ -340,7 +340,7 @@ pub(crate) fn dispatch_function(
                 .filter(|value| *value > 0)
                 .unwrap_or_else(|| {
                     fade_duration_ms(
-                        unit,
+                        &doc.transitions,
                         unit.map(|item| item.fps_num).unwrap_or(60_000),
                         unit.map(|item| item.fps_den).unwrap_or(1_001),
                     )
@@ -502,17 +502,19 @@ fn empty_document() -> Document {
         inputs: Vec::new(),
         scenes: Vec::new(),
         units: Vec::new(),
+        transitions: Vec::new(),
+        overlays: Vec::new(),
+        next_overlay_id: 1,
         outputs: Vec::new(),
         multiviews: Vec::new(),
-        buses: Vec::new(),
         next_input_id: 0,
         next_scene_id: 0,
         next_unit_id: 0,
         next_output_id: 0,
         next_multiview_id: 0,
-        next_bus_id: 0,
         selected_unit_id: 0,
-        headphone_copy_master: false,
+        headphone: Default::default(),
+        headphone_copy_monitor: false,
     })
 }
 

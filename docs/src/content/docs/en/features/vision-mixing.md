@@ -18,7 +18,7 @@ The switcher UI assigns a [Scene](/eiviz/en/concepts/scenes/) to Preview. CUT, A
 
 ### Overlay
 
-[Overlays](/eiviz/en/concepts/overlays/) are up to eight per Mixing Unit. The source is a Scene or an Input.  
+[Overlays](/eiviz/en/concepts/overlays/) are session-wide. Each Mixing Unit has its own On-Air list, with no count limit. The source is a Scene or an Input.  
 They sit on Program after CUT or the T-bar has mixed. They do not sit on Preview.
 
 ### Multiview

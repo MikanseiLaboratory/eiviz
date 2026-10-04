@@ -48,7 +48,7 @@ public partial class OverlayWindow : Window
             PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
         Loaded += (_, _) =>
         {
-            _unit.Overlays.Sort((a, b) => b.Z.CompareTo(a.Z));
+            _session.Overlays.Sort((a, b) => b.Z.CompareTo(a.Z));
             NormalizeOrder();
             RefreshList();
             AttachDrags();
@@ -70,7 +70,7 @@ public partial class OverlayWindow : Window
         WireLabel.Text = $"Wireframe ({unit.Width}x{unit.Height})";
         if (!App.IsRemote)
             PreviewHost.RetargetUnit(unit.Id, MixerNative.OutputProgram);
-        _selected = unit.Overlays.FirstOrDefault();
+        _selected = _session.Overlays.FirstOrDefault();
         RefreshList();
     }
 
@@ -97,38 +97,42 @@ public partial class OverlayWindow : Window
         Bind(OpLabel, OpBox, 400, "0.###");
     }
 
+    private bool OnAir(OverlaySlot slot) => _unit.OverlaysOnAir.Contains(slot.Id);
+
     private void Push()
     {
-        if (Application.Current is App { Backend.IsRemote: true } app && _selected is not null)
+        if (Application.Current is App { Backend.IsRemote: true } && _selected is not null)
         {
-            var index = (uint)Math.Max(0, _unit.Overlays.IndexOf(_selected));
             if (Owner is MainWindow remote)
-                remote.RemoteMutate(MutationJson.SetOverlaySlot(_unit.Id, index, _selected), Loc.T("chrome.overlay"), reloadDocument: false);
+                remote.RemoteMutate(MutationJson.UpsertOverlay(_selected), Loc.T("chrome.overlay"), reloadDocument: false);
         }
         else
-            MixerApply.PatchAux(_unit.Id, _unit);
+        {
+            foreach (var unit in _session.Units)
+                MixerApply.PushOverlays(_session, unit);
+        }
         if (Owner is MainWindow main)
             main.RebuildOverlayToggles();
     }
 
     private void NormalizeOrder()
     {
-        for (var i = 0; i < _unit.Overlays.Count; i++)
-            _unit.Overlays[i].Z = _unit.Overlays.Count - 1 - i;
+        for (var i = 0; i < _session.Overlays.Count; i++)
+            _session.Overlays[i].Z = _session.Overlays.Count - 1 - i;
     }
 
     private bool MoveSlot(int from, int to)
     {
-        if (from < 0 || from >= _unit.Overlays.Count)
+        if (from < 0 || from >= _session.Overlays.Count)
             return false;
-        to = Math.Clamp(to, 0, _unit.Overlays.Count);
+        to = Math.Clamp(to, 0, _session.Overlays.Count);
         if (to == from || to == from + 1)
             return false;
-        var slot = _unit.Overlays[from];
-        _unit.Overlays.RemoveAt(from);
+        var slot = _session.Overlays[from];
+        _session.Overlays.RemoveAt(from);
         if (to > from)
             to--;
-        _unit.Overlays.Insert(to, slot);
+        _session.Overlays.Insert(to, slot);
         _selected = slot;
         NormalizeOrder();
         RefreshList();
@@ -140,17 +144,17 @@ public partial class OverlayWindow : Window
     {
         _suppress = true;
         SlotList.Items.Clear();
-        foreach (var slot in _unit.Overlays)
+        foreach (var slot in _session.Overlays)
             SlotList.Items.Add(BuildSlotRow(slot));
         if (_selected is not null)
         {
-            var index = _unit.Overlays.IndexOf(_selected);
+            var index = _session.Overlays.IndexOf(_selected);
             if (index >= 0)
                 SlotList.SelectedIndex = index;
         }
-        else if (_unit.Overlays.Count > 0)
+        else if (_session.Overlays.Count > 0)
         {
-            _selected = _unit.Overlays[0];
+            _selected = _session.Overlays[0];
             SlotList.SelectedIndex = 0;
         }
         _suppress = false;
@@ -186,11 +190,11 @@ public partial class OverlayWindow : Window
         DockPanel.SetDock(lockBtn, Dock.Left);
         var name = new TextBlock
         {
-            Text = $"{_unit.Overlays.IndexOf(slot) + 1}. {slot.DisplayName(_session)}",
+            Text = $"{_session.Overlays.IndexOf(slot) + 1}. {slot.DisplayName(_session)}",
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Foreground = slot.Enabled ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
+            Foreground = OnAir(slot) ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88))
         };
         var row = new DockPanel { Tag = slot, LastChildFill = true };
         row.Children.Add(audio);
@@ -210,11 +214,11 @@ public partial class OverlayWindow : Window
             Color.FromRgb(0xAB, 0x47, 0xBC),
             Color.FromRgb(0xEF, 0x53, 0x50)
         };
-        for (var i = _unit.Overlays.Count - 1; i >= 0; i--)
+        for (var i = _session.Overlays.Count - 1; i >= 0; i--)
         {
-            var slot = _unit.Overlays[i];
+            var slot = _session.Overlays[i];
             var color = hues[i % hues.Length];
-            if (!slot.Enabled)
+            if (!OnAir(slot))
                 color = Color.FromRgb(0x55, 0x55, 0x55);
             var rect = new Rectangle
             {
@@ -222,8 +226,8 @@ public partial class OverlayWindow : Window
                 Height = Math.Max(8, slot.Height * WireCanvas.Height),
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = ReferenceEquals(slot, _selected) ? 4 : 2,
-                StrokeDashArray = slot.Enabled ? null : new DoubleCollection { 4, 3 },
-                Fill = new SolidColorBrush(Color.FromArgb(slot.Enabled ? (byte)40 : (byte)20, color.R, color.G, color.B)),
+                StrokeDashArray = OnAir(slot) ? null : new DoubleCollection { 4, 3 },
+                Fill = new SolidColorBrush(Color.FromArgb(OnAir(slot) ? (byte)40 : (byte)20, color.R, color.G, color.B)),
                 Tag = slot
             };
             Canvas.SetLeft(rect, slot.X * WireCanvas.Width);
@@ -351,14 +355,12 @@ public partial class OverlayWindow : Window
 
     private void Add_Click(object sender, RoutedEventArgs e)
     {
-        if (_unit.Overlays.Count >= 8)
-            return;
         var kind = AddKindBox.SelectedIndex == 1 ? OverlaySourceKind.Input : OverlaySourceKind.Scene;
         var id = kind == OverlaySourceKind.Input
             ? (AddSourceBox.SelectedItem as InputEntry)?.Id ?? _session.Inputs.FirstOrDefault()?.Id ?? 0UL
             : (AddSourceBox.SelectedItem as SceneEntry)?.GpuId ?? _session.Scenes.FirstOrDefault()?.GpuId ?? 0UL;
-        var slot = new OverlaySlot { SourceKind = kind, SceneGpuId = id };
-        _unit.Overlays.Insert(0, slot);
+        var slot = new OverlaySlot { Id = _session.NextOverlayId++, SourceKind = kind, SceneGpuId = id };
+        _session.Overlays.Insert(0, slot);
         _selected = slot;
         NormalizeOrder();
         RefreshList();
@@ -369,11 +371,17 @@ public partial class OverlayWindow : Window
     {
         if (_selected is null)
             return;
-        _unit.Overlays.Remove(_selected);
-        _selected = _unit.Overlays.FirstOrDefault();
+        var removed = _selected;
+        foreach (var unit in _session.Units)
+            unit.OverlaysOnAir.Remove(removed.Id);
+        _session.Overlays.Remove(removed);
+        _selected = _session.Overlays.FirstOrDefault();
         NormalizeOrder();
         RefreshList();
-        Push();
+        if (Application.Current is App { Backend.IsRemote: true } && Owner is MainWindow remote)
+            remote.RemoteMutate(MutationJson.DeleteOverlay(removed.Id), Loc.T("chrome.overlay"), reloadDocument: false);
+        else
+            Push();
     }
 
     private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftDisplay(-1);
@@ -384,11 +392,11 @@ public partial class OverlayWindow : Window
     {
         if (_selected is null)
             return;
-        var index = _unit.Overlays.IndexOf(_selected);
+        var index = _session.Overlays.IndexOf(_selected);
         var target = index + delta;
-        if (target < 0 || target >= _unit.Overlays.Count)
+        if (target < 0 || target >= _session.Overlays.Count)
             return;
-        (_unit.Overlays[index], _unit.Overlays[target]) = (_unit.Overlays[target], _unit.Overlays[index]);
+        (_session.Overlays[index], _session.Overlays[target]) = (_session.Overlays[target], _session.Overlays[index]);
         NormalizeOrder();
         RefreshList();
         Push();
@@ -400,8 +408,8 @@ public partial class OverlayWindow : Window
             return;
         if (SlotList.SelectedItem is FrameworkElement { Tag: OverlaySlot slot })
             _selected = slot;
-        else if (SlotList.SelectedIndex >= 0 && SlotList.SelectedIndex < _unit.Overlays.Count)
-            _selected = _unit.Overlays[SlotList.SelectedIndex];
+        else if (SlotList.SelectedIndex >= 0 && SlotList.SelectedIndex < _session.Overlays.Count)
+            _selected = _session.Overlays[SlotList.SelectedIndex];
         else
             return;
         DrawWireframe();
@@ -657,7 +665,7 @@ public partial class OverlayWindow : Window
 
     private OverlaySlot? HitSlot(Point pos)
     {
-        var hits = _unit.Overlays.Where(slot =>
+        var hits = _session.Overlays.Where(slot =>
             pos.X >= slot.X * WireCanvas.Width
             && pos.X <= (slot.X + slot.Width) * WireCanvas.Width
             && pos.Y >= slot.Y * WireCanvas.Height
@@ -735,8 +743,8 @@ public partial class OverlayWindow : Window
         if (_selected is null || !LayoutSnapOn)
             return;
         var rendered = SceneSnap.RenderedSize(this, WireCanvas);
-        var boxes = _unit.Overlays.Select(slot => new SceneSnap.Box(
-            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !slot.Enabled, ReferenceEquals(slot, _selected))).ToList();
+        var boxes = _session.Overlays.Select(slot => new SceneSnap.Box(
+            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !OnAir(slot), ReferenceEquals(slot, _selected))).ToList();
         x = SceneSnap.LatchMoveAxis(x, _selected.Width, boxes, true, rendered.Width, ref _snapX);
         y = SceneSnap.LatchMoveAxis(y, _selected.Height, boxes, false, rendered.Height, ref _snapY);
     }
@@ -746,8 +754,8 @@ public partial class OverlayWindow : Window
         if (_selected is null || !LayoutSnapOn)
             return;
         var rendered = SceneSnap.RenderedSize(this, WireCanvas);
-        var boxes = _unit.Overlays.Select(slot => new SceneSnap.Box(
-            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !slot.Enabled, ReferenceEquals(slot, _selected))).ToList();
+        var boxes = _session.Overlays.Select(slot => new SceneSnap.Box(
+            slot.X, slot.Y, slot.Width, slot.Height, slot.Hidden || !OnAir(slot), ReferenceEquals(slot, _selected))).ToList();
         var width = _selected.Width;
         var height = _selected.Height;
         SceneSnap.SnapResize(

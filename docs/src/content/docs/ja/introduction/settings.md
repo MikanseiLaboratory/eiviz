@@ -36,7 +36,7 @@ description: セッションに保存される設定ウィンドウの項目
 <img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **映像ソース**: Input、Scene、MU PRV、MU PGM、Multiviewから選択できます。
-- **音声ソース**: Master、Headphone、各Audio AUX、またはNone（音声なし）から選択します（Multiview選択時は音声なし固定）。
+- **音声ソース**: Mixing UnitのMU Bus、またはNone（音声なし）から選択します（Multiview選択時は音声なし固定）。
 - **解像度・フレームレート**: 出力ごとに個別に指定するか、「セッション設定を使用」を選択します。
 - **エンコード方式（OMT）**:
   - **CPU（推奨）**: 高品質な標準エンコーダー。本線配信やプログラム出力に使用します。
@@ -52,14 +52,14 @@ description: セッションに保存される設定ウィンドウの項目
 - **新規Multiviewの既定Mixing Unit**: マルチビュー作成時にPreview/Programとして割り当てる既定のユニットを指定します。
 - **プレビュー更新間隔**: タイルの更新頻度を設定します（既定: 3フレームごと、約20 fps）。スペックが不足する場合は間隔を広げることで描画負荷を軽減できます。
 
-## 音声AUX
+## ヘッドホン
 
-<img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="音声AUX設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="ヘッドホン設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-内部ミックスは48 kHzステレオで動作します。Master、Headphoneのほか、最大8本のAUXバス（A〜H）を追加できます。
+内部ミックスは48 kHzステレオです。このページでは、選択中のMixing Unitをcueするヘッドホンの出力先を設定します。各Mixing Unitの出力デバイスは、Mixing Unitのダイアログで選びます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
 
-- **Enabled**: 出力デバイスを割り当てず、内部ミックスのみを有効化します。実機デバイスへの出力にはWASAPI共有またはASIOを使用します。
-- **HeadphoneはMasterをコピー**: チェックを入れると、HeadphoneバスへMasterと同じ音声が常時ミラーリングされます。個別にモニターしたい場合は無効にします。
+- **None**: 内部ミックスのままです。実機へ出すときはWASAPI共有またはASIOを使います。
+- **ヘッドホンはcue中のMU Busをコピー**: オンにすると、cue中のMU Busと同じミックスを出します。オフのときは、cue対象を別にミックスします。
 
 ## Web API
 

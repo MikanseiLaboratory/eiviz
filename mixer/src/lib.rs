@@ -209,6 +209,7 @@ pub(crate) struct LiveUnit {
     state: UnitState,
     auto: Option<AutoTransition>,
     overlay_autos: Vec<OverlayAuto>,
+    overlays: Arc<[OverlayDesc]>,
     frozen_preview: Option<u64>,
     custom_wgsl: Option<String>,
 }
@@ -217,7 +218,7 @@ pub(crate) struct LiveOutput {
     source_kind: u32,
     source_id: u64,
     unit_id: u64,
-    audio_bus_id: u64,
+    audio_unit_id: u64,
     width: u32,
     height: u32,
     fps_num: u32,
@@ -239,7 +240,7 @@ pub(crate) struct OutputSnap {
     source_kind: u32,
     source_id: u64,
     unit_id: u64,
-    audio_bus_id: u64,
+    audio_unit_id: u64,
     width: u32,
     height: u32,
     fps_n: u32,
@@ -662,13 +663,7 @@ pub(crate) fn live_unit_from(unit: &LiveUnit) -> crate::vmix_xml::UnitLive {
     crate::vmix_xml::UnitLive {
         program_source: unit.state.program_source,
         preview_source: unit.state.preview_source,
-        overlay_sources: unit
-            .state
-            .overlays
-            .iter()
-            .take(unit.state.overlay_count as usize)
-            .map(|overlay| overlay.source_id)
-            .collect(),
+        overlay_sources: unit.overlays.iter().map(|overlay| overlay.source_id).collect(),
     }
 }
 
@@ -1120,6 +1115,14 @@ pub(crate) fn mixer_created() -> bool {
     matches!(*mixer_slot().lock_or_recover(), MixerSlot::Running(_))
 }
 
+fn audio_peak_id(id: u64) -> u64 {
+    if id == audio::HEADPHONE_BUS {
+        crate::abi::AUDIO_HEADPHONE_PEAK
+    } else {
+        crate::abi::AUDIO_BUS_PEAK_BASE | id
+    }
+}
+
 pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
     use eiviz_control::live::{LivePeak, LiveState, UnitLiveState};
     with_mixer(|mixer| {
@@ -1136,10 +1139,8 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                         transitioning: unit.auto.is_some() || unit.state.mix > 0.001,
                         incoming_source: unit.state.incoming_source,
                         overlay_sources: unit
-                            .state
                             .overlays
                             .iter()
-                            .take(unit.state.overlay_count as usize)
                             .map(|overlay| overlay.source_id)
                             .collect(),
                     },
@@ -1147,7 +1148,7 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
             }
             (
                 units,
-                shared.audio.master_peak(),
+                shared.audio.monitor_peak(),
                 shared.audio.bus_peaks(),
                 shared.audio.mix_input_peaks(),
             )
@@ -1161,7 +1162,7 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
         }];
         for (id, left, right) in buses {
             peaks.push(LivePeak {
-                id: crate::abi::AUDIO_BUS_PEAK_BASE | id,
+                id: audio_peak_id(id),
                 left,
                 right,
             });
@@ -1287,13 +1288,13 @@ fn mixer_create_unit_ffi(unit_id: u64, width: u32, height: u32) -> i32 {
                 },
                 auto: None,
                 overlay_autos: Vec::new(),
+                overlays: Arc::from([]),
                 frozen_preview: None,
                 custom_wgsl: None,
             },
         );
-        shared
-            .audio
-            .set_unit_link(unit_id, audio::MASTER_BUS, audio::LINK_FOLLOW);
+        shared.audio.ensure_unit(unit_id);
+        shared.audio.set_unit_link(unit_id, audio::LINK_FOLLOW);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -1437,10 +1438,9 @@ pub extern "C" fn mixer_define_mix_input(
     target_id: u64,
     source_kind: u32,
     delay: u32,
-    audio_bus_id: u64,
 ) -> i32 {
     ffi_guard("mixer_define_mix_input", ERR_DEVICE, || {
-        mixer_define_mix_input_ffi(id, target_id, source_kind, delay, audio_bus_id)
+        mixer_define_mix_input_ffi(id, target_id, source_kind, delay)
     })
 }
 
@@ -1449,9 +1449,8 @@ fn mixer_define_mix_input_ffi(
     target_id: u64,
     source_kind: u32,
     delay: u32,
-    audio_bus_id: u64,
 ) -> i32 {
-    let Some(spec) = MixInputSpec::new(target_id, source_kind, delay, audio_bus_id) else {
+    let Some(spec) = MixInputSpec::new(target_id, source_kind, delay) else {
         return ERR_INVALID_ARGUMENT;
     };
     if id == 0 {
@@ -1463,7 +1462,13 @@ fn mixer_define_mix_input_ffi(
         pending.insert(id, spec);
         if !spec.is_session_multiview() {
             for (unit_id, unit) in &shared.units {
-                if unit_uses_mix_cycle(*unit_id, &unit.state, &pending, &shared.scenes) {
+                if unit_uses_mix_cycle(
+                    *unit_id,
+                    &unit.state,
+                    unit.overlays.as_ref(),
+                    &pending,
+                    &shared.scenes,
+                ) {
                     set_error(
                         &mixer.telemetry,
                         format!("mix input {id:#x} would cycle unit {unit_id:#x}"),
@@ -1517,6 +1522,7 @@ fn mixer_destroy_unit_ffi(unit_id: u64) -> i32 {
         |mixer, reply| {
             let mut shared = mixer.shared.lock_or_recover();
             shared.units.remove(&unit_id);
+            shared.audio.remove_unit(unit_id);
             let mut gone = Vec::new();
             shared.outputs.retain(|id, output| {
                 if output.unit_id == unit_id {
@@ -1663,16 +1669,16 @@ unsafe fn mixer_unit_set_state_ffi(unit_id: u64, state: *const UnitState) -> i32
     code
 }
 
-fn validate_unit_state(unit_id: u64, state: &UnitState) -> Result<(), i32> {
-    if state.overlay_count > state.overlays.len() as u32
-        || state.mv_slot_count > state.mv_slots.len() as u32
-        || !(0.0..=1.0).contains(&state.mix)
-    {
+fn validate_unit_state(state: &UnitState) -> Result<(), i32> {
+    if state.mv_slot_count > state.mv_slots.len() as u32 || !(0.0..=1.0).contains(&state.mix) {
         return Err(ERR_INVALID_ARGUMENT);
     }
-    let overlays = &state.overlays[..state.overlay_count as usize];
+    Ok(())
+}
+
+fn validate_overlays(unit_id: u64, overlays: &[OverlayDesc]) -> Result<(), i32> {
     if let Some(reason) = invalid_overlays(overlays) {
-        report_session_error(format!("unit {unit_id:#x} state: {reason}"));
+        report_session_error(format!("unit {unit_id:#x} overlays: {reason}"));
         return Err(ERR_INVALID_ARGUMENT);
     }
     Ok(())
@@ -1684,7 +1690,18 @@ fn apply_unit_state(
     unit_id: u64,
     state: UnitState,
 ) -> i32 {
-    if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
+    let overlays = shared
+        .units
+        .get(&unit_id)
+        .map(|unit| Arc::clone(&unit.overlays))
+        .unwrap_or_else(|| Arc::from([]));
+    if unit_uses_mix_cycle(
+        unit_id,
+        &state,
+        overlays.as_ref(),
+        &shared.mix_inputs,
+        &shared.scenes,
+    ) {
         set_error(
             telemetry,
             format!("mixing unit {unit_id:#x} references its own output"),
@@ -1751,8 +1768,68 @@ fn apply_unit_state(
     OK
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_unit_set_overlays(
+    unit_id: u64,
+    overlays: *const OverlayDesc,
+    count: u32,
+) -> i32 {
+    ffi_guard("mixer_unit_set_overlays", ERR_DEVICE, || unsafe {
+        mixer_unit_set_overlays_ffi(unit_id, overlays, count)
+    })
+}
+
+unsafe fn mixer_unit_set_overlays_ffi(
+    unit_id: u64,
+    overlays: *const OverlayDesc,
+    count: u32,
+) -> i32 {
+    if count > 0 && overlays.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let copied = if count == 0 {
+        Vec::new()
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(overlays, count as usize) };
+        let mut descs = slice.to_vec();
+        for desc in &mut descs {
+            desc.label = std::ptr::null();
+        }
+        descs
+    };
+    if let Err(code) = validate_overlays(unit_id, &copied) {
+        return code;
+    }
+    with_mixer(|mixer| {
+        let mut shared = mixer.shared.lock_or_recover();
+        let Some(unit) = shared.units.get(&unit_id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        if unit_uses_mix_cycle(
+            unit_id,
+            &unit.state,
+            &copied,
+            &shared.mix_inputs,
+            &shared.scenes,
+        ) {
+            set_error(
+                &mixer.telemetry,
+                format!("mixing unit {unit_id:#x} overlay references its own output"),
+            );
+            return ERR_INVALID_ARGUMENT;
+        }
+        let Some(unit) = shared.units.get_mut(&unit_id) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        unit.overlays = Arc::from(copied);
+        shared.compose_dirty = true;
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
 pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
-    if let Err(code) = validate_unit_state(unit_id, state) {
+        if let Err(code) = validate_unit_state(state) {
         return code;
     }
     let state = *state;
@@ -1774,7 +1851,7 @@ pub(crate) fn unit_update_state_inner(unit_id: u64, update: impl FnOnce(&mut Uni
         };
         let mut state = unit.state;
         update(&mut state);
-        if let Err(code) = validate_unit_state(unit_id, &state) {
+        if let Err(code) = validate_unit_state(&state) {
             return code;
         }
         apply_unit_state(&mut shared, &mixer.telemetry, unit_id, state)
@@ -1799,32 +1876,21 @@ pub(crate) fn ease_mix(t: f32, kind: u32) -> f32 {
     }
 }
 
-pub(crate) fn merge_overlay(state: &mut UnitState, desc: OverlayDesc) {
-    if let Some(existing) = state
-        .overlays
+pub(crate) fn merge_overlay(overlays: &mut Vec<OverlayDesc>, desc: OverlayDesc) {
+    if let Some(existing) = overlays
         .iter_mut()
-        .take(state.overlay_count as usize)
         .find(|item| item.source_id == desc.source_id)
     {
         *existing = desc;
         return;
     }
-    if (state.overlay_count as usize) < state.overlays.len() {
-        state.overlays[state.overlay_count as usize] = desc;
-        state.overlay_count += 1;
-    }
+    overlays.push(desc);
 }
 
-pub(crate) fn remove_overlay(state: &mut UnitState, source_id: u64) {
-    let count = (state.overlay_count as usize).min(state.overlays.len());
-    let Some(index) = state.overlays[..count]
-        .iter()
-        .position(|item| item.source_id == source_id)
-    else {
-        return;
-    };
-    state.overlays.copy_within(index + 1..count, index);
-    state.overlay_count = (count - 1) as u32;
+pub(crate) fn remove_overlay(overlays: &mut Vec<OverlayDesc>, source_id: u64) {
+    if let Some(index) = overlays.iter().position(|item| item.source_id == source_id) {
+        overlays.remove(index);
+    }
 }
 
 pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
@@ -1843,23 +1909,28 @@ pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
             unit.auto = Some(auto);
         }
     }
+    if unit.overlay_autos.is_empty() {
+        return;
+    }
+    let mut overlays: Vec<OverlayDesc> = unit.overlays.iter().cloned().collect();
     let mut still = Vec::new();
     for mut item in unit.overlay_autos.drain(..) {
         let t = item.start.elapsed().as_secs_f32() / item.duration.as_secs_f32();
         if t >= 1.0 {
             item.desc.opacity = item.to;
             if item.to > 0.001 {
-                merge_overlay(&mut unit.state, item.desc);
+                merge_overlay(&mut overlays, item.desc);
             } else {
-                remove_overlay(&mut unit.state, item.desc.source_id);
+                remove_overlay(&mut overlays, item.desc.source_id);
             }
         } else {
             item.desc.opacity = item.from + (item.to - item.from) * t;
-            merge_overlay(&mut unit.state, item.desc);
+            merge_overlay(&mut overlays, item.desc);
             still.push(item);
         }
     }
     unit.overlay_autos = still;
+    unit.overlays = Arc::from(overlays);
 }
 
 pub(crate) fn live_incoming(unit: &LiveUnit) -> u64 {
@@ -3230,7 +3301,7 @@ unsafe fn mixer_omt_start_send_ffi(unit_id: u64, name: *const c_char) -> i32 {
             0,
             unit_id,
             0,
-            0,
+            unit_id,
             1,
             0,
             0,
@@ -3249,7 +3320,7 @@ pub unsafe extern "C" fn mixer_output_add(
     source_id: u64,
     unit_id: u64,
     use_gpu: u32,
-    audio_bus_id: u64,
+    audio_unit_id: u64,
     skip_idle_encode: u32,
     width: u32,
     height: u32,
@@ -3265,7 +3336,7 @@ pub unsafe extern "C" fn mixer_output_add(
             source_id,
             unit_id,
             use_gpu,
-            audio_bus_id,
+            audio_unit_id,
             skip_idle_encode,
             width,
             height,
@@ -3283,7 +3354,7 @@ unsafe fn mixer_output_add_ffi(
     source_id: u64,
     unit_id: u64,
     use_gpu: u32,
-    audio_bus_id: u64,
+    audio_unit_id: u64,
     skip_idle_encode: u32,
     width: u32,
     height: u32,
@@ -3321,10 +3392,10 @@ unsafe fn mixer_output_add_ffi(
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
     let skip_idle_encode = transport == OUT_OMT && skip_idle_encode != 0;
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
-    let audio_bus_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
+    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
         0
     } else {
-        audio_bus_id
+        audio_unit_id
     };
     // Replace must not withdraw `_omt._tcp` for this instance name.
     // openmediatransport-rs keys DNS-SD by name; Drop of the old sender
@@ -3446,7 +3517,7 @@ unsafe fn mixer_output_add_ffi(
                 source_kind,
                 source_id,
                 unit_id,
-                audio_bus_id,
+                audio_unit_id,
                 width,
                 height,
                 fps_num: inherited.0,
@@ -4239,113 +4310,94 @@ fn mixer_flush_audio_ffi(id: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_audio_bus_upsert(
-    id: u64,
-    name: *const c_char,
-    role: u32,
+pub unsafe extern "C" fn mixer_audio_unit_bus_set(
+    unit_id: u64,
     device_kind: u32,
     device_id: *const c_char,
     map_left: i32,
     map_right: i32,
 ) -> i32 {
-    ffi_guard("mixer_audio_bus_upsert", ERR_DEVICE, || unsafe {
-        mixer_audio_bus_upsert_ffi(id, name, role, device_kind, device_id, map_left, map_right)
+    ffi_guard("mixer_audio_unit_bus_set", ERR_DEVICE, || unsafe {
+        mixer_audio_unit_bus_set_ffi(unit_id, device_kind, device_id, map_left, map_right)
     })
 }
 
-unsafe fn mixer_audio_bus_upsert_ffi(
-    id: u64,
-    name: *const c_char,
-    role: u32,
+unsafe fn mixer_audio_unit_bus_set_ffi(
+    unit_id: u64,
     device_kind: u32,
     device_id: *const c_char,
     map_left: i32,
     map_right: i32,
 ) -> i32 {
-    if id == 0 {
+    if unit_id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
-    let name = read_cstr(name);
     let device_id = read_cstr(device_id);
     with_mixer(|mixer| {
         let audio = mixer.shared.lock_or_recover().audio.clone();
-        audio.upsert_bus(
-            id,
-            &name,
-            role,
-            device_kind,
-            &device_id,
-            map_left,
-            map_right,
-        );
+        audio.set_unit_device(unit_id, device_kind, &device_id, map_left, map_right);
         OK
     })
     .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_audio_bus_remove(id: u64) -> i32 {
-    ffi_guard("mixer_audio_bus_remove", ERR_DEVICE, || {
-        mixer_audio_bus_remove_ffi(id)
+pub unsafe extern "C" fn mixer_audio_headphone_set(
+    device_kind: u32,
+    device_id: *const c_char,
+    map_left: i32,
+    map_right: i32,
+) -> i32 {
+    ffi_guard("mixer_audio_headphone_set", ERR_DEVICE, || unsafe {
+        mixer_audio_headphone_set_ffi(device_kind, device_id, map_left, map_right)
     })
 }
 
-fn mixer_audio_bus_remove_ffi(id: u64) -> i32 {
+unsafe fn mixer_audio_headphone_set_ffi(
+    device_kind: u32,
+    device_id: *const c_char,
+    map_left: i32,
+    map_right: i32,
+) -> i32 {
+    let device_id = read_cstr(device_id);
     with_mixer(|mixer| {
         let audio = mixer.shared.lock_or_recover().audio.clone();
-        audio.remove_bus(id);
+        audio.set_headphone_device(device_kind, &device_id, map_left, map_right);
         OK
     })
     .unwrap_or_else(|code| code)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_audio_bus_count() -> i32 {
-    ffi_guard("mixer_audio_bus_count", ERR_DEVICE, || {
-        mixer_audio_bus_count_ffi()
+pub unsafe extern "C" fn mixer_audio_unit_bus_get(unit_id: u64, out: *mut AudioBusInfo) -> i32 {
+    ffi_guard("mixer_audio_unit_bus_get", ERR_DEVICE, || unsafe {
+        mixer_audio_unit_bus_get_ffi(unit_id, out)
     })
 }
 
-fn mixer_audio_bus_count_ffi() -> i32 {
-    with_mixer(|mixer| {
-        mixer
-            .shared
-            .lock_or_recover()
-            .audio
-            .graph()
-            .lock_or_recover()
-            .buses
-            .len() as i32
-    })
-    .unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_audio_bus_get(index: u32, out: *mut AudioBusInfo) -> i32 {
-    ffi_guard("mixer_audio_bus_get", ERR_DEVICE, || unsafe {
-        mixer_audio_bus_get_ffi(index, out)
-    })
-}
-
-unsafe fn mixer_audio_bus_get_ffi(index: u32, out: *mut AudioBusInfo) -> i32 {
-    if out.is_null() {
+unsafe fn mixer_audio_unit_bus_get_ffi(unit_id: u64, out: *mut AudioBusInfo) -> i32 {
+    if out.is_null() || unit_id == 0 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
         let graph = mixer.shared.lock_or_recover().audio.graph();
         let graph = graph.lock_or_recover();
-        let Some(bus) = graph.buses.get(index as usize) else {
+        let bus = if unit_id == audio::HEADPHONE_BUS {
+            Some(&graph.headphone)
+        } else {
+            graph.unit_buses.get(&unit_id)
+        };
+        let Some(bus) = bus else {
             return ERR_INVALID_ARGUMENT;
         };
         unsafe {
             *out = AudioBusInfo {
                 id: bus.id,
-                role: bus.role,
                 device_kind: bus.device_kind,
                 map_left: bus.map_left,
                 map_right: bus.map_right,
-                bit: bus.bit,
-                name: write_fixed::<64>(&bus.name),
+                gain: bus.gain,
+                mute: u32::from(bus.mute),
                 device_id: write_fixed::<256>(&bus.device_id),
             };
         }
@@ -4355,19 +4407,36 @@ unsafe fn mixer_audio_bus_get_ffi(index: u32, out: *mut AudioBusInfo) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_audio_set_input(id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
-    ffi_guard("mixer_audio_set_input", ERR_DEVICE, || {
-        mixer_audio_set_input_ffi(id, bus_mask, gain, mute)
+pub unsafe extern "C" fn mixer_audio_set_input(
+    id: u64,
+    units: *const u64,
+    count: u32,
+    gain: f32,
+    mute: u32,
+) -> i32 {
+    ffi_guard("mixer_audio_set_input", ERR_DEVICE, || unsafe {
+        mixer_audio_set_input_ffi(id, units, count, gain, mute)
     })
 }
 
-fn mixer_audio_set_input_ffi(id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
+unsafe fn mixer_audio_set_input_ffi(
+    id: u64,
+    units: *const u64,
+    count: u32,
+    gain: f32,
+    mute: u32,
+) -> i32 {
+    let routed = if units.is_null() || count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(units, count as usize).to_vec() }
+    };
     with_mixer(|mixer| {
         mixer
             .shared
             .lock_or_recover()
             .audio
-            .set_input(id, bus_mask, gain, mute);
+            .set_input(id, &routed, gain, mute);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -4393,19 +4462,19 @@ fn mixer_audio_set_bus_gain_ffi(id: u64, gain: f32, mute: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_audio_set_unit_link(unit_id: u64, bus_id: u64, mode: u32) -> i32 {
+pub extern "C" fn mixer_audio_set_unit_link(unit_id: u64, mode: u32) -> i32 {
     ffi_guard("mixer_audio_set_unit_link", ERR_DEVICE, || {
-        mixer_audio_set_unit_link_ffi(unit_id, bus_id, mode)
+        mixer_audio_set_unit_link_ffi(unit_id, mode)
     })
 }
 
-fn mixer_audio_set_unit_link_ffi(unit_id: u64, bus_id: u64, mode: u32) -> i32 {
+fn mixer_audio_set_unit_link_ffi(unit_id: u64, mode: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
             .lock_or_recover()
             .audio
-            .set_unit_link(unit_id, bus_id, mode);
+            .set_unit_link(unit_id, mode);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -4431,19 +4500,19 @@ fn mixer_audio_set_headphone_cue_ffi(unit_id: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_audio_set_headphone_copy_master(enabled: u32) -> i32 {
-    ffi_guard("mixer_audio_set_headphone_copy_master", ERR_DEVICE, || {
-        mixer_audio_set_headphone_copy_master_ffi(enabled)
+pub extern "C" fn mixer_audio_set_headphone_copy_monitor(enabled: u32) -> i32 {
+    ffi_guard("mixer_audio_set_headphone_copy_monitor", ERR_DEVICE, || {
+        mixer_audio_set_headphone_copy_monitor_ffi(enabled)
     })
 }
 
-fn mixer_audio_set_headphone_copy_master_ffi(enabled: u32) -> i32 {
+fn mixer_audio_set_headphone_copy_monitor_ffi(enabled: u32) -> i32 {
     with_mixer(|mixer| {
         mixer
             .shared
             .lock_or_recover()
             .audio
-            .set_headphone_copy_master(enabled);
+            .set_headphone_copy_monitor(enabled);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -4762,7 +4831,7 @@ unsafe fn mixer_copy_audio_peaks_ffi(out: *mut AudioPeak, cap: u32) -> i32 {
     with_mixer(|mixer| {
         let (master, buses, mix_peaks, uploads) = {
             let shared = mixer.shared.lock_or_recover();
-            let master = shared.audio.master_peak();
+            let master = shared.audio.monitor_peak();
             let buses = shared.audio.bus_peaks();
             let mix_peaks = shared.audio.mix_input_peaks();
             let uploads = Arc::clone(&mixer.uploads);
@@ -4789,7 +4858,7 @@ unsafe fn mixer_copy_audio_peaks_ffi(out: *mut AudioPeak, cap: u32) -> i32 {
             }
             unsafe {
                 *out.add(n as usize) = AudioPeak {
-                    source_id: crate::abi::AUDIO_BUS_PEAK_BASE | id,
+                    source_id: audio_peak_id(id),
                     left,
                     right,
                 };
@@ -5429,7 +5498,7 @@ mod tests {
 
     #[test]
     fn remove_overlay_compacts_list() {
-        let mut state = UnitState::default();
+        let mut overlays = Vec::new();
         let desc = |source_id: u64| OverlayDesc {
             source_id,
             rect: Rect {
@@ -5451,14 +5520,46 @@ mod tests {
             label: std::ptr::null(),
         };
         for id in [1, 2, 3] {
-            merge_overlay(&mut state, desc(id));
+            merge_overlay(&mut overlays, desc(id));
         }
-        remove_overlay(&mut state, 2);
-        assert_eq!(state.overlay_count, 2);
-        assert_eq!(state.overlays[0].source_id, 1);
-        assert_eq!(state.overlays[1].source_id, 3);
-        remove_overlay(&mut state, 99);
-        assert_eq!(state.overlay_count, 2);
+        remove_overlay(&mut overlays, 2);
+        assert_eq!(overlays.len(), 2);
+        assert_eq!(overlays[0].source_id, 1);
+        assert_eq!(overlays[1].source_id, 3);
+        remove_overlay(&mut overlays, 99);
+        assert_eq!(overlays.len(), 2);
+    }
+
+    #[test]
+    fn nine_overlays_are_kept() {
+        let mut overlays = Vec::new();
+        for source_id in 1..=9 {
+            merge_overlay(
+                &mut overlays,
+                OverlayDesc {
+                    source_id,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    crop: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    opacity: 1.0,
+                    z: source_id as i32,
+                    audio_follow: 0,
+                    hidden: 0,
+                    label: std::ptr::null(),
+                },
+            );
+        }
+        assert_eq!(overlays.len(), 9);
+        assert_eq!(overlays[8].source_id, 9);
     }
 
     #[test]
@@ -5512,7 +5613,7 @@ mod tests {
             source_kind: SRC_KIND_MU_PROGRAM,
             source_id: 1,
             unit_id: 1,
-            audio_bus_id: 1,
+            audio_unit_id: 1,
             width: 0,
             height: 0,
             fps_n: 60,
@@ -5559,19 +5660,13 @@ mod tests {
             (on_air, 1920, 1080, empty.clone(), MvLabelStyle::default()),
             (idle, 1920, 1080, empty, MvLabelStyle::default()),
         ];
-        let snapshot = [(
+        let snapshot = [crate::abi::UnitSnap::bare(
             1,
-            1920,
-            1080,
-            60_000,
-            1_001,
             crate::abi::UnitState {
                 program_source: on_air,
                 preview_source: on_air,
                 ..crate::abi::UnitState::default()
             },
-            0,
-            None,
         )];
         let (scenes, _) = collect_live_ids(&specs, &snapshot, &[], &[], &HashMap::new());
         assert!(scenes.contains(&on_air));
@@ -5611,7 +5706,7 @@ mod tests {
             source_kind: SRC_KIND_MU_MULTIVIEW,
             source_id: mv,
             unit_id: 1,
-            audio_bus_id: 1,
+            audio_unit_id: 1,
             width: 0,
             height: 0,
             fps_n: 60,
@@ -5630,8 +5725,8 @@ mod tests {
 
     #[test]
     fn mix_source_cycles_self_but_not_mutual() {
-        let mix_a = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
-        let mix_b = crate::abi::MixInputSpec::new(2, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
+        let mix_a = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1).unwrap();
+        let mix_b = crate::abi::MixInputSpec::new(2, SRC_KIND_MU_PROGRAM, 1).unwrap();
         let mix_inputs = HashMap::from([(20, mix_a), (21, mix_b)]);
         let scene_a = SceneSpec {
             width: 320,
@@ -5660,14 +5755,26 @@ mod tests {
             preview_source: SRC_BARS,
             ..UnitState::default()
         };
-        assert!(unit_uses_mix_cycle(1, &self_on_a, &mix_inputs, &scenes));
+        assert!(unit_uses_mix_cycle(
+            1,
+            &self_on_a,
+            &[],
+            &mix_inputs,
+            &scenes
+        ));
 
         let nest_b = UnitState {
             program_source: SCENE_BASE | 2,
             preview_source: SRC_BARS,
             ..UnitState::default()
         };
-        assert!(!unit_uses_mix_cycle(2, &nest_b, &mix_inputs, &scenes));
+        assert!(!unit_uses_mix_cycle(
+            2,
+            &nest_b,
+            &[],
+            &mix_inputs,
+            &scenes
+        ));
 
         let mutual_a = UnitState {
             program_source: SCENE_BASE | 3,
@@ -5679,18 +5786,30 @@ mod tests {
             preview_source: SRC_BLUE,
             ..UnitState::default()
         };
-        assert!(!unit_uses_mix_cycle(1, &mutual_a, &mix_inputs, &scenes));
-        assert!(!unit_uses_mix_cycle(2, &mutual_b, &mix_inputs, &scenes));
+        assert!(!unit_uses_mix_cycle(
+            1,
+            &mutual_a,
+            &[],
+            &mix_inputs,
+            &scenes
+        ));
+        assert!(!unit_uses_mix_cycle(
+            2,
+            &mutual_b,
+            &[],
+            &mix_inputs,
+            &scenes
+        ));
     }
 
     #[test]
     fn mix_input_spec_promotes_raw_multiview() {
-        let spec = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_MULTIVIEW, 1, 0).unwrap();
+        let spec = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_MULTIVIEW, 1).unwrap();
         assert_eq!(spec.target_id, MULTIVIEW_BASE | 1);
         let already =
-            crate::abi::MixInputSpec::new(MULTIVIEW_BASE | 1, SRC_KIND_MU_MULTIVIEW, 1, 0).unwrap();
+            crate::abi::MixInputSpec::new(MULTIVIEW_BASE | 1, SRC_KIND_MU_MULTIVIEW, 1).unwrap();
         assert_eq!(already.target_id, MULTIVIEW_BASE | 1);
-        let program = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1, 0).unwrap();
+        let program = crate::abi::MixInputSpec::new(1, SRC_KIND_MU_PROGRAM, 1).unwrap();
         assert_eq!(program.target_id, 1);
     }
 
@@ -5718,19 +5837,13 @@ mod tests {
     fn collect_frame_live_ids_uploads_on_air_not_idle_gui() {
         let on_air = 20;
         let idle = 21;
-        let snapshot = [(
+        let snapshot = [crate::abi::UnitSnap::bare(
             1,
-            1920,
-            1080,
-            60_000,
-            1_001,
             crate::abi::UnitState {
                 program_source: on_air,
                 preview_source: on_air,
                 ..crate::abi::UnitState::default()
             },
-            0,
-            None,
         )];
         let (_, uploads) = collect_frame_live_ids(&[], &snapshot, &[], &[], &HashMap::new(), false);
         assert!(uploads.contains(&on_air));
