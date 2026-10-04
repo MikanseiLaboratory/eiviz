@@ -862,7 +862,7 @@ extension MixerController {
             let states: [EivizSceneStateDesc] = scene.states.enumerated().map { index, state in
                 EivizSceneStateDesc(
                     id: state.id,
-                    layers: layerPtrs[index].map(UnsafePointer.init),
+                    layers: layerPtrs[index].map { UnsafePointer($0) },
                     layer_count: UInt32(layerBufs[index].count),
                     enter: sceneMotion(state.enter),
                     camera: EivizSceneCamera(
@@ -883,7 +883,7 @@ extension MixerController {
                 let sequences: [EivizSceneSequenceDesc] = scene.sequences.enumerated().map { index, sequence in
                     EivizSceneSequenceDesc(
                         id: sequence.id,
-                        steps: stepPtrs[index].map(UnsafePointer.init),
+                        steps: stepPtrs[index].map { UnsafePointer($0) },
                         step_count: UInt32(stepBufs[index].count)
                     )
                 }

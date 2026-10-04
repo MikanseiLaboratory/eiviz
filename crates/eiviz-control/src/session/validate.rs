@@ -281,8 +281,8 @@ fn check_camera(camera: &crate::session::SceneCamera, what: &str) -> Result<(), 
         )));
     }
     let margin = 0.5 / camera.zoom;
-    let inside = (margin..=1.0 - margin).contains(&camera.x)
-        && (margin..=1.0 - margin).contains(&camera.y);
+    let inside =
+        (margin..=1.0 - margin).contains(&camera.x) && (margin..=1.0 - margin).contains(&camera.y);
     if !inside {
         return Err(ValidationError::new(format!(
             "{what} camera center is out of range"
@@ -578,18 +578,24 @@ mod tests {
 
     #[test]
     fn camera_out_of_range_is_rejected() {
-        let doc = parse(session_with_camera(r#"{"zoom": 0.5}"#, r#"{"zoom": 2}"#).as_bytes()).unwrap();
+        let doc =
+            parse(session_with_camera(r#"{"zoom": 0.5}"#, r#"{"zoom": 2}"#).as_bytes()).unwrap();
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("zoom"), "{}", err.message);
 
-        let doc = parse(session_with_camera(r#"{"zoom": 2}"#, r#"{"x": 0.0, "zoom": 4}"#).as_bytes()).unwrap();
+        let doc =
+            parse(session_with_camera(r#"{"zoom": 2}"#, r#"{"x": 0.0, "zoom": 4}"#).as_bytes())
+                .unwrap();
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("center"), "{}", err.message);
     }
 
     #[test]
     fn camera_round_trips_through_the_session_file() {
-        let doc = parse(session_with_camera(r#"{"x": 0.6, "y": 0.4, "zoom": 2}"#, r#"{"zoom": 4}"#).as_bytes()).unwrap();
+        let doc = parse(
+            session_with_camera(r#"{"x": 0.6, "y": 0.4, "zoom": 2}"#, r#"{"zoom": 4}"#).as_bytes(),
+        )
+        .unwrap();
         validate(&doc).unwrap();
         let bytes = crate::session::file::encode_file(&doc).unwrap();
         let back = crate::session::file::decode_file(&bytes).unwrap();
