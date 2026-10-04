@@ -265,6 +265,16 @@ impl AudioEngine {
         self.graph.lock_or_recover().headphone_cue_unit = unit_id;
     }
 
+    pub fn set_headphone_listen(&self, kind: u32, id: u64) {
+        let mut graph = self.graph.lock_or_recover();
+        let kind = match kind {
+            graph::LISTEN_UNIT | graph::LISTEN_INPUT => kind,
+            _ => graph::LISTEN_OFF,
+        };
+        graph.headphone_listen_kind = kind;
+        graph.headphone_listen_id = if kind == graph::LISTEN_OFF { 0 } else { id };
+    }
+
     pub fn set_headphone_copy_monitor(&self, enabled: u32) {
         self.graph.lock_or_recover().headphone_copy_monitor = enabled != 0;
     }

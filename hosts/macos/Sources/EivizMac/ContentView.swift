@@ -535,7 +535,7 @@ struct ContentView: View {
             HSplitView {
                 HStack(alignment: .bottom, spacing: 12) {
                     ForEach(mixer.session.units) { unit in
-                        meter(title: unit.name, id: EIVIZ_AUDIO_BUS_PEAK_BASE | unit.id)
+                        meter(title: unit.name, unitId: unit.id)
                     }
                     ForEach(mixer.session.inputs) { input in
                         inputMeter(input)
@@ -587,8 +587,9 @@ struct ContentView: View {
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }
 
-    private func meter(title: String, id: UInt64) -> some View {
-        let peak = mixer.peaks[id] ?? (0, 0)
+    private func meter(title: String, unitId: UInt64) -> some View {
+        let peak = mixer.peaks[EIVIZ_AUDIO_BUS_PEAK_BASE | unitId] ?? (0, 0)
+        let listening = mixer.session.headphoneListenKind == 1 && mixer.session.headphoneListenId == unitId
         return VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.system(size: 10))
             HStack(spacing: 2) {
@@ -596,6 +597,9 @@ struct ContentView: View {
                 Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
             }
             .frame(height: 40, alignment: .bottom)
+            listenButton(on: listening) {
+                mixer.toggleHeadphoneListen(kind: 1, id: unitId)
+            }
         }
     }
 
@@ -621,10 +625,49 @@ struct ContentView: View {
                 Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
             }
             .frame(height: 40, alignment: .bottom)
+            listenButton(on: mixer.session.headphoneListenKind == 2 && mixer.session.headphoneListenId == input.id) {
+                mixer.toggleHeadphoneListen(kind: 2, id: input.id)
+            }
+            if input.kind != .mix {
+                ForEach(mixer.session.units) { unit in
+                    let on = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)
+                    Button {
+                        let turningOff = on
+                        var routes = input.audioUnits
+                        if turningOff {
+                            routes.removeAll { $0 == unit.id }
+                            mixer.clearAudioFollow(inputId: input.id, unitId: unit.id)
+                        } else if !routes.contains(unit.id) {
+                            routes.append(unit.id)
+                        }
+                        mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
+                    } label: {
+                        Text("MU\(unit.id)")
+                            .font(.system(size: 10, weight: on ? .bold : .regular))
+                            .foregroundStyle(on ? Color.white : EivizTheme.dim)
+                            .frame(width: 36, height: 18)
+                            .background(on ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.format("audio.routeTip", unit.name))
+                }
+            }
         }
         .onTapGesture(count: 2) {
             mixer.openAudioInput(input)
         }
+    }
+
+    private func listenButton(on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "headphones")
+                .font(.system(size: 11))
+                .foregroundStyle(on ? Color.white : EivizTheme.dim)
+                .frame(width: 22, height: 18)
+                .background(on ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
+        }
+        .buttonStyle(.plain)
+        .help(L10n.t(on ? "audio.listening" : "audio.listen"))
     }
 
     private var mixUnitBar: some View {

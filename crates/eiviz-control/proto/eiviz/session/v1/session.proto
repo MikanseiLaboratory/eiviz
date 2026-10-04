@@ -49,6 +49,8 @@ message Document {
   uint64 selected_unit_id = 18;
   bool headphone_copy_monitor = 19;
   Headphone headphone = 23;
+  uint32 headphone_listen_kind = 24;
+  uint64 headphone_listen_id = 25;
 }
 
 message SessionSettings {

@@ -644,6 +644,76 @@ final class MixerController: ObservableObject {
         objectWillChange.send()
     }
 
+    func inputFollows(_ inputId: UInt64, unit: MixingUnitEntry) -> Bool {
+        if let scene = session.scenes.first(where: { $0.id == unit.programSceneId }),
+           sceneCarries(scene, inputId: inputId) {
+            return true
+        }
+        for slot in session.overlays where unit.overlaysOnAir.contains(slot.id) && slot.audioFollow {
+            if slot.sourceKind == .input && slot.sceneGpuId == inputId {
+                return true
+            }
+            if slot.sourceKind == .scene,
+               let scene = session.scenes.first(where: { $0.gpuId == slot.sceneGpuId }),
+               sceneCarries(scene, inputId: inputId) {
+                return true
+            }
+        }
+        return false
+    }
+
+    func clearAudioFollow(inputId: UInt64, unitId: UInt64) {
+        guard let unit = session.units.first(where: { $0.id == unitId }) else { return }
+        if let scene = session.scenes.first(where: { $0.id == unit.programSceneId }) {
+            clearSceneFollow(scene, inputId: inputId)
+        }
+        var overlays = false
+        for index in session.overlays.indices where unit.overlaysOnAir.contains(session.overlays[index].id) {
+            let slot = session.overlays[index]
+            guard slot.audioFollow else { continue }
+            if slot.sourceKind == .input && slot.sceneGpuId == inputId {
+                session.overlays[index].audioFollow = false
+                overlays = true
+            } else if slot.sourceKind == .scene,
+                      let scene = session.scenes.first(where: { $0.gpuId == slot.sceneGpuId }) {
+                clearSceneFollow(scene, inputId: inputId)
+            }
+        }
+        if overlays {
+            pushOverlays(unitId: unitId)
+        }
+        objectWillChange.send()
+    }
+
+    private func sceneCarries(_ scene: SceneEntry, inputId: UInt64) -> Bool {
+        scene.layers.contains { $0.audioFollow && ($0.inputId == inputId || nestedCarries($0.inputId, inputId: inputId)) }
+    }
+
+    private func nestedCarries(_ sourceId: UInt64, inputId: UInt64) -> Bool {
+        guard let scene = session.scenes.first(where: { $0.gpuId == sourceId }) else { return false }
+        return scene.layers.contains { $0.audioFollow && $0.inputId == inputId }
+    }
+
+    private func clearSceneFollow(_ scene: SceneEntry, inputId: UInt64) {
+        guard let index = session.scenes.firstIndex(where: { $0.id == scene.id }) else { return }
+        var changed = false
+        for layerIndex in session.scenes[index].layers.indices {
+            let layer = session.scenes[index].layers[layerIndex]
+            guard layer.audioFollow else { continue }
+            if layer.inputId == inputId {
+                session.scenes[index].layers[layerIndex].audioFollow = false
+                changed = true
+            } else if nestedCarries(layer.inputId, inputId: inputId),
+                      let nested = session.scenes.first(where: { $0.gpuId == layer.inputId }) {
+                clearSceneFollow(nested, inputId: inputId)
+                changed = true
+            }
+        }
+        if changed, let updated = session.scenes.first(where: { $0.id == scene.id }) {
+            pushScene(updated)
+        }
+    }
+
     func pushInputAudio(_ input: InputEntry) {
         let units = input.kind == .mix ? [] : input.audioUnits
         units.withUnsafeBufferPointer { buffer in
@@ -742,6 +812,21 @@ final class MixerController: ObservableObject {
         }
         _ = mixer_audio_set_headphone_cue(selectedUnitId)
         _ = mixer_audio_set_headphone_copy_monitor(session.headphoneCopyMonitor ? 1 : 0)
+        _ = mixer_audio_set_headphone_listen(session.headphoneListenKind, session.headphoneListenId)
+    }
+
+    func toggleHeadphoneListen(kind: UInt32, id: UInt64) {
+        if session.headphoneListenKind == kind && session.headphoneListenId == id {
+            session.headphoneListenKind = 0
+            session.headphoneListenId = 0
+        } else {
+            session.headphoneListenKind = kind
+            session.headphoneListenId = id
+        }
+        if !isRemote {
+            _ = mixer_audio_set_headphone_listen(session.headphoneListenKind, session.headphoneListenId)
+        }
+        objectWillChange.send()
     }
 
 }

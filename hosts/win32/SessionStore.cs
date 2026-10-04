@@ -210,6 +210,8 @@ internal static class SessionStore
         public ulong SelectedUnitId { get; set; }
         public HeadphoneEntry Headphone { get; set; } = new();
         public bool HeadphoneCopyMonitor { get; set; }
+        public uint HeadphoneListenKind { get; set; }
+        public ulong HeadphoneListenId { get; set; }
 
         public static Document From(Session session) => new()
         {
@@ -253,7 +255,9 @@ internal static class SessionStore
             NextMultiviewId = session.NextMultiviewId,
             SelectedUnitId = session.SelectedUnitId,
             Headphone = session.Headphone.Clone(),
-            HeadphoneCopyMonitor = session.HeadphoneCopyMonitor
+            HeadphoneCopyMonitor = session.HeadphoneCopyMonitor,
+            HeadphoneListenKind = session.HeadphoneListenKind,
+            HeadphoneListenId = session.HeadphoneListenId
         };
 
         public Session ToSession()
@@ -262,7 +266,9 @@ internal static class SessionStore
             {
                 SelectedUnitId = SelectedUnitId,
                 Headphone = Headphone.Clone(),
-                HeadphoneCopyMonitor = HeadphoneCopyMonitor
+                HeadphoneCopyMonitor = HeadphoneCopyMonitor,
+                HeadphoneListenKind = HeadphoneListenKind,
+                HeadphoneListenId = HeadphoneListenId
             };
             session.Settings.MasterFpsNum = Settings.MasterFpsNum;
             session.Settings.MasterFpsDen = Settings.MasterFpsDen;

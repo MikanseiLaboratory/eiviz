@@ -302,6 +302,20 @@ public partial class MainWindow
                 BusTheme.Inactive(_session.Settings));
         }
         ApplySceneTileThumbs();
+        RefreshAudioRoutes();
+    }
+
+    private void RefreshAudioRoutes()
+    {
+        foreach (var input in _session.Inputs)
+        {
+            if (input.Kind == InputKind.Mix || !_meters.TryGetValue(input.Id, out var strip))
+                continue;
+            var follow = FollowUnits(input);
+            strip.SetRoutes(_session.Units, input.AudioUnits, follow);
+            if (_audioInputs.TryGetValue(input.Id, out var window))
+                window.SetRoutes(input.AudioUnits, follow);
+        }
     }
 
     private void ApplySceneTileThumbs()

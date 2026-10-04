@@ -360,6 +360,7 @@ int32_t mixer_audio_set_input(uint64_t id, const uint64_t *units, uint32_t count
 int32_t mixer_audio_set_bus_gain(uint64_t id, float gain, uint32_t mute);
 int32_t mixer_audio_set_unit_link(uint64_t unit_id, uint32_t mode);
 int32_t mixer_audio_set_headphone_cue(uint64_t unit_id);
+int32_t mixer_audio_set_headphone_listen(uint32_t kind, uint64_t id);
 int32_t mixer_audio_set_headphone_copy_monitor(uint32_t enabled);
 int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint32_t cap);
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);

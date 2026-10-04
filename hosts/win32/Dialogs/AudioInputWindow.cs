@@ -15,13 +15,15 @@ internal sealed class AudioInputWindow : Window
 
     public ulong InputId => _input.Id;
     public event Action<InputEntry, IReadOnlyList<ulong>, float, bool>? Changed;
+    public event Action<MeterStrip>? ListenRequested;
+    public event Action<ulong, ulong>? FollowCleared;
 
     public AudioInputWindow(InputEntry input, IReadOnlyList<MixingUnitEntry> units)
     {
         _input = input;
         _units = units;
         Title = Loc.Format("audio.inputTitle", input.ListLabel);
-        Width = 280;
+        Width = 420;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
         Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11));
@@ -31,7 +33,7 @@ internal sealed class AudioInputWindow : Window
 
         _pre = new MeterStrip(
             MeterKind.Input, input.Id, Loc.T("audio.pre"), input.Gain, input.Mute,
-            showFader: false, showOpen: false, showRoutes: false);
+            showFader: false, showOpen: false, showRoutes: false, showListen: false);
         _post = new MeterStrip(
             MeterKind.Input, input.Id, Loc.T("audio.post"), input.Gain, input.Mute,
             showFader: true, showOpen: false, showRoutes: input.Kind != InputKind.Mix);
@@ -41,6 +43,8 @@ internal sealed class AudioInputWindow : Window
             Changed?.Invoke(_input, _post.Routes, gain, mute);
         _post.RoutesChanged += (_, routes) =>
             Changed?.Invoke(_input, routes, _post.Gain, _post.Mute);
+        _post.FollowCleared += (inputId, unitId) => FollowCleared?.Invoke(inputId, unitId);
+        _post.ListenRequested += strip => ListenRequested?.Invoke(strip);
 
         var row = new StackPanel
         {
@@ -63,16 +67,18 @@ internal sealed class AudioInputWindow : Window
         _post.SetLevels(post.L, post.R);
     }
 
-    public void Sync(float gain, bool mute, IReadOnlyList<ulong> routes)
+    public void Sync(float gain, bool mute, IReadOnlyList<ulong> routes, IReadOnlyList<ulong>? followed = null)
     {
         _pre.SyncFrom(gain, mute);
         _post.SyncFrom(gain, mute);
-        if (!SameRoutes(_post.Routes, routes))
-            _post.SetRoutes(_units, routes);
+        if (!SameRoutes(_post.Routes, routes) || followed is not null)
+            _post.SetRoutes(_units, routes, followed);
     }
 
-    public void SetRoutes(IReadOnlyList<ulong> routes) =>
-        _post.SetRoutes(_units, routes);
+    public void SetRoutes(IReadOnlyList<ulong> routes, IReadOnlyList<ulong>? followed = null) =>
+        _post.SetRoutes(_units, routes, followed);
+
+    public void SetListening(bool on) => _post.SetListening(on);
 
     private static bool SameRoutes(IReadOnlyList<ulong> left, IReadOnlyList<ulong> right) =>
         left.Count == right.Count && left.Order().SequenceEqual(right.Order());

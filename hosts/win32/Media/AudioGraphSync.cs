@@ -41,6 +41,7 @@ internal static class AudioGraphSync
         }
         MixerNative.AudioSetHeadphoneCue(session.SelectedUnitId);
         MixerNative.AudioSetHeadphoneCopyMonitor(session.HeadphoneCopyMonitor ? 1u : 0u);
+        MixerNative.AudioSetHeadphoneListen(session.HeadphoneListenKind, session.HeadphoneListenId);
     }
 
     public static void SetInput(ulong id, IReadOnlyList<ulong> units, float gain, bool mute)

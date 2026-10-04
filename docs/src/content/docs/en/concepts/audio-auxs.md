@@ -13,9 +13,7 @@ An Input routes to a set of Mixing Units. An Input with no route is silent. One 
 
 ## Headphone
 
-Headphone cues the selected Mixing Unit. Its device is set under Headphone in [Settings](/eiviz/en/introduction/settings/).  
-Headphone copies the cued MU Bus makes Headphone a copy of that mix. Leave it off to render the cue separately.  
-The local monitor plays the cued MU Bus.
+Click the headphone icon on a Mixing Unit or Input meter to listen to that source. Click it again to stop. The output device is set under Headphone in [Settings](/eiviz/en/introduction/settings/).
 
 ## Mix Input
 

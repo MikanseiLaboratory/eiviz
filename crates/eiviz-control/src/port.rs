@@ -56,6 +56,9 @@ pub trait MixerPort: Send {
     fn audio_set_bus_gain(&mut self, id: u64, gain: f32, mute: bool) -> ControlResult<()>;
     fn audio_set_unit_link(&mut self, unit_id: u64, mode: u32) -> ControlResult<()>;
     fn audio_set_headphone_copy_monitor(&mut self, enabled: bool) -> ControlResult<()>;
+    fn audio_set_headphone_listen(&mut self, _kind: u32, _id: u64) -> ControlResult<()> {
+        Ok(())
+    }
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()>;
     fn set_master_fps(&mut self, fps_num: u32, fps_den: u32) -> ControlResult<()>;

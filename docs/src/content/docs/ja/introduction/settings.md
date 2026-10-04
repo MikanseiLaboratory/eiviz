@@ -56,10 +56,9 @@ description: セッションに保存される設定ウィンドウの項目
 
 <img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="ヘッドホン設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-内部ミックスは48 kHzステレオです。このページでは、選択中のMixing Unitをcueするヘッドホンの出力先を設定します。各Mixing Unitの出力デバイスは、Mixing Unitのダイアログで選びます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
+内部ミックスは48 kHzステレオです。このページではヘッドホンの出力デバイスを選びます。聴く対象は、メーターのヘッドホンアイコンで選びます。各Mixing Unitの出力デバイスは、Mixing Unitのダイアログで選びます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
 
-- **None**: 内部ミックスのままです。実機へ出すときはWASAPI共有またはASIOを使います。
-- **ヘッドホンはcue中のMU Busをコピー**: オンにすると、cue中のMU Busと同じミックスを出します。オフのときは、cue対象を別にミックスします。
+- **None**: 内部ミックスのままです。デバイスへ出すときはWASAPI共有またはASIOを使います。
 
 ## Web API
 

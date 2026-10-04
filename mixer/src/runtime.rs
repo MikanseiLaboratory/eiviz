@@ -12,7 +12,8 @@ use crate::abi::{
 };
 use crate::{
     mixer_api_configure, mixer_audio_capture_start, mixer_audio_headphone_set,
-    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor, mixer_audio_set_input,
+    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor, mixer_audio_set_headphone_listen,
+    mixer_audio_set_input,
     mixer_audio_set_unit_link, mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_create_unit,
     mixer_define_generator,
     mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
@@ -352,6 +353,10 @@ impl MixerPort for ProcessMixer {
 
     fn audio_set_headphone_copy_monitor(&mut self, enabled: bool) -> ControlResult<()> {
         map_abi(mixer_audio_set_headphone_copy_monitor(u32::from(enabled)))
+    }
+
+    fn audio_set_headphone_listen(&mut self, kind: u32, id: u64) -> ControlResult<()> {
+        map_abi(mixer_audio_set_headphone_listen(kind, id))
     }
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()> {

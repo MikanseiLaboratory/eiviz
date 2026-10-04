@@ -357,6 +357,8 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         selected_unit_id: doc.selected_unit_id,
         headphone_copy_monitor: doc.headphone_copy_monitor,
         headphone: Some(headphone_to_pb(&doc.headphone)),
+        headphone_listen_kind: doc.headphone_listen_kind,
+        headphone_listen_id: doc.headphone_listen_id,
     }
 }
 
@@ -398,6 +400,8 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
         next_multiview_id: doc.next_multiview_id,
         selected_unit_id: doc.selected_unit_id,
         headphone_copy_monitor: doc.headphone_copy_monitor,
+        headphone_listen_kind: doc.headphone_listen_kind,
+        headphone_listen_id: doc.headphone_listen_id,
         headphone: doc
             .headphone
             .map(headphone_from_pb)

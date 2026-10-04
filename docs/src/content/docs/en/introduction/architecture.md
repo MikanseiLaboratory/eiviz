@@ -214,7 +214,7 @@ flowchart TB
 
 ## Audio
 
-The internal mix is a 48 kHz graph. Every Mixing Unit has one MU Bus. Headphone cues the selected Mixing Unit.  
+The internal mix is a 48 kHz graph. Every Mixing Unit has one MU Bus. Headphone plays the Mixing Unit or Input chosen with the meter icon.  
 Inputs route to a set of Mixing Units and have gain. Follow tracks Preview/Program. Overlays can follow too.
 
 Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/).

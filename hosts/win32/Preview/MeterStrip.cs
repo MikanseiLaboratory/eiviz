@@ -20,6 +20,11 @@ internal sealed class MeterStrip : StackPanel
     private const string IconSpeaker = "\uE767";
     private const string IconMute = "\uE74F";
     private const string IconSettings = "\uE713";
+    private const string IconHeadphones = "\uE7F6";
+    private static readonly SolidColorBrush RouteOnFill = Freeze(Color.FromRgb(0x2E, 0x7D, 0x32));
+    private static readonly SolidColorBrush RouteOffFill = Freeze(Color.FromRgb(0x2A, 0x2A, 0x2A));
+    private static readonly SolidColorBrush RouteOffText = Freeze(Color.FromRgb(0x9E, 0x9E, 0x9E));
+    private static readonly SolidColorBrush RouteOffBorder = Freeze(Color.FromRgb(0x66, 0x66, 0x66));
 
     private readonly Rectangle _left = MakeBar();
     private readonly Rectangle _right = MakeBar();
@@ -33,6 +38,7 @@ internal sealed class MeterStrip : StackPanel
         ItemHeight = 22
     };
     private readonly bool _showRoutes;
+    private readonly Button _listen;
     private float _leftPeak;
     private float _rightPeak;
     private float _leftDb = float.NegativeInfinity;
@@ -43,9 +49,12 @@ internal sealed class MeterStrip : StackPanel
     public MeterKind Kind { get; }
     public ulong TargetId { get; }
     public IReadOnlyList<ulong> Routes { get; private set; } = [];
+    private ulong[] _followed = [];
+    public event Action<ulong, ulong>? FollowCleared;
     public float Gain { get; private set; } = 1;
     public bool Mute { get; private set; }
     public event Action<ulong, IReadOnlyList<ulong>>? RoutesChanged;
+    public event Action<MeterStrip>? ListenRequested;
     public event Action<ulong, float, bool>? FaderChanged;
     public event Action<ulong>? OpenRequested;
 
@@ -57,14 +66,15 @@ internal sealed class MeterStrip : StackPanel
         bool mute,
         bool showFader = true,
         bool showOpen = false,
-        bool showRoutes = true)
+        bool showRoutes = true,
+        bool showListen = true)
     {
         Kind = kind;
         TargetId = targetId;
         Gain = gain < 0 ? 1 : gain;
         Mute = mute;
         _showRoutes = showRoutes;
-        Width = 108;
+        Width = 112;
         Margin = new Thickness(0, 0, 10, 0);
         Orientation = Orientation.Vertical;
         VerticalAlignment = VerticalAlignment.Top;
@@ -147,6 +157,22 @@ internal sealed class MeterStrip : StackPanel
             _mute.Content = MuteGlyph(Mute);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
+        _listen = new Button
+        {
+            Content = IconHeadphones,
+            FontFamily = IconFont,
+            FontSize = 12,
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 4, 0, 0),
+            ToolTip = Loc.T("audio.listen"),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        _listen.Click += (_, _) => ListenRequested?.Invoke(this);
+        SetListening(false);
+        if (showListen)
+            Children.Add(_listen);
         if (showRoutes)
         {
             Children.Add(_routes);
@@ -222,9 +248,11 @@ internal sealed class MeterStrip : StackPanel
         return Math.Clamp((db + 60.0) / 72.0, 0, 1);
     }
 
-    public void SetRoutes(IReadOnlyList<MixingUnitEntry> units, IReadOnlyList<ulong> selected)
+    public void SetRoutes(IReadOnlyList<MixingUnitEntry> units, IReadOnlyList<ulong> selected, IReadOnlyList<ulong>? followed = null)
     {
         Routes = selected.ToArray();
+        if (followed is not null)
+            _followed = followed.ToArray();
         if (!_showRoutes)
             return;
         _routes.Children.Clear();
@@ -233,31 +261,65 @@ internal sealed class MeterStrip : StackPanel
             foreach (var unit in units)
             {
                 var unitId = unit.Id;
-                var button = new ToggleButton
+                var button = new Button
                 {
-                    Width = 26,
+                    Width = 44,
                     Height = 22,
-                    FontSize = 10,
-                    Margin = new Thickness(0, 0, 2, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    IsChecked = selected.Contains(unitId),
-                    ToolTip = unit.Name,
-                    Content = unit.Name.Length == 0 ? "?" : unit.Name[..1]
+                    Margin = new Thickness(0, 0, 2, 2),
+                    Padding = new Thickness(0),
+                    ToolTip = Loc.Format("audio.routeTip", unit.Name)
                 };
-                button.Click += (_, _) =>
-                {
-                    var next = Routes.ToHashSet();
-                    if (button.IsChecked == true)
-                        next.Add(unitId);
-                    else
-                        next.Remove(unitId);
-                    Routes = next.Order().ToArray();
-                    RoutesChanged?.Invoke(TargetId, Routes);
-                };
+                PaintRoute(button, RouteShown(unitId), unit.Id);
+                button.Click += (_, _) => ToggleRoute(button, unitId);
                 _routes.Children.Add(button);
             }
         }
         _routes.Children.Add(_mute);
+    }
+
+    private bool RouteShown(ulong unitId) => Routes.Contains(unitId) || _followed.Contains(unitId);
+
+    private void ToggleRoute(Button button, ulong unitId)
+    {
+        var shown = RouteShown(unitId);
+        if (shown && _followed.Contains(unitId))
+        {
+            _followed = _followed.Where(id => id != unitId).ToArray();
+            FollowCleared?.Invoke(TargetId, unitId);
+        }
+        var next = Routes.ToHashSet();
+        if (shown)
+            next.Remove(unitId);
+        else
+            next.Add(unitId);
+        Routes = next.Order().ToArray();
+        PaintRoute(button, RouteShown(unitId), unitId);
+        RoutesChanged?.Invoke(TargetId, Routes);
+    }
+
+    public void SetListening(bool on)
+    {
+        _listen.Background = on ? RouteOnFill : RouteOffFill;
+        _listen.Foreground = on ? Brushes.White : RouteOffText;
+        _listen.BorderBrush = on ? RouteOnFill : RouteOffBorder;
+        _listen.ToolTip = Loc.T(on ? "audio.listening" : "audio.listen");
+    }
+
+    private static void PaintRoute(Button button, bool on, ulong unitId)
+    {
+        button.Background = on ? RouteOnFill : RouteOffFill;
+        button.BorderBrush = on ? RouteOnFill : RouteOffBorder;
+        button.Foreground = on ? Brushes.White : RouteOffText;
+        button.FontWeight = on ? FontWeights.Bold : FontWeights.Normal;
+        button.FontSize = 11;
+        button.Content = "MU" + unitId;
+    }
+
+    private static SolidColorBrush Freeze(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private static object MuteGlyph(bool muted) => muted ? IconMute : IconSpeaker;

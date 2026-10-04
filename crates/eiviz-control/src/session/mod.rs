@@ -71,6 +71,11 @@ pub struct Document {
     pub headphone: HeadphoneDto,
     #[serde(default)]
     pub headphone_copy_monitor: bool,
+    /// 0 = off, 1 = Mixing Unit, 2 = Input.
+    #[serde(default)]
+    pub headphone_listen_kind: u32,
+    #[serde(default)]
+    pub headphone_listen_id: u64,
 }
 
 fn version_two() -> i32 {
@@ -1155,6 +1160,18 @@ impl Document {
             doc.settings.vmix_api_port = api_port();
         }
         doc.settings.multiview_label_size = clamp_size(doc.settings.multiview_label_size);
+        let listen_ok = match doc.headphone_listen_kind {
+            1 => doc.units.iter().any(|unit| unit.id == doc.headphone_listen_id),
+            2 => doc
+                .inputs
+                .iter()
+                .any(|input| input.id == doc.headphone_listen_id),
+            _ => false,
+        };
+        if !listen_ok {
+            doc.headphone_listen_kind = 0;
+            doc.headphone_listen_id = 0;
+        }
         for input in &mut doc.inputs {
             if input.kind == InputKind::Mix {
                 input.audio_units.clear();

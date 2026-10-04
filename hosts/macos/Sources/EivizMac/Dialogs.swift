@@ -539,10 +539,9 @@ struct SettingsView: View {
 
     private var audio: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Each Mixing Unit has its own MU Bus. This page sets the Headphone device, which cues the selected Mixing Unit. None keeps the mix internal. Core Audio sends it to a device.")
+            Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device. Core Audio sends it to a device.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle("Headphone copies the cued MU Bus", isOn: $mixer.session.headphoneCopyMonitor)
             headphoneRow
         }
     }

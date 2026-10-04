@@ -19,6 +19,9 @@ internal static partial class MixerNative
     internal const ulong LabelBase = 0x0003_0000;
     internal const ulong AudioBusPeakBase = 0x0004_0000UL;
     internal const ulong AudioHeadphonePeak = 0x0004_FFFFUL;
+    internal const uint ListenOff = 0;
+    internal const uint ListenUnit = 1;
+    internal const uint ListenInput = 2;
     internal const ulong HeadphoneBus = ulong.MaxValue;
     internal const uint OutputProgram = 0;
     internal const uint OutputPreview = 1;
@@ -224,6 +227,9 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_headphone_cue")]
     internal static partial int AudioSetHeadphoneCue(ulong unitId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_headphone_listen")]
+    internal static partial int AudioSetHeadphoneListen(uint kind, ulong id);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_audio_set_headphone_copy_monitor")]
     internal static partial int AudioSetHeadphoneCopyMonitor(uint enabled);

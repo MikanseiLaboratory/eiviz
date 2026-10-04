@@ -26,11 +26,25 @@ public partial class MainWindow
             AddUnitMeter(unit);
         foreach (var input in _session.Inputs)
             AddInputMeter(input);
+        if (_session.HeadphoneListenKind == MixerNative.ListenUnit
+            && _session.Units.All(unit => unit.Id != _session.HeadphoneListenId)
+            || _session.HeadphoneListenKind == MixerNative.ListenInput
+            && _session.Inputs.All(input => input.Id != _session.HeadphoneListenId))
+        {
+            _session.HeadphoneListenKind = MixerNative.ListenOff;
+            _session.HeadphoneListenId = 0;
+            if (!HostRole.IsRemote)
+                MixerNative.AudioSetHeadphoneListen(MixerNative.ListenOff, 0);
+            foreach (var meter in _meters.Values)
+                meter.SetListening(false);
+        }
     }
 
     private void AddUnitMeter(MixingUnitEntry unit)
     {
         var strip = new MeterStrip(MeterKind.Bus, unit.Id, unit.Name, unit.Audio.Gain, unit.Audio.Mute, showRoutes: false);
+        strip.ListenRequested += ToggleListen;
+        strip.SetListening(IsListening(strip));
         strip.FaderChanged += (_, gain, mute) =>
         {
             unit.Audio.Gain = gain;
@@ -47,7 +61,12 @@ public partial class MainWindow
             MeterKind.Input, input.Id, input.ListLabel, input.Gain, input.Mute,
             showFader: false, showOpen: true, showRoutes: input.Kind != InputKind.Mix);
         if (input.Kind != InputKind.Mix)
-            strip.SetRoutes(_session.Units, input.AudioUnits);
+        {
+            strip.SetRoutes(_session.Units, input.AudioUnits, FollowUnits(input));
+            strip.FollowCleared += ClearInputFollow;
+        }
+        strip.ListenRequested += ToggleListen;
+        strip.SetListening(IsListening(strip));
         strip.RoutesChanged += (_, routes) => ApplyInputAudio(input, routes, input.Gain, input.Mute);
         strip.FaderChanged += (_, gain, mute) =>
             ApplyInputAudio(input, input.AudioUnits, gain, mute);
@@ -56,8 +75,8 @@ public partial class MainWindow
         MeterPanel.Children.Add(strip);
         if (_audioInputs.TryGetValue(input.Id, out var window))
         {
-            window.SetRoutes(input.AudioUnits);
-            window.Sync(input.Gain, input.Mute, input.AudioUnits);
+            window.SetRoutes(input.AudioUnits, FollowUnits(input));
+            window.Sync(input.Gain, input.Mute, input.AudioUnits, FollowUnits(input));
         }
     }
 
@@ -70,6 +89,11 @@ public partial class MainWindow
         }
         var window = new AudioInputWindow(input, _session.Units) { Owner = this };
         window.Changed += ApplyInputAudio;
+        window.FollowCleared += ClearInputFollow;
+        window.ListenRequested += ToggleListen;
+        if (input.Kind != InputKind.Mix)
+            window.SetRoutes(input.AudioUnits, FollowUnits(input));
+        window.SetListening(IsListeningInput(input.Id));
         window.Closed += (_, _) => _audioInputs.Remove(input.Id);
         _audioInputs[input.Id] = window;
         window.Show();
@@ -94,10 +118,144 @@ public partial class MainWindow
         {
             strip.SyncFrom(input.Gain, input.Mute);
             if (input.Kind != InputKind.Mix)
-                strip.SetRoutes(_session.Units, input.AudioUnits);
+                strip.SetRoutes(_session.Units, input.AudioUnits, FollowUnits(input));
         }
         if (_audioInputs.TryGetValue(input.Id, out var window))
-            window.Sync(input.Gain, input.Mute, input.AudioUnits);
+        {
+            window.Sync(input.Gain, input.Mute, input.AudioUnits, FollowUnits(input));
+            window.SetListening(IsListeningInput(input.Id));
+        }
+    }
+
+    private IReadOnlyList<ulong> FollowUnits(InputEntry input)
+    {
+        if (input.Kind == InputKind.Mix || Application.Current is not App app)
+            return [];
+        var units = new List<ulong>();
+        foreach (var unit in _session.Units)
+        {
+            app.Backend.BusSources(unit.Id, out _, out var program);
+            if (SceneCarries(program, input.Id))
+            {
+                units.Add(unit.Id);
+                continue;
+            }
+            foreach (var overlayId in unit.OverlaysOnAir)
+            {
+                var slot = _session.Overlays.FirstOrDefault(item => item.Id == overlayId);
+                if (slot is null || !slot.AudioFollow)
+                    continue;
+                if (slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id
+                    || slot.SourceKind == OverlaySourceKind.Scene && SceneCarries(slot.SceneGpuId, input.Id))
+                {
+                    units.Add(unit.Id);
+                    break;
+                }
+            }
+        }
+        return units;
+    }
+
+    private bool SceneCarries(ulong sceneGpuId, ulong inputId)
+    {
+        var scene = _session.Scenes.FirstOrDefault(item => item.GpuId == sceneGpuId);
+        return scene is not null && scene.Layers.Any(layer => layer.AudioFollow && LayerCarries(layer.InputId, inputId, 0));
+    }
+
+    private bool LayerCarries(ulong sourceId, ulong inputId, int depth)
+    {
+        if (sourceId == inputId)
+            return true;
+        if (depth >= 4)
+            return false;
+        var scene = _session.Scenes.FirstOrDefault(item => item.GpuId == sourceId);
+        return scene is not null && scene.Layers.Any(layer => layer.AudioFollow && LayerCarries(layer.InputId, inputId, depth + 1));
+    }
+
+    private void ClearInputFollow(ulong inputId, ulong unitId)
+    {
+        var input = _session.Inputs.FirstOrDefault(item => item.Id == inputId);
+        var unit = _session.Units.FirstOrDefault(item => item.Id == unitId);
+        if (input is null || unit is null || Application.Current is not App app)
+            return;
+        app.Backend.BusSources(unit.Id, out _, out var program);
+        ClearSceneFollow(program, input.Id);
+        var overlays = false;
+        foreach (var overlayId in unit.OverlaysOnAir.ToArray())
+        {
+            var slot = _session.Overlays.FirstOrDefault(item => item.Id == overlayId);
+            if (slot is null || !slot.AudioFollow)
+                continue;
+            if (slot.SourceKind == OverlaySourceKind.Input && slot.SceneGpuId == input.Id)
+            {
+                slot.AudioFollow = false;
+                overlays = true;
+            }
+            else if (slot.SourceKind == OverlaySourceKind.Scene)
+            {
+                ClearSceneFollow(slot.SceneGpuId, input.Id);
+            }
+        }
+        if (overlays)
+            MixerApply.PushOverlays(_session, unit);
+        _overlay?.Reload(unit);
+    }
+
+    private void ClearSceneFollow(ulong sceneGpuId, ulong inputId)
+    {
+        var scene = _session.Scenes.FirstOrDefault(item => item.GpuId == sceneGpuId);
+        if (scene is null)
+            return;
+        var changed = false;
+        foreach (var layer in scene.Layers)
+        {
+            if (!layer.AudioFollow)
+                continue;
+            if (layer.InputId == inputId)
+            {
+                layer.AudioFollow = false;
+                changed = true;
+                continue;
+            }
+            if (_session.Scenes.Any(item => item.GpuId == layer.InputId) && LayerCarries(layer.InputId, inputId, 0))
+            {
+                ClearSceneFollow(layer.InputId, inputId);
+                changed = true;
+            }
+        }
+        if (changed)
+            MixerApply.DefineScene(scene, SelectedUnit.Width, SelectedUnit.Height);
+    }
+
+    private bool IsListening(MeterStrip strip)
+    {
+        var kind = strip.Kind == MeterKind.Bus ? MixerNative.ListenUnit : MixerNative.ListenInput;
+        return _session.HeadphoneListenKind == kind && _session.HeadphoneListenId == strip.TargetId;
+    }
+
+    private bool IsListeningInput(ulong inputId) =>
+        _session.HeadphoneListenKind == MixerNative.ListenInput && _session.HeadphoneListenId == inputId;
+
+    private void ToggleListen(MeterStrip strip)
+    {
+        if (IsListening(strip))
+        {
+            _session.HeadphoneListenKind = MixerNative.ListenOff;
+            _session.HeadphoneListenId = 0;
+        }
+        else
+        {
+            _session.HeadphoneListenKind = strip.Kind == MeterKind.Bus
+                ? MixerNative.ListenUnit
+                : MixerNative.ListenInput;
+            _session.HeadphoneListenId = strip.TargetId;
+        }
+        if (!HostRole.IsRemote)
+            MixerNative.AudioSetHeadphoneListen(_session.HeadphoneListenKind, _session.HeadphoneListenId);
+        foreach (var meter in _meters.Values)
+            meter.SetListening(IsListening(meter));
+        foreach (var window in _audioInputs.Values)
+            window.SetListening(IsListeningInput(window.InputId));
     }
 
     private void TickMeters()

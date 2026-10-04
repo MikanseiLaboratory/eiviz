@@ -78,6 +78,10 @@ pub enum ReconcileOp {
     HeadphoneCopyMonitor {
         enabled: bool,
     },
+    HeadphoneListen {
+        kind: u32,
+        id: u64,
+    },
     ConfigureVmixApi {
         http_enabled: bool,
         tcp_enabled: bool,
@@ -259,6 +263,15 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
     if previous.is_none_or(|prev| prev.headphone_copy_monitor != next.headphone_copy_monitor) {
         ops.push(ReconcileOp::HeadphoneCopyMonitor {
             enabled: next.headphone_copy_monitor,
+        });
+    }
+    if previous.is_none_or(|prev| {
+        prev.headphone_listen_kind != next.headphone_listen_kind
+            || prev.headphone_listen_id != next.headphone_listen_id
+    }) {
+        ops.push(ReconcileOp::HeadphoneListen {
+            kind: next.headphone_listen_kind,
+            id: next.headphone_listen_id,
         });
     }
 
@@ -589,6 +602,7 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
         ReconcileOp::HeadphoneCopyMonitor { enabled } => {
             port.audio_set_headphone_copy_monitor(*enabled)
         }
+        ReconcileOp::HeadphoneListen { kind, id } => port.audio_set_headphone_listen(*kind, *id),
         ReconcileOp::ConfigureVmixApi {
             http_enabled,
             tcp_enabled,

@@ -1060,6 +1060,8 @@ public sealed class Session
     public ulong SelectedUnitId { get; set; } = 1;
     public HeadphoneEntry Headphone { get; set; } = new();
     public bool HeadphoneCopyMonitor { get; set; }
+    public uint HeadphoneListenKind { get; set; }
+    public ulong HeadphoneListenId { get; set; }
 
     public void EnsureDefaultTransitions()
     {

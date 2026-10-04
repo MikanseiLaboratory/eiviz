@@ -515,6 +515,8 @@ fn empty_document() -> Document {
         selected_unit_id: 0,
         headphone: Default::default(),
         headphone_copy_monitor: false,
+        headphone_listen_kind: 0,
+        headphone_listen_id: 0,
     })
 }
 

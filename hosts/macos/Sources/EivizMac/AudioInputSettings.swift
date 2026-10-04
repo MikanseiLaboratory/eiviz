@@ -71,22 +71,26 @@ struct AudioInputSettingsView: View {
                 if input.kind != .mix {
                     HStack(spacing: 6) {
                         ForEach(mixer.session.units) { unit in
-                            Toggle(isOn: Binding(
-                                get: { input.audioUnits.contains(unit.id) },
-                                set: { on in
-                                    var routes = input.audioUnits
-                                    if on {
-                                        if !routes.contains(unit.id) { routes.append(unit.id) }
-                                    } else {
-                                        routes.removeAll { $0 == unit.id }
-                                    }
-                                    mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
+                            let sent = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)
+                            Button {
+                                let turningOff = sent
+                                var routes = input.audioUnits
+                                if turningOff {
+                                    routes.removeAll { $0 == unit.id }
+                                    mixer.clearAudioFollow(inputId: input.id, unitId: unit.id)
+                                } else if !routes.contains(unit.id) {
+                                    routes.append(unit.id)
                                 }
-                            )) {
-                                Text(unit.name.isEmpty ? "?" : String(unit.name.prefix(1)))
+                                mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
+                            } label: {
+                                Text("MU\(unit.id)")
+                                    .font(.system(size: 12, weight: sent ? .bold : .regular))
+                                    .foregroundStyle(sent ? Color.white : EivizTheme.dim)
+                                    .frame(minWidth: 44, minHeight: 24)
+                                    .background(sent ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
                             }
-                            .toggleStyle(.checkbox)
-                            .help(unit.name)
+                            .buttonStyle(.plain)
+                            .help(L10n.format("audio.routeTip", unit.name))
                         }
                     }
                 }

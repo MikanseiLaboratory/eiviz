@@ -64,7 +64,7 @@ public partial class SettingsWindow : Window
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
         Headphone = session.Headphone.Clone();
-        HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMonitor;
+        HeadphoneCopyMonitor = session.HeadphoneCopyMonitor;
         _devices = AudioGraphSync.EnumerateDevices(0)
             .Where(device => device.Direction != 1)
             .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
@@ -677,7 +677,6 @@ public partial class SettingsWindow : Window
             Settings.FlipSwapchainLimit = flipLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16 ? flipLimit : 0;
         Settings.RebarOptimization = _rebarAvailable && RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
-        HeadphoneCopyMonitor = HeadphoneCopyBox.IsChecked == true;
         Settings.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
         Settings.VmixTcpEnabled = WebApiTcpEnabledBox.IsChecked == true;
         Settings.NativeApiEnabled = WebApiWsEnabledBox.IsChecked == true;

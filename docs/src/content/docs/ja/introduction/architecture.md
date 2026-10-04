@@ -135,4 +135,4 @@ sequenceDiagram
 
 ## 音声パイプライン
 
-48 kHzのステレオオーディオグラフを内部で処理します。各Mixing Unitが専用のMU Busを持ち、ヘッドホンは選択中のMixing Unitをcueします。入力は送る先のMixing Unitの集合とゲインを持ち、FollowではPreview/Programに連動します。Overlayも同様に追従できます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)を参照してください。
+内部で48 kHzステレオのオーディオグラフを処理します。各Mixing UnitがMU Busを1本持ちます。ヘッドホンは、メーターのアイコンで選んだMixing UnitまたはInputの音を出します。入力は送り先のMixing Unitとゲインを持ち、FollowではPreview/Programに連動します。Overlayも連動できます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)を参照してください。

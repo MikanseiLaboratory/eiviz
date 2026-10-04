@@ -4500,6 +4500,25 @@ fn mixer_audio_set_headphone_cue_ffi(unit_id: u64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_audio_set_headphone_listen(kind: u32, id: u64) -> i32 {
+    ffi_guard("mixer_audio_set_headphone_listen", ERR_DEVICE, || {
+        mixer_audio_set_headphone_listen_ffi(kind, id)
+    })
+}
+
+fn mixer_audio_set_headphone_listen_ffi(kind: u32, id: u64) -> i32 {
+    with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock_or_recover()
+            .audio
+            .set_headphone_listen(kind, id);
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_audio_set_headphone_copy_monitor(enabled: u32) -> i32 {
     ffi_guard("mixer_audio_set_headphone_copy_monitor", ERR_DEVICE, || {
         mixer_audio_set_headphone_copy_monitor_ffi(enabled)

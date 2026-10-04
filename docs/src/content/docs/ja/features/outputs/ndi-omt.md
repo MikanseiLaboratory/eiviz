@@ -20,4 +20,4 @@ Mixing UnitのProgramや指定したソースを、NDIまたはOMT（OpenMediaTr
 
 ## 音声のルーティング
 
-映像と同時に送出する音声は、Mixing UnitのMU Bus、またはNoneです。内部の48 kHzオーディオグラフでミックスされたPCMが映像と同期して送信されます。Multiviewを映像ソースに選んだときは音声なし固定です。
+映像と同時に送出する音声は、Mixing UnitのMU BusまたはNoneです。内部の48 kHzオーディオグラフでミックスされたPCMが映像と同期して送信されます。Multiview選択時は音声なし固定です。

@@ -97,12 +97,10 @@ Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 
 <img src="/eiviz/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Headphone settings" style="max-width: 100%; height: auto;" />
 
-The internal mix is 48 kHz stereo. This page sets the Headphone device, which cues the selected Mixing Unit. Each Mixing Unit's own output device is on the Mixing Unit dialog.  
+The internal mix is 48 kHz stereo. This page sets the Headphone output device. Choose what to hear with the headphone icon on a meter. Each Mixing Unit's own output device is on the Mixing Unit dialog.  
 Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
 
 None keeps the mix internal. Hardware output is WASAPI shared or ASIO.
-
-Headphone copies the cued MU Bus makes Headphone a duplicate of that mix. Leave it off to render the cue separately.
 
 ## Web API
 

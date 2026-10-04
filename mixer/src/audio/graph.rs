@@ -12,6 +12,9 @@ use super::rt::SpscF32;
 
 /// Gain and peak id for the headphone bus. It is not a Mixing Unit id.
 pub const HEADPHONE_BUS: u64 = u64::MAX;
+pub const LISTEN_OFF: u32 = 0;
+pub const LISTEN_UNIT: u32 = 1;
+pub const LISTEN_INPUT: u32 = 2;
 pub const DEVICE_NONE: u32 = 0;
 pub const DEVICE_WASAPI: u32 = 1;
 pub const DEVICE_ASIO: u32 = 2;
@@ -206,6 +209,8 @@ pub struct AudioGraph {
     pub unit_links: HashMap<u64, UnitLink>,
     pub headphone_cue_unit: u64,
     pub headphone_copy_monitor: bool,
+    pub headphone_listen_kind: u32,
+    pub headphone_listen_id: u64,
     pub monitor_peak: (f32, f32),
     scratch_master: Vec<f32>,
     scratch_mixed: Vec<f32>,
@@ -224,6 +229,8 @@ impl AudioGraph {
             unit_links: HashMap::new(),
             headphone_cue_unit: 1,
             headphone_copy_monitor: false,
+            headphone_listen_kind: LISTEN_OFF,
+            headphone_listen_id: 0,
             monitor_peak: (0.0, 0.0),
             scratch_master: Vec::new(),
             scratch_mixed: Vec::new(),
@@ -251,6 +258,10 @@ impl AudioGraph {
         }
         if self.headphone_cue_unit == unit_id {
             self.headphone_cue_unit = self.unit_buses.keys().copied().next().unwrap_or(0);
+        }
+        if self.headphone_listen_kind == LISTEN_UNIT && self.headphone_listen_id == unit_id {
+            self.headphone_listen_kind = LISTEN_OFF;
+            self.headphone_listen_id = 0;
         }
     }
 
@@ -378,6 +389,7 @@ impl AudioGraph {
                 .collect();
             self.pop_mix_inputs(mix_inputs, frames, fps_num, fps_den);
             let unit_ids: Vec<u64> = self.unit_buses.keys().copied().collect();
+            let mut listened_unit = Vec::new();
             for unit_id in unit_ids {
                 let fader = {
                     let Some(bus) = self.unit_buses.get(&unit_id) else {
@@ -394,6 +406,12 @@ impl AudioGraph {
                 if let Some(bus) = self.unit_buses.get_mut(&unit_id) {
                     bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
+                if self.headphone_listen_kind == LISTEN_UNIT
+                    && unit_id == self.headphone_listen_id
+                {
+                    listened_unit.clear();
+                    listened_unit.extend_from_slice(&self.scratch_mixed);
+                }
                 delay.push(unit_id, &self.scratch_mixed);
             }
             let hp_fader = if self.headphone.mute {
@@ -401,21 +419,21 @@ impl AudioGraph {
             } else {
                 self.headphone.gain.max(0.0)
             };
-            if self.headphone_copy_monitor {
-                self.scratch_mixed.clear();
-                self.scratch_mixed.extend_from_slice(&self.scratch_master);
-                crate::simd::scale_f32(&mut self.scratch_mixed, hp_fader);
-            } else {
-                self.render_bus(
-                    self.headphone_cue_unit,
-                    true,
-                    hp_fader,
-                    snapshot,
-                    &spec_map,
-                    mix_inputs,
-                    frames,
-                );
+            self.scratch_mixed.clear();
+            self.scratch_mixed.resize(frames * 2, 0.0);
+            if self.headphone_listen_kind == LISTEN_UNIT && listened_unit.len() == frames * 2 {
+                self.scratch_mixed.copy_from_slice(&listened_unit);
+            } else if self.headphone_listen_kind == LISTEN_INPUT {
+                let gain = self
+                    .inputs
+                    .get(&self.headphone_listen_id)
+                    .map(|input| if input.mute { 0.0 } else { input.gain.max(0.0) })
+                    .unwrap_or(0.0);
+                if let Some(samples) = self.popped.get(&self.headphone_listen_id) {
+                    crate::simd::mix_stereo_gain(&mut self.scratch_mixed, samples, gain);
+                }
             }
+            crate::simd::scale_f32(&mut self.scratch_mixed, hp_fader);
             self.headphone.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
             delay.push(HEADPHONE_BUS, &self.scratch_mixed);
         }
@@ -738,7 +756,7 @@ fn add_source(
     let Some(input) = inputs.get(&id) else {
         return;
     };
-    if input.mute || !input.units.contains(&unit_id) {
+    if input.mute {
         return;
     }
     let level = input.gain.max(0.0);

@@ -1406,12 +1406,14 @@ struct MixerSessionData: Codable {
     var nextMultiviewId: UInt64 = 1
     var selectedUnitId: UInt64 = 1
     var headphoneCopyMonitor: Bool = false
+    var headphoneListenKind: UInt32 = 0
+    var headphoneListenId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
         case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, multiviews, headphone
         case inputTags, sceneTags
         case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId
-        case selectedUnitId, headphoneCopyMonitor
+        case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId
     }
 
     static func `default`() -> MixerSessionData {
@@ -1524,7 +1526,11 @@ enum SessionFile {
     }
 
     static func decode(_ data: Data) throws -> MixerSessionData {
-        var session = try JSONDecoder().decode(MixerSessionData.self, from: data)
+        var object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        if object["headphoneListenKind"] == nil { object["headphoneListenKind"] = 0 }
+        if object["headphoneListenId"] == nil { object["headphoneListenId"] = 0 }
+        let patched = try JSONSerialization.data(withJSONObject: object)
+        var session = try JSONDecoder().decode(MixerSessionData.self, from: patched)
         session.assignMonitors()
         session.mergeTagCatalogs()
         return session
