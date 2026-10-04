@@ -473,6 +473,8 @@ internal static class SessionStore
         public List<SceneLayer> Layers { get; set; } = [];
         public List<string> Tags { get; set; } = [];
         public bool PreviewCollapsed { get; set; }
+        public List<SceneState> States { get; set; } = [];
+        public List<SceneSequence> Sequences { get; set; } = [];
 
         public static SceneDto From(SceneEntry scene) => new()
         {
@@ -481,7 +483,9 @@ internal static class SessionStore
             Name = scene.Name,
             Layers = [.. scene.Layers],
             Tags = [.. scene.Tags],
-            PreviewCollapsed = scene.PreviewCollapsed
+            PreviewCollapsed = scene.PreviewCollapsed,
+            States = [.. scene.States],
+            Sequences = [.. scene.Sequences]
         };
 
         public SceneEntry ToEntry(Session session)
@@ -497,6 +501,10 @@ internal static class SessionStore
             };
             foreach (var layer in Layers)
                 scene.Layers.Add(layer);
+            foreach (var state in States)
+                scene.States.Add(state);
+            foreach (var sequence in Sequences)
+                scene.Sequences.Add(sequence);
             return scene;
         }
     }

@@ -361,11 +361,11 @@ struct OverlayView: View {
         let locked = current?.locked == true
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Pos X", range: -pw ... pw * 2) { $0.x * pw } set: { $0.x = $1 / pw }
-                overlayMeter("Pos Y", range: -ph ... ph * 2) { $0.y * ph } set: { $0.y = $1 / ph }
+                overlayMeter("Pos X ↔", range: -pw ... pw * 2) { $0.x * pw } set: { $0.x = $1 / pw }
+                overlayMeter("Pos Y ↕", range: -ph ... ph * 2) { $0.y * ph } set: { $0.y = $1 / ph }
             }
             HStack(alignment: .top, spacing: 8) {
-                overlayMeter("Size X", range: 1 ... pw * 2) { $0.width * pw } set: { slot, value in
+                overlayMeter("Size X ↔", range: 1 ... pw * 2) { $0.width * pw } set: { slot, value in
                     let width = max(1, value) / pw
                     if slot.sizeLinked && slot.width > 0 {
                         slot.height = width * (slot.height / slot.width)
@@ -377,7 +377,7 @@ struct OverlayView: View {
                     set: { value in mutate { $0.sizeLinked = value } }
                 ))
                 .disabled(locked)
-                overlayMeter("Size Y", range: 1 ... ph * 2) { $0.height * ph } set: { slot, value in
+                overlayMeter("Size Y ↕", range: 1 ... ph * 2) { $0.height * ph } set: { slot, value in
                     let height = max(1, value) / ph
                     if slot.sizeLinked && slot.height > 0 {
                         slot.width = height * (slot.width / slot.height)

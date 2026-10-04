@@ -28,7 +28,11 @@ pub trait MixerPort: Send {
     ) -> ControlResult<()>;
 
     fn define_scene(&mut self, spec: SceneApply) -> ControlResult<()>;
+    fn define_scene_anim(&mut self, spec: SceneAnimApply) -> ControlResult<()>;
     fn destroy_scene(&mut self, id: u64) -> ControlResult<()>;
+    fn scene_go_to(&mut self, scene_gpu_id: u64, state_id: u64) -> ControlResult<()>;
+    fn scene_sequence(&mut self, scene_gpu_id: u64, sequence_id: u64, op: u32)
+    -> ControlResult<()>;
 
     fn define_generator(&mut self, spec: GeneratorApply) -> ControlResult<()>;
     fn define_mix_input(&mut self, spec: MixInputApply) -> ControlResult<()>;
@@ -167,6 +171,24 @@ pub struct OverlayLayer {
     pub audio_follow: bool,
     pub hidden: bool,
     pub label: String,
+    pub layer_id: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraApply {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
+}
+
+impl Default for CameraApply {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.5,
+            zoom: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,6 +197,42 @@ pub struct SceneApply {
     pub width: u32,
     pub height: u32,
     pub layers: Vec<OverlayLayer>,
+    pub camera: CameraApply,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotionApply {
+    pub duration_frames: u32,
+    pub easing: u32,
+    pub bezier: Option<[f32; 4]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateApply {
+    pub id: u64,
+    pub layers: Vec<OverlayLayer>,
+    pub camera: Option<CameraApply>,
+    pub enter: MotionApply,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepApply {
+    pub state_id: u64,
+    pub motion: Option<MotionApply>,
+    pub hold_frames: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SequenceApply {
+    pub id: u64,
+    pub steps: Vec<StepApply>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneAnimApply {
+    pub id: u64,
+    pub states: Vec<StateApply>,
+    pub sequences: Vec<SequenceApply>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,10 +333,14 @@ pub struct HeadphoneApply {
 pub struct AutoApply {
     pub unit_id: u64,
     pub kind: u32,
-    pub duration_ms: u32,
+    pub duration_frames: u32,
     pub swap: bool,
     pub keep_preview: bool,
     pub easing: u32,
+    pub bezier_x1: f32,
+    pub bezier_y1: f32,
+    pub bezier_x2: f32,
+    pub bezier_y2: f32,
     pub direction: u32,
     pub dip_r: f32,
     pub dip_g: f32,
@@ -293,7 +355,12 @@ pub struct AutoApply {
 pub struct OverlayAutoApply {
     pub unit_id: u64,
     pub to_on: bool,
-    pub duration_ms: u32,
+    pub duration_frames: u32,
+    pub easing: u32,
+    pub bezier_x1: f32,
+    pub bezier_y1: f32,
+    pub bezier_x2: f32,
+    pub bezier_y2: f32,
     pub source_id: u64,
     pub x: f32,
     pub y: f32,
@@ -355,7 +422,21 @@ impl MixerPort for NullMixer {
     fn define_scene(&mut self, _spec: SceneApply) -> ControlResult<()> {
         Ok(())
     }
+    fn define_scene_anim(&mut self, _spec: SceneAnimApply) -> ControlResult<()> {
+        Ok(())
+    }
     fn destroy_scene(&mut self, _id: u64) -> ControlResult<()> {
+        Ok(())
+    }
+    fn scene_go_to(&mut self, _scene_gpu_id: u64, _state_id: u64) -> ControlResult<()> {
+        Ok(())
+    }
+    fn scene_sequence(
+        &mut self,
+        _scene_gpu_id: u64,
+        _sequence_id: u64,
+        _op: u32,
+    ) -> ControlResult<()> {
         Ok(())
     }
     fn define_generator(&mut self, _spec: GeneratorApply) -> ControlResult<()> {

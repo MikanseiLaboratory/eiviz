@@ -1,3 +1,4 @@
+using System.Linq;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -582,11 +583,19 @@ public partial class MainWindow
             easing.Items.Add(new ComboBoxItem { Content = "EaseOut", Tag = MixerNative.EasingOut });
             easing.Items.Add(new ComboBoxItem { Content = "EaseInOut", Tag = MixerNative.EasingInOut });
             easing.Items.Add(new ComboBoxItem { Content = "Smoothstep", Tag = MixerNative.EasingSmoothstep });
-            easing.SelectedIndex = (int)Math.Min(preset.Easing, 4u);
+            easing.Items.Add(new ComboBoxItem { Content = "Bezier", Tag = MixerNative.EasingBezier });
+            easing.SelectedIndex = easing.Items.Cast<ComboBoxItem>().ToList().FindIndex(item => item.Tag is uint tag && tag == preset.Easing);
+            if (easing.SelectedIndex < 0)
+                easing.SelectedIndex = 0;
             easing.SelectionChanged += (_, _) =>
             {
                 if (easing.SelectedItem is ComboBoxItem item && item.Tag is uint value)
+                {
                     preset.Easing = value;
+                    if (value == MixerNative.EasingBezier && preset.Bezier is null)
+                        preset.Bezier = new BezierHandles { X1 = 0.42f, Y1 = 0, X2 = 0.58f, Y2 = 1 };
+                    RebuildTransitions();
+                }
             };
             var direction = new ComboBox { Margin = new Thickness(0, 0, 0, 4) };
             direction.Items.Add(new ComboBoxItem { Content = "Left", Tag = 0u });
@@ -623,6 +632,8 @@ public partial class MainWindow
             {
                 stack.Children.Add(new TextBlock { Text = "Easing", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
                 stack.Children.Add(easing);
+                if (preset.Easing == MixerNative.EasingBezier)
+                    stack.Children.Add(BuildBezierEditor(preset));
             }
             if (preset.HasDirection)
             {
@@ -800,6 +811,50 @@ public partial class MainWindow
         return root;
     }
 
+    private StackPanel BuildBezierEditor(TransitionPreset preset)
+    {
+        preset.Bezier ??= new BezierHandles { X1 = 0.42f, Y1 = 0, X2 = 0.58f, Y2 = 1 };
+        var panel = new StackPanel();
+        var presets = new WrapPanel();
+        void Add(string label, float x1, float y1, float x2, float y2)
+        {
+            var button = new Button { Content = label, Height = 22, Margin = new Thickness(0, 0, 4, 4) };
+            button.Click += (_, _) =>
+            {
+                preset.Bezier = new BezierHandles { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2 };
+                RebuildTransitions();
+            };
+            presets.Children.Add(button);
+        }
+        Add("Ease", 0.25f, 0.1f, 0.25f, 1);
+        Add("In", 0.42f, 0, 1, 1);
+        Add("Out", 0, 0, 0.58f, 1);
+        Add("In Out", 0.42f, 0, 0.58f, 1);
+        panel.Children.Add(presets);
+        panel.Children.Add(new TextBlock { Text = "X1", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+        panel.Children.Add(TransitionFloatBox(() => preset.Bezier!.X1, value => preset.Bezier!.X1 = Math.Clamp(value, 0f, 1f), "0.###"));
+        panel.Children.Add(new TextBlock { Text = "Y1", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+        panel.Children.Add(TransitionFloatBox(() => preset.Bezier!.Y1, value => preset.Bezier!.Y1 = value, "0.###"));
+        panel.Children.Add(new TextBlock { Text = "X2", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+        panel.Children.Add(TransitionFloatBox(() => preset.Bezier!.X2, value => preset.Bezier!.X2 = Math.Clamp(value, 0f, 1f), "0.###"));
+        panel.Children.Add(new TextBlock { Text = "Y2", FontSize = 11, Foreground = System.Windows.Media.Brushes.Silver });
+        panel.Children.Add(TransitionFloatBox(() => preset.Bezier!.Y2, value => preset.Bezier!.Y2 = value, "0.###"));
+        return panel;
+    }
+
+    private static EivizCurve SlotCurve(OverlaySlot slot)
+    {
+        var bezier = slot.Bezier;
+        return new EivizCurve
+        {
+            Kind = slot.Easing,
+            X1 = bezier?.X1 ?? 0,
+            Y1 = bezier?.Y1 ?? 0,
+            X2 = bezier?.X2 ?? 1,
+            Y2 = bezier?.Y2 ?? 1
+        };
+    }
+
     private static TextBox TransitionFloatBox(Func<float> get, Action<float> set, string format)
     {
         var box = new TextBox { Text = get().ToString(format), Margin = new Thickness(0, 0, 0, 4) };
@@ -846,9 +901,8 @@ public partial class MainWindow
 
     internal void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
     {
-        var ms = slot.DurationUnit == MixerNative.DurationMs
-            ? Math.Max(1, slot.DurationValue)
-            : unit.DurationMs(slot.DurationValue);
+        var frames = _session.Settings.FramesFor(slot.DurationValue, slot.DurationUnit);
+        var ms = _session.Settings.WallMs(frames);
         if (Application.Current is App { Backend.IsRemote: true } remoteApp)
         {
             SetOverlayOn(unit, slot, enabled);
@@ -879,7 +933,8 @@ public partial class MainWindow
             PushAuxFor(unit);
             unsafe
             {
-                MixerNative.OverlayAuto(unit.Id, 1u, ms, &desc);
+                var curve = SlotCurve(slot);
+            MixerNative.OverlayAuto(unit.Id, 1u, frames, &desc, &curve);
             }
             NotifyOverlayUi();
             return;
@@ -891,7 +946,8 @@ public partial class MainWindow
         PushAuxFor(unit);
         unsafe
         {
-            MixerNative.OverlayAuto(unit.Id, 0u, ms, &desc);
+            var curve = SlotCurve(slot);
+            MixerNative.OverlayAuto(unit.Id, 0u, frames, &desc, &curve);
         }
         SetOverlayOn(unit, slot, false);
         var delay = TimeSpan.FromMilliseconds(ms);

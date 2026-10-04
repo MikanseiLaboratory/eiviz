@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -16,7 +17,6 @@ public partial class SceneEditorWindow : Window
     private readonly Session _session;
     private readonly uint _width;
     private readonly uint _height;
-    private readonly List<SceneLayer> _original;
     private SceneLayer? _selected;
     private bool _dragging;
     private bool _resizing;
@@ -33,27 +33,57 @@ public partial class SceneEditorWindow : Window
     private float? _snapY;
     private DateTime _lastGpuPush;
     private TagCheckPanel? _tags;
+    private bool _cameraDragging;
+    private bool _cameraZooming;
+    private float _camGrabX;
+    private float _camGrabY;
+    private float _viewZoom = 0.8f;
+    private SizeCorner _sizeCorner;
+    private float _anchorL;
+    private float _anchorT;
+    private float _anchorR;
+    private float _anchorB;
+    private float _resizeAspect = 1;
     private bool _live = true;
     private ulong _draftGpuId;
     private bool _draftDefined;
+    private OnAir? _onAir;
+
+    private enum SizeCorner { None, Nw, Ne, Sw, Se }
+
+    /// <summary>The scene as it is on the output, taken when LIVE is turned off.</summary>
+    private sealed class OnAir
+    {
+        public required List<SceneLayer> Layers { get; init; }
+        public required SceneCamera Camera { get; init; }
+        public required string Name { get; init; }
+        public required List<string> Tags { get; init; }
+        public required List<SceneState> States { get; init; }
+        public required List<SceneSequence> Sequences { get; init; }
+    }
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
         InitializeComponent();
         LayoutSnapButton.Content = "🧲";
         LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
+        ViewOutButton.ToolTip = Loc.T("editor.viewZoomHelp");
+        ViewInButton.ToolTip = Loc.T("editor.viewZoomHelp");
         LiveButton.Content = Loc.T("editor.live");
         LiveButton.ToolTip = Loc.T("editor.liveHelp");
         if (App.IsRemote)
             LiveButton.IsEnabled = false;
+        CameraLabel.Text = Loc.T("scene.camera");
+        CameraLabel.ToolTip = Loc.T("scene.cameraEditHelp");
+        CamZoomLabel.Text = Loc.T("scene.cameraZoom");
+        CameraResetButton.Content = Loc.T("scene.cameraReset");
         _scene = scene;
         _session = session;
         _width = width;
         _height = height;
-        _original = scene.Layers.Select(Clone).ToList();
         _selected = scene.Layers.FirstOrDefault();
         NameBox.Text = scene.Name;
-        _tags = new TagCheckPanel(TagPanel, session.SceneTags, scene.Tags, this);
+        _tags = new TagCheckPanel(TagPanel, session.SceneTags, scene.Tags, this, Settle);
         WireCanvas.Width = width;
         WireCanvas.Height = height;
         WireLabel.Text = $"Wireframe ({width}x{height})";
@@ -70,7 +100,8 @@ public partial class SceneEditorWindow : Window
             _scene.Layers.Sort((a, b) => b.Z.CompareTo(a.Z));
             NormalizeOrder();
             RefreshLayers();
-            PushGpu();
+            FillCamera();
+            Settle();
             AttachDrags();
             ListReorder.Attach(LayerList, MoveLayer);
             if (!App.IsRemote)
@@ -100,6 +131,14 @@ public partial class SceneEditorWindow : Window
         Bind(CropWLabel, CropWBox, 2);
         Bind(CropHLabel, CropHBox, 2);
         Bind(OpLabel, OpBox, 400, "0.###");
+        void PreviewCamera() => ApplyCamera(false);
+        void CommitCamera() => ApplyCamera(true);
+        NumericDrag.Attach(CamXLabel, CamXBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.AttachBox(CamXBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.Attach(CamYLabel, CamYBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.AttachBox(CamYBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.Attach(CamZoomLabel, CamZoomBox, 120, PreviewCamera, CommitCamera, "0.##");
+        NumericDrag.AttachBox(CamZoomBox, 120, PreviewCamera, CommitCamera, "0.##");
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -118,7 +157,8 @@ public partial class SceneEditorWindow : Window
         CropX = layer.CropX,
         CropY = layer.CropY,
         CropWidth = layer.CropWidth,
-        CropHeight = layer.CropHeight
+        CropHeight = layer.CropHeight,
+        LayerId = layer.LayerId
     };
 
     private void NormalizeOrder()
@@ -142,7 +182,7 @@ public partial class SceneEditorWindow : Window
         _selected = layer;
         NormalizeOrder();
         RefreshLayers();
-        PushGpu();
+        Settle();
         return true;
     }
 
@@ -224,9 +264,49 @@ public partial class SceneEditorWindow : Window
         return $"{order}. {input?.ListLabel ?? layer.InputId.ToString()}";
     }
 
+    private double MapX(float scene) => (scene * _viewZoom + (1 - _viewZoom) / 2) * WireCanvas.Width;
+
+    private double MapY(float scene) => (scene * _viewZoom + (1 - _viewZoom) / 2) * WireCanvas.Height;
+
+    private double MapW(float scene) => scene * _viewZoom * WireCanvas.Width;
+
+    private double MapH(float scene) => scene * _viewZoom * WireCanvas.Height;
+
+    private float UnmapX(double canvas) =>
+        (float)((canvas / Math.Max(WireCanvas.Width, 1) - (1 - _viewZoom) / 2) / _viewZoom);
+
+    private float UnmapY(double canvas) =>
+        (float)((canvas / Math.Max(WireCanvas.Height, 1) - (1 - _viewZoom) / 2) / _viewZoom);
+
+    private void ViewZoom_Click(object sender, RoutedEventArgs e)
+    {
+        var step = sender is Button { Tag: "+" } ? 0.1f : -0.1f;
+        _viewZoom = Math.Clamp(_viewZoom + step, 0.5f, 1f);
+        DrawWireframe();
+    }
+
+    private void WireCanvas_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        _viewZoom = Math.Clamp(_viewZoom + (e.Delta > 0 ? 0.1f : -0.1f), 0.5f, 1f);
+        DrawWireframe();
+        e.Handled = true;
+    }
+
     private void DrawWireframe()
     {
         WireCanvas.Children.Clear();
+        var frame = new Rectangle
+        {
+            Width = Math.Max(8, MapW(1)),
+            Height = Math.Max(8, MapH(1)),
+            Fill = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)),
+            Stroke = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+            StrokeThickness = 1,
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(frame, MapX(0));
+        Canvas.SetTop(frame, MapY(0));
+        WireCanvas.Children.Add(frame);
         var hues = new[]
         {
             Color.FromRgb(0xE8, 0x77, 0x22),
@@ -241,16 +321,16 @@ public partial class SceneEditorWindow : Window
             var color = layer.Hidden ? Color.FromRgb(0x55, 0x55, 0x55) : hues[i % hues.Length];
             var rect = new Rectangle
             {
-                Width = Math.Max(8, layer.Width * WireCanvas.Width),
-                Height = Math.Max(8, layer.Height * WireCanvas.Height),
+                Width = Math.Max(8, MapW(layer.Width)),
+                Height = Math.Max(8, MapH(layer.Height)),
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = ReferenceEquals(layer, _selected) ? 4 : 2,
                 StrokeDashArray = layer.Hidden ? new DoubleCollection { 4, 3 } : null,
                 Fill = new SolidColorBrush(Color.FromArgb(layer.Hidden ? (byte)20 : (byte)40, color.R, color.G, color.B)),
                 Tag = layer
             };
-            Canvas.SetLeft(rect, layer.X * WireCanvas.Width);
-            Canvas.SetTop(rect, layer.Y * WireCanvas.Height);
+            Canvas.SetLeft(rect, MapX(layer.X));
+            Canvas.SetTop(rect, MapY(layer.Y));
             WireCanvas.Children.Add(rect);
             var cropW = Math.Clamp(layer.CropWidth, 0.01f, 1f);
             var cropH = Math.Clamp(layer.CropHeight, 0.01f, 1f);
@@ -285,18 +365,137 @@ public partial class SceneEditorWindow : Window
             WireCanvas.Children.Add(label);
             if (ReferenceEquals(layer, _selected) && !layer.Locked)
             {
-                var handle = new Rectangle
-                {
-                    Width = 16,
-                    Height = 16,
-                    Fill = new SolidColorBrush(color),
-                    Tag = "handle"
-                };
-                Canvas.SetLeft(handle, Canvas.GetLeft(rect) + rect.Width - 16);
-                Canvas.SetTop(handle, Canvas.GetTop(rect) + rect.Height - 16);
-                WireCanvas.Children.Add(handle);
+                AddSizeHandle(color, Canvas.GetLeft(rect), Canvas.GetTop(rect));
+                AddSizeHandle(color, Canvas.GetLeft(rect) + rect.Width, Canvas.GetTop(rect));
+                AddSizeHandle(color, Canvas.GetLeft(rect), Canvas.GetTop(rect) + rect.Height);
+                AddSizeHandle(color, Canvas.GetLeft(rect) + rect.Width, Canvas.GetTop(rect) + rect.Height);
             }
         }
+        DrawCameraFrame();
+    }
+
+    private void AddSizeHandle(Color color, double x, double y)
+    {
+        var handle = new Rectangle
+        {
+            Width = 14,
+            Height = 14,
+            Fill = new SolidColorBrush(color),
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(handle, x - 7);
+        Canvas.SetTop(handle, y - 7);
+        WireCanvas.Children.Add(handle);
+    }
+
+    /// <summary>The camera frame is the region of the scene that fills the output.</summary>
+    private void CameraFrame(out double left, out double top, out double width, out double height)
+    {
+        var camera = _scene.Camera;
+        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        width = MapW(1f / zoom);
+        height = MapH(1f / zoom);
+        left = MapX(camera.X - 0.5f / zoom);
+        top = MapY(camera.Y - 0.5f / zoom);
+    }
+
+    private void DrawCameraFrame()
+    {
+        CameraFrame(out var left, out var top, out var width, out var height);
+        var frame = new Rectangle
+        {
+            Width = Math.Max(8, width),
+            Height = Math.Max(8, height),
+            Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0xE0, 0x82)),
+            StrokeThickness = 3,
+            StrokeDashArray = new DoubleCollection { 8, 4 },
+            Fill = Brushes.Transparent,
+            IsHitTestVisible = false,
+            Tag = "camera"
+        };
+        Canvas.SetLeft(frame, left);
+        Canvas.SetTop(frame, top);
+        WireCanvas.Children.Add(frame);
+        var handle = new Rectangle
+        {
+            Width = 16,
+            Height = 16,
+            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xE0, 0x82)),
+            IsHitTestVisible = false,
+            Tag = "camera-zoom"
+        };
+        Canvas.SetLeft(handle, left + width - 16);
+        Canvas.SetTop(handle, top + height - 16);
+        WireCanvas.Children.Add(handle);
+    }
+
+    private void MoveCamera(Point pos)
+    {
+        var camera = _scene.Camera;
+        if (_cameraZooming)
+        {
+            var dx = Math.Abs(UnmapX(pos.X) - camera.X);
+            var dy = Math.Abs(UnmapY(pos.Y) - camera.Y);
+            var half = Math.Max(dx, dy);
+            camera.Zoom = half < 1e-3f ? 8f : 0.5f / half;
+        }
+        else
+        {
+            camera.X = UnmapX(pos.X) - _camGrabX;
+            camera.Y = UnmapY(pos.Y) - _camGrabY;
+        }
+        ClampCamera(camera);
+        DrawWireframe();
+        FillCamera();
+        if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+        {
+            _lastGpuPush = DateTime.UtcNow;
+            PushGpu();
+        }
+    }
+
+    private static void ClampCamera(SceneCamera camera)
+    {
+        camera.Zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        var margin = 0.5f / camera.Zoom;
+        camera.X = Math.Clamp(camera.X, margin, 1f - margin);
+        camera.Y = Math.Clamp(camera.Y, margin, 1f - margin);
+    }
+
+    private void FillCamera()
+    {
+        var camera = _scene.Camera;
+        CamXBox.Text = (camera.X * _width).ToString("0.#");
+        CamYBox.Text = (camera.Y * _height).ToString("0.#");
+        CamZoomBox.Text = camera.Zoom.ToString("0.##");
+    }
+
+    private void Camera_LostFocus(object sender, RoutedEventArgs e) => ApplyCamera(true);
+
+    private void ApplyCamera(bool push)
+    {
+        var camera = _scene.Camera;
+        if (float.TryParse(CamXBox.Text, out var x))
+            camera.X = x / _width;
+        if (float.TryParse(CamYBox.Text, out var y))
+            camera.Y = y / _height;
+        if (float.TryParse(CamZoomBox.Text, out var zoom))
+            camera.Zoom = zoom;
+        ClampCamera(camera);
+        DrawWireframe();
+        if (push)
+        {
+            FillCamera();
+            Settle();
+        }
+    }
+
+    private void CameraReset_Click(object sender, RoutedEventArgs e)
+    {
+        _scene.Camera = new SceneCamera();
+        FillCamera();
+        DrawWireframe();
+        Settle();
     }
 
     private void WriteCropBoxes()
@@ -362,43 +561,110 @@ public partial class SceneEditorWindow : Window
             PushDraft();
     }
 
-    private void PushDraft()
+    private void Name_LostFocus(object sender, RoutedEventArgs e) => Settle();
+
+    private void Live_Click(object sender, RoutedEventArgs e)
     {
-        EnsureDraft();
-        MixerApply.DefineSceneGpu(_draftGpuId, _scene, _width, _height);
-        _draftDefined = true;
+        if (App.IsRemote)
+        {
+            LiveButton.IsChecked = true;
+            return;
+        }
+        var on = LiveButton.IsChecked == true;
+        if (on == _live)
+            return;
+        if (!on)
+        {
+            _onAir = Capture();
+            _live = false;
+            PushDraft();
+            PreviewHost.UpdateMonitorSource(_draftGpuId);
+            return;
+        }
+        _live = true;
+        _onAir = null;
+        Settle();
+        PreviewHost.UpdateMonitorSource(_scene.GpuId);
+        ReleaseDraft();
+    }
+
+    /// <summary>
+    /// Writes the scene as it stands. While LIVE is on this reaches the output.
+    /// While LIVE is off only the editor preview is updated.
+    /// </summary>
+    private void Settle()
+    {
+        if (!string.IsNullOrWhiteSpace(NameBox.Text))
+            _scene.Name = NameBox.Text.Trim();
+        if (_tags is { } tags)
+            TagCatalog.Replace(_scene.Tags, tags.Selected);
+        if (App.IsRemote)
+        {
+            if (Application.Current is not App app)
+                return;
+            app.Backend.Mutate(MutationJson.UpsertScene(_scene), app.Backend.Revision, out _);
+            app.Backend.Poll();
+            return;
+        }
+        if (!_live)
+        {
+            PushDraft();
+            return;
+        }
+        MixerApply.DefineScene(_scene, _width, _height);
+        MixerApply.DefineSceneAnim(_scene);
+        SessionStore.Publish(_session);
+    }
+
+    private OnAir Capture() => new()
+    {
+        Layers = _scene.Layers.Select(Clone).ToList(),
+        Camera = _scene.Camera.Clone(),
+        Name = _scene.Name,
+        Tags = [.. _scene.Tags],
+        States = JsonSerializer.Deserialize<List<SceneState>>(JsonSerializer.Serialize(_scene.States)) ?? [],
+        Sequences = JsonSerializer.Deserialize<List<SceneSequence>>(JsonSerializer.Serialize(_scene.Sequences)) ?? []
+    };
+
+    private void Revert(OnAir snap)
+    {
+        _scene.Layers.Clear();
+        foreach (var layer in snap.Layers)
+            _scene.Layers.Add(Clone(layer));
+        _scene.Camera = snap.Camera.Clone();
+        _scene.Name = snap.Name;
+        TagCatalog.Replace(_scene.Tags, snap.Tags);
+        _scene.States.Clear();
+        _scene.States.AddRange(snap.States);
+        _scene.Sequences.Clear();
+        _scene.Sequences.AddRange(snap.Sequences);
+        if (App.IsRemote)
+            return;
+        MixerApply.DefineScene(_scene, _width, _height);
+        MixerApply.DefineSceneAnim(_scene);
+        SessionStore.Publish(_session);
     }
 
     private void EnsureDraft()
     {
-        if (_draftGpuId != 0)
+        if (_draftDefined)
             return;
         _draftGpuId = MixerNative.SceneGpuId(_session.NextSceneId++);
+        _draftDefined = true;
+    }
+
+    private void PushDraft()
+    {
+        EnsureDraft();
+        MixerApply.DefineSceneGpu(_draftGpuId, _scene, _width, _height);
     }
 
     private void ReleaseDraft()
     {
-        if (_draftDefined)
-            MixerApply.DestroyScene(_draftGpuId);
-        _draftGpuId = 0;
+        if (!_draftDefined)
+            return;
+        MixerApply.DestroyScene(_draftGpuId);
         _draftDefined = false;
-    }
-
-    private void Live_Click(object sender, RoutedEventArgs e)
-    {
-        var on = LiveButton.IsChecked == true;
-        if (on == _live || App.IsRemote)
-            return;
-        _live = on;
-        if (_live)
-        {
-            MixerApply.DefineScene(_scene, _width, _height);
-            PreviewHost.UpdateMonitorSource(_scene.GpuId);
-            ReleaseDraft();
-            return;
-        }
-        PushDraft();
-        PreviewHost.UpdateMonitorSource(_draftGpuId);
     }
 
     private void AddLayer_Click(object sender, RoutedEventArgs e)
@@ -416,9 +682,10 @@ public partial class SceneEditorWindow : Window
             Z = _scene.Layers.Count == 0 ? 0 : _scene.Layers.Max(item => item.Z) + 1
         };
         _scene.Layers.Add(layer);
+        _scene.AssignLayerIds();
         _selected = layer;
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void DeleteLayer_Click(object sender, RoutedEventArgs e)
@@ -428,7 +695,7 @@ public partial class SceneEditorWindow : Window
         _scene.Layers.Remove(_selected);
         _selected = _scene.Layers.LastOrDefault();
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void ZUp_Click(object sender, RoutedEventArgs e) => ShiftDisplay(-1);
@@ -446,7 +713,7 @@ public partial class SceneEditorWindow : Window
         (_scene.Layers[index], _scene.Layers[target]) = (_scene.Layers[target], _scene.Layers[index]);
         NormalizeOrder();
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void LayerList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -518,7 +785,7 @@ public partial class SceneEditorWindow : Window
         if (push)
         {
             FillNumeric();
-            PushGpu();
+            Settle();
         }
         else
         {
@@ -529,7 +796,7 @@ public partial class SceneEditorWindow : Window
             if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
             {
                 _lastGpuPush = DateTime.UtcNow;
-                PushGpu();
+                Settle();
             }
         }
     }
@@ -541,8 +808,113 @@ public partial class SceneEditorWindow : Window
         layer.AudioFollow = !layer.AudioFollow;
         _selected = layer;
         RefreshLayers();
-        PushGpu();
+        Settle();
         e.Handled = true;
+    }
+
+    private bool TryBeginCorner(Point pos)
+    {
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            return false;
+        SceneLayer? found = null;
+        var corner = SizeCorner.None;
+        if (_selected is { Locked: false } selected && HitCorner(selected, pos) is var selectedCorner && selectedCorner != SizeCorner.None)
+        {
+            found = selected;
+            corner = selectedCorner;
+        }
+        else
+        {
+            foreach (var layer in _scene.Layers.OrderByDescending(item => item.Z))
+            {
+                if (layer.Locked)
+                    continue;
+                var hit = HitCorner(layer, pos);
+                if (hit == SizeCorner.None)
+                    continue;
+                found = layer;
+                corner = hit;
+                break;
+            }
+        }
+        if (found is null)
+            return false;
+        _selected = found;
+        _resizing = true;
+        _dragging = false;
+        _cropping = false;
+        _sizeCorner = corner;
+        _anchorL = found.X;
+        _anchorT = found.Y;
+        _anchorR = found.X + found.Width;
+        _anchorB = found.Y + found.Height;
+        _resizeAspect = found.Height > 0.001f ? found.Width / found.Height : 1;
+        return true;
+    }
+
+    private SizeCorner HitCorner(SceneLayer layer, Point pos)
+    {
+        var x0 = MapX(layer.X);
+        var y0 = MapY(layer.Y);
+        var x1 = MapX(layer.X + layer.Width);
+        var y1 = MapY(layer.Y + layer.Height);
+        const double reach = 22;
+        var nearRight = Math.Abs(pos.X - x1) <= reach;
+        var nearLeft = Math.Abs(pos.X - x0) <= reach;
+        var nearBottom = Math.Abs(pos.Y - y1) <= reach;
+        var nearTop = Math.Abs(pos.Y - y0) <= reach;
+        if (nearRight && nearBottom)
+            return SizeCorner.Se;
+        if (nearLeft && nearBottom)
+            return SizeCorner.Sw;
+        if (nearRight && nearTop)
+            return SizeCorner.Ne;
+        if (nearLeft && nearTop)
+            return SizeCorner.Nw;
+        return SizeCorner.None;
+    }
+
+    private void ApplyCornerResize(float px, float py)
+    {
+        if (_selected is null)
+            return;
+        var moveLeft = _sizeCorner is SizeCorner.Sw or SizeCorner.Nw;
+        var moveTop = _sizeCorner is SizeCorner.Nw or SizeCorner.Ne;
+        var left = moveLeft ? px : _anchorL;
+        var right = moveLeft ? _anchorR : px;
+        var top = moveTop ? py : _anchorT;
+        var bottom = moveTop ? _anchorB : py;
+        if (_selected.SizeLinked)
+        {
+            var width = Math.Max(0.02f, moveLeft ? _anchorR - px : px - _anchorL);
+            var height = Math.Max(0.02f, width / Math.Max(_resizeAspect, 0.02f));
+            left = moveLeft ? _anchorR - width : _anchorL;
+            right = left + width;
+            top = moveTop ? _anchorB - height : _anchorT;
+            bottom = top + height;
+        }
+        else
+        {
+            if (right < left + 0.02f)
+            {
+                if (moveLeft)
+                    left = right - 0.02f;
+                else
+                    right = left + 0.02f;
+            }
+            if (bottom < top + 0.02f)
+            {
+                if (moveTop)
+                    top = bottom - 0.02f;
+                else
+                    bottom = top + 0.02f;
+            }
+        }
+        _selected.X = left;
+        _selected.Y = top;
+        _selected.Width = right - left;
+        _selected.Height = bottom - top;
+        ApplyResizeSnap();
     }
 
     private void WireCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -551,12 +923,14 @@ public partial class SceneEditorWindow : Window
         _last = pos;
         _snapX = null;
         _snapY = null;
-        if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false }
-            && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+        if (TryBeginCorner(pos))
         {
-            _resizing = true;
-            _dragging = false;
-            _cropping = false;
+            WireCanvas.CaptureMouse();
+            RefreshLayers();
+            return;
+        }
+        if (BeginCameraDrag(pos))
+        {
             WireCanvas.CaptureMouse();
             return;
         }
@@ -576,8 +950,8 @@ public partial class SceneEditorWindow : Window
             _dragging = hit is { Locked: false };
             if (_dragging && hit is not null)
             {
-                _grabX = (float)(pos.X / WireCanvas.Width) - hit.X;
-                _grabY = (float)(pos.Y / WireCanvas.Height) - hit.Y;
+                _grabX = UnmapX(pos.X) - hit.X;
+                _grabY = UnmapY(pos.Y) - hit.Y;
                 WireCanvas.CaptureMouse();
             }
         }
@@ -586,10 +960,10 @@ public partial class SceneEditorWindow : Window
 
     private bool TryBeginCrop(SceneLayer layer, Point pos)
     {
-        var left = layer.X * WireCanvas.Width;
-        var top = layer.Y * WireCanvas.Height;
-        var right = (layer.X + layer.Width) * WireCanvas.Width;
-        var bottom = (layer.Y + layer.Height) * WireCanvas.Height;
+        var left = MapX(layer.X);
+        var top = MapY(layer.Y);
+        var right = MapX(layer.X + layer.Width);
+        var bottom = MapY(layer.Y + layer.Height);
         const double edge = 8;
         _cropLeft = Math.Abs(pos.X - left) <= edge;
         _cropRight = Math.Abs(pos.X - right) <= edge;
@@ -600,11 +974,11 @@ public partial class SceneEditorWindow : Window
 
     private SceneLayer? HitLayer(Point pos)
     {
+        var x = UnmapX(pos.X);
+        var y = UnmapY(pos.Y);
         var hits = _scene.Layers.Where(layer =>
-            pos.X >= layer.X * WireCanvas.Width
-            && pos.X <= (layer.X + layer.Width) * WireCanvas.Width
-            && pos.Y >= layer.Y * WireCanvas.Height
-            && pos.Y <= (layer.Y + layer.Height) * WireCanvas.Height).ToList();
+            x >= layer.X && x <= layer.X + layer.Width
+            && y >= layer.Y && y <= layer.Y + layer.Height).ToList();
         if (hits.Count == 0)
             return null;
         if (_selected is not null && hits.Contains(_selected))
@@ -612,32 +986,51 @@ public partial class SceneEditorWindow : Window
         return hits.OrderByDescending(item => item.Z).First();
     }
 
+    private bool BeginCameraDrag(Point pos)
+    {
+        CameraFrame(out var left, out var top, out var width, out var height);
+        var onZoom = pos.X >= left + width - 20 && pos.X <= left + width + 4
+            && pos.Y >= top + height - 20 && pos.Y <= top + height + 4;
+        if (onZoom)
+        {
+            _cameraZooming = true;
+            _cameraDragging = false;
+            return true;
+        }
+        var inside = pos.X >= left - 4 && pos.X <= left + width + 4
+            && pos.Y >= top - 4 && pos.Y <= top + height + 4;
+        if (!inside || HitLayer(pos) is not null)
+            return false;
+        _cameraZooming = false;
+        _cameraDragging = true;
+        _camGrabX = UnmapX(pos.X) - _scene.Camera.X;
+        _camGrabY = UnmapY(pos.Y) - _scene.Camera.Y;
+        return true;
+    }
+
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if ((_cameraDragging || _cameraZooming) && e.LeftButton == MouseButtonState.Pressed)
+        {
+            MoveCamera(e.GetPosition(WireCanvas));
+            return;
+        }
         if (_selected is null || (!_dragging && !_resizing && !_cropping) || e.LeftButton != MouseButtonState.Pressed)
             return;
         var pos = e.GetPosition(WireCanvas);
-        var dx = (float)((pos.X - _last.X) / WireCanvas.Width);
-        var dy = (float)((pos.Y - _last.Y) / WireCanvas.Height);
+        var dx = UnmapX(pos.X) - UnmapX(_last.X);
+        var dy = UnmapY(pos.Y) - UnmapY(_last.Y);
         _last = pos;
         if (_selected.Locked)
             return;
         if (_cropping)
             ApplyCropDrag(_selected, dx, dy);
         else if (_resizing)
-        {
-            var width = Math.Max(0.02f, _selected.Width + dx);
-            if (_selected.SizeLinked && _selected.Width > 0)
-                _selected.Height = Math.Max(0.02f, width * (_selected.Height / _selected.Width));
-            else
-                _selected.Height = Math.Max(0.02f, _selected.Height + dy);
-            _selected.Width = width;
-            ApplyResizeSnap();
-        }
+            ApplyCornerResize(UnmapX(pos.X), UnmapY(pos.Y));
         else
         {
-            var x = (float)(pos.X / WireCanvas.Width) - _grabX;
-            var y = (float)(pos.Y / WireCanvas.Height) - _grabY;
+            var x = UnmapX(pos.X) - _grabX;
+            var y = UnmapY(pos.Y) - _grabY;
             ApplyMoveSnap(ref x, ref y);
             _selected.X = x;
             _selected.Y = y;
@@ -677,43 +1070,57 @@ public partial class SceneEditorWindow : Window
     {
         if (_selected is null || !LayoutSnapOn)
             return;
-        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
-        var boxes = _scene.Layers.Select(layer => new SceneSnap.Box(
-            layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
-
-        x = SceneSnap.LatchMoveAxis(x, _selected.Width, boxes, true, rendered.Width, ref _snapX);
-        y = SceneSnap.LatchMoveAxis(y, _selected.Height, boxes, false, rendered.Height, ref _snapY);
+        var (px, py) = FramePixels();
+        var boxes = SnapBoxes();
+        x = SceneSnap.LatchMoveAxis(x, _selected.Width, boxes, true, px, ref _snapX);
+        y = SceneSnap.LatchMoveAxis(y, _selected.Height, boxes, false, py, ref _snapY);
     }
 
     private void ApplyResizeSnap()
     {
-        if (_selected is null || !LayoutSnapOn)
+        if (_selected is null || !LayoutSnapOn || _sizeCorner == SizeCorner.None)
             return;
-        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
-        var boxes = _scene.Layers.Select(layer => new SceneSnap.Box(
-            layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
+        var (px, py) = FramePixels();
+        var x = _selected.X;
+        var y = _selected.Y;
         var width = _selected.Width;
         var height = _selected.Height;
         SceneSnap.SnapResize(
+            ref x,
+            ref y,
             ref width,
             ref height,
-            _selected.X,
-            _selected.Y,
+            _sizeCorner is SizeCorner.Sw or SizeCorner.Nw,
+            _sizeCorner is SizeCorner.Nw or SizeCorner.Ne,
             _selected.SizeLinked,
-            boxes,
-            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Width, 1)),
-            (float)(SceneSnap.EngagePixels / Math.Max(rendered.Height, 1)));
+            SnapBoxes(),
+            (float)(SceneSnap.EngagePixels / px),
+            (float)(SceneSnap.EngagePixels / py));
+        _selected.X = x;
+        _selected.Y = y;
         _selected.Width = width;
         _selected.Height = height;
     }
 
+    /// <summary>On-screen size of the output frame. View zoom insets that frame inside the canvas.</summary>
+    private (double X, double Y) FramePixels()
+    {
+        var rendered = SceneSnap.RenderedSize(this, WireCanvas);
+        return (Math.Max(rendered.Width, 1) * _viewZoom, Math.Max(rendered.Height, 1) * _viewZoom);
+    }
+
+    private List<SceneSnap.Box> SnapBoxes() => _scene.Layers.Select(layer => new SceneSnap.Box(
+        layer.X, layer.Y, layer.Width, layer.Height, layer.Hidden, ReferenceEquals(layer, _selected))).ToList();
+
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_dragging || _resizing || _cropping)
-            PushGpu();
+        if (_dragging || _resizing || _cropping || _cameraDragging || _cameraZooming)
+            Settle();
         _dragging = false;
         _resizing = false;
         _cropping = false;
+        _cameraDragging = false;
+        _cameraZooming = false;
         _snapX = null;
         _snapY = null;
         WireCanvas.ReleaseMouseCapture();
@@ -747,7 +1154,7 @@ public partial class SceneEditorWindow : Window
         layer.ResetLayout();
         _selected = layer;
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void Link_Click(object sender, RoutedEventArgs e)
@@ -774,7 +1181,7 @@ public partial class SceneEditorWindow : Window
         layer.Hidden = !layer.Hidden;
         _selected = layer;
         RefreshLayers();
-        PushGpu();
+        Settle();
         e.Handled = true;
     }
 
@@ -784,7 +1191,7 @@ public partial class SceneEditorWindow : Window
             return;
         _selected.InputId = input.Id;
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void ResetLayer_Click(object sender, RoutedEventArgs e)
@@ -793,7 +1200,7 @@ public partial class SceneEditorWindow : Window
             return;
         _selected.ResetLayout();
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
     private void FillPresets()
@@ -872,7 +1279,7 @@ public partial class SceneEditorWindow : Window
             _scene.Layers.Add(Clone(layer));
         _selected = _scene.Layers.FirstOrDefault();
         RefreshLayers();
-        PushGpu();
+        Settle();
         CopyFromBox.SelectedIndex = -1;
     }
 
@@ -914,7 +1321,7 @@ public partial class SceneEditorWindow : Window
             _scene.Layers.Sort((a, b) => b.Z.CompareTo(a.Z));
             NormalizeOrder();
             RefreshLayers();
-            PushGpu();
+            Settle();
             return;
         }
         if (name == "Full")
@@ -928,7 +1335,7 @@ public partial class SceneEditorWindow : Window
                 layer.ResetLayoutExtras();
             }
             RefreshLayers();
-            PushGpu();
+            Settle();
             return;
         }
         var boxes = SceneLayoutPresets.Boxes(name);
@@ -943,55 +1350,25 @@ public partial class SceneEditorWindow : Window
             unlocked[i].ResetLayoutExtras();
         }
         RefreshLayers();
-        PushGpu();
+        Settle();
     }
 
-    private void Ok_Click(object sender, RoutedEventArgs e)
+    private void Animation_Click(object sender, RoutedEventArgs e)
     {
-        _scene.Name = string.IsNullOrWhiteSpace(NameBox.Text) ? _scene.Name : NameBox.Text.Trim();
-        if (_tags is { } tags)
-            TagCatalog.Replace(_scene.Tags, tags.Selected);
-        if (Application.Current is App { Backend.IsRemote: true } app)
-        {
-            IsEnabled = false;
-            var json = MutationJson.UpsertScene(_scene);
-            var revision = app.Backend.Revision;
-            var backend = app.Backend;
-            Task.Run(() =>
-            {
-                var ok = backend.Mutate(json, revision, out var error);
-                Dispatcher.BeginInvoke(() =>
-                {
-                    backend.Poll();
-                    if (!ok)
-                    {
-                        MessageBox.Show(this, error, Loc.T("msg.revisionConflict"));
-                        IsEnabled = true;
-                        return;
-                    }
-                    DialogResult = true;
-                });
-            });
-            return;
-        }
-        MixerApply.DefineScene(_scene, _width, _height);
-        ReleaseDraft();
-        DialogResult = true;
+        var dialog = new SceneAnimWindow(_scene, persist: false) { Owner = this };
+        dialog.ShowDialog();
     }
 
     private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
 
     protected override void OnClosed(EventArgs e)
     {
-        PreviewHost.ReleaseNative();
-        if (DialogResult != true)
-        {
-            _scene.Layers.Clear();
-            _scene.Layers.AddRange(_original);
-            if (!App.IsRemote)
-                MixerApply.DefineScene(_scene, _width, _height);
-        }
+        if (_live)
+            Settle();
+        else if (_onAir is { } snap)
+            Revert(snap);
         ReleaseDraft();
+        PreviewHost.ReleaseNative();
         base.OnClosed(e);
     }
 }

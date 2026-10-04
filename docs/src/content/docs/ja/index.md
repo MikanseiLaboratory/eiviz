@@ -4,9 +4,9 @@ description: クロスプラットフォームの無制限M/Eソフトウェア�
 ---
 
 **eiviz**（ˈeɪvɪz）は、[未完成成果物研究所](https://mikanseilaboratory.github.io/)および河村 柊吾/[FlowingSPDG](https://github.com/FlowingSPDG)が開発・保守するソフトウェアスイッチャーです。  
-WindowsとmacOSに対応しています。Linuxは実験的です。
+WindowsとmacOSに対応しています。Linux対応は実験的です。
 
-このサイトでは、使い方、開発目的、現場での運用までをまとめています。
+このサイトでは、使い方、開発動機、現場での運用までをまとめています。
 
 ## はじめに
 
@@ -34,7 +34,7 @@ WindowsとmacOSに対応しています。Linuxは実験的です。
 - [Colour](/eiviz/ja/features/inputs/colour/) — カラー入力
 - [映像の合成](/eiviz/ja/features/compositing/) — Sceneの合成と複数レイヤー
 - [NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/) — NDIおよびOMTへの出力
-- [Decklink](/eiviz/ja/features/outputs/decklink/) — Decklinkへの出力
+- [DeckLink](/eiviz/ja/features/outputs/decklink/) — DeckLinkへの出力
 - [音声、ASIOなど](/eiviz/ja/features/outputs/audio/) — 音声出力とASIO
 - [Vision Mixing](/eiviz/ja/features/vision-mixing/) — Mixing Unitを使った多段M/E
 - [リモート接続](/eiviz/ja/features/remote/) — 別のeivizをGUIから操作する

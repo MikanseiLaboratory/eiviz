@@ -206,6 +206,118 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
         return Err(ValidationError::new("master fps is invalid"));
     }
+    for preset in &doc.transitions {
+        check_curve(preset.easing, preset.bezier.as_ref(), false, "transition")?;
+    }
+    for overlay in &doc.overlays {
+        check_curve(overlay.easing, overlay.bezier.as_ref(), false, "overlay")?;
+    }
+    for scene in &doc.scenes {
+        let layer_ids: Vec<u64> = scene.layers.iter().map(|layer| layer.layer_id).collect();
+        let state_ids: Vec<u64> = scene.states.iter().map(|state| state.id).collect();
+        check_camera(&scene.camera, &format!("scene {}", scene.id))?;
+        for state in &scene.states {
+            if state.id == 0 {
+                return Err(ValidationError::new(format!(
+                    "scene {} state id 0 is reserved for the saved layout",
+                    scene.id
+                )));
+            }
+            for key in &state.layers {
+                if !layer_ids.contains(&key.layer_id) {
+                    return Err(ValidationError::new(format!(
+                        "scene {} state {} references missing layer {}",
+                        scene.id, state.id, key.layer_id
+                    )));
+                }
+            }
+            check_curve(
+                state.enter.easing,
+                state.enter.bezier.as_ref(),
+                true,
+                "state",
+            )?;
+            if state.enter.duration_frames == 0 {
+                return Err(ValidationError::new(format!(
+                    "scene {} state {} duration is zero",
+                    scene.id, state.id
+                )));
+            }
+            if let Some(camera) = &state.camera {
+                check_camera(camera, &format!("scene {} state {}", scene.id, state.id))?;
+            }
+        }
+        for seq in &scene.sequences {
+            for step in &seq.steps {
+                if !state_ids.contains(&step.state_id) {
+                    return Err(ValidationError::new(format!(
+                        "scene {} sequence {} references missing state {}",
+                        scene.id, seq.id, step.state_id
+                    )));
+                }
+                if let Some(motion) = &step.motion {
+                    check_curve(motion.easing, motion.bezier.as_ref(), true, "sequence step")?;
+                    if motion.duration_frames == 0 {
+                        return Err(ValidationError::new(format!(
+                            "scene {} sequence {} step duration is zero",
+                            scene.id, seq.id
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_camera(camera: &crate::session::SceneCamera, what: &str) -> Result<(), ValidationError> {
+    let finite = camera.x.is_finite() && camera.y.is_finite() && camera.zoom.is_finite();
+    if !finite {
+        return Err(ValidationError::new(format!("{what} camera is not finite")));
+    }
+    if !(1.0..=8.0).contains(&camera.zoom) {
+        return Err(ValidationError::new(format!(
+            "{what} camera zoom is out of range"
+        )));
+    }
+    let margin = 0.5 / camera.zoom;
+    let inside =
+        (margin..=1.0 - margin).contains(&camera.x) && (margin..=1.0 - margin).contains(&camera.y);
+    if !inside {
+        return Err(ValidationError::new(format!(
+            "{what} camera center is out of range"
+        )));
+    }
+    Ok(())
+}
+
+fn check_curve(
+    easing: u32,
+    bezier: Option<&crate::session::BezierHandles>,
+    allow_hold: bool,
+    what: &str,
+) -> Result<(), ValidationError> {
+    let max = if allow_hold { 6 } else { 5 };
+    if easing > max {
+        return Err(ValidationError::new(format!(
+            "{what} easing {easing} is not supported"
+        )));
+    }
+    if easing == 5 {
+        let Some(handles) = bezier else {
+            return Err(ValidationError::new(format!(
+                "{what} bezier easing requires handles"
+            )));
+        };
+        let finite = [handles.x1, handles.y1, handles.x2, handles.y2]
+            .iter()
+            .all(|value| value.is_finite());
+        if !finite || !handles.x_in_range() {
+            return Err(ValidationError::new(format!(
+                "{what} bezier handles are outside the supported range"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -448,5 +560,48 @@ mod tests {
         }"#;
         let err = validate(&parse(src).unwrap()).unwrap_err();
         assert!(err.message.contains("master fps"), "{}", err.message);
+    }
+
+    fn session_with_camera(camera: &str, state_camera: &str) -> String {
+        format!(
+            r#"{{
+              "version": 2,
+              "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
+              "scenes": [{{ "id": 1, "name": "Scene 1", "camera": {camera},
+                "layers": [{{ "inputId": 2, "layerId": 1, "width": 1, "height": 1 }}],
+                "states": [{{ "id": 1, "name": "Close", "camera": {state_camera},
+                  "layers": [{{ "layerId": 1, "geom": {{ "width": 1, "height": 1 }} }}] }}] }}],
+              "units": [{{ "id": 1, "name": "MU 1" }}]
+            }}"#
+        )
+    }
+
+    #[test]
+    fn camera_out_of_range_is_rejected() {
+        let doc =
+            parse(session_with_camera(r#"{"zoom": 0.5}"#, r#"{"zoom": 2}"#).as_bytes()).unwrap();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("zoom"), "{}", err.message);
+
+        let doc =
+            parse(session_with_camera(r#"{"zoom": 2}"#, r#"{"x": 0.0, "zoom": 4}"#).as_bytes())
+                .unwrap();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("center"), "{}", err.message);
+    }
+
+    #[test]
+    fn camera_round_trips_through_the_session_file() {
+        let doc = parse(
+            session_with_camera(r#"{"x": 0.6, "y": 0.4, "zoom": 2}"#, r#"{"zoom": 4}"#).as_bytes(),
+        )
+        .unwrap();
+        validate(&doc).unwrap();
+        let bytes = crate::session::file::encode_file(&doc).unwrap();
+        let back = crate::session::file::decode_file(&bytes).unwrap();
+        assert_eq!(back.scenes[0].camera.zoom, 2.0);
+        assert_eq!(back.scenes[0].camera.x, 0.6);
+        let state = &back.scenes[0].states[0];
+        assert_eq!(state.camera.map(|camera| camera.zoom), Some(4.0));
     }
 }

@@ -477,6 +477,7 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     var cropY: Float = 0
     var cropWidth: Float = 1
     var cropHeight: Float = 1
+    var layerId: UInt64 = 0
 
     mutating func clampCrop(minX: Float = 0, minY: Float = 0, edit: CropEdit = .all) {
         applyCropClamp(
@@ -521,10 +522,10 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case inputId, x, y, width, height, opacity, z, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
+        case inputId, x, y, width, height, opacity, z, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight, layerId
     }
 
-    init(inputId: UInt64, x: Float = 0, y: Float = 0, width: Float = 1, height: Float = 1, opacity: Float = 1, z: Int32 = 0, audioFollow: Bool = true, locked: Bool = false, hidden: Bool = false, sizeLinked: Bool = true, cropX: Float = 0, cropY: Float = 0, cropWidth: Float = 1, cropHeight: Float = 1) {
+    init(inputId: UInt64, x: Float = 0, y: Float = 0, width: Float = 1, height: Float = 1, opacity: Float = 1, z: Int32 = 0, audioFollow: Bool = true, locked: Bool = false, hidden: Bool = false, sizeLinked: Bool = true, cropX: Float = 0, cropY: Float = 0, cropWidth: Float = 1, cropHeight: Float = 1, layerId: UInt64 = 0) {
         self.id = UUID()
         self.inputId = inputId
         self.x = x
@@ -541,6 +542,27 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
         self.cropY = cropY
         self.cropWidth = cropWidth
         self.cropHeight = cropHeight
+        self.layerId = layerId
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(inputId, forKey: .inputId)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(z, forKey: .z)
+        try container.encode(audioFollow, forKey: .audioFollow)
+        try container.encode(locked, forKey: .locked)
+        try container.encode(hidden, forKey: .hidden)
+        try container.encode(sizeLinked, forKey: .sizeLinked)
+        try container.encode(cropX, forKey: .cropX)
+        try container.encode(cropY, forKey: .cropY)
+        try container.encode(cropWidth, forKey: .cropWidth)
+        try container.encode(cropHeight, forKey: .cropHeight)
+        try container.encode(layerId, forKey: .layerId)
     }
 
     init(from decoder: Decoder) throws {
@@ -560,6 +582,113 @@ struct SceneLayer: Identifiable, Codable, Equatable, Hashable {
         cropY = try container.decodeIfPresent(Float.self, forKey: .cropY) ?? 0
         cropWidth = try container.decodeIfPresent(Float.self, forKey: .cropWidth) ?? 1
         cropHeight = try container.decodeIfPresent(Float.self, forKey: .cropHeight) ?? 1
+        layerId = try container.decodeIfPresent(UInt64.self, forKey: .layerId) ?? 0
+    }
+}
+
+struct BezierHandles: Codable, Equatable, Hashable {
+    var x1: Float = 0
+    var y1: Float = 0
+    var x2: Float = 1
+    var y2: Float = 1
+}
+
+struct SceneLayerGeom: Codable, Equatable, Hashable {
+    var x: Float = 0
+    var y: Float = 0
+    var width: Float = 1
+    var height: Float = 1
+    var opacity: Float = 1
+    var z: Int32 = 0
+    var cropX: Float = 0
+    var cropY: Float = 0
+    var cropWidth: Float = 1
+    var cropHeight: Float = 1
+
+    static func from(_ layer: SceneLayer) -> SceneLayerGeom {
+        SceneLayerGeom(
+            x: layer.x, y: layer.y, width: layer.width, height: layer.height, opacity: layer.opacity, z: layer.z,
+            cropX: layer.cropX, cropY: layer.cropY, cropWidth: layer.cropWidth, cropHeight: layer.cropHeight
+        )
+    }
+}
+
+struct LayerKey: Codable, Equatable, Hashable {
+    var layerId: UInt64 = 0
+    var geom: SceneLayerGeom = SceneLayerGeom()
+}
+
+struct Motion: Codable, Equatable, Hashable {
+    var durationFrames: UInt32 = 15
+    var easing: UInt32 = 0
+    var bezier: BezierHandles?
+}
+
+struct SceneCamera: Codable, Equatable, Hashable {
+    var x: Float = 0.5
+    var y: Float = 0.5
+    var zoom: Float = 1
+
+    static let identity = SceneCamera()
+
+    func clamped() -> SceneCamera {
+        let zoom = min(8, max(1, zoom))
+        let margin = 0.5 / zoom
+        return SceneCamera(
+            x: min(1 - margin, max(margin, x)),
+            y: min(1 - margin, max(margin, y)),
+            zoom: zoom
+        )
+    }
+}
+
+struct SceneState: Identifiable, Codable, Equatable, Hashable {
+    var id: UInt64
+    var name: String = ""
+    var layers: [LayerKey] = []
+    var camera: SceneCamera?
+    var enter: Motion = Motion()
+}
+
+struct SequenceStep: Codable, Equatable, Hashable {
+    var stateId: UInt64 = 0
+    var motion: Motion?
+    var holdFrames: UInt32 = 0
+}
+
+struct SceneSequence: Identifiable, Codable, Equatable, Hashable {
+    var id: UInt64
+    var name: String = ""
+    var steps: [SequenceStep] = []
+}
+
+/// What a scene's animation is doing right now. Playback is live-only.
+struct SceneAnimLive: Equatable {
+    var shownState: UInt64?
+    var movingState: UInt64?
+    var sequenceId: UInt64?
+    var stepIndex: Int
+    var holding: Bool
+
+    static let idle = SceneAnimLive(shownState: nil, movingState: nil, sequenceId: nil, stepIndex: -1, holding: false)
+
+    var litState: UInt64? { movingState ?? shownState }
+
+    static func sameState(_ ids: [UInt64]) -> UInt64? {
+        guard let first = ids.first, ids.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    /// A state lights only once its camera has arrived too, when it carries one.
+    static func shown(_ ids: [UInt64], cameraState: UInt64, states: [SceneState]) -> UInt64? {
+        var agreed = sameState(ids)
+        if agreed == nil && ids.isEmpty && cameraState != 0 {
+            agreed = cameraState
+        }
+        if let id = agreed, states.first(where: { $0.id == id })?.camera != nil, cameraState != id {
+            return nil
+        }
+        return agreed
     }
 }
 
@@ -569,12 +698,15 @@ struct SceneEntry: Identifiable, Codable {
     var name: String
     var monitorId: UInt64 = 0
     var layers: [SceneLayer] = []
+    var states: [SceneState] = []
+    var sequences: [SceneSequence] = []
     var tags: [String] = []
     var previewCollapsed: Bool = false
+    var camera: SceneCamera = .identity
     var gpuId: UInt64 { EIVIZ_SCENE_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, guid, name, layers, tags, previewCollapsed
+        case id, guid, name, layers, tags, previewCollapsed, states, sequences, camera
     }
 
     init(
@@ -601,8 +733,37 @@ struct SceneEntry: Identifiable, Codable {
         guid = try container.decodeIfPresent(String.self, forKey: .guid) ?? UUID().uuidString
         name = try container.decode(String.self, forKey: .name)
         layers = try container.decodeIfPresent([SceneLayer].self, forKey: .layers) ?? []
+        states = try container.decodeIfPresent([SceneState].self, forKey: .states) ?? []
+        sequences = try container.decodeIfPresent([SceneSequence].self, forKey: .sequences) ?? []
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         previewCollapsed = try container.decodeIfPresent(Bool.self, forKey: .previewCollapsed) ?? false
+        camera = try container.decodeIfPresent(SceneCamera.self, forKey: .camera) ?? .identity
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(guid, forKey: .guid)
+        try container.encode(name, forKey: .name)
+        try container.encode(layers, forKey: .layers)
+        try container.encode(states, forKey: .states)
+        try container.encode(sequences, forKey: .sequences)
+        try container.encode(tags, forKey: .tags)
+        try container.encode(previewCollapsed, forKey: .previewCollapsed)
+        try container.encode(camera, forKey: .camera)
+    }
+
+    mutating func assignLayerIds() {
+        var next = layers.map(\.layerId).max() ?? 0
+        var seen = Set<UInt64>()
+        for index in layers.indices {
+            let id = layers[index].layerId
+            if id == 0 || seen.contains(id) {
+                next += 1
+                layers[index].layerId = next
+            }
+            seen.insert(layers[index].layerId)
+        }
     }
 }
 
@@ -624,6 +785,7 @@ struct TransitionPreset: Identifiable, Codable {
     var swap: Bool = true
     var keepPreview: Bool = true
     var easing: UInt32 = 0
+    var bezier: BezierHandles?
     var direction: UInt32 = 0
     var dipR: Float = 0
     var dipG: Float = 0
@@ -643,7 +805,7 @@ struct TransitionPreset: Identifiable, Codable {
     var label: String { TransitionCatalog.label(kind) }
 
     enum CodingKeys: String, CodingKey {
-        case kind, durationValue, durationUnit, swap, keepPreview, easing, direction, dipR, dipG, dipB, dipA, softness, param, customWgsl
+        case kind, durationValue, durationUnit, swap, keepPreview, easing, bezier, direction, dipR, dipG, dipB, dipA, softness, param, customWgsl
     }
 
     init(
@@ -686,6 +848,7 @@ struct TransitionPreset: Identifiable, Codable {
         swap = try container.decodeIfPresent(Bool.self, forKey: .swap) ?? true
         keepPreview = try container.decodeIfPresent(Bool.self, forKey: .keepPreview) ?? true
         easing = try container.decodeIfPresent(UInt32.self, forKey: .easing) ?? 0
+        bezier = try container.decodeIfPresent(BezierHandles.self, forKey: .bezier)
         direction = try container.decodeIfPresent(UInt32.self, forKey: .direction) ?? 0
         dipR = try container.decodeIfPresent(Float.self, forKey: .dipR) ?? 0
         dipG = try container.decodeIfPresent(Float.self, forKey: .dipG) ?? 0
@@ -694,6 +857,25 @@ struct TransitionPreset: Identifiable, Codable {
         softness = try container.decodeIfPresent(Float.self, forKey: .softness) ?? 0.02
         param = try container.decodeIfPresent(Float.self, forKey: .param) ?? 0
         customWgsl = try container.decodeIfPresent(String.self, forKey: .customWgsl)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(durationValue, forKey: .durationValue)
+        try container.encode(durationUnit, forKey: .durationUnit)
+        try container.encode(swap, forKey: .swap)
+        try container.encode(keepPreview, forKey: .keepPreview)
+        try container.encode(easing, forKey: .easing)
+        try container.encodeIfPresent(bezier, forKey: .bezier)
+        try container.encode(direction, forKey: .direction)
+        try container.encode(dipR, forKey: .dipR)
+        try container.encode(dipG, forKey: .dipG)
+        try container.encode(dipB, forKey: .dipB)
+        try container.encode(dipA, forKey: .dipA)
+        try container.encode(softness, forKey: .softness)
+        try container.encode(param, forKey: .param)
+        try container.encodeIfPresent(customWgsl, forKey: .customWgsl)
     }
 }
 
@@ -715,6 +897,8 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var transitionKind: UInt32 = EIVIZ_TRANSITION_FADE
     var durationValue: UInt32 = 15
     var durationUnit: UInt32 = 0
+    var easing: UInt32 = 0
+    var bezier: BezierHandles?
     var audioFollow: Bool = true
     var locked: Bool = false
     var hidden: Bool = false
@@ -763,7 +947,7 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, sourceKind, sceneGpuId, x, y, width, height, opacity, z, transitionKind, durationValue, durationUnit, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
+        case id, sourceKind, sceneGpuId, x, y, width, height, opacity, z, transitionKind, durationValue, durationUnit, easing, bezier, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
     }
 
     init(id: UInt64 = 0, sourceKind: OverlaySourceKind = .scene, sceneGpuId: UInt64 = 0) {
@@ -786,6 +970,8 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
         transitionKind = try container.decodeIfPresent(UInt32.self, forKey: .transitionKind) ?? EIVIZ_TRANSITION_FADE
         durationValue = try container.decodeIfPresent(UInt32.self, forKey: .durationValue) ?? 15
         durationUnit = try container.decodeIfPresent(UInt32.self, forKey: .durationUnit) ?? 0
+        easing = try container.decodeIfPresent(UInt32.self, forKey: .easing) ?? 0
+        bezier = try container.decodeIfPresent(BezierHandles.self, forKey: .bezier)
         audioFollow = try container.decodeIfPresent(Bool.self, forKey: .audioFollow) ?? true
         locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
@@ -794,6 +980,32 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
         cropY = try container.decodeIfPresent(Float.self, forKey: .cropY) ?? 0
         cropWidth = try container.decodeIfPresent(Float.self, forKey: .cropWidth) ?? 1
         cropHeight = try container.decodeIfPresent(Float.self, forKey: .cropHeight) ?? 1
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(sourceKind, forKey: .sourceKind)
+        try container.encode(sceneGpuId, forKey: .sceneGpuId)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(z, forKey: .z)
+        try container.encode(transitionKind, forKey: .transitionKind)
+        try container.encode(durationValue, forKey: .durationValue)
+        try container.encode(durationUnit, forKey: .durationUnit)
+        try container.encode(easing, forKey: .easing)
+        try container.encodeIfPresent(bezier, forKey: .bezier)
+        try container.encode(audioFollow, forKey: .audioFollow)
+        try container.encode(locked, forKey: .locked)
+        try container.encode(hidden, forKey: .hidden)
+        try container.encode(sizeLinked, forKey: .sizeLinked)
+        try container.encode(cropX, forKey: .cropX)
+        try container.encode(cropY, forKey: .cropY)
+        try container.encode(cropWidth, forKey: .cropWidth)
+        try container.encode(cropHeight, forKey: .cropHeight)
     }
 }
 
@@ -1306,6 +1518,17 @@ enum GpuRenderer: String, Codable, CaseIterable {
 struct SessionSettings: Codable {
     var masterFpsNum: UInt32 = 60_000
     var masterFpsDen: UInt32 = 1_001
+
+    func frames(for value: UInt32, unit: UInt32) -> UInt32 {
+        if unit == EIVIZ_DURATION_MS {
+            return UInt32(max(1, (Double(value) * Double(masterFpsNum) / Double(max(1, masterFpsDen)) / 1000.0).rounded()))
+        }
+        return max(1, value)
+    }
+
+    func wallMs(_ frames: UInt32) -> UInt32 {
+        UInt32(max(1, (Double(frames) * 1000.0 * Double(masterFpsDen) / Double(max(1, masterFpsNum))).rounded()))
+    }
     var defaultWidth: UInt32 = 1920
     var defaultHeight: UInt32 = 1080
     var theme: String = "Charcoal"
@@ -1433,6 +1656,7 @@ struct MixerSessionData: Codable {
             session.inputs[index].audioUnits = [1]
         }
         session.addScene(name: "Scene 1", input: EIVIZ_SRC_BARS)
+        session.seedPreviewAnimation()
         session.addScene(name: "Scene 2", input: EIVIZ_SRC_COLOR)
         session.units[0].previewSceneId = session.scenes[0].id
         session.units[0].programSceneId = session.scenes[1].id
@@ -1465,6 +1689,48 @@ struct MixerSessionData: Codable {
         nextMonitorId += 1
         scenes.append(scene)
         return scene
+    }
+
+    /// Blue plate on the bars scene. Play walks it to the lower third, then back to the corner.
+    private mutating func seedPreviewAnimation() {
+        guard !scenes.isEmpty, !scenes[0].layers.isEmpty else { return }
+        scenes[0].layers[0].layerId = 1
+        scenes[0].layers[0].z = 0
+        scenes[0].layers.append(SceneLayer(
+            inputId: EIVIZ_SRC_BLUE,
+            x: 0.72, y: 0.06, width: 0.22, height: 0.16, z: 1, layerId: 2
+        ))
+        scenes[0].states = [
+            SceneState(
+                id: 1,
+                name: "Lower third",
+                layers: [Self.plateKey(0.06, 0.72, 0.55, 0.2)],
+                enter: Motion(durationFrames: 45, easing: EIVIZ_EASING_OUT)
+            ),
+            SceneState(
+                id: 2,
+                name: "Bug",
+                layers: [Self.plateKey(0.72, 0.06, 0.22, 0.16)],
+                enter: Motion(durationFrames: 30, easing: EIVIZ_EASING_IN_OUT)
+            )
+        ]
+        scenes[0].sequences = [
+            SceneSequence(
+                id: 1,
+                name: "Lower third",
+                steps: [
+                    SequenceStep(stateId: 1, holdFrames: 20),
+                    SequenceStep(stateId: 2, holdFrames: 20)
+                ]
+            )
+        ]
+    }
+
+    private static func plateKey(_ x: Float, _ y: Float, _ width: Float, _ height: Float) -> LayerKey {
+        LayerKey(
+            layerId: 2,
+            geom: SceneLayerGeom(x: x, y: y, width: width, height: height, opacity: 1, z: 1)
+        )
     }
 
     @discardableResult

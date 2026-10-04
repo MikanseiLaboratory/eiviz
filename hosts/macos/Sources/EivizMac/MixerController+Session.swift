@@ -777,6 +777,7 @@ extension MixerController {
             desc.z = layer.z
             desc.audio_follow = layer.audioFollow ? 1 : 0
             desc.hidden = layer.hidden ? 1 : 0
+            desc.layer_id = layer.layerId
             return desc
         }
         let count = UInt32(layers.count)
@@ -786,6 +787,228 @@ extension MixerController {
                 "Define scene"
             )
         }
+        let camera = scene.camera
+        fail(
+            mixer_scene_camera_define(
+                gpuId ?? scene.gpuId,
+                EivizSceneCamera(x: camera.x, y: camera.y, zoom: camera.zoom)
+            ),
+            "Define scene camera"
+        )
+    }
+
+    /// Cuts the scene to this state's pose without rewriting the saved layout.
+    func showScenePose(_ scene: SceneEntry, stateId: UInt64) {
+        if isRemote { return }
+        guard let state = scene.states.first(where: { $0.id == stateId }) else { return }
+        var layers = scene.layers.map { layer -> EivizOverlayDesc in
+            let geom = state.layers.first { $0.layerId == layer.layerId }?.geom ?? SceneLayerGeom.from(layer)
+            var desc = MixerFFI.emptyOverlay()
+            desc.source_id = layer.inputId
+            desc.rect = EivizRect(x: geom.x, y: geom.y, width: geom.width, height: geom.height)
+            desc.crop = EivizRect(x: geom.cropX, y: geom.cropY, width: geom.cropWidth, height: geom.cropHeight)
+            desc.opacity = geom.opacity
+            desc.z = geom.z
+            desc.audio_follow = layer.audioFollow ? 1 : 0
+            desc.hidden = layer.hidden ? 1 : 0
+            desc.layer_id = layer.layerId
+            return desc
+        }
+        let camera = (state.camera ?? scene.camera).clamped()
+        let count = UInt32(layers.count)
+        layers.withUnsafeMutableBufferPointer { ptr in
+            fail(
+                mixer_scene_show_pose(
+                    scene.gpuId,
+                    count,
+                    ptr.baseAddress,
+                    EivizSceneCamera(x: camera.x, y: camera.y, zoom: camera.zoom),
+                    1,
+                    stateId
+                ),
+                "Show scene pose"
+            )
+        }
+    }
+
+    func pushSceneAnim(_ scene: SceneEntry) {
+        if isRemote { return }
+        let layerBufs: [[EivizOverlayDesc]] = scene.states.map { state in
+            state.layers.compactMap { key in
+                guard let layer = scene.layers.first(where: { $0.layerId == key.layerId }) else { return nil }
+                var desc = MixerFFI.emptyOverlay()
+                desc.source_id = layer.inputId
+                desc.rect = EivizRect(x: key.geom.x, y: key.geom.y, width: key.geom.width, height: key.geom.height)
+                desc.crop = EivizRect(x: key.geom.cropX, y: key.geom.cropY, width: key.geom.cropWidth, height: key.geom.cropHeight)
+                desc.opacity = key.geom.opacity
+                desc.z = key.geom.z
+                desc.audio_follow = layer.audioFollow ? 1 : 0
+                desc.hidden = layer.hidden ? 1 : 0
+                desc.layer_id = key.layerId
+                return desc
+            }
+        }
+        let stepBufs: [[EivizSequenceStepDesc]] = scene.sequences.map { sequence in
+            sequence.steps.map { step in
+                EivizSequenceStepDesc(
+                    state_id: step.stateId,
+                    motion: sceneMotion(step.motion ?? Motion()),
+                    has_motion: step.motion == nil ? 0 : 1,
+                    hold_frames: step.holdFrames
+                )
+            }
+        }
+        let layerCounts = layerBufs.map { UInt32($0.count) }
+        let stepCounts = stepBufs.map { UInt32($0.count) }
+        withPinned(layerBufs) { layerPtrs in
+            let states: [EivizSceneStateDesc] = scene.states.enumerated().map { index, state in
+                EivizSceneStateDesc(
+                    id: state.id,
+                    layers: layerPtrs[index].map { UnsafePointer($0) },
+                    layer_count: layerCounts[index],
+                    enter: sceneMotion(state.enter),
+                    camera: EivizSceneCamera(
+                        x: state.camera?.x ?? 0.5,
+                        y: state.camera?.y ?? 0.5,
+                        zoom: state.camera?.zoom ?? 1
+                    ),
+                    has_camera: state.camera == nil ? 0 : 1
+                )
+            }
+            states.withUnsafeBufferPointer { ptr in
+                fail(
+                    mixer_scene_states_define(scene.gpuId, ptr.baseAddress, UInt32(states.count)),
+                    "Define scene states"
+                )
+            }
+            withPinned(stepBufs) { stepPtrs in
+                let sequences: [EivizSceneSequenceDesc] = scene.sequences.enumerated().map { index, sequence in
+                    EivizSceneSequenceDesc(
+                        id: sequence.id,
+                        steps: stepPtrs[index].map { UnsafePointer($0) },
+                        step_count: stepCounts[index]
+                    )
+                }
+                sequences.withUnsafeBufferPointer { ptr in
+                    fail(
+                        mixer_scene_sequences_define(scene.gpuId, ptr.baseAddress, UInt32(sequences.count)),
+                        "Define scene sequences"
+                    )
+                }
+            }
+        }
+    }
+
+    func sceneGo(to stateId: UInt64, scene: SceneEntry) {
+        if isRemote {
+            _ = mixer_remote_scene_go_to(remoteHandle, scene.id, stateId)
+            return
+        }
+        fail(mixer_scene_go_to(scene.gpuId, stateId), "Scene go to")
+    }
+
+    func sceneSequence(_ sequenceId: UInt64, op: UInt32, scene: SceneEntry) {
+        if isRemote {
+            _ = mixer_remote_scene_sequence(remoteHandle, scene.id, sequenceId, op)
+            return
+        }
+        fail(mixer_scene_sequence(scene.gpuId, sequenceId, op), "Scene sequence")
+    }
+
+    func sceneAnimLive(_ scene: SceneEntry) -> SceneAnimLive {
+        isRemote ? remoteSceneAnimLive(scene) : localSceneAnimLive(scene)
+    }
+
+    private func localSceneAnimLive(_ scene: SceneEntry) -> SceneAnimLive {
+        var reached = [EivizReachedLayer](repeating: EivizReachedLayer(layer_id: 0, state_id: 0), count: 64)
+        var moves = [EivizActiveMove](repeating: EivizActiveMove(move_id: 0, state_id: 0, sequence_id: 0, progress: 0, layer_count: 0), count: 16)
+        var sequences = [EivizActiveSequence](repeating: EivizActiveSequence(sequence_id: 0, step_index: 0, reverse: 0, holding: 0), count: 16)
+        var reachedCount: UInt32 = 0
+        var moveCount: UInt32 = 0
+        var sequenceCount: UInt32 = 0
+        var cameraState: UInt64 = 0
+        let code = reached.withUnsafeMutableBufferPointer { reachedBuf in
+            moves.withUnsafeMutableBufferPointer { moveBuf in
+                sequences.withUnsafeMutableBufferPointer { sequenceBuf in
+                    mixer_scene_anim_state(
+                        scene.gpuId,
+                        reachedBuf.baseAddress, 64, &reachedCount,
+                        moveBuf.baseAddress, 16, &moveCount,
+                        sequenceBuf.baseAddress, 16, &sequenceCount,
+                        &cameraState
+                    )
+                }
+            }
+        }
+        guard code == EIVIZ_OK else { return .idle }
+        let ids = Array(reached.prefix(Int(min(reachedCount, 64))).map(\.state_id))
+        let shown = SceneAnimLive.shown(ids, cameraState: cameraState, states: scene.states)
+        let moving = moveCount > 0 ? moves[0].state_id : nil
+        guard sequenceCount > 0 else {
+            return SceneAnimLive(shownState: shown, movingState: moving, sequenceId: nil, stepIndex: -1, holding: false)
+        }
+        let active = sequences[0]
+        return SceneAnimLive(
+            shownState: shown,
+            movingState: moving,
+            sequenceId: active.sequence_id,
+            stepIndex: Int(active.step_index),
+            holding: active.holding != 0
+        )
+    }
+
+    private func remoteSceneAnimLive(_ scene: SceneEntry) -> SceneAnimLive {
+        guard let data = MixerRemote.live(remoteHandle).data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let scenes = root["scenes"] as? [String: Any],
+              let live = scenes["\(scene.gpuId)"] as? [String: Any]
+        else { return .idle }
+        let reached = (live["reached"] as? [[String: Any]] ?? []).compactMap { ($0["stateId"] as? NSNumber)?.uint64Value }
+        let moving = ((live["moves"] as? [[String: Any]])?.first?["stateId"] as? NSNumber)?.uint64Value
+        let cameraState = (live["cameraState"] as? NSNumber)?.uint64Value ?? 0
+        let shown = SceneAnimLive.shown(reached, cameraState: cameraState, states: scene.states)
+        guard let active = (live["sequences"] as? [[String: Any]])?.first,
+              let sequenceId = (active["sequenceId"] as? NSNumber)?.uint64Value
+        else {
+            return SceneAnimLive(shownState: shown, movingState: moving, sequenceId: nil, stepIndex: -1, holding: false)
+        }
+        return SceneAnimLive(
+            shownState: shown,
+            movingState: moving,
+            sequenceId: sequenceId,
+            stepIndex: (active["stepIndex"] as? NSNumber)?.intValue ?? -1,
+            holding: active["holding"] as? Bool ?? false
+        )
+    }
+
+    private func sceneMotion(_ motion: Motion) -> EivizMotion {
+        let bezier = motion.easing == EIVIZ_EASING_BEZIER ? motion.bezier : nil
+        return EivizMotion(
+            duration_frames: max(1, motion.durationFrames),
+            easing: motion.easing,
+            x1: bezier?.x1 ?? 0,
+            y1: bezier?.y1 ?? 0,
+            x2: bezier?.x2 ?? 1,
+            y2: bezier?.y2 ?? 1,
+            has_bezier: bezier == nil ? 0 : 1
+        )
+    }
+
+    /// Pins each row for `body`. Each row is copied first so the pointer borrow does not overlap a read of `buffers`.
+    private func withPinned<T, R>(_ buffers: [[T]], _ body: ([UnsafeMutablePointer<T>?]) -> R) -> R {
+        func walk(_ index: Int, _ acc: [UnsafeMutablePointer<T>?]) -> R {
+            if index == buffers.count {
+                return body(acc)
+            }
+            var row = buffers[index]
+            if row.isEmpty {
+                return walk(index + 1, acc + [nil])
+            }
+            return row.withUnsafeMutableBufferPointer { ptr in
+                walk(index + 1, acc + [ptr.baseAddress])
+            }
+        }
+        return walk(0, [])
     }
 
     func overlayDesc(_ slot: OverlaySlot) -> EivizOverlayDesc {

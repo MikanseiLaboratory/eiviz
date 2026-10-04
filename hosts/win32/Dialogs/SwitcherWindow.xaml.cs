@@ -166,6 +166,17 @@ public partial class SwitcherWindow : Window
         SceneTabBar.Children.Add(button);
     }
 
+    private void Animation_Click(object sender, RoutedEventArgs e)
+    {
+        ReadBusSources(out var previewId, out _);
+        var scene = Session.Scenes.FirstOrDefault(item => item.GpuId == previewId)
+            ?? Session.Scenes.FirstOrDefault();
+        if (scene is null)
+            return;
+        var dialog = new SceneAnimWindow(scene, persist: true) { Owner = this };
+        dialog.Show();
+    }
+
     private void ManageScenes_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new SwitcherScenesWindow(_unit, Session) { Owner = this };

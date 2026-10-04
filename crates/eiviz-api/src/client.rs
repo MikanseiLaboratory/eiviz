@@ -71,6 +71,23 @@ impl ControlClient {
         status_ok(&self.roundtrip(preview_req(unit_id, scene_id)).await?)
     }
 
+    pub async fn scene_go_to(&self, scene_id: u64, state_id: u64) -> ControlResult<()> {
+        status_ok(&self.roundtrip(scene_go_req(scene_id, state_id)).await?)
+    }
+
+    pub async fn scene_sequence(
+        &self,
+        scene_id: u64,
+        sequence_id: u64,
+        op: u32,
+    ) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(scene_seq_req(scene_id, sequence_id, op))
+                .await?,
+        )
+    }
+
     pub async fn auto(&self, unit_id: u64, duration_ms: u32, swap: bool) -> ControlResult<()> {
         self.auto_full(
             unit_id,
@@ -86,6 +103,7 @@ impl ControlClient {
             1.0,
             0.02,
             0.0,
+            [0.0, 0.0, 1.0, 1.0],
         )
         .await
     }
@@ -106,6 +124,7 @@ impl ControlClient {
         dip_a: f32,
         softness: f32,
         param: f32,
+        bezier: [f32; 4],
     ) -> ControlResult<()> {
         status_ok(
             &self
@@ -123,6 +142,7 @@ impl ControlClient {
                     dip_a,
                     softness,
                     param,
+                    bezier,
                 ))
                 .await?,
         )
@@ -345,6 +365,25 @@ impl ControlSession {
         status_ok(&response)
     }
 
+    pub async fn scene_go_to(&self, scene_id: u64, state_id: u64) -> ControlResult<()> {
+        let response = self.roundtrip(scene_go_req(scene_id, state_id)).await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
+    pub async fn scene_sequence(
+        &self,
+        scene_id: u64,
+        sequence_id: u64,
+        op: u32,
+    ) -> ControlResult<()> {
+        let response = self
+            .roundtrip(scene_seq_req(scene_id, sequence_id, op))
+            .await?;
+        apply_response(&self.view, &response);
+        status_ok(&response)
+    }
+
     pub async fn auto(&self, unit_id: u64, duration_ms: u32, swap: bool) -> ControlResult<()> {
         self.auto_full(
             unit_id,
@@ -360,6 +399,7 @@ impl ControlSession {
             1.0,
             0.02,
             0.0,
+            [0.0, 0.0, 1.0, 1.0],
         )
         .await
     }
@@ -380,6 +420,7 @@ impl ControlSession {
         dip_a: f32,
         softness: f32,
         param: f32,
+        bezier: [f32; 4],
     ) -> ControlResult<()> {
         let response = self
             .roundtrip(auto_req(
@@ -396,6 +437,7 @@ impl ControlSession {
                 dip_a,
                 softness,
                 param,
+                bezier,
             ))
             .await?;
         apply_response(&self.view, &response);
@@ -952,6 +994,31 @@ fn live_cut(unit_id: u64, swap: bool) -> Request {
     }
 }
 
+fn scene_go_req(scene_id: u64, state_id: u64) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::SceneGoTo(crate::proto::SceneGoTo {
+            scene_id,
+            state_id,
+        })),
+    }
+}
+
+fn scene_seq_req(scene_id: u64, sequence_id: u64, op: u32) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(request::Payload::SceneSequence(
+            crate::proto::SceneSequence {
+                scene_id,
+                sequence_id,
+                op,
+            },
+        )),
+    }
+}
+
 fn preview_req(unit_id: u64, scene_id: u64) -> Request {
     Request {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -983,6 +1050,7 @@ fn auto_req(
     dip_a: f32,
     softness: f32,
     param: f32,
+    bezier: [f32; 4],
 ) -> Request {
     Request {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -1002,6 +1070,10 @@ fn auto_req(
             dip_a,
             softness,
             param,
+            bezier_x1: bezier[0],
+            bezier_y1: bezier[1],
+            bezier_x2: bezier[2],
+            bezier_y2: bezier[3],
         })),
     }
 }

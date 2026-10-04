@@ -1,4 +1,8 @@
 use crate::session::{Document, InputDto, InputKind, OverlaySlot, SceneDto, SceneLayer, UnitDto};
+
+pub const SCENE_SEQ_PLAY: u32 = 1;
+pub const SCENE_SEQ_REVERSE: u32 = 2;
+pub const SCENE_SEQ_STOP: u32 = 3;
 use serde::{Deserialize, Serialize};
 
 /// Client-originated mutation. Live ops change Mix Effect state. Session ops
@@ -17,10 +21,16 @@ pub enum Command {
     Auto {
         unit_id: u64,
         kind: u32,
-        duration_ms: u32,
+        /// Master frames when `duration_unit` is 0, milliseconds when it is 1.
+        duration_value: u32,
+        duration_unit: u32,
         swap: bool,
         keep_preview: bool,
         easing: u32,
+        bezier_x1: f32,
+        bezier_y1: f32,
+        bezier_x2: f32,
+        bezier_y2: f32,
         direction: u32,
         dip_r: f32,
         dip_g: f32,
@@ -37,8 +47,21 @@ pub enum Command {
     OverlayAuto {
         unit_id: u64,
         overlay_id: u64,
-        duration_ms: u32,
+        /// Master frames when `duration_unit` is 0, milliseconds when it is 1.
+        duration_value: u32,
+        duration_unit: u32,
         to_on: bool,
+    },
+    /// `scene_id` is the document scene id. `state_id` 0 returns to the saved layout.
+    SceneGoTo {
+        scene_id: u64,
+        state_id: u64,
+    },
+    /// `op` is 1 play, 2 reverse, 3 stop.
+    SceneSequence {
+        scene_id: u64,
+        sequence_id: u64,
+        op: u32,
     },
     VideoPlay {
         input_id: u64,

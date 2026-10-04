@@ -12,6 +12,8 @@ struct SwitcherView: View {
     @State private var tbarPresetIndex = 0
     @State private var sceneTag: String? = nil
     @State private var showScenePicker = false
+    @State private var showAnim = false
+    @State private var animSceneId: UInt64 = 0
 
     private var unit: MixingUnitEntry {
         mixer.session.units.first { $0.id == unitId } ?? mixer.selectedUnit
@@ -68,6 +70,10 @@ struct SwitcherView: View {
         .foregroundStyle(EivizTheme.text)
         .sheet(isPresented: $showScenePicker) {
             SwitcherScenesSheet(unitId: unitId)
+                .environmentObject(mixer)
+        }
+        .sheet(isPresented: $showAnim) {
+            SceneAnimView(sceneId: animSceneId, persist: true)
                 .environmentObject(mixer)
         }
         .onChange(of: mixer.session.sceneTags) { _, tags in
@@ -140,6 +146,13 @@ struct SwitcherView: View {
             HStack {
                 Text(L10n.t("chrome.scenes")).fontWeight(.bold)
                 Spacer()
+                Button("Animation") {
+                    animSceneId = mixer.previewingSceneId(for: unitId) ?? visibleScenes.first?.id ?? 0
+                    if animSceneId != 0 {
+                        showAnim = true
+                    }
+                }
+                .buttonStyle(MixerButtonStyle())
                 Button(L10n.t("switcher.manageScenes")) { showScenePicker = true }
                     .buttonStyle(MixerButtonStyle())
             }

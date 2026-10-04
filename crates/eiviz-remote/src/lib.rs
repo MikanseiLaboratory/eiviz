@@ -247,6 +247,24 @@ pub fn cut(handle: i32, unit_id: u64, swap: u32) -> i32 {
     })
 }
 
+pub fn scene_go_to(handle: i32, scene_id: u64, state_id: u64) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
+        map_result(session.scene_go_to(scene_id, state_id).await)
+    })
+}
+
+pub fn scene_sequence(handle: i32, scene_id: u64, sequence_id: u64, op: u32) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
+        map_result(session.scene_sequence(scene_id, sequence_id, op).await)
+    })
+}
+
 pub fn preview(handle: i32, unit_id: u64, scene_id: u64) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
@@ -272,6 +290,7 @@ pub fn auto(
     dip_a: f32,
     softness: f32,
     param: f32,
+    bezier: [f32; 4],
 ) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
@@ -293,6 +312,7 @@ pub fn auto(
                     dip_a,
                     softness,
                     param,
+                    bezier,
                 )
                 .await,
         )
@@ -588,6 +608,25 @@ pub extern "C" fn mixer_remote_cut(handle: i32, unit_id: u64, swap: u32) -> i32 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_scene_go_to(handle: i32, scene_id: u64, state_id: u64) -> i32 {
+    guarded("mixer_remote_scene_go_to", || {
+        scene_go_to(handle, scene_id, state_id)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_scene_sequence(
+    handle: i32,
+    scene_id: u64,
+    sequence_id: u64,
+    op: u32,
+) -> i32 {
+    guarded("mixer_remote_scene_sequence", || {
+        scene_sequence(handle, scene_id, sequence_id, op)
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_preview(handle: i32, unit_id: u64, scene_id: u64) -> i32 {
     guarded("mixer_remote_preview", || {
         preview(handle, unit_id, scene_id)
@@ -610,6 +649,10 @@ pub extern "C" fn mixer_remote_auto(
     dip_a: f32,
     softness: f32,
     param: f32,
+    bezier_x1: f32,
+    bezier_y1: f32,
+    bezier_x2: f32,
+    bezier_y2: f32,
 ) -> i32 {
     guarded("mixer_remote_auto", || {
         auto(
@@ -627,6 +670,7 @@ pub extern "C" fn mixer_remote_auto(
             dip_a,
             softness,
             param,
+            [bezier_x1, bezier_y1, bezier_x2, bezier_y2],
         )
     })
 }

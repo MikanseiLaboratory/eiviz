@@ -3,14 +3,32 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
+using Eiviz.Host.I18n;
+using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Preview;
 
 public partial class SceneTile : UserControl
 {
+    private const double AnimPanelWidth = 130;
+    private static readonly Brush AnimLive = new SolidColorBrush(Color.FromRgb(0x1E, 0x6B, 0x3A));
+    private readonly DispatcherTimer _animTally = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    private bool _animOpen;
+    private string _animShape = "";
+
     public SceneTile()
     {
         InitializeComponent();
+        AnimExpandedButton.ToolTip = Loc.T("anim.panel");
+        AnimCollapsedButton.ToolTip = Loc.T("anim.panel");
+        _animTally.Tick += (_, _) => PaintAnim();
+        Unloaded += (_, _) => _animTally.Stop();
+        Loaded += (_, _) =>
+        {
+            if (_animOpen)
+                _animTally.Start();
+        };
         MouseLeftButtonUp += (_, _) => Select();
         MouseDoubleClick += (_, e) =>
         {
@@ -42,6 +60,8 @@ public partial class SceneTile : UserControl
         CollapsedNumber.Text = number.ToString();
         Monitor.SetWanted(false);
         ApplyCollapsed();
+        if (_animOpen)
+            BuildAnim();
         if (HostRole.IsRemote || Application.Current is App { Backend.CanShowSceneThumbs: false })
             return;
         Monitor.Bind(scene.GpuId, 170, 90, presentInterval);
@@ -98,7 +118,10 @@ public partial class SceneTile : UserControl
     public void ApplyCollapsed()
     {
         var collapsed = HostRole.IsRemote || Scene?.PreviewCollapsed == true;
-        Width = collapsed ? 40 : 176;
+        Width = (collapsed ? 40 : 176) + (_animOpen ? AnimPanelWidth : 0);
+        AnimPanel.Visibility = _animOpen ? Visibility.Visible : Visibility.Collapsed;
+        AnimExpandedButton.Content = _animOpen ? "◂" : "▸";
+        AnimCollapsedButton.Content = _animOpen ? "◂" : "▸";
         Height = 140;
         ExpandedBody.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         CollapsedBody.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
@@ -158,6 +181,146 @@ public partial class SceneTile : UserControl
         Raise(SceneSnapshotRequested);
         e.Handled = true;
     }
+
+    private void Anim_Click(object sender, RoutedEventArgs e)
+    {
+        _animOpen = !_animOpen;
+        if (_animOpen)
+        {
+            BuildAnim();
+            _animTally.Start();
+        }
+        else
+        {
+            _animTally.Stop();
+        }
+        ApplyCollapsed();
+    }
+
+    private static string AnimShape(SceneEntry scene) =>
+        string.Join("|", scene.States.Select(state => $"{state.Id}:{state.Name}"))
+        + "#" + string.Join("|", scene.Sequences.Select(sequence => $"{sequence.Id}:{sequence.Name}:{sequence.Steps.Count}"));
+
+    private void BuildAnim()
+    {
+        AnimButtons.Children.Clear();
+        if (Scene is not { } scene)
+            return;
+        _animShape = AnimShape(scene);
+        if (scene.States.Count == 0)
+        {
+            AnimButtons.Children.Add(new TextBlock
+            {
+                Text = Loc.T("anim.empty"),
+                Foreground = Brushes.Silver,
+                FontSize = 10,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+        AnimButtons.Children.Add(AnimHeading(Loc.T("anim.states")));
+        foreach (var state in scene.States)
+        {
+            var id = state.Id;
+            AnimButtons.Children.Add(AnimButton(LabelOf(state.Name, id), ("state", id), () => SceneAnimPlayback.GoTo(scene, id)));
+        }
+        if (scene.Sequences.Count == 0)
+        {
+            PaintAnim();
+            return;
+        }
+        AnimButtons.Children.Add(new Border
+        {
+            Height = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
+            Margin = new Thickness(0, 4, 0, 2)
+        });
+        AnimButtons.Children.Add(AnimHeading(Loc.T("anim.sequences")));
+        foreach (var sequence in scene.Sequences)
+        {
+            var id = sequence.Id;
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+            var stop = AnimButton("■", null, () => SceneAnimPlayback.Sequence(scene, id, MixerNative.SceneSeqStop));
+            stop.Width = 22;
+            stop.Margin = new Thickness(2, 0, 0, 0);
+            stop.ToolTip = Loc.T("anim.stop");
+            DockPanel.SetDock(stop, Dock.Right);
+            row.Children.Add(stop);
+            var play = AnimButton("▶ " + LabelOf(sequence.Name, id), ("sequence", id), () => SceneAnimPlayback.Sequence(scene, id, MixerNative.SceneSeqPlay));
+            play.Margin = new Thickness(0);
+            row.Children.Add(play);
+            AnimButtons.Children.Add(row);
+        }
+        PaintAnim();
+    }
+
+    private static TextBlock AnimHeading(string text) => new()
+    {
+        Text = text,
+        Foreground = Brushes.Silver,
+        FontSize = 10,
+        Margin = new Thickness(0, 2, 0, 2)
+    };
+
+    private static Button AnimButton(string label, (string Kind, ulong Id)? tag, Action click)
+    {
+        var button = new Button
+        {
+            Content = new TextBlock { Text = label, TextTrimming = TextTrimming.CharacterEllipsis },
+            Height = 22,
+            FontSize = 11,
+            Padding = new Thickness(4, 0, 4, 0),
+            Margin = new Thickness(0, 0, 0, 2),
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Tag = tag,
+            ToolTip = label
+        };
+        button.Click += (_, _) => click();
+        return button;
+    }
+
+    private void PaintAnim()
+    {
+        if (!_animOpen || Scene is not { } scene)
+            return;
+        if (AnimShape(scene) != _animShape)
+        {
+            BuildAnim();
+            return;
+        }
+        var live = SceneAnimPlayback.Read(scene);
+        var lit = live.MovingState ?? live.ShownState;
+        foreach (var button in AnimButtonsIn(AnimButtons))
+        {
+            var on = button.Tag switch
+            {
+                ("state", ulong id) => lit == id,
+                ("sequence", ulong id) => live.SequenceId == id,
+                _ => false
+            };
+            if (on)
+                button.Background = AnimLive;
+            else
+                button.ClearValue(BackgroundProperty);
+        }
+    }
+
+    private static IEnumerable<Button> AnimButtonsIn(Panel panel)
+    {
+        foreach (var child in panel.Children)
+        {
+            if (child is Button button)
+                yield return button;
+            else if (child is Panel nested)
+            {
+                foreach (var inner in AnimButtonsIn(nested))
+                    yield return inner;
+            }
+        }
+    }
+
+    private static string LabelOf(string name, ulong id) =>
+        string.IsNullOrWhiteSpace(name) ? id.ToString() : name;
 
     private void Close_Click(object sender, RoutedEventArgs e)
     {

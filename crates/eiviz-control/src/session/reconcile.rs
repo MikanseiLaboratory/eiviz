@@ -44,6 +44,7 @@ pub enum ReconcileOp {
         message: String,
     },
     DefineScene(SceneApply),
+    DefineSceneAnim(SceneAnimApply),
     DestroyScene {
         id: u64,
     },
@@ -161,14 +162,14 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
     let prev_scenes = previous.map(|doc| doc.scenes.as_slice()).unwrap_or(&[]);
     for scene in &next.scenes {
         let apply = scene_apply(scene, width, height);
-        if prev_scenes
-            .iter()
-            .find(|item| item.id == scene.id)
-            .is_some_and(|prev| scene_apply(prev, width, height) == apply)
-        {
-            continue;
+        let anim = scene_anim_apply(scene);
+        let prev = prev_scenes.iter().find(|item| item.id == scene.id);
+        if !prev.is_some_and(|prev| scene_apply(prev, width, height) == apply) {
+            ops.push(ReconcileOp::DefineScene(apply));
         }
-        ops.push(ReconcileOp::DefineScene(apply));
+        if !prev.is_some_and(|prev| scene_anim_apply(prev) == anim) {
+            ops.push(ReconcileOp::DefineSceneAnim(anim));
+        }
     }
     for prev in prev_scenes {
         if !next.scenes.iter().any(|item| item.id == prev.id) {
@@ -407,6 +408,7 @@ fn on_air_layers(doc: &Document, unit: &crate::session::UnitDto) -> Vec<OverlayL
             audio_follow: slot.audio_follow,
             hidden: slot.hidden,
             label: String::new(),
+            layer_id: 0,
         })
         .collect()
 }
@@ -465,6 +467,7 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         | ReconcileOp::DestroySource { .. }
         | ReconcileOp::FailInput { .. } => apply_inputs(port, op, statuses),
         ReconcileOp::DefineScene(_)
+        | ReconcileOp::DefineSceneAnim(_)
         | ReconcileOp::DestroyScene { .. }
         | ReconcileOp::DefineMultiview { .. } => apply_scenes(port, next, op),
         _ => apply_live(port, op, statuses),
@@ -560,6 +563,7 @@ fn apply_scenes<P: crate::port::MixerPort + ?Sized>(
 ) -> crate::error::ControlResult<()> {
     match op {
         ReconcileOp::DefineScene(spec) => port.define_scene(spec.clone()),
+        ReconcileOp::DefineSceneAnim(spec) => port.define_scene_anim(spec.clone()),
         ReconcileOp::DestroyScene { id } => port.destroy_scene(*id),
         ReconcileOp::DefineMultiview {
             spec,
@@ -881,8 +885,86 @@ fn scene_apply(scene: &SceneDto, width: u32, height: u32) -> SceneApply {
                 audio_follow: layer.audio_follow,
                 hidden: layer.hidden,
                 label: String::new(),
+                layer_id: layer.layer_id,
             })
             .collect(),
+        camera: camera_apply(scene.camera),
+    }
+}
+
+fn scene_anim_apply(scene: &SceneDto) -> SceneAnimApply {
+    SceneAnimApply {
+        id: ids::scene_gpu_id(scene.id),
+        states: scene
+            .states
+            .iter()
+            .map(|state| StateApply {
+                id: state.id,
+                layers: state
+                    .layers
+                    .iter()
+                    .map(|key| key_layer(scene, key))
+                    .collect(),
+                camera: state.camera.map(camera_apply),
+                enter: motion_apply(&state.enter),
+            })
+            .collect(),
+        sequences: scene
+            .sequences
+            .iter()
+            .map(|sequence| SequenceApply {
+                id: sequence.id,
+                steps: sequence
+                    .steps
+                    .iter()
+                    .map(|step| StepApply {
+                        state_id: step.state_id,
+                        motion: step.motion.as_ref().map(motion_apply),
+                        hold_frames: step.hold_frames,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn camera_apply(camera: crate::session::SceneCamera) -> CameraApply {
+    CameraApply {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
+    }
+}
+
+fn motion_apply(motion: &crate::session::Motion) -> MotionApply {
+    MotionApply {
+        duration_frames: motion.duration_frames,
+        easing: motion.easing,
+        bezier: motion.bezier.map(|handles| handles.as_array()),
+    }
+}
+
+fn key_layer(scene: &SceneDto, key: &crate::session::LayerKey) -> OverlayLayer {
+    let source = scene
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == key.layer_id);
+    OverlayLayer {
+        source_id: source.map(|layer| layer.input_id).unwrap_or(0),
+        x: key.geom.x,
+        y: key.geom.y,
+        width: key.geom.width,
+        height: key.geom.height,
+        crop_x: key.geom.crop_x,
+        crop_y: key.geom.crop_y,
+        crop_width: key.geom.crop_width,
+        crop_height: key.geom.crop_height,
+        opacity: key.geom.opacity,
+        z: key.geom.z,
+        audio_follow: source.map(|layer| layer.audio_follow).unwrap_or(true),
+        hidden: source.map(|layer| layer.hidden).unwrap_or(false),
+        label: String::new(),
+        layer_id: key.layer_id,
     }
 }
 
@@ -966,6 +1048,7 @@ fn multiview_op(layout: &MultiviewDto, doc: &Document, width: u32, height: u32) 
                 audio_follow: false,
                 hidden: false,
                 label: tile_label(layout, index, doc),
+                layer_id: 0,
             }
         })
         .collect();
@@ -989,6 +1072,7 @@ fn multiview_op(layout: &MultiviewDto, doc: &Document, width: u32, height: u32) 
             width,
             height,
             layers,
+            camera: CameraApply::default(),
         },
         preview_unit: preview,
         program_unit: program,

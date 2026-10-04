@@ -16,6 +16,14 @@ Audio Follow on a layer ties that Input’s sound to the picture.
 
 Use it on a Mixing Unit bus, as an [Overlay](/eiviz/en/concepts/overlays/) source, on a [Multiview](/eiviz/en/concepts/multiviews/) tile, or as an Output source.
 
+## Camera
+
+A Scene has one camera: a center (X, Y) and a zoom from 1x to 8x. It moves the view over every layer at once, so you frame a busy layout without editing each layer.
+
+The camera only changes where each layer is drawn. Each source is still sampled from its own texture, so zooming in does not soften the picture. Detail is lost only when the zoom enlarges a source past its own pixels.
+
+Drag empty space inside the frame to pan, or its corner to zoom. A drag on a layer moves that layer. A State can store a camera, and a Sequence moves between them. The Animation window edits the selected state's layout and camera while you watch the preview. Its − and + buttons, and the mouse wheel, show layers that sit outside the frame. Zoom eases on a logarithmic scale, so the speed feels even as it magnifies.
+
 ## Tags and tiles
 
 A Scene can have more than one tag. Tags stay in the session catalog, and unused tags still appear as tabs.

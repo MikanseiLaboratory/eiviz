@@ -12,10 +12,9 @@ use crate::abi::{
 };
 use crate::{
     mixer_api_configure, mixer_audio_capture_start, mixer_audio_headphone_set,
-    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor, mixer_audio_set_headphone_listen,
-    mixer_audio_set_input,
-    mixer_audio_set_unit_link, mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_create_unit,
-    mixer_define_generator,
+    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor,
+    mixer_audio_set_headphone_listen, mixer_audio_set_input, mixer_audio_set_unit_link,
+    mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_create_unit, mixer_define_generator,
     mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
     mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
@@ -44,6 +43,51 @@ pub(crate) fn last_error_text() -> String {
         return String::new();
     }
     String::from_utf8_lossy(&buf[..n as usize]).into_owned()
+}
+
+fn overlay_desc(layer: &OverlayLayer) -> OverlayDesc {
+    OverlayDesc {
+        source_id: layer.source_id,
+        rect: Rect {
+            x: layer.x,
+            y: layer.y,
+            width: layer.width,
+            height: layer.height,
+        },
+        crop: Rect {
+            x: layer.crop_x,
+            y: layer.crop_y,
+            width: layer.crop_width,
+            height: layer.crop_height,
+        },
+        opacity: layer.opacity,
+        z: layer.z,
+        audio_follow: u32::from(layer.audio_follow),
+        hidden: u32::from(layer.hidden),
+        label: std::ptr::null(),
+        layer_id: layer.layer_id,
+    }
+}
+
+fn motion_desc(motion: &MotionApply) -> crate::abi::EivizMotion {
+    let bezier = motion.bezier.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+    crate::abi::EivizMotion {
+        duration_frames: motion.duration_frames,
+        easing: motion.easing,
+        x1: bezier[0],
+        y1: bezier[1],
+        x2: bezier[2],
+        y2: bezier[3],
+        has_bezier: u32::from(motion.bezier.is_some()),
+    }
+}
+
+fn camera_desc(camera: CameraApply) -> crate::abi::EivizSceneCamera {
+    crate::abi::EivizSceneCamera {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
+    }
 }
 
 pub struct ProcessMixer;
@@ -127,6 +171,7 @@ impl MixerPort for ProcessMixer {
                 } else {
                     labels[index].as_ptr()
                 },
+                layer_id: layer.layer_id,
             })
             .collect();
         let code = unsafe {
@@ -142,11 +187,104 @@ impl MixerPort for ProcessMixer {
                 },
             )
         };
-        map_abi(code)
+        map_abi(code)?;
+        map_abi(unsafe { crate::mixer_scene_camera_define(spec.id, camera_desc(spec.camera)) })
     }
 
     fn destroy_scene(&mut self, id: u64) -> ControlResult<()> {
         map_abi(mixer_destroy_scene(id))
+    }
+
+    fn define_scene_anim(&mut self, spec: SceneAnimApply) -> ControlResult<()> {
+        let layer_bufs: Vec<Vec<OverlayDesc>> = spec
+            .states
+            .iter()
+            .map(|state| state.layers.iter().map(overlay_desc).collect())
+            .collect();
+        let states: Vec<crate::abi::EivizSceneStateDesc> = spec
+            .states
+            .iter()
+            .enumerate()
+            .map(|(index, state)| crate::abi::EivizSceneStateDesc {
+                id: state.id,
+                layers: layer_bufs[index].as_ptr(),
+                layer_count: layer_bufs[index].len() as u32,
+                enter: motion_desc(&state.enter),
+                camera: state.camera.map(camera_desc).unwrap_or_default(),
+                has_camera: u32::from(state.camera.is_some()),
+            })
+            .collect();
+        map_abi(unsafe {
+            crate::mixer_scene_states_define(
+                spec.id,
+                if states.is_empty() {
+                    std::ptr::null()
+                } else {
+                    states.as_ptr()
+                },
+                states.len() as u32,
+            )
+        })?;
+        let step_bufs: Vec<Vec<crate::abi::EivizSequenceStepDesc>> = spec
+            .sequences
+            .iter()
+            .map(|sequence| {
+                sequence
+                    .steps
+                    .iter()
+                    .map(|step| crate::abi::EivizSequenceStepDesc {
+                        state_id: step.state_id,
+                        motion: step.motion.as_ref().map(motion_desc).unwrap_or(
+                            crate::abi::EivizMotion {
+                                duration_frames: 1,
+                                easing: 0,
+                                x1: 0.0,
+                                y1: 0.0,
+                                x2: 1.0,
+                                y2: 1.0,
+                                has_bezier: 0,
+                            },
+                        ),
+                        has_motion: u32::from(step.motion.is_some()),
+                        hold_frames: step.hold_frames,
+                    })
+                    .collect()
+            })
+            .collect();
+        let sequences: Vec<crate::abi::EivizSceneSequenceDesc> = spec
+            .sequences
+            .iter()
+            .enumerate()
+            .map(|(index, sequence)| crate::abi::EivizSceneSequenceDesc {
+                id: sequence.id,
+                steps: step_bufs[index].as_ptr(),
+                step_count: step_bufs[index].len() as u32,
+            })
+            .collect();
+        map_abi(unsafe {
+            crate::mixer_scene_sequences_define(
+                spec.id,
+                if sequences.is_empty() {
+                    std::ptr::null()
+                } else {
+                    sequences.as_ptr()
+                },
+                sequences.len() as u32,
+            )
+        })
+    }
+
+    fn scene_go_to(&mut self, scene_gpu_id: u64, state_id: u64) -> ControlResult<()> {
+        map_abi(unsafe { crate::mixer_scene_go_to(scene_gpu_id, state_id) })
+    }
+
+    fn scene_sequence(
+        &mut self,
+        scene_gpu_id: u64,
+        sequence_id: u64,
+        op: u32,
+    ) -> ControlResult<()> {
+        map_abi(unsafe { crate::mixer_scene_sequence(scene_gpu_id, sequence_id, op) })
     }
 
     fn define_generator(&mut self, spec: GeneratorApply) -> ControlResult<()> {
@@ -426,10 +564,16 @@ impl MixerPort for ProcessMixer {
         map_abi(crate::unit_auto_inner(
             spec.unit_id,
             spec.kind,
-            spec.duration_ms,
+            spec.duration_frames,
             u32::from(spec.swap),
             u32::from(spec.keep_preview),
             spec.easing,
+            [
+                spec.bezier_x1,
+                spec.bezier_y1,
+                spec.bezier_x2,
+                spec.bezier_y2,
+            ],
             spec.direction,
             spec.dip_r,
             spec.dip_g,
@@ -473,12 +617,20 @@ impl MixerPort for ProcessMixer {
             audio_follow: u32::from(spec.audio_follow),
             hidden: u32::from(spec.hidden),
             label: std::ptr::null(),
+            layer_id: 0,
         };
         map_abi(crate::overlay_auto_inner(
             spec.unit_id,
             u32::from(spec.to_on),
-            spec.duration_ms,
+            spec.duration_frames,
             desc,
+            spec.easing,
+            [
+                spec.bezier_x1,
+                spec.bezier_y1,
+                spec.bezier_x2,
+                spec.bezier_y2,
+            ],
         ))
     }
 
@@ -504,6 +656,7 @@ impl MixerPort for ProcessMixer {
                 audio_follow: u32::from(layer.audio_follow),
                 hidden: u32::from(layer.hidden),
                 label: std::ptr::null(),
+                layer_id: 0,
             })
             .collect();
         map_abi(unsafe {
@@ -788,10 +941,11 @@ pub(crate) fn copy_snapshot_bytes(out: &mut [u8]) -> i32 {
 pub(crate) fn c_auto(
     unit_id: u64,
     kind: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     swap: u32,
     keep_preview: u32,
     easing: u32,
+    bezier: [f32; 4],
     direction: u32,
     dip_r: f32,
     dip_g: f32,
@@ -810,10 +964,15 @@ pub(crate) fn c_auto(
             Command::Auto {
                 unit_id,
                 kind,
-                duration_ms,
+                duration_value: duration_frames,
+                duration_unit: 0,
                 swap: swap != 0,
                 keep_preview: keep_preview != 0,
                 easing,
+                bezier_x1: bezier[0],
+                bezier_y1: bezier[1],
+                bezier_x2: bezier[2],
+                bezier_y2: bezier[3],
                 direction,
                 dip_r,
                 dip_g,

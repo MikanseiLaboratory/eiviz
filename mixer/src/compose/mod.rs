@@ -111,6 +111,20 @@ pub fn fit_rect(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> [f32; 4] {
     }
 }
 
+/// Destination rect of a layer seen through the scene camera.
+/// The identity camera returns `rect` unchanged, so scenes without a camera draw as before.
+pub fn camera_rect(rect: [f32; 4], camera: crate::abi::EivizSceneCamera) -> [f32; 4] {
+    if camera.is_identity() {
+        return rect;
+    }
+    [
+        (rect[0] - camera.x) * camera.zoom + 0.5,
+        (rect[1] - camera.y) * camera.zoom + 0.5,
+        rect[2] * camera.zoom,
+        rect[3] * camera.zoom,
+    ]
+}
+
 fn crop_blit(rect: [f32; 4], crop: Rect) -> ([f32; 4], [f32; 4]) {
     let uv = crop_uv(crop);
     (
@@ -906,15 +920,21 @@ impl Composer {
         device: &GpuDevice,
         specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
         labels: &HashMap<u64, Arc<[String]>>,
+        cameras: &HashMap<u64, crate::abi::EivizSceneCamera>,
     ) {
         let keep: std::collections::HashSet<u64> = specs.iter().map(|spec| spec.0).collect();
         self.scenes.retain(|id, _| keep.contains(id));
         for (id, width, height, layers, style) in specs {
             let scene_labels = labels.get(id).cloned().unwrap_or_else(|| Arc::from([]));
+            let camera = cameras
+                .get(id)
+                .copied()
+                .unwrap_or(crate::abi::EivizSceneCamera::IDENTITY);
             if let Some(existing) = self.scenes.get_mut(id) {
                 existing.label_size = style.size;
                 existing.label_percent = style.percent;
                 existing.label_top = style.top;
+                existing.camera = camera;
                 if existing.width == *width && existing.height == *height {
                     if !Arc::ptr_eq(&existing.layers, layers) {
                         existing.layers = Arc::clone(layers);
@@ -931,6 +951,7 @@ impl Composer {
                 *width,
                 *height,
                 Arc::clone(layers),
+                camera,
                 scene_labels,
                 *style,
             );
@@ -944,6 +965,7 @@ impl Composer {
         width: u32,
         height: u32,
         layers: Arc<[OverlayDesc]>,
+        camera: crate::abi::EivizSceneCamera,
         labels: Arc<[String]>,
         style: crate::MvLabelStyle,
     ) {
@@ -965,6 +987,7 @@ impl Composer {
                 width,
                 height,
                 layers,
+                camera,
                 labels,
                 label_size: style.size,
                 label_percent: style.percent,
@@ -1031,12 +1054,13 @@ impl Composer {
         scene_id: u64,
         tallies: &[(u64, u64)],
     ) -> Result<u64, String> {
-        let (width, height, mut layers, labels, view, label_size, label_percent, label_top) = {
+        let (width, height, mut layers, camera, labels, view, label_size, label_percent, label_top) = {
             let scene = self.scenes.get(&scene_id).ok_or("scene missing")?;
             (
                 scene.width,
                 scene.height,
                 scene.layers.iter().copied().collect::<Vec<_>>(),
+                scene.camera,
                 scene.labels.clone(),
                 scene.view.clone(),
                 scene.label_size,
@@ -1055,12 +1079,15 @@ impl Composer {
                         continue;
                     }
                     let (dest, uv) = crop_blit(
-                        [
-                            layer.rect.x,
-                            layer.rect.y,
-                            layer.rect.width,
-                            layer.rect.height,
-                        ],
+                        camera_rect(
+                            [
+                                layer.rect.x,
+                                layer.rect.y,
+                                layer.rect.width,
+                                layer.rect.height,
+                            ],
+                            camera,
+                        ),
                         layer.crop,
                     );
                     self.draw_source_pass(
@@ -2800,7 +2827,7 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL_UV, crop_blit, crop_uv, fit_rect, validate_wgsl_module};
+    use super::{FULL_UV, camera_rect, crop_blit, crop_uv, fit_rect, validate_wgsl_module};
     use crate::abi::Rect;
 
     #[test]
@@ -2911,6 +2938,24 @@ mod tests {
         assert_eq!(dest, [0.2, 0.0, 0.8, 1.0]);
         assert_eq!(uv[0], 0.2);
         assert_eq!(uv[2], 0.8);
+    }
+
+    #[test]
+    fn camera_rect_is_identity_until_the_camera_moves() {
+        let full = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(camera_rect(full, crate::abi::EivizSceneCamera::IDENTITY), full);
+        let zoomed = camera_rect(
+            [0.25, 0.25, 0.5, 0.5],
+            crate::abi::EivizSceneCamera {
+                x: 0.5,
+                y: 0.5,
+                zoom: 2.0,
+            },
+        );
+        assert!((zoomed[0] - 0.0).abs() < 1.0e-5);
+        assert!((zoomed[1] - 0.0).abs() < 1.0e-5);
+        assert!((zoomed[2] - 1.0).abs() < 1.0e-5);
+        assert!((zoomed[3] - 1.0).abs() < 1.0e-5);
     }
 
     #[test]

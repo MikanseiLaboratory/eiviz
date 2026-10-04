@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod abi;
+mod anim;
 mod audio;
 mod audio_in;
 mod clock;
@@ -58,12 +59,13 @@ pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 
 pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
-    DURATION_MS, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT, EASING_SMOOTHSTEP,
-    ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats,
-    MULTIVIEW_BASE, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus, MixerStats,
-    MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI, OUT_OMT,
-    OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats, OverlayDesc, Rect,
+    DURATION_MS, EASING_BEZIER, EASING_HOLD, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
+    EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT,
+    ERR_IO, ERR_NOT_CREATED, EivizCurve, EivizSceneCamera, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW,
+    INCOMING_PROGRAM,
+    InputRuntimeStats, MULTIVIEW_BASE, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus,
+    MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
+    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats, OverlayDesc, Rect,
     SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
     SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
     SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
@@ -184,21 +186,20 @@ use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, UploadStore};
 pub(crate) struct AutoTransition {
     from: f32,
     to: f32,
-    start: Instant,
-    duration: Duration,
+    clock: anim::AnimClock,
     swap: bool,
     keep_preview: bool,
     incoming_locked: bool,
     frozen_preview: u64,
-    easing: u32,
+    curve: anim::Curve,
 }
 
 pub(crate) struct OverlayAuto {
     desc: OverlayDesc,
     from: f32,
     to: f32,
-    start: Instant,
-    duration: Duration,
+    clock: anim::AnimClock,
+    curve: anim::Curve,
 }
 
 pub(crate) struct LiveUnit {
@@ -327,7 +328,14 @@ impl Default for BusColors {
 pub(crate) struct SceneSpec {
     width: u32,
     height: u32,
+    /// Saved layout. Playback never writes this.
+    base_layers: Arc<[crate::abi::OverlayDesc]>,
+    /// Layers the composer draws. Stays equal to `base_layers` until a move publishes a pose.
     layers: Arc<[crate::abi::OverlayDesc]>,
+    /// Saved camera. Playback never writes this.
+    base_camera: crate::abi::EivizSceneCamera,
+    /// Camera the composer draws.
+    camera: crate::abi::EivizSceneCamera,
     labels: Arc<[String]>,
     mv_label: MvLabelStyle,
 }
@@ -337,6 +345,7 @@ pub(crate) struct Shared {
     master_fps_den: u32,
     units: HashMap<u64, LiveUnit>,
     scenes: HashMap<u64, SceneSpec>,
+    scene_anims: HashMap<u64, crate::anim::SceneRuntime>,
     bus_colors: BusColors,
     mv_label: MvLabelStyle,
     uploads: Arc<Mutex<UploadStore>>,
@@ -364,6 +373,8 @@ pub(crate) struct Shared {
     rebar_optimization: bool,
     ndi_gpu_upload: bool,
     audio: audio::AudioEngine,
+    /// Last master compose index. Animations arm against this frame.
+    composed_frame: u64,
 }
 
 /// Host-visible status that must not share the control lock with ingest or render.
@@ -663,7 +674,11 @@ pub(crate) fn live_unit_from(unit: &LiveUnit) -> crate::vmix_xml::UnitLive {
     crate::vmix_xml::UnitLive {
         program_source: unit.state.program_source,
         preview_source: unit.state.preview_source,
-        overlay_sources: unit.overlays.iter().map(|overlay| overlay.source_id).collect(),
+        overlay_sources: unit
+            .overlays
+            .iter()
+            .map(|overlay| overlay.source_id)
+            .collect(),
     }
 }
 
@@ -987,6 +1002,7 @@ pub(crate) fn start_mixer(
         master_fps_den: fps_den,
         units: HashMap::new(),
         scenes: HashMap::new(),
+        scene_anims: HashMap::new(),
         bus_colors: BusColors::default(),
         mv_label: MvLabelStyle::default(),
         uploads: Arc::clone(&uploads),
@@ -1014,6 +1030,7 @@ pub(crate) fn start_mixer(
         mix_inputs: HashMap::new(),
         audio_snap: Arc::new(Mutex::new(audio::AudioMixSnapshot::default())),
         clock,
+        composed_frame: 0,
     }));
     let thumb_pixels = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = mpsc::channel();
@@ -1123,10 +1140,60 @@ fn audio_peak_id(id: u64) -> u64 {
     }
 }
 
+fn scene_anim_live(shared: &Shared) -> HashMap<u64, eiviz_control::live::SceneAnimLive> {
+    use eiviz_control::live::{ActiveMoveLive, ActiveSequenceLive, ReachedLayer, SceneAnimLive};
+    let mut scenes = HashMap::new();
+    for (id, runtime) in &shared.scene_anims {
+        let mut reached = [abi::EivizReachedLayer::default(); 64];
+        let mut moves = [abi::EivizActiveMove::default(); 16];
+        let mut sequences = [abi::EivizActiveSequence::default(); 16];
+        let (reached_n, move_n, seq_n) = runtime.fill_status(
+            shared.composed_frame,
+            &mut reached,
+            &mut moves,
+            &mut sequences,
+        );
+        scenes.insert(
+            *id,
+            SceneAnimLive {
+                reached: reached[..reached_n as usize]
+                    .iter()
+                    .map(|item| ReachedLayer {
+                        layer_id: item.layer_id,
+                        state_id: item.state_id,
+                    })
+                    .collect(),
+                moves: moves[..move_n as usize]
+                    .iter()
+                    .map(|item| ActiveMoveLive {
+                        move_id: item.move_id,
+                        state_id: item.state_id,
+                        sequence_id: item.sequence_id,
+                        progress: item.progress,
+                        layer_count: item.layer_count,
+                    })
+                    .collect(),
+                sequences: sequences[..seq_n as usize]
+                    .iter()
+                    .map(|item| ActiveSequenceLive {
+                        sequence_id: item.sequence_id,
+                        step_index: item.step_index,
+                        reverse: item.reverse != 0,
+                        holding: item.holding != 0,
+                    })
+                    .collect(),
+                camera_state: runtime.camera_reached(),
+                takeovers: runtime.takeover_log().map(str::to_string).collect(),
+            },
+        );
+    }
+    scenes
+}
+
 pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
     use eiviz_control::live::{LivePeak, LiveState, UnitLiveState};
     with_mixer(|mixer| {
-        let (units, master, buses, mix_peaks) = {
+        let (units, master, buses, mix_peaks, scenes) = {
             let shared = mixer.shared.lock_or_recover();
             let mut units = HashMap::new();
             for (id, unit) in &shared.units {
@@ -1151,6 +1218,7 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
                 shared.audio.monitor_peak(),
                 shared.audio.bus_peaks(),
                 shared.audio.mix_input_peaks(),
+                scene_anim_live(&shared),
             )
         };
         let audio_in = mixer.uploads.lock_or_recover().audio_store();
@@ -1179,7 +1247,11 @@ pub(crate) fn all_live_state() -> eiviz_control::live::LiveState {
         for (id, left, right) in mix_peaks {
             peaks.push(LivePeak { id, left, right });
         }
-        LiveState { units, peaks }
+        LiveState {
+            units,
+            peaks,
+            scenes,
+        }
     })
     .unwrap_or_default()
 }
@@ -1326,7 +1398,7 @@ unsafe fn mixer_define_scene_ffi(
     if count > 0 && layers.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    let (copied, labels) = if count == 0 {
+    let (copied, labels): (Arc<[OverlayDesc]>, Arc<[String]>) = if count == 0 {
         (Arc::from([]), Arc::from([]))
     } else {
         // SAFETY: caller keeps count OverlayDesc values readable for this call.
@@ -1350,12 +1422,41 @@ unsafe fn mixer_define_scene_ffi(
             .get(&scene_id)
             .map(|spec| spec.mv_label)
             .unwrap_or(shared.mv_label);
+        let (previous, kept_camera) = match shared.scenes.get(&scene_id) {
+            Some(spec) => (
+                Some(Arc::clone(&spec.base_layers)),
+                (spec.base_camera, spec.camera),
+            ),
+            None => (
+                None,
+                (
+                    abi::EivizSceneCamera::IDENTITY,
+                    abi::EivizSceneCamera::IDENTITY,
+                ),
+            ),
+        };
+        if let Some(runtime) = shared.scene_anims.get_mut(&scene_id) {
+            if let Some(previous) = previous.as_deref() {
+                runtime.note_base_edit(previous, copied.as_ref());
+            }
+        }
+        let frame = shared.composed_frame;
+        let (base_camera, camera) = kept_camera;
+        let (layers, camera) = shared
+            .scene_anims
+            .get(&scene_id)
+            .and_then(|runtime| runtime.republish(copied.as_ref(), base_camera, frame))
+            .map(|pose| (Arc::from(pose.layers), pose.camera))
+            .unwrap_or_else(|| (Arc::clone(&copied), camera));
         shared.scenes.insert(
             scene_id,
             SceneSpec {
                 width,
                 height,
-                layers: copied,
+                base_layers: Arc::clone(&copied),
+                layers,
+                base_camera,
+                camera,
                 labels,
                 mv_label,
             },
@@ -1378,12 +1479,314 @@ fn mixer_destroy_scene_ffi(scene_id: u64) -> i32 {
         {
             let mut shared = mixer.shared.lock_or_recover();
             shared.scenes.remove(&scene_id);
+            shared.scene_anims.remove(&scene_id);
             shared.multiview_binds.remove(&scene_id);
             shared.compose_dirty = true;
         }
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+/// Shows a pose immediately. Playback stops and the saved layout is left alone,
+/// so the next move starts from the picture on screen.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_show_pose(
+    scene_id: u64,
+    count: u32,
+    layers: *const OverlayDesc,
+    camera: abi::EivizSceneCamera,
+    has_camera: u32,
+    state_id: u64,
+) -> i32 {
+    ffi_guard("mixer_scene_show_pose", ERR_DEVICE, || {
+        if count > 64 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        if count > 0 && layers.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let shown_camera = if has_camera == 0 {
+            None
+        } else if let Err(message) = abi::validate_camera(camera) {
+            report_session_error(message);
+            return ERR_INVALID_ARGUMENT;
+        } else {
+            Some(camera)
+        };
+        let copied: Arc<[OverlayDesc]> = if count == 0 {
+            Arc::from([])
+        } else {
+            // SAFETY: caller keeps count OverlayDesc values readable for this call.
+            let slice = unsafe { std::slice::from_raw_parts(layers, count as usize) };
+            if let Some(reason) = invalid_scene_layer(scene_id, slice) {
+                report_session_error(format!("scene {scene_id:#x}: {reason}"));
+                return ERR_INVALID_ARGUMENT;
+            }
+            let mut descs = slice.to_vec();
+            for desc in &mut descs {
+                desc.label = std::ptr::null();
+            }
+            Arc::from(descs)
+        };
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            {
+                let Some(spec) = shared.scenes.get_mut(&scene_id) else {
+                    return scene_anim_error(mixer, "scene does not exist");
+                };
+                spec.layers = Arc::clone(&copied);
+                if let Some(camera) = shown_camera {
+                    spec.camera = camera;
+                }
+            }
+            shared
+                .scene_anims
+                .entry(scene_id)
+                .or_default()
+                .hold_pose(copied.as_ref(), shown_camera, state_id);
+            shared.compose_dirty = true;
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+/// Sets the saved camera and the camera on screen. A camera edit ends camera playback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_camera_define(
+    scene_id: u64,
+    camera: abi::EivizSceneCamera,
+) -> i32 {
+    ffi_guard("mixer_scene_camera_define", ERR_DEVICE, || {
+        if let Err(message) = abi::validate_camera(camera) {
+            report_session_error(message);
+            return ERR_INVALID_ARGUMENT;
+        }
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            let previous = {
+                let Some(spec) = shared.scenes.get_mut(&scene_id) else {
+                    return scene_anim_error(mixer, "scene does not exist");
+                };
+                let previous = spec.base_camera;
+                spec.base_camera = camera;
+                spec.camera = camera;
+                previous
+            };
+            if let Some(runtime) = shared.scene_anims.get_mut(&scene_id) {
+                runtime.note_camera_edit(previous, camera);
+            }
+            shared.compose_dirty = true;
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+pub(crate) fn tick_scene_anims(shared: &mut Shared, frame: u64) {
+    let ids: Vec<u64> = shared.scene_anims.keys().copied().collect();
+    for id in ids {
+        let Some((base, base_camera)) = shared
+            .scenes
+            .get(&id)
+            .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
+        else {
+            continue;
+        };
+        let drawn = {
+            let Some(runtime) = shared.scene_anims.get_mut(&id) else {
+                continue;
+            };
+            runtime.tick(base.as_ref(), base_camera, frame)
+        };
+        if let Some(drawn) = drawn {
+            if let Some(spec) = shared.scenes.get_mut(&id) {
+                spec.layers = Arc::from(drawn.layers);
+                spec.camera = drawn.camera;
+            }
+            shared.compose_dirty = true;
+        }
+    }
+}
+
+/// Records an animation error without locking the mixer again.
+/// Callers are already inside `with_mixer`. `report_session_error` takes that
+/// same lock, and `std::sync::Mutex` waits forever on the thread that holds it.
+fn scene_anim_error(mixer: &Mixer, message: &str) -> i32 {
+    set_error(&mixer.telemetry, message);
+    ERR_INVALID_ARGUMENT
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_states_define(
+    scene_id: u64,
+    states: *const abi::EivizSceneStateDesc,
+    count: u32,
+) -> i32 {
+    ffi_guard("mixer_scene_states_define", ERR_DEVICE, || {
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            match shared
+                .scene_anims
+                .entry(scene_id)
+                .or_default()
+                .define_states_raw(states, count)
+            {
+                Ok(()) => OK,
+                Err(message) => scene_anim_error(mixer, message),
+            }
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_sequences_define(
+    scene_id: u64,
+    sequences: *const abi::EivizSceneSequenceDesc,
+    count: u32,
+) -> i32 {
+    ffi_guard("mixer_scene_sequences_define", ERR_DEVICE, || {
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            match shared
+                .scene_anims
+                .entry(scene_id)
+                .or_default()
+                .define_sequences_raw(sequences, count)
+            {
+                Ok(()) => OK,
+                Err(message) => scene_anim_error(mixer, message),
+            }
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_go_to(scene_id: u64, state_id: u64) -> i32 {
+    ffi_guard("mixer_scene_go_to", ERR_DEVICE, || {
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            let Some((base, base_camera)) = shared
+                .scenes
+                .get(&scene_id)
+                .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
+            else {
+                return scene_anim_error(mixer, "scene does not exist");
+            };
+            let frame = shared.composed_frame;
+            match shared.scene_anims.entry(scene_id).or_default().go_to(
+                state_id,
+                base.as_ref(),
+                base_camera,
+                frame,
+            ) {
+                Ok(()) => OK,
+                Err(message) => scene_anim_error(mixer, message),
+            }
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_sequence(scene_id: u64, sequence_id: u64, op: u32) -> i32 {
+    ffi_guard("mixer_scene_sequence", ERR_DEVICE, || {
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            let Some((base, base_camera)) = shared
+                .scenes
+                .get(&scene_id)
+                .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
+            else {
+                return scene_anim_error(mixer, "scene does not exist");
+            };
+            let frame = shared.composed_frame;
+            match shared.scene_anims.entry(scene_id).or_default().sequence(
+                sequence_id,
+                op,
+                base.as_ref(),
+                base_camera,
+                frame,
+            ) {
+                Ok(()) => OK,
+                Err(message) => scene_anim_error(mixer, message),
+            }
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_anim_state(
+    scene_id: u64,
+    reached: *mut abi::EivizReachedLayer,
+    reached_cap: u32,
+    reached_count: *mut u32,
+    moves: *mut abi::EivizActiveMove,
+    moves_cap: u32,
+    moves_count: *mut u32,
+    sequences: *mut abi::EivizActiveSequence,
+    sequences_cap: u32,
+    sequences_count: *mut u32,
+    camera_state: *mut u64,
+) -> i32 {
+    ffi_guard("mixer_scene_anim_state", ERR_DEVICE, || {
+        if reached_count.is_null()
+            || moves_count.is_null()
+            || sequences_count.is_null()
+            || camera_state.is_null()
+        {
+            return ERR_INVALID_ARGUMENT;
+        }
+        if (reached_cap > 0 && reached.is_null())
+            || (moves_cap > 0 && moves.is_null())
+            || (sequences_cap > 0 && sequences.is_null())
+        {
+            return ERR_INVALID_ARGUMENT;
+        }
+        with_mixer(|mixer| {
+            let shared = mixer.shared.lock_or_recover();
+            let frame = shared.composed_frame;
+            let Some(runtime) = shared.scene_anims.get(&scene_id) else {
+                unsafe {
+                    *reached_count = 0;
+                    *moves_count = 0;
+                    *sequences_count = 0;
+                    *camera_state = 0;
+                }
+                return OK;
+            };
+            let reached_buf = if reached_cap == 0 {
+                &mut [][..]
+            } else {
+                unsafe { std::slice::from_raw_parts_mut(reached, reached_cap as usize) }
+            };
+            let moves_buf = if moves_cap == 0 {
+                &mut [][..]
+            } else {
+                unsafe { std::slice::from_raw_parts_mut(moves, moves_cap as usize) }
+            };
+            let seq_buf = if sequences_cap == 0 {
+                &mut [][..]
+            } else {
+                unsafe { std::slice::from_raw_parts_mut(sequences, sequences_cap as usize) }
+            };
+            let (reached_n, move_n, seq_n) =
+                runtime.fill_status(frame, reached_buf, moves_buf, seq_buf);
+            let camera_reached = runtime.camera_reached();
+            unsafe {
+                *reached_count = reached_n;
+                *moves_count = move_n;
+                *sequences_count = seq_n;
+                *camera_state = camera_reached;
+            }
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1444,12 +1847,7 @@ pub extern "C" fn mixer_define_mix_input(
     })
 }
 
-fn mixer_define_mix_input_ffi(
-    id: u64,
-    target_id: u64,
-    source_kind: u32,
-    delay: u32,
-) -> i32 {
+fn mixer_define_mix_input_ffi(id: u64, target_id: u64, source_kind: u32, delay: u32) -> i32 {
     let Some(spec) = MixInputSpec::new(target_id, source_kind, delay) else {
         return ERR_INVALID_ARGUMENT;
     };
@@ -1829,7 +2227,7 @@ unsafe fn mixer_unit_set_overlays_ffi(
 }
 
 pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
-        if let Err(code) = validate_unit_state(state) {
+    if let Err(code) = validate_unit_state(state) {
         return code;
     }
     let state = *state;
@@ -1859,21 +2257,17 @@ pub(crate) fn unit_update_state_inner(unit_id: u64, update: impl FnOnce(&mut Uni
     .unwrap_or_else(|code| code)
 }
 
-pub(crate) fn ease_mix(t: f32, kind: u32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    match kind {
-        1 => t * t * t,
-        2 => 1.0 - (1.0 - t).powi(3),
-        3 => {
-            if t < 0.5 {
-                4.0 * t * t * t
-            } else {
-                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-            }
-        }
-        4 => t * t * (3.0 - 2.0 * t),
-        _ => t,
-    }
+pub(crate) fn curve_from_parts(
+    kind: u32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+) -> Result<anim::Curve, i32> {
+    anim::Curve::try_new(kind, x1, y1, x2, y2).map_err(|reason| {
+        report_session_error(reason);
+        ERR_INVALID_ARGUMENT
+    })
 }
 
 pub(crate) fn merge_overlay(overlays: &mut Vec<OverlayDesc>, desc: OverlayDesc) {
@@ -1893,10 +2287,9 @@ pub(crate) fn remove_overlay(overlays: &mut Vec<OverlayDesc>, source_id: u64) {
     }
 }
 
-pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
+pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit, frame_i: u64) {
     if let Some(auto) = unit.auto.take() {
-        let t = auto.start.elapsed().as_secs_f32() / auto.duration.as_secs_f32();
-        if t >= 1.0 {
+        if auto.clock.finished(frame_i) {
             unit.state.mix = auto.to;
             if auto.to >= 1.0 {
                 take_cut(unit, auto.swap);
@@ -1904,7 +2297,7 @@ pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
                 unit.frozen_preview = None;
             }
         } else {
-            let eased = ease_mix(t, auto.easing);
+            let eased = auto.curve.eval(auto.clock.progress(frame_i));
             unit.state.mix = auto.from + (auto.to - auto.from) * eased;
             unit.auto = Some(auto);
         }
@@ -1915,8 +2308,7 @@ pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
     let mut overlays: Vec<OverlayDesc> = unit.overlays.iter().cloned().collect();
     let mut still = Vec::new();
     for mut item in unit.overlay_autos.drain(..) {
-        let t = item.start.elapsed().as_secs_f32() / item.duration.as_secs_f32();
-        if t >= 1.0 {
+        if item.clock.finished(frame_i) {
             item.desc.opacity = item.to;
             if item.to > 0.001 {
                 merge_overlay(&mut overlays, item.desc);
@@ -1924,7 +2316,8 @@ pub(crate) fn tick_unit_transitions(unit: &mut LiveUnit) {
                 remove_overlay(&mut overlays, item.desc.source_id);
             }
         } else {
-            item.desc.opacity = item.from + (item.to - item.from) * t;
+            let eased = item.curve.eval(item.clock.progress(frame_i));
+            item.desc.opacity = item.from + (item.to - item.from) * eased;
             merge_overlay(&mut overlays, item.desc);
             still.push(item);
         }
@@ -2017,10 +2410,11 @@ fn mixer_unit_cut_ffi(unit_id: u64, swap: u32, incoming_source: u64) -> i32 {
 pub(crate) fn unit_auto_inner(
     unit_id: u64,
     kind: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     swap: u32,
     keep_preview: u32,
     easing: u32,
+    bezier: [f32; 4],
     direction: u32,
     dip_r: f32,
     dip_g: f32,
@@ -2030,8 +2424,13 @@ pub(crate) fn unit_auto_inner(
     softness: f32,
     param: f32,
 ) -> i32 {
+    let curve = match curve_from_parts(easing, bezier[0], bezier[1], bezier[2], bezier[3]) {
+        Ok(curve) => curve,
+        Err(code) => return code,
+    };
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
+        let start_frame = shared.composed_frame;
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2065,13 +2464,12 @@ pub(crate) fn unit_auto_inner(
         unit.auto = Some(AutoTransition {
             from: unit.state.mix,
             to: if unit.state.mix < 0.5 { 1.0 } else { 0.0 },
-            start: Instant::now(),
-            duration: Duration::from_millis(u64::from(duration_ms.max(1))),
+            clock: anim::AnimClock::new(start_frame, duration_frames),
             swap: swap != 0,
             keep_preview: keep,
             incoming_locked,
             frozen_preview: incoming,
-            easing,
+            curve,
         });
         shared.compose_dirty = true;
         OK
@@ -2080,13 +2478,13 @@ pub(crate) fn unit_auto_inner(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_unit_auto(
+pub unsafe extern "C" fn mixer_unit_auto(
     unit_id: u64,
     kind: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     swap: u32,
     keep_preview: u32,
-    easing: u32,
+    curve: *const crate::abi::EivizCurve,
     direction: u32,
     dip_r: f32,
     dip_g: f32,
@@ -2096,14 +2494,14 @@ pub extern "C" fn mixer_unit_auto(
     softness: f32,
     param: f32,
 ) -> i32 {
-    ffi_guard("mixer_unit_auto", ERR_DEVICE, || {
+    ffi_guard("mixer_unit_auto", ERR_DEVICE, || unsafe {
         mixer_unit_auto_ffi(
             unit_id,
             kind,
-            duration_ms,
+            duration_frames,
             swap,
             keep_preview,
-            easing,
+            curve,
             direction,
             dip_r,
             dip_g,
@@ -2116,13 +2514,13 @@ pub extern "C" fn mixer_unit_auto(
     })
 }
 
-fn mixer_unit_auto_ffi(
+unsafe fn mixer_unit_auto_ffi(
     unit_id: u64,
     kind: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     swap: u32,
     keep_preview: u32,
-    easing: u32,
+    curve: *const crate::abi::EivizCurve,
     direction: u32,
     dip_r: f32,
     dip_g: f32,
@@ -2132,13 +2530,19 @@ fn mixer_unit_auto_ffi(
     softness: f32,
     param: f32,
 ) -> i32 {
+    if curve.is_null() {
+        report_session_error("AUTO requires a curve");
+        return ERR_INVALID_ARGUMENT;
+    }
+    let curve = unsafe { *curve };
     crate::runtime::c_auto(
         unit_id,
         kind,
-        duration_ms,
+        duration_frames,
         swap,
         keep_preview,
-        easing,
+        curve.kind,
+        [curve.x1, curve.y1, curve.x2, curve.y2],
         direction,
         dip_r,
         dip_g,
@@ -2154,25 +2558,36 @@ fn mixer_unit_auto_ffi(
 pub unsafe extern "C" fn mixer_unit_overlay_auto(
     unit_id: u64,
     target_enabled: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     desc: *const OverlayDesc,
+    curve: *const crate::abi::EivizCurve,
 ) -> i32 {
     ffi_guard("mixer_unit_overlay_auto", ERR_DEVICE, || unsafe {
-        mixer_unit_overlay_auto_ffi(unit_id, target_enabled, duration_ms, desc)
+        mixer_unit_overlay_auto_ffi(unit_id, target_enabled, duration_frames, desc, curve)
     })
 }
 
 unsafe fn mixer_unit_overlay_auto_ffi(
     unit_id: u64,
     target_enabled: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     desc: *const OverlayDesc,
+    curve: *const crate::abi::EivizCurve,
 ) -> i32 {
-    if desc.is_null() {
+    if desc.is_null() || curve.is_null() {
+        report_session_error("overlay AUTO requires a descriptor and a curve");
         return ERR_INVALID_ARGUMENT;
     }
     let desc = unsafe { *desc };
-    let code = overlay_auto_inner(unit_id, target_enabled, duration_ms, desc);
+    let curve = unsafe { *curve };
+    let code = overlay_auto_inner(
+        unit_id,
+        target_enabled,
+        duration_frames,
+        desc,
+        curve.kind,
+        [curve.x1, curve.y1, curve.x2, curve.y2],
+    );
     if code == OK {
         crate::runtime::note_live("OverlayAuto");
     }
@@ -2182,15 +2597,22 @@ unsafe fn mixer_unit_overlay_auto_ffi(
 pub(crate) fn overlay_auto_inner(
     unit_id: u64,
     target_enabled: u32,
-    duration_ms: u32,
+    duration_frames: u32,
     desc: OverlayDesc,
+    easing: u32,
+    bezier: [f32; 4],
 ) -> i32 {
     if let Some(reason) = invalid_overlays(std::slice::from_ref(&desc)) {
         report_session_error(format!("overlay auto: {reason}"));
         return ERR_INVALID_ARGUMENT;
     }
+    let curve = match curve_from_parts(easing, bezier[0], bezier[1], bezier[2], bezier[3]) {
+        Ok(curve) => curve,
+        Err(code) => return code,
+    };
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
+        let start_frame = shared.composed_frame;
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -2210,8 +2632,8 @@ pub(crate) fn overlay_auto_inner(
             desc,
             from,
             to,
-            start: Instant::now(),
-            duration: Duration::from_millis(u64::from(duration_ms.max(1))),
+            clock: anim::AnimClock::new(start_frame, duration_frames),
+            curve,
         });
         OK
     })
@@ -2323,10 +2745,11 @@ unsafe fn mixer_unit_get_state_ffi(unit_id: u64, out: *mut UnitState) -> i32 {
     }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
+        let frame_i = shared.composed_frame;
         let Some(unit) = shared.units.get_mut(&unit_id) else {
             return ERR_INVALID_ARGUMENT;
         };
-        tick_unit_transitions(unit);
+        tick_unit_transitions(unit, frame_i);
         let mut state = unit.state;
         state.incoming_source = snapshot_mix_preview(unit);
         unsafe { *out = state };
@@ -5509,6 +5932,7 @@ mod tests {
             audio_follow: 0,
             hidden: 0,
             label: std::ptr::null(),
+            layer_id: 0,
         };
         assert!(invalid_scene_layer(7, &[layer(7, 0.0)]).is_some());
         assert!(invalid_scene_layer(7, &[layer(8, f32::NAN)]).is_some());
@@ -5537,6 +5961,7 @@ mod tests {
             audio_follow: 0,
             hidden: 0,
             label: std::ptr::null(),
+            layer_id: 0,
         };
         for id in [1, 2, 3] {
             merge_overlay(&mut overlays, desc(id));
@@ -5574,6 +5999,7 @@ mod tests {
                     audio_follow: 0,
                     hidden: 0,
                     label: std::ptr::null(),
+                    layer_id: 0,
                 },
             );
         }
@@ -5595,6 +6021,7 @@ mod tests {
                 0,
                 0,
                 0,
+                [0.0, 0.0, 1.0, 1.0],
                 0,
                 0.0,
                 0.0,
@@ -5750,20 +6177,32 @@ mod tests {
         let scene_a = SceneSpec {
             width: 320,
             height: 180,
+            base_layers: std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: 20,
+                ..crate::abi::OverlayDesc::default()
+            }]),
             layers: std::sync::Arc::from([crate::abi::OverlayDesc {
                 source_id: 20,
                 ..crate::abi::OverlayDesc::default()
             }]),
+            base_camera: crate::abi::EivizSceneCamera::IDENTITY,
+            camera: crate::abi::EivizSceneCamera::IDENTITY,
             labels: std::sync::Arc::from([]),
             mv_label: MvLabelStyle::default(),
         };
         let scene_b = SceneSpec {
             width: 320,
             height: 180,
+            base_layers: std::sync::Arc::from([crate::abi::OverlayDesc {
+                source_id: 21,
+                ..crate::abi::OverlayDesc::default()
+            }]),
             layers: std::sync::Arc::from([crate::abi::OverlayDesc {
                 source_id: 21,
                 ..crate::abi::OverlayDesc::default()
             }]),
+            base_camera: crate::abi::EivizSceneCamera::IDENTITY,
+            camera: crate::abi::EivizSceneCamera::IDENTITY,
             labels: std::sync::Arc::from([]),
             mv_label: MvLabelStyle::default(),
         };
@@ -5787,13 +6226,7 @@ mod tests {
             preview_source: SRC_BARS,
             ..UnitState::default()
         };
-        assert!(!unit_uses_mix_cycle(
-            2,
-            &nest_b,
-            &[],
-            &mix_inputs,
-            &scenes
-        ));
+        assert!(!unit_uses_mix_cycle(2, &nest_b, &[], &mix_inputs, &scenes));
 
         let mutual_a = UnitState {
             program_source: SCENE_BASE | 3,

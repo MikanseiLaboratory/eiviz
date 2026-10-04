@@ -29,7 +29,13 @@ internal static partial class MixerRemote
     internal static partial int Preview(int handle, ulong unitId, ulong sceneId);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_auto")]
-    internal static partial int Auto(int handle, ulong unitId, uint kind, uint durationMs, uint swap, uint keepPreview, uint easing, uint direction, float dipR, float dipG, float dipB, float dipA, float softness, float param);
+    internal static partial int Auto(int handle, ulong unitId, uint kind, uint durationMs, uint swap, uint keepPreview, uint easing, uint direction, float dipR, float dipG, float dipB, float dipA, float softness, float param, float bezierX1, float bezierY1, float bezierX2, float bezierY2);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_scene_go_to")]
+    internal static partial int SceneGoTo(int handle, ulong sceneId, ulong stateId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_scene_sequence")]
+    internal static partial int SceneSequence(int handle, ulong sceneId, ulong sequenceId, uint op);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_set_mix")]
     internal static partial int SetMix(int handle, ulong unitId, float value);

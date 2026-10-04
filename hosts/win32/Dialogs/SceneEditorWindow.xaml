@@ -41,10 +41,14 @@
         </DockPanel>
         <DockPanel Grid.Column="1" Margin="12,0">
             <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="True">
-                <ToggleButton x:Name="LayoutSnapButton" DockPanel.Dock="Right"
-                              IsChecked="True" Width="32" Height="26" Padding="0"
-                              FontSize="14" VerticalAlignment="Center"
-                              Click="LayoutSnap_Click"/>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="ViewOutButton" Content="−" Width="26" Height="26" Tag="-" Click="ViewZoom_Click"/>
+                    <Button x:Name="ViewInButton" Content="+" Width="26" Height="26" Margin="4,0,0,0" Tag="+" Click="ViewZoom_Click"/>
+                    <ToggleButton x:Name="LayoutSnapButton" Margin="6,0,0,0"
+                                  IsChecked="True" Width="32" Height="26" Padding="0"
+                                  FontSize="14" VerticalAlignment="Center"
+                                  Click="LayoutSnap_Click"/>
+                </StackPanel>
                 <TextBlock x:Name="WireLabel" Text="Wireframe" FontWeight="Bold"
                            VerticalAlignment="Center"/>
             </DockPanel>
@@ -55,12 +59,13 @@
                             MouseLeftButtonDown="WireCanvas_MouseLeftButtonDown"
                             MouseMove="WireCanvas_MouseMove"
                             MouseLeftButtonUp="WireCanvas_MouseLeftButtonUp"
-                            MouseRightButtonUp="WireCanvas_MouseRightButtonUp"/>
+                            MouseRightButtonUp="WireCanvas_MouseRightButtonUp"
+                            PreviewMouseWheel="WireCanvas_MouseWheel"/>
                 </Viewbox>
             </Border>
         </DockPanel>
         <DockPanel Grid.Column="2">
-            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="True">
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                 <ToggleButton x:Name="LiveButton" DockPanel.Dock="Right"
                               IsChecked="True" Width="64" Height="26" Padding="0"
                               VerticalAlignment="Center"
@@ -70,18 +75,37 @@
             </DockPanel>
             <StackPanel DockPanel.Dock="Bottom">
                 <TextBlock Text="Name" Margin="0,8,0,4"/>
-                <TextBox x:Name="NameBox"/>
+                <TextBox x:Name="NameBox" LostFocus="Name_LostFocus"/>
                 <TextBlock Text="Tags" Margin="0,8,0,4"/>
                 <DockPanel Margin="0,0,0,4">
                     <Button DockPanel.Dock="Right" Content="+" Width="28" Height="22" Click="AddTag_Click"/>
                     <WrapPanel x:Name="TagPanel" Margin="0,0,8,0"/>
                 </DockPanel>
-                <Grid Margin="0,12,0,0">
+                <Button Content="Animation" Height="26" Margin="0,4,0,0" Click="Animation_Click"/>
+                <TextBlock x:Name="CameraLabel" Text="Camera" FontWeight="Bold" Margin="0,10,0,0"/>
+                <Grid Margin="0,4,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="56"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="48"/>
                         <ColumnDefinition Width="56"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="64"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="CamXLabel" Text="X ↔" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamXBox" Grid.Column="1" Margin="0,0,8,0" LostFocus="Camera_LostFocus"/>
+                    <TextBlock x:Name="CamYLabel" Grid.Column="2" Text="Y ↕" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamYBox" Grid.Column="3" Margin="0,0,8,0" LostFocus="Camera_LostFocus"/>
+                    <TextBlock x:Name="CamZoomLabel" Grid.Column="4" Text="Zoom" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamZoomBox" Grid.Column="5" LostFocus="Camera_LostFocus"/>
+                </Grid>
+                <Button x:Name="CameraResetButton" Content="Reset camera" Height="24" Margin="0,4,0,0" Click="CameraReset_Click"/>
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="78"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="48"/>
+                        <ColumnDefinition Width="78"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
@@ -95,16 +119,16 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PosXLabel" Text="Pos X ↔" VerticalAlignment="Center"/>
                     <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y ↕" VerticalAlignment="Center"/>
                     <TextBox x:Name="YBox" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                    <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X ↔" VerticalAlignment="Center"/>
                     <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,4,6" LostFocus="Numeric_LostFocus"/>
                     <CheckBox x:Name="LinkBox" Grid.Row="1" Grid.Column="2"
                               Content="Link" VerticalAlignment="Center" Margin="0,0,4,6" Foreground="#EEEEEE"
                               Click="Link_Click"/>
-                    <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y ↕" VerticalAlignment="Center"/>
                     <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
                     <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Text="Crop" FontWeight="Bold" Margin="0,8,0,2"/>
                     <TextBlock Grid.Row="3" Grid.ColumnSpan="5" Text="px from each edge" FontSize="11" Opacity="0.7" Margin="0,0,0,6"/>
@@ -125,10 +149,6 @@
                     <Button Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="5" Content="Reset"
                             Height="26" Margin="0,8,0,0" Click="ResetLayer_Click"/>
                 </Grid>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                    <Button Content="OK" Width="88" IsDefault="True" Click="Ok_Click"/>
-                    <Button Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True"/>
-                </StackPanel>
             </StackPanel>
             <Border Background="#111" BorderBrush="#555" BorderThickness="1" Margin="0,0,0,12">
                 <preview:AspectBox x:Name="PreviewAspect" HorizontalAlignment="Center" VerticalAlignment="Center">

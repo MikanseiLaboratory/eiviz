@@ -240,6 +240,7 @@ enum MixerRemote {
             "transitionKind": slot.transitionKind,
             "durationValue": slot.durationValue,
             "durationUnit": slot.durationUnit,
+            "easing": slot.easing,
             "audioFollow": slot.audioFollow,
             "sourceKind": slot.sourceKind.rawValue,
             "locked": slot.locked,
@@ -250,7 +251,11 @@ enum MixerRemote {
             "cropWidth": slot.cropWidth,
             "cropHeight": slot.cropHeight
         ]
-        return encode(["kind": "upsertOverlay", "slot": wire])
+        var payload = wire
+        if let bezier = slot.bezier {
+            payload["bezier"] = bezierWire(bezier)
+        }
+        return encode(["kind": "upsertOverlay", "slot": payload])
     }
 
     static func deleteOverlay(_ id: UInt64) -> String {
@@ -298,9 +303,69 @@ enum MixerRemote {
                     "cropX": layer.cropX,
                     "cropY": layer.cropY,
                     "cropWidth": layer.cropWidth,
-                    "cropHeight": layer.cropHeight
+                    "cropHeight": layer.cropHeight,
+                    "layerId": NSNumber(value: layer.layerId)
+                ]
+            },
+            "states": scene.states.map { state -> [String: Any] in
+                [
+                    "id": NSNumber(value: state.id),
+                    "name": state.name,
+                    "enter": motionWire(state.enter),
+                    "layers": state.layers.map { key -> [String: Any] in
+                        [
+                            "layerId": NSNumber(value: key.layerId),
+                            "geom": geomWire(key.geom)
+                        ]
+                    }
+                ]
+            },
+            "sequences": scene.sequences.map { sequence -> [String: Any] in
+                [
+                    "id": NSNumber(value: sequence.id),
+                    "name": sequence.name,
+                    "steps": sequence.steps.map { step -> [String: Any] in
+                        var wire: [String: Any] = [
+                            "stateId": NSNumber(value: step.stateId),
+                            "holdFrames": step.holdFrames
+                        ]
+                        if let motion = step.motion {
+                            wire["motion"] = motionWire(motion)
+                        }
+                        return wire
+                    }
                 ]
             }
+        ]
+    }
+
+    private static func bezierWire(_ bezier: BezierHandles) -> [String: Any] {
+        ["x1": bezier.x1, "y1": bezier.y1, "x2": bezier.x2, "y2": bezier.y2]
+    }
+
+    private static func motionWire(_ motion: Motion) -> [String: Any] {
+        var wire: [String: Any] = [
+            "durationFrames": motion.durationFrames,
+            "easing": motion.easing
+        ]
+        if let bezier = motion.bezier {
+            wire["bezier"] = bezierWire(bezier)
+        }
+        return wire
+    }
+
+    private static func geomWire(_ geom: SceneLayerGeom) -> [String: Any] {
+        [
+            "x": geom.x,
+            "y": geom.y,
+            "width": geom.width,
+            "height": geom.height,
+            "opacity": geom.opacity,
+            "z": geom.z,
+            "cropX": geom.cropX,
+            "cropY": geom.cropY,
+            "cropWidth": geom.cropWidth,
+            "cropHeight": geom.cropHeight
         ]
     }
 }

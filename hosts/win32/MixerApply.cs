@@ -26,8 +26,170 @@ internal static class MixerApply
             Z = layer.Z,
             AudioFollow = layer.AudioFollow ? 1u : 0u,
             Hidden = layer.Hidden ? 1u : 0u,
-            Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight }
+            Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight },
+            LayerId = layer.LayerId
         }).ToArray());
+        MixerNative.ThrowIfFailed(
+            MixerNative.SceneCameraDefine(gpuId, CameraDesc(scene.Camera)),
+            "Define scene camera");
+    }
+
+    /// Cuts the scene to this pose without rewriting the saved layout.
+    public static void ShowPose(ulong gpuId, OverlayDesc[] layers, SceneCamera camera, ulong stateId)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        var pin = GCHandle.Alloc(layers, GCHandleType.Pinned);
+        try
+        {
+            unsafe
+            {
+                MixerNative.ThrowIfFailed(
+                    MixerNative.SceneShowPose(
+                        gpuId,
+                        (uint)layers.Length,
+                        layers.Length == 0 ? null : (OverlayDesc*)pin.AddrOfPinnedObject(),
+                        CameraDesc(camera),
+                        1,
+                        stateId),
+                    "Show scene pose");
+            }
+        }
+        finally
+        {
+            if (pin.IsAllocated)
+                pin.Free();
+        }
+    }
+
+    private static EivizSceneCamera CameraDesc(SceneCamera camera) => new()
+    {
+        X = camera.X,
+        Y = camera.Y,
+        Zoom = camera.Zoom
+    };
+
+    public static void DefineSceneAnim(SceneEntry scene)
+    {
+        if (Application.Current is App { Backend.IsRemote: true })
+            return;
+        scene.AssignLayerIds();
+        var layerSets = new List<OverlayDesc[]>();
+        var states = new EivizSceneStateDesc[scene.States.Count];
+        foreach (var state in scene.States)
+            layerSets.Add(StateLayers(scene, state));
+        var stepSets = new List<EivizSequenceStepDesc[]>();
+        var sequences = new EivizSceneSequenceDesc[scene.Sequences.Count];
+        for (var i = 0; i < scene.Sequences.Count; i++)
+        {
+            var sequence = scene.Sequences[i];
+            stepSets.Add(sequence.Steps.Select(step => new EivizSequenceStepDesc
+            {
+                StateId = step.StateId,
+                Motion = MotionDesc(step.Motion ?? new Motion()),
+                HasMotion = step.Motion is null ? 0u : 1u,
+                HoldFrames = step.HoldFrames
+            }).ToArray());
+        }
+        var pins = new List<GCHandle>();
+        try
+        {
+            unsafe
+            {
+                for (var i = 0; i < scene.States.Count; i++)
+                {
+                    var layers = layerSets[i];
+                    var layerPin = GCHandle.Alloc(layers, GCHandleType.Pinned);
+                    pins.Add(layerPin);
+                    states[i] = new EivizSceneStateDesc
+                    {
+                        Id = scene.States[i].Id,
+                        Layers = layers.Length == 0 ? 0 : layerPin.AddrOfPinnedObject(),
+                        LayerCount = (uint)layers.Length,
+                        Enter = MotionDesc(scene.States[i].Enter),
+                        Camera = scene.States[i].Camera is { } camera ? CameraDesc(camera) : default,
+                        HasCamera = scene.States[i].Camera is null ? 0u : 1u
+                    };
+                }
+                fixed (EivizSceneStateDesc* statePtr = states)
+                {
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.SceneStatesDefine(
+                            scene.GpuId,
+                            scene.States.Count == 0 ? null : statePtr,
+                            (uint)scene.States.Count),
+                        "Define scene states");
+                }
+                for (var i = 0; i < scene.Sequences.Count; i++)
+                {
+                    var steps = stepSets[i];
+                    var stepPin = GCHandle.Alloc(steps, GCHandleType.Pinned);
+                    pins.Add(stepPin);
+                    sequences[i] = new EivizSceneSequenceDesc
+                    {
+                        Id = scene.Sequences[i].Id,
+                        Steps = steps.Length == 0 ? 0 : stepPin.AddrOfPinnedObject(),
+                        StepCount = (uint)steps.Length
+                    };
+                }
+                fixed (EivizSceneSequenceDesc* seqPtr = sequences)
+                {
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.SceneSequencesDefine(
+                            scene.GpuId,
+                            scene.Sequences.Count == 0 ? null : seqPtr,
+                            (uint)scene.Sequences.Count),
+                        "Define scene sequences");
+                }
+            }
+        }
+        finally
+        {
+            foreach (var pin in pins)
+            {
+                if (pin.IsAllocated)
+                    pin.Free();
+            }
+        }
+    }
+
+    private static OverlayDesc[] StateLayers(SceneEntry scene, SceneState state)
+    {
+        var layers = new List<OverlayDesc>();
+        foreach (var key in state.Layers)
+        {
+            var source = scene.Layers.FirstOrDefault(item => item.LayerId == key.LayerId);
+            if (source is null)
+                continue;
+            var geom = key.Geom;
+            layers.Add(new OverlayDesc
+            {
+                SourceId = source.InputId,
+                Rect = new Rect { X = geom.X, Y = geom.Y, Width = geom.Width, Height = geom.Height },
+                Opacity = geom.Opacity,
+                Z = geom.Z,
+                AudioFollow = source.AudioFollow ? 1u : 0u,
+                Hidden = source.Hidden ? 1u : 0u,
+                Crop = new Rect { X = geom.CropX, Y = geom.CropY, Width = geom.CropWidth, Height = geom.CropHeight },
+                LayerId = key.LayerId
+            });
+        }
+        return layers.ToArray();
+    }
+
+    private static EivizMotion MotionDesc(Motion motion)
+    {
+        var bezier = motion.Easing == MixerNative.EasingBezier ? motion.Bezier : null;
+        return new EivizMotion
+        {
+            DurationFrames = Math.Max(1, motion.DurationFrames),
+            Easing = motion.Easing,
+            X1 = bezier?.X1 ?? 0,
+            Y1 = bezier?.Y1 ?? 0,
+            X2 = bezier?.X2 ?? 1,
+            Y2 = bezier?.Y2 ?? 1,
+            HasBezier = bezier is null ? 0u : 1u
+        };
     }
 
     public static void PushMultiview(MultiviewLayout layout, uint width, uint height)
@@ -85,18 +247,20 @@ internal static class MixerApply
 
     internal static bool AutoLocal(ulong unitId, MixingUnitEntry unit, TransitionPreset preset)
     {
-        return Try(() => Auto(unitId, preset.Kind, preset.DurationMsFor(unit), preset.Swap, preset.KeepPreview,
-            preset.Easing, preset.Direction, preset.DipR, preset.DipG, preset.DipB, preset.DipA,
+        var settings = Application.Current is App app ? app.Session.Settings : new SessionSettings();
+        _ = unit;
+        return Try(() => Auto(unitId, preset.Kind, preset.DurationFrames(settings), preset.Swap, preset.KeepPreview,
+            preset.Curve(), preset.Direction, preset.DipR, preset.DipG, preset.DipB, preset.DipA,
             preset.CustomWgsl, preset.Softness, preset.Param));
     }
 
     public static void Auto(
         ulong unitId,
         uint kind,
-        uint durationMs,
+        uint durationFrames,
         bool swap,
         bool keepPreview,
-        uint easing,
+        EivizCurve curve,
         uint direction,
         float dipR,
         float dipG,
@@ -112,7 +276,7 @@ internal static class MixerApply
             if (MixerNative.GetUnitState(unitId, &current) == 0)
             {
                 current.TransitionKind = kind;
-                current.TransitionEasing = easing;
+                current.TransitionEasing = curve.Kind;
                 current.TransitionDirection = direction;
                 current.KeepPreview = keepPreview ? 1u : 0u;
                 current.DipR = dipR;
@@ -125,23 +289,26 @@ internal static class MixerApply
             }
         }
         MixerNative.SetCustomWgsl(unitId, ResolveCustomWgsl(kind, customWgsl));
-        MixerNative.ThrowIfFailed(
-            MixerNative.Auto(
-                unitId,
-                kind,
-                durationMs,
-                swap ? 1u : 0u,
-                keepPreview ? 1u : 0u,
-                easing,
-                direction,
-                dipR,
-                dipG,
-                dipB,
-                dipA <= 0 ? 1 : dipA,
-                MixerNative.IncomingPreview,
-                softness,
-                param),
-            "AUTO");
+        unsafe
+        {
+            MixerNative.ThrowIfFailed(
+                MixerNative.Auto(
+                    unitId,
+                    kind,
+                    durationFrames,
+                    swap ? 1u : 0u,
+                    keepPreview ? 1u : 0u,
+                    &curve,
+                    direction,
+                    dipR,
+                    dipG,
+                    dipB,
+                    dipA <= 0 ? 1 : dipA,
+                    MixerNative.IncomingPreview,
+                    softness,
+                    param),
+                "AUTO");
+        }
     }
 
     public static bool PreviewScene(ulong unitId, ulong sceneGpuId) =>

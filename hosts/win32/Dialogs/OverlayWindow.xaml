@@ -69,10 +69,10 @@
                               SelectionChanged="SourceBox_SelectionChanged"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="56"/>
+                            <ColumnDefinition Width="78"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="48"/>
-                            <ColumnDefinition Width="56"/>
+                            <ColumnDefinition Width="78"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
@@ -84,16 +84,16 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock x:Name="PosXLabel" Text="Pos X" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PosXLabel" Text="Pos X ↔" VerticalAlignment="Center"/>
                         <TextBox x:Name="XBox" Grid.Column="1" Margin="0,0,8,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PosYLabel" Grid.Column="3" Text="Pos Y ↕" VerticalAlignment="Center"/>
                         <TextBox x:Name="YBox" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
-                        <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SizeXLabel" Grid.Row="1" Text="Size X ↔" VerticalAlignment="Center"/>
                         <TextBox x:Name="WBox" Grid.Row="1" Grid.Column="1" Margin="0,0,4,6" LostFocus="Numeric_LostFocus"/>
                         <CheckBox x:Name="LinkBox" Grid.Row="1" Grid.Column="2"
                                   Content="Link" VerticalAlignment="Center" Margin="0,0,4,6" Foreground="#EEEEEE"
                                   Click="Link_Click"/>
-                        <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SizeYLabel" Grid.Row="1" Grid.Column="3" Text="Size Y ↕" VerticalAlignment="Center"/>
                         <TextBox x:Name="HBox" Grid.Row="1" Grid.Column="4" Margin="0,0,0,6" LostFocus="Numeric_LostFocus"/>
                         <TextBlock Grid.Row="2" Grid.ColumnSpan="5" Text="Crop" FontWeight="Bold" Margin="0,8,0,2"/>
                         <TextBlock Grid.Row="3" Grid.ColumnSpan="5" Text="px from each edge" FontSize="11" Opacity="0.7" Margin="0,0,0,6"/>

@@ -11,7 +11,36 @@ const DEFAULT_JSON: &[u8] = br#"{
     { "id": 4, "name": "Blue", "kind": "Color", "colorR": 0, "colorG": 0, "colorB": 1, "audioUnits": [1] }
   ],
   "scenes": [
-    { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+    {
+      "id": 1,
+      "name": "Scene 1",
+      "layers": [
+        { "inputId": 2, "width": 1, "height": 1, "z": 0, "layerId": 1 },
+        { "inputId": 4, "x": 0.72, "y": 0.06, "width": 0.22, "height": 0.16, "z": 1, "layerId": 2 }
+      ],
+      "states": [
+        {
+          "id": 1,
+          "name": "Lower third",
+          "enter": { "durationFrames": 45, "easing": 2 },
+          "layers": [{ "layerId": 2, "geom": { "x": 0.06, "y": 0.72, "width": 0.55, "height": 0.2, "z": 1 } }]
+        },
+        {
+          "id": 2,
+          "name": "Bug",
+          "enter": { "durationFrames": 30, "easing": 3 },
+          "layers": [{ "layerId": 2, "geom": { "x": 0.72, "y": 0.06, "width": 0.22, "height": 0.16, "z": 1 } }]
+        }
+      ],
+      "sequences": [{
+        "id": 1,
+        "name": "Lower third",
+        "steps": [
+          { "stateId": 1, "holdFrames": 20 },
+          { "stateId": 2, "holdFrames": 20 }
+        ]
+      }]
+    },
     { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 1, "width": 1, "height": 1 }] }
   ],
   "units": [{

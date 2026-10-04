@@ -13,20 +13,83 @@ use eiviz_mixer::{
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
-    mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
-    mixer_audio_set_input, mixer_create_unit, mixer_create_with_backend, mixer_define_generator,
-    mixer_define_mix_input,
+    mixer_audio_set_input, mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
+    mixer_create_unit, mixer_create_with_backend, mixer_define_generator, mixer_define_mix_input,
     mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_omt_connect,
     mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
     mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
-    mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_detach_native,
-    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
+    mixer_unit_acquire_frame, mixer_unit_cut, mixer_unit_detach_native, mixer_unit_get_state,
+    mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
     mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(target_os = "linux")]
 use eiviz_mixer::{BACKEND_VULKAN, mixer_backend};
 #[cfg(windows)]
 use eiviz_mixer::{OUT_NDI, mixer_ndi_discover, mixer_output_remove};
+fn master_frames(ms: u32) -> u32 {
+    ((f64::from(ms) * 60_000.0) / 1_001.0 / 1_000.0)
+        .round()
+        .max(1.0) as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+fn unit_auto(
+    unit_id: u64,
+    kind: u32,
+    duration_frames: u32,
+    swap: u32,
+    keep_preview: u32,
+    easing: u32,
+    direction: u32,
+    dip_r: f32,
+    dip_g: f32,
+    dip_b: f32,
+    dip_a: f32,
+    incoming_source: u64,
+    softness: f32,
+    param: f32,
+) -> i32 {
+    let curve = eiviz_mixer::EivizCurve {
+        kind: easing,
+        x1: 0.0,
+        y1: 0.0,
+        x2: 1.0,
+        y2: 1.0,
+    };
+    unsafe {
+        eiviz_mixer::mixer_unit_auto(
+            unit_id,
+            kind,
+            duration_frames,
+            swap,
+            keep_preview,
+            &curve,
+            direction,
+            dip_r,
+            dip_g,
+            dip_b,
+            dip_a,
+            incoming_source,
+            softness,
+            param,
+        )
+    }
+}
+
+/// Transitions advance on composed frames, so wait for the render loop
+/// (including its first-frame warm-up) instead of a fixed wall-clock sleep.
+fn wait_for_program(unit_id: u64, program: u64) -> UnitState {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut out = UnitState::default();
+        assert_eq!(unsafe { mixer_unit_get_state(unit_id, &mut out) }, OK);
+        if out.program_source == program || Instant::now() >= deadline {
+            return out;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 use openmediatransport::{
     Codec, DecodedVideoFrame, Discovery, FrameType, MediaFrame, ReceiverConfig, ReceiverSession,
     Sender,
@@ -127,10 +190,10 @@ fn compose_omt_and_program_out() {
     }
     assert_eq!(mixer_unit_cut(1, 1, 0), OK);
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             1,
             TRANSITION_FADE,
-            200,
+            master_frames(200),
             1,
             1,
             0,
@@ -276,10 +339,10 @@ fn omt_program_shows_fade_during_auto() {
     const AUTO_MS: u32 = 2000;
     let auto_started = Instant::now();
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             1,
             TRANSITION_FADE,
-            AUTO_MS,
+            master_frames(AUTO_MS),
             1,
             1,
             0,
@@ -400,10 +463,10 @@ fn mix_mu_program_shows_fade_during_auto() {
     const AUTO_MS: u32 = 2000;
     let auto_started = Instant::now();
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             1,
             TRANSITION_FADE,
-            AUTO_MS,
+            master_frames(AUTO_MS),
             1,
             1,
             0,
@@ -463,10 +526,7 @@ fn mix_session_multiview_raw_id_program_is_not_black() {
             mixer_define_scene(MULTIVIEW_BASE | 1, 320, 180, 1, &color),
             OK
         );
-        assert_eq!(
-            mixer_define_mix_input(20, 1, SRC_KIND_MU_MULTIVIEW, 1),
-            OK
-        );
+        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_MULTIVIEW, 1), OK);
         assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_layer), OK);
         let state = UnitState {
             program_source: scene_id(2),
@@ -1350,10 +1410,10 @@ fn mix_input_nesting_keeps_composing() {
             .as_millis()
     ));
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             1,
             TRANSITION_FADE,
-            1200,
+            master_frames(1200),
             1,
             1,
             0,
@@ -1387,10 +1447,10 @@ fn mix_input_nesting_keeps_composing() {
         assert_eq!(mixer_unit_set_state(2, &mutual_b), OK);
     }
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             1,
             TRANSITION_FADE,
-            800,
+            master_frames(800),
             1,
             1,
             0,
@@ -1406,10 +1466,10 @@ fn mix_input_nesting_keeps_composing() {
         OK
     );
     assert_eq!(
-        mixer_unit_auto(
+        unit_auto(
             2,
             TRANSITION_FADE,
-            800,
+            master_frames(800),
             1,
             1,
             0,
@@ -1523,10 +1583,10 @@ fn keep_preview_freezes_incoming_source() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(
+            unit_auto(
                 1,
                 TRANSITION_FADE,
-                400,
+                master_frames(400),
                 1,
                 1,
                 0,
@@ -1544,13 +1604,9 @@ fn keep_preview_freezes_incoming_source() {
         state.preview_source = SRC_BARS;
         assert_eq!(mixer_unit_set_state(1, &state), OK);
     }
-    thread::sleep(Duration::from_millis(550));
-    unsafe {
-        let mut out = UnitState::default();
-        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
-        assert_eq!(out.program_source, SRC_BLUE);
-        assert_eq!(out.mix, 0.0);
-    }
+    let out = wait_for_program(1, SRC_BLUE);
+    assert_eq!(out.program_source, SRC_BLUE);
+    assert_eq!(out.mix, 0.0);
     mixer_destroy();
 }
 
@@ -1569,10 +1625,10 @@ fn easing_completes_with_cut() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(
+            unit_auto(
                 1,
                 TRANSITION_FADE,
-                200,
+                master_frames(200),
                 1,
                 1,
                 EASING_IN_OUT,
@@ -1588,13 +1644,9 @@ fn easing_completes_with_cut() {
             OK
         );
     }
-    thread::sleep(Duration::from_millis(350));
-    unsafe {
-        let mut out = UnitState::default();
-        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
-        assert_eq!(out.mix, 0.0);
-        assert_eq!(out.program_source, SRC_BLUE);
-    }
+    let out = wait_for_program(1, SRC_BLUE);
+    assert_eq!(out.mix, 0.0);
+    assert_eq!(out.program_source, SRC_BLUE);
     mixer_destroy();
 }
 
@@ -1888,10 +1940,10 @@ fn dip_uses_preset_color() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(
+            unit_auto(
                 1,
                 TRANSITION_DIP,
-                300,
+                master_frames(300),
                 1,
                 1,
                 0,
@@ -1932,10 +1984,10 @@ fn auto_uses_incoming_source_instead_of_preview() {
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
         assert_eq!(
-            mixer_unit_auto(
+            unit_auto(
                 1,
                 TRANSITION_FADE,
-                200,
+                master_frames(200),
                 1,
                 0,
                 0,
@@ -1951,15 +2003,11 @@ fn auto_uses_incoming_source_instead_of_preview() {
             OK
         );
     }
-    thread::sleep(Duration::from_millis(350));
-    unsafe {
-        let mut out = UnitState::default();
-        assert_eq!(mixer_unit_get_state(1, &mut out), OK);
-        assert_eq!(out.program_source, SRC_BARS);
-        assert_eq!(out.preview_source, SRC_BLUE);
-        assert_eq!(out.incoming_source, 0);
-        assert_eq!(out.mix, 0.0);
-    }
+    let out = wait_for_program(1, SRC_BARS);
+    assert_eq!(out.program_source, SRC_BARS);
+    assert_eq!(out.preview_source, SRC_BLUE);
+    assert_eq!(out.incoming_source, 0);
+    assert_eq!(out.mix, 0.0);
     mixer_destroy();
 }
 
@@ -2092,6 +2140,77 @@ fn snapshot_writes_png() {
     let input_bytes = std::fs::read(&input_path).expect("input png");
     assert!(input_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let _ = std::fs::remove_file(&input_path);
+    mixer_destroy();
+}
+
+fn snap_pixel(scene: u64, x: u32, y: u32) -> [u8; 3] {
+    let path = std::env::temp_dir().join(format!("eiviz-camera-{scene}-{x}-{y}.png"));
+    let _ = std::fs::remove_file(&path);
+    let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    let mut code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
+    if code != OK {
+        thread::sleep(Duration::from_millis(250));
+        code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
+    }
+    assert_eq!(code, OK);
+    let image = image::open(&path).expect("decode scene snapshot").to_rgb8();
+    let _ = std::fs::remove_file(&path);
+    let pixel = image.get_pixel(x, y);
+    [pixel[0], pixel[1], pixel[2]]
+}
+
+fn is_red(pixel: [u8; 3]) -> bool {
+    pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40
+}
+
+fn is_black(pixel: [u8; 3]) -> bool {
+    pixel[0] < 40 && pixel[1] < 40 && pixel[2] < 40
+}
+
+#[test]
+fn scene_camera_zoom_fills_the_frame_from_the_center() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let scene = scene_id(1);
+    let center = OverlayDesc {
+        source_id: SRC_COLOR,
+        rect: Rect {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        },
+        opacity: 1.0,
+        ..OverlayDesc::default()
+    };
+    unsafe {
+        assert_eq!(mixer_define_scene(scene, 320, 180, 1, &center), OK);
+    }
+    thread::sleep(Duration::from_millis(300));
+    let corner = snap_pixel(scene, 4, 4);
+    let middle = snap_pixel(scene, 160, 90);
+    assert!(is_black(corner), "corner {corner:?} should be the empty background");
+    assert!(is_red(middle), "center {middle:?} should be the color layer");
+
+    let zoomed = eiviz_mixer::EivizSceneCamera {
+        x: 0.5,
+        y: 0.5,
+        zoom: 2.0,
+    };
+    assert_eq!(unsafe { eiviz_mixer::mixer_scene_camera_define(scene, zoomed) }, OK);
+    thread::sleep(Duration::from_millis(300));
+    let corner = snap_pixel(scene, 4, 4);
+    assert!(is_red(corner), "zoomed corner {corner:?} should show the center layer");
+
+    let too_wide = eiviz_mixer::EivizSceneCamera {
+        x: 0.5,
+        y: 0.5,
+        zoom: 0.5,
+    };
+    assert_eq!(
+        unsafe { eiviz_mixer::mixer_scene_camera_define(scene, too_wide) },
+        ERR_INVALID_ARGUMENT
+    );
     mixer_destroy();
 }
 

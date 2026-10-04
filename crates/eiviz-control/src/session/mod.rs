@@ -281,6 +281,41 @@ fn native_api_port() -> u32 {
     9400
 }
 
+/// `unit` 0 is master frames. `unit` 1 is milliseconds, converted with the master rate.
+pub fn duration_to_frames(value: u32, unit: u32, fps_num: u32, fps_den: u32) -> u32 {
+    let value = value.max(1);
+    if unit == 1 {
+        let fps = if fps_den == 0 {
+            60.0
+        } else {
+            f64::from(fps_num) / f64::from(fps_den)
+        };
+        let fps = if fps <= 0.0 { 60.0 } else { fps };
+        ((f64::from(value) * fps) / 1000.0).round().max(1.0) as u32
+    } else {
+        value
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BezierHandles {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+impl BezierHandles {
+    pub fn as_array(self) -> [f32; 4] {
+        [self.x1, self.y1, self.x2, self.y2]
+    }
+
+    pub fn x_in_range(self) -> bool {
+        (0.0..=1.0).contains(&self.x1) && (0.0..=1.0).contains(&self.x2)
+    }
+}
+
 pub(crate) fn clamp_size(size: f32) -> f32 {
     if !size.is_finite() {
         return 18.0;
@@ -644,6 +679,9 @@ fn one_u32() -> u32 {
 fn one_f32() -> f32 {
     1.0
 }
+fn half_f32() -> f32 {
+    0.5
+}
 fn tone_level() -> f32 {
     -20.0
 }
@@ -683,10 +721,121 @@ pub struct SceneLayer {
     pub crop_height: f32,
     #[serde(default)]
     pub hidden: bool,
+    /// Stable within one Scene. `0` is assigned by [`Document::canonicalize`].
+    #[serde(default)]
+    pub layer_id: u64,
 }
 
 fn true_bool() -> bool {
     true
+}
+
+/// Scene camera. `x` and `y` are the center in scene coordinates and `zoom` is the magnification.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCamera {
+    #[serde(default = "half_f32")]
+    pub x: f32,
+    #[serde(default = "half_f32")]
+    pub y: f32,
+    #[serde(default = "one_f32")]
+    pub zoom: f32,
+}
+
+impl Default for SceneCamera {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.5,
+            zoom: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneState {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub layers: Vec<LayerKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<SceneCamera>,
+    #[serde(default = "default_motion")]
+    pub enter: Motion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Motion {
+    #[serde(default = "fifteen")]
+    pub duration_frames: u32,
+    #[serde(default)]
+    pub easing: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bezier: Option<BezierHandles>,
+}
+
+fn default_motion() -> Motion {
+    Motion {
+        duration_frames: fifteen(),
+        easing: 0,
+        bezier: None,
+    }
+}
+
+impl Default for Motion {
+    fn default() -> Self {
+        default_motion()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerKey {
+    #[serde(default)]
+    pub layer_id: u64,
+    #[serde(default = "default_geom")]
+    pub geom: SceneLayerGeom,
+}
+
+fn default_geom() -> SceneLayerGeom {
+    SceneLayerGeom {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+        opacity: 1.0,
+        z: 0,
+        crop_x: 0.0,
+        crop_y: 0.0,
+        crop_width: 1.0,
+        crop_height: 1.0,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneSequence {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub steps: Vec<SequenceStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceStep {
+    #[serde(default)]
+    pub state_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<Motion>,
+    #[serde(default)]
+    pub hold_frames: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -703,6 +852,12 @@ pub struct SceneDto {
     pub tags: Vec<String>,
     #[serde(default)]
     pub preview_collapsed: bool,
+    #[serde(default)]
+    pub camera: SceneCamera,
+    #[serde(default)]
+    pub states: Vec<SceneState>,
+    #[serde(default)]
+    pub sequences: Vec<SceneSequence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -754,6 +909,8 @@ pub struct TransitionPreset {
     pub keep_preview: bool,
     #[serde(default)]
     pub easing: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bezier: Option<BezierHandles>,
     #[serde(default)]
     pub direction: u32,
     #[serde(default)]
@@ -844,6 +1001,7 @@ impl Default for TransitionPreset {
             swap: true,
             keep_preview: true,
             easing: 0,
+            bezier: None,
             direction: 0,
             dip_r: 0.0,
             dip_g: 0.0,
@@ -882,6 +1040,10 @@ pub struct OverlaySlot {
     pub duration_value: u32,
     #[serde(default)]
     pub duration_unit: u32,
+    #[serde(default)]
+    pub easing: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bezier: Option<BezierHandles>,
     #[serde(default = "true_bool")]
     pub audio_follow: bool,
     #[serde(default)]
@@ -916,6 +1078,8 @@ impl Default for OverlaySlot {
             transition_kind: fade(),
             duration_value: fifteen(),
             duration_unit: 0,
+            easing: 0,
+            bezier: None,
             audio_follow: true,
             source_kind: 0,
             locked: false,
@@ -931,6 +1095,29 @@ impl Default for OverlaySlot {
 
 fn fifteen() -> u32 {
     15
+}
+
+fn assign_layer_ids(scene: &mut SceneDto) {
+    let mut next = scene
+        .layers
+        .iter()
+        .map(|layer| layer.layer_id)
+        .max()
+        .unwrap_or(0);
+    let mut seen = std::collections::HashSet::new();
+    for layer in &mut scene.layers {
+        if layer.crop_width <= 0.0 {
+            layer.crop_width = 1.0;
+        }
+        if layer.crop_height <= 0.0 {
+            layer.crop_height = 1.0;
+        }
+        if layer.layer_id == 0 || !seen.insert(layer.layer_id) {
+            next += 1;
+            layer.layer_id = next;
+            seen.insert(layer.layer_id);
+        }
+    }
 }
 
 fn overlay_x() -> f32 {
@@ -1194,12 +1381,45 @@ impl Document {
             }
         }
         for scene in &mut doc.scenes {
-            for layer in &mut scene.layers {
-                if layer.crop_width <= 0.0 {
-                    layer.crop_width = 1.0;
+            assign_layer_ids(scene);
+            let layer_ids: std::collections::HashSet<u64> =
+                scene.layers.iter().map(|layer| layer.layer_id).collect();
+            let mut next_state = scene.states.iter().map(|state| state.id).max().unwrap_or(0);
+            let mut seen_states = std::collections::HashSet::new();
+            for state in &mut scene.states {
+                if state.id == 0 || !seen_states.insert(state.id) {
+                    next_state += 1;
+                    state.id = next_state;
+                    seen_states.insert(state.id);
                 }
-                if layer.crop_height <= 0.0 {
-                    layer.crop_height = 1.0;
+                state.layers.retain(|key| layer_ids.contains(&key.layer_id));
+                if state.enter.easing != 5 {
+                    state.enter.bezier = None;
+                }
+                if state.enter.duration_frames == 0 {
+                    state.enter.duration_frames = 1;
+                }
+            }
+            let state_ids: std::collections::HashSet<u64> =
+                scene.states.iter().map(|state| state.id).collect();
+            let mut next_seq = scene.sequences.iter().map(|seq| seq.id).max().unwrap_or(0);
+            let mut seen_seq = std::collections::HashSet::new();
+            for seq in &mut scene.sequences {
+                if seq.id == 0 || !seen_seq.insert(seq.id) {
+                    next_seq += 1;
+                    seq.id = next_seq;
+                    seen_seq.insert(seq.id);
+                }
+                seq.steps.retain(|step| state_ids.contains(&step.state_id));
+                for step in &mut seq.steps {
+                    if let Some(motion) = step.motion.as_mut() {
+                        if motion.easing != 5 {
+                            motion.bezier = None;
+                        }
+                        if motion.duration_frames == 0 {
+                            motion.duration_frames = 1;
+                        }
+                    }
                 }
             }
         }
@@ -1224,6 +1444,9 @@ impl Document {
                 if preset.duration_value == 0 {
                     preset.duration_value = 1;
                 }
+                if preset.easing != 5 {
+                    preset.bezier = None;
+                }
             }
         }
         let mut next_overlay = doc
@@ -1244,6 +1467,9 @@ impl Document {
             }
             if overlay.crop_height <= 0.0 {
                 overlay.crop_height = 1.0;
+            }
+            if overlay.easing != 5 {
+                overlay.bezier = None;
             }
         }
         doc.next_overlay_id = next_overlay;
