@@ -30,7 +30,7 @@ use crate::upload::{AUDIO_RATE, AudioInputStore};
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, LINK_FOLLOW, MASTER_BUS,
+    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, HEADPHONE_BUS, LINK_FOLLOW,
     MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
@@ -201,20 +201,26 @@ impl AudioEngine {
         asio::shutdown();
     }
 
-    pub fn upsert_bus(
+    pub fn ensure_unit(&self, unit_id: u64) {
+        self.graph.lock_or_recover().ensure_unit(unit_id);
+        self.sync_outputs();
+    }
+
+    pub fn remove_unit(&self, unit_id: u64) {
+        self.graph.lock_or_recover().remove_unit(unit_id);
+        self.sync_outputs();
+    }
+
+    pub fn set_unit_device(
         &self,
-        id: u64,
-        name: &str,
-        role: u32,
+        unit_id: u64,
         device_kind: u32,
         device_id: &str,
         map_left: i32,
         map_right: i32,
     ) {
-        self.graph.lock_or_recover().upsert_bus(
-            id,
-            name,
-            role,
+        self.graph.lock_or_recover().set_unit_device(
+            unit_id,
             device_kind,
             device_id,
             map_left,
@@ -223,15 +229,26 @@ impl AudioEngine {
         self.sync_outputs();
     }
 
-    pub fn remove_bus(&self, id: u64) {
-        self.graph.lock_or_recover().remove_bus(id);
+    pub fn set_headphone_device(
+        &self,
+        device_kind: u32,
+        device_id: &str,
+        map_left: i32,
+        map_right: i32,
+    ) {
+        self.graph.lock_or_recover().set_headphone_device(
+            device_kind,
+            device_id,
+            map_left,
+            map_right,
+        );
         self.sync_outputs();
     }
 
-    pub fn set_input(&self, id: u64, bus_mask: u32, gain: f32, mute: u32) {
+    pub fn set_input(&self, id: u64, units: &[u64], gain: f32, mute: u32) {
         self.graph
             .lock_or_recover()
-            .set_input(id, bus_mask, gain, mute != 0);
+            .set_input(id, units, gain, mute != 0);
     }
 
     pub fn set_bus_gain(&self, id: u64, gain: f32, mute: u32) {
@@ -240,18 +257,26 @@ impl AudioEngine {
             .set_bus_gain(id, gain, mute != 0);
     }
 
-    pub fn set_unit_link(&self, unit_id: u64, bus_id: u64, mode: u32) {
-        self.graph
-            .lock_or_recover()
-            .set_unit_link(unit_id, bus_id, mode);
+    pub fn set_unit_link(&self, unit_id: u64, mode: u32) {
+        self.graph.lock_or_recover().set_unit_link(unit_id, mode);
     }
 
     pub fn set_headphone_cue(&self, unit_id: u64) {
         self.graph.lock_or_recover().headphone_cue_unit = unit_id;
     }
 
-    pub fn set_headphone_copy_master(&self, enabled: u32) {
-        self.graph.lock_or_recover().headphone_copy_master = enabled != 0;
+    pub fn set_headphone_listen(&self, kind: u32, id: u64) {
+        let mut graph = self.graph.lock_or_recover();
+        let kind = match kind {
+            graph::LISTEN_UNIT | graph::LISTEN_INPUT => kind,
+            _ => graph::LISTEN_OFF,
+        };
+        graph.headphone_listen_kind = kind;
+        graph.headphone_listen_id = if kind == graph::LISTEN_OFF { 0 } else { id };
+    }
+
+    pub fn set_headphone_copy_monitor(&self, enabled: u32) {
+        self.graph.lock_or_recover().headphone_copy_monitor = enabled != 0;
     }
 
     pub fn set_video_delay(&self, buffer_frames: u32, fps_num: u32, fps_den: u32) {
@@ -279,17 +304,23 @@ impl AudioEngine {
         )
     }
 
-    pub fn master_peak(&self) -> (f32, f32) {
-        self.graph.lock_or_recover().master_peak
+    pub fn monitor_peak(&self) -> (f32, f32) {
+        self.graph.lock_or_recover().monitor_peak
     }
 
     pub fn bus_peaks(&self) -> Vec<(u64, f32, f32)> {
-        self.graph
-            .lock_or_recover()
-            .buses
+        let graph = self.graph.lock_or_recover();
+        let mut peaks: Vec<(u64, f32, f32)> = graph
+            .unit_buses
             .iter()
-            .map(|bus| (bus.id, bus.peak.0, bus.peak.1))
-            .collect()
+            .map(|(id, bus)| (*id, bus.peak.0, bus.peak.1))
+            .collect();
+        peaks.push((
+            HEADPHONE_BUS,
+            graph.headphone.peak.0,
+            graph.headphone.peak.1,
+        ));
+        peaks
     }
 
     pub fn mix_input_peaks(&self) -> Vec<(u64, f32, f32)> {
@@ -303,9 +334,10 @@ impl AudioEngine {
         }
         self.delay.lock_or_recover().skip_frames(frames);
         let graph = self.graph.lock_or_recover();
-        for bus in &graph.buses {
+        for bus in graph.unit_buses.values() {
             bus.ring.skip_frames(frames);
         }
+        graph.headphone.ring.skip_frames(frames);
     }
 
     fn sync_outputs(&self) {

@@ -50,28 +50,19 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             }
             Ok(())
         }
-        SessionMutation::SetOverlaySlot {
-            unit_id,
-            index,
-            slot,
-        } => {
-            let unit = document
-                .units
-                .iter_mut()
-                .find(|item| item.id == unit_id)
-                .ok_or_else(|| ControlError::not_found(format!("unit {unit_id}")))?;
-            let index = index as usize;
-            if index >= unit.overlays.len() {
-                unit.overlays.resize(
-                    index + 1,
-                    crate::session::OverlaySlot {
-                        scene_gpu_id: 0,
-                        enabled: true,
-                        ..crate::session::OverlaySlot::default()
-                    },
-                );
+        SessionMutation::UpsertOverlay { slot } => upsert_overlay(document, *slot),
+        SessionMutation::DeleteOverlay { id } => {
+            if !document.overlays.iter().any(|item| item.id == id) {
+                return Err(ControlError::not_found(format!("overlay {id}")));
             }
-            unit.overlays[index] = *slot;
+            document.overlays.retain(|item| item.id != id);
+            for unit in &mut document.units {
+                unit.overlays_on_air.retain(|item| *item != id);
+            }
+            Ok(())
+        }
+        SessionMutation::SetTransitions { presets } => {
+            document.transitions = presets;
             Ok(())
         }
         SessionMutation::AddMediaInput {
@@ -106,7 +97,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 scroll: false,
                 tone_hz: 0.0,
                 tone_level_dbfs: -20.0,
-                bus_mask: 1,
+                audio_units: vec![document.units.first().map(|unit| unit.id).unwrap_or(1)],
                 gain: 1.0,
                 mute: false,
                 use_gpu: false,
@@ -126,7 +117,6 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 tags,
                 mix_source: crate::session::MixSource::MuProgram,
                 mix_target_id: 0,
-                mix_audio_bus_id: 0,
                 audio_capture_mode: crate::session::AudioCaptureMode::Mic,
                 audio_device_kind: crate::session::AudioDeviceKind::None,
                 audio_device_id: String::new(),
@@ -149,10 +139,9 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
         SessionMutation::SetSettings {
             settings,
             outputs,
-            buses,
-            headphone_copy_master,
+            headphone,
+            headphone_copy_monitor,
             next_output_id,
-            next_bus_id,
         } => {
             let renderer = document.settings.renderer;
             let last_session_path = document.settings.last_session_path.clone();
@@ -160,15 +149,14 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             document.settings.renderer = renderer;
             document.settings.last_session_path = last_session_path;
             document.outputs = outputs;
-            document.buses = buses;
-            if let Some(enabled) = headphone_copy_master {
-                document.headphone_copy_master = enabled;
+            if let Some(headphone) = headphone {
+                document.headphone = headphone;
+            }
+            if let Some(enabled) = headphone_copy_monitor {
+                document.headphone_copy_monitor = enabled;
             }
             if next_output_id != 0 {
                 document.next_output_id = next_output_id;
-            }
-            if next_bus_id != 0 {
-                document.next_bus_id = next_bus_id;
             }
             Ok(())
         }
@@ -234,6 +222,24 @@ fn upsert_scene(document: &mut Document, scene: SceneDto) -> ControlResult<()> {
     } else {
         document.next_scene_id = document.next_scene_id.max(scene.id.saturating_add(1));
         document.scenes.push(scene);
+    }
+    Ok(())
+}
+
+fn upsert_overlay(
+    document: &mut Document,
+    mut slot: crate::session::OverlaySlot,
+) -> ControlResult<()> {
+    if slot.id == 0 {
+        slot.id = document.next_overlay_id.max(1);
+        document.next_overlay_id = slot.id.saturating_add(1);
+    } else {
+        document.next_overlay_id = document.next_overlay_id.max(slot.id.saturating_add(1));
+    }
+    if let Some(existing) = document.overlays.iter_mut().find(|item| item.id == slot.id) {
+        *existing = slot;
+    } else {
+        document.overlays.push(slot);
     }
     Ok(())
 }
@@ -428,7 +434,7 @@ mod tests {
             unit_id: 1,
             use_gpu: true,
             enabled: true,
-            audio_bus_id: 1,
+            audio_unit_id: 1,
             skip_encode_when_no_receivers: true,
             width: 0,
             height: 0,
@@ -444,7 +450,7 @@ mod tests {
             unit_id: 1,
             use_gpu: false,
             enabled: true,
-            audio_bus_id: 1,
+            audio_unit_id: 1,
             skip_encode_when_no_receivers: true,
             width: 0,
             height: 0,
@@ -478,17 +484,16 @@ mod tests {
                     unit_id: 1,
                     use_gpu: true,
                     enabled: true,
-                    audio_bus_id: 1,
+                    audio_unit_id: 1,
                     skip_encode_when_no_receivers: true,
                     width: 0,
                     height: 0,
                     fps_num: 0,
                     fps_den: 0,
                 }],
-                buses: vec![],
-                headphone_copy_master: Some(true),
+                headphone: None,
+                headphone_copy_monitor: Some(true),
                 next_output_id: 101,
-                next_bus_id: 3,
             },
         )
         .unwrap();
@@ -496,28 +501,27 @@ mod tests {
         assert_eq!(doc.settings.renderer, crate::session::Renderer::Vulkan);
         assert_eq!(doc.settings.last_session_path.as_deref(), Some("show.json"));
         assert_eq!(doc.outputs.len(), 1);
-        assert!(doc.headphone_copy_master);
+        assert!(doc.headphone_copy_monitor);
         assert_eq!(doc.next_output_id, 101);
     }
 
     #[test]
     fn set_settings_without_headphone_keeps_existing() {
         let mut doc = bars();
-        doc.headphone_copy_master = true;
+        doc.headphone_copy_monitor = true;
         let settings = doc.settings.clone();
         apply(
             &mut doc,
             SessionMutation::SetSettings {
                 settings: Box::new(settings),
                 outputs: vec![],
-                buses: vec![],
-                headphone_copy_master: None,
+                headphone: None,
+                headphone_copy_monitor: None,
                 next_output_id: 0,
-                next_bus_id: 0,
             },
         )
         .unwrap();
-        assert!(doc.headphone_copy_master);
+        assert!(doc.headphone_copy_monitor);
     }
 
     #[test]

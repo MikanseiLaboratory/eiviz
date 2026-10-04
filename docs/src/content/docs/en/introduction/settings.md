@@ -67,7 +67,7 @@ Where pictures leave the mixer.
 Each row is a name, a transport, an On/Off switch, a video source, audio, resolution, and frame rate.  
 Transport is OMT or NDI. Hardware outputs such as DeckLink are still in progress.  
 Source can be Input, Scene, MU PRV, MU PGM, or Multiview.  
-Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
+Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.  
 Resolution and frame rate are per output. Follow session settings uses the Mixing Unit (or the session master frame rate and default size). Video is sent at that rate, not as soon as compose finishes.
 
@@ -93,16 +93,14 @@ Which Mixing Unit’s Preview/Program a newly created Multiview watches.
 The project-default frame skip. Lower it on a weaker PC so monitoring does not hurt performance.  
 Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 
-## Audio Auxiliary
+## Headphone
 
-<img src="/eiviz/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Audio AUX settings" style="max-width: 100%; height: auto;" />
+<img src="/eiviz/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Headphone settings" style="max-width: 100%; height: auto;" />
 
-The internal mix is 48 kHz stereo. You can add up to eight Audio AUX buses, A–H.  
-Detail is in [Audio Auxs](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
+The internal mix is 48 kHz stereo. This page sets the Headphone output device. Choose what to hear with the headphone icon on a meter. Each Mixing Unit's own output device is on the Mixing Unit dialog.  
+Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
 
-Enabled keeps the bus mixing internally with no output device. Hardware output is WASAPI shared or ASIO.
-
-Headphone copies Master makes the Headphone bus a duplicate of Master. Leave it off if you want a cue mix.
+None keeps the mix internal. Hardware output is WASAPI shared or ASIO.
 
 ## Web API
 

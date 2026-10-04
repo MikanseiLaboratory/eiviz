@@ -23,7 +23,7 @@ Each OMT output can skip VMX encode when no receiver is subscribed. The default 
 
 ## Audio
 
-Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
+Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.
 
 Device mix is [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/). Network PCM is taken from that internal mix.

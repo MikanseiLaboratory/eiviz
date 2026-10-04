@@ -31,7 +31,7 @@ Browser `Origin` headers are allowed by `EIVIZ_API_ALLOWED_ORIGINS` (comma-separ
 | `GetCapabilities` / `GetSnapshot` / `Subscribe` | read | Capabilities, Document+LiveState, event subscribe |
 | `Preview` / `Cut` / `Auto` / `SetMix` / `OverlayAuto` | operate | Live Mixing Unit ops |
 | `VideoPlay` / `VideoLoop` / `VideoSeek` | operate | Video inputs |
-| `AudioSetInput` / `AudioSetBus` | operate | Audio |
+| `AudioSetInput` / `AudioSetBus` | operate | Route an Input to Mixing Unit ids, or set MU Bus / Headphone gain and mute |
 | `SnapshotCmd` / `Discover` | operate | Still capture and discovery |
 | `ReplaceSession` | configure | Replace the destination Document (`expected_revision` rejects lost updates) |
 | `MutateSession` | configure | Typed document mutation (mismatched `expected_revision` is rejected; the client reloads) |

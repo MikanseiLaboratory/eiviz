@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows;
 using Eiviz.Host.Interop;
+using Eiviz.Host.Media;
 using Eiviz.Host.Preview;
 
 namespace Eiviz.Host;
@@ -35,7 +36,7 @@ internal interface IEivizBackend
     bool Preview(ulong unitId, ulong sceneGpuId);
     bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset);
     bool SetMix(ulong unitId, float mix, TransitionPreset? preset);
-    bool OverlayAuto(ulong unitId, uint index, uint durationMs, bool toOn);
+    bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn);
     bool VideoPlay(ulong inputId, bool playing);
     bool VideoLoop(ulong inputId, bool looping);
     bool VideoSeek(ulong inputId, long positionHns);
@@ -56,7 +57,7 @@ internal interface IEivizBackend
     void BusSources(ulong unitId, out ulong previewGpuId, out ulong programGpuId);
     IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; }
     void SetBusGain(ulong busId, float gain, bool mute);
-    void SetInputGain(ulong inputId, uint busMask, float gain, bool mute);
+    void SetInputGain(ulong inputId, IReadOnlyList<ulong> units, float gain, bool mute);
     IReadOnlyList<PublishedVideoOutput> PublishedOutputs();
     void BindPreviewProgram(SwapchainHost preview, SwapchainHost program, ulong unitId);
     void BindMainMultiview(SwapchainHost host);
@@ -87,14 +88,13 @@ internal static class MutationJson
     public static string UpsertScene(SceneEntry scene) =>
         JsonSerializer.Serialize(new { kind = "upsertScene", scene = SceneDto.FromPublic(scene) }, Json);
 
-    public static string SetOverlaySlot(ulong unitId, uint index, OverlaySlot slot) =>
+    public static string UpsertOverlay(OverlaySlot slot) =>
         JsonSerializer.Serialize(new
         {
-            kind = "setOverlaySlot",
-            unitId,
-            index,
+            kind = "upsertOverlay",
             slot = new
             {
+                id = slot.Id,
                 sceneGpuId = slot.SceneGpuId,
                 x = slot.X,
                 y = slot.Y,
@@ -102,16 +102,23 @@ internal static class MutationJson
                 height = slot.Height,
                 opacity = slot.Opacity,
                 z = slot.Z,
-                enabled = slot.Enabled,
                 transitionKind = slot.TransitionKind,
                 durationValue = slot.DurationValue,
                 durationUnit = slot.DurationUnit,
                 audioFollow = slot.AudioFollow,
                 sourceKind = slot.SourceKind == OverlaySourceKind.Input ? 1u : 0u,
                 locked = slot.Locked,
-                hidden = slot.Hidden
+                hidden = slot.Hidden,
+                sizeLinked = slot.SizeLinked,
+                cropX = slot.CropX,
+                cropY = slot.CropY,
+                cropWidth = slot.CropWidth,
+                cropHeight = slot.CropHeight
             }
         }, Json);
+
+    public static string DeleteOverlay(ulong id) =>
+        JsonSerializer.Serialize(new { kind = "deleteOverlay", id }, Json);
 
     public static string UpsertInput(InputEntry input) =>
         JsonSerializer.Serialize(new { kind = "upsertInput", input = InputWire.From(input) }, Json);
@@ -170,18 +177,16 @@ internal static class MutationJson
     public static string SetSettings(
         SessionSettings settings,
         IEnumerable<OutputEntry> outputs,
-        IEnumerable<AudioBusEntry> buses,
-        bool headphoneCopyMaster,
-        ulong nextOutputId,
-        ulong nextBusId) =>
+        HeadphoneEntry headphone,
+        bool headphoneCopyMonitor,
+        ulong nextOutputId) =>
         JsonSerializer.Serialize(new SetSettingsWire
         {
             Settings = settings,
             Outputs = outputs,
-            Buses = buses,
-            HeadphoneCopyMaster = headphoneCopyMaster,
-            NextOutputId = nextOutputId,
-            NextBusId = nextBusId
+            Headphone = headphone,
+            HeadphoneCopyMonitor = headphoneCopyMonitor,
+            NextOutputId = nextOutputId
         }, DocumentJson);
 
     private sealed class SetSettingsWire
@@ -189,10 +194,9 @@ internal static class MutationJson
         public string Kind { get; set; } = "setSettings";
         public SessionSettings Settings { get; set; } = new();
         public IEnumerable<OutputEntry> Outputs { get; set; } = [];
-        public IEnumerable<AudioBusEntry> Buses { get; set; } = [];
-        public bool HeadphoneCopyMaster { get; set; }
+        public HeadphoneEntry Headphone { get; set; } = new();
+        public bool HeadphoneCopyMonitor { get; set; }
         public ulong NextOutputId { get; set; }
-        public ulong NextBusId { get; set; }
     }
 
     private sealed class InputWire
@@ -208,7 +212,7 @@ internal static class MutationJson
         public bool Scroll { get; set; }
         public float ToneHz { get; set; }
         public float ToneLevelDbfs { get; set; } = -20;
-        public uint BusMask { get; set; } = 1;
+        public List<ulong> AudioUnits { get; set; } = [];
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
         public bool UseGpu { get; set; }
@@ -228,7 +232,6 @@ internal static class MutationJson
         public List<string> Tags { get; set; } = [];
         public MixSource MixSource { get; set; }
         public ulong MixTargetId { get; set; }
-        public ulong MixAudioBusId { get; set; }
         public AudioCaptureMode AudioCaptureMode { get; set; } = AudioCaptureMode.Mic;
         public AudioDeviceKind AudioDeviceKind { get; set; } = AudioDeviceKind.None;
         public string AudioDeviceId { get; set; } = "";
@@ -250,7 +253,7 @@ internal static class MutationJson
             Scroll = input.Scroll,
             ToneHz = input.ToneHz,
             ToneLevelDbfs = input.ToneLevelDbfs,
-            BusMask = input.BusMask,
+            AudioUnits = input.Kind == InputKind.Mix ? [] : [.. input.AudioUnits],
             Gain = input.Gain,
             Mute = input.Mute,
             UseGpu = input.UseGpu,
@@ -270,7 +273,6 @@ internal static class MutationJson
             Tags = [.. input.Tags],
             MixSource = input.MixSource,
             MixTargetId = input.MixTargetId,
-            MixAudioBusId = input.MixAudioBusId,
             AudioCaptureMode = input.AudioCaptureMode,
             AudioDeviceKind = input.AudioDeviceKind,
             AudioDeviceId = input.AudioDeviceId,
@@ -366,14 +368,13 @@ internal sealed class LocalEivizBackend : IEivizBackend
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset) =>
         MixerApply.SetMixLocal(unitId, mix, preset);
 
-    public bool OverlayAuto(ulong unitId, uint index, uint durationMs, bool toOn)
+    public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn)
     {
         if (Application.Current is not App app)
             return false;
-        var unit = app.Session.Units.FirstOrDefault(item => item.Id == unitId);
-        if (unit is null || index >= unit.Overlays.Count)
+        var slot = app.Session.Overlays.FirstOrDefault(item => item.Id == overlayId);
+        if (slot is null || app.Session.Units.All(item => item.Id != unitId))
             return false;
-        var slot = unit.Overlays[(int)index];
         unsafe
         {
             var desc = OverlayDescFrom(slot);
@@ -458,8 +459,8 @@ internal sealed class LocalEivizBackend : IEivizBackend
     public void SetBusGain(ulong busId, float gain, bool mute) =>
         MixerNative.AudioSetBusGain(busId, gain, mute ? 1u : 0u);
 
-    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) =>
-        MixerNative.AudioSetInput(inputId, busMask, gain, mute ? 1u : 0u);
+    public void SetInputGain(ulong inputId, IReadOnlyList<ulong> units, float gain, bool mute) =>
+        AudioGraphSync.SetInput(inputId, units, gain, mute);
 
     public IReadOnlyList<PublishedVideoOutput> PublishedOutputs() =>
         Application.Current is App app ? HostPresentation.From(app.Session) : [];
@@ -627,8 +628,8 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         return MixerRemote.SetMix(_handle, unitId, mix) == 0;
     }
 
-    public bool OverlayAuto(ulong unitId, uint index, uint durationMs, bool toOn) =>
-        MixerRemote.OverlayAuto(_handle, unitId, index, durationMs, toOn ? 1u : 0u) == 0;
+    public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) =>
+        MixerRemote.OverlayAuto(_handle, unitId, overlayId, durationMs, toOn ? 1u : 0u) == 0;
 
     public bool VideoPlay(ulong inputId, bool playing) =>
         MixerRemote.VideoPlay(_handle, inputId, playing ? 1u : 0u) == 0;
@@ -725,8 +726,23 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public void SetBusGain(ulong busId, float gain, bool mute) =>
         MixerRemote.AudioSetBus(_handle, busId, gain, mute ? 1u : 0u);
 
-    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) =>
-        MixerRemote.AudioSetInput(_handle, inputId, busMask, gain, mute ? 1u : 0u);
+    public void SetInputGain(ulong inputId, IReadOnlyList<ulong> units, float gain, bool mute)
+    {
+        var copy = units as ulong[] ?? units.ToArray();
+        unsafe
+        {
+            fixed (ulong* ptr = copy)
+            {
+                MixerRemote.AudioSetInput(
+                    _handle,
+                    inputId,
+                    copy.Length == 0 ? null : ptr,
+                    (uint)copy.Length,
+                    gain,
+                    mute ? 1u : 0u);
+            }
+        }
+    }
 
     private void PullLive()
     {
@@ -1225,7 +1241,7 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool Preview(ulong unitId, ulong sceneGpuId) { _ = (unitId, sceneGpuId); return false; }
     public bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset) { _ = (unitId, unit, preset); return false; }
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset) { _ = (unitId, mix, preset); return false; }
-    public bool OverlayAuto(ulong unitId, uint index, uint durationMs, bool toOn) { _ = (unitId, index, durationMs, toOn); return false; }
+    public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) { _ = (unitId, overlayId, durationMs, toOn); return false; }
     public bool VideoPlay(ulong inputId, bool playing) { _ = (inputId, playing); return false; }
     public bool VideoLoop(ulong inputId, bool looping) { _ = (inputId, looping); return false; }
     public bool VideoSeek(ulong inputId, long positionHns) { _ = (inputId, positionHns); return false; }
@@ -1256,7 +1272,7 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public IReadOnlyDictionary<ulong, (float L, float R)> Peaks { get; } =
         new Dictionary<ulong, (float L, float R)>();
     public void SetBusGain(ulong busId, float gain, bool mute) { _ = (busId, gain, mute); }
-    public void SetInputGain(ulong inputId, uint busMask, float gain, bool mute) { _ = (inputId, busMask, gain, mute); }
+    public void SetInputGain(ulong inputId, IReadOnlyList<ulong> units, float gain, bool mute) { _ = (inputId, units, gain, mute); }
     public IReadOnlyList<PublishedVideoOutput> PublishedOutputs() => [];
     public void BindPreviewProgram(SwapchainHost preview, SwapchainHost program, ulong unitId)
     {

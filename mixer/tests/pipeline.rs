@@ -13,13 +13,14 @@ use eiviz_mixer::{
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
-    mixer_audio_bus_count, mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
-    mixer_create_unit, mixer_create_with_backend, mixer_define_generator, mixer_define_mix_input,
+    mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
+    mixer_audio_set_input, mixer_create_unit, mixer_create_with_backend, mixer_define_generator,
+    mixer_define_mix_input,
     mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_omt_connect,
     mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
     mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
     mixer_unit_acquire_frame, mixer_unit_auto, mixer_unit_cut, mixer_unit_detach_native,
-    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_state,
+    mixer_unit_get_state, mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
     mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(target_os = "linux")]
@@ -96,7 +97,6 @@ fn vmx_roundtrip_is_available() {
 fn compose_omt_and_program_out() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
-    assert!(mixer_audio_bus_count() >= 2);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
 
     let mut state = UnitState {
@@ -104,15 +104,22 @@ fn compose_omt_and_program_out() {
         preview_source: SRC_BLUE,
         mix: 0.5,
         transition_kind: 1,
-        overlay_count: 1,
         ..UnitState::default()
     };
-    state.overlays[0].source_id = SRC_BARS;
-    state.overlays[0].rect.width = 0.3;
-    state.overlays[0].rect.height = 0.3;
-    state.overlays[0].opacity = 0.8;
+    let overlay = OverlayDesc {
+        source_id: SRC_BARS,
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.3,
+            height: 0.3,
+        },
+        opacity: 0.8,
+        ..OverlayDesc::default()
+    };
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_set_overlays(1, &overlay, 1), OK);
     }
     thread::sleep(Duration::from_millis(250));
     unsafe {
@@ -355,7 +362,7 @@ fn mix_mu_program_shows_fade_during_auto() {
     assert_eq!(mixer_create_unit(2, 320, 180), OK);
     let mix_layer = full_layer(20);
     unsafe {
-        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1, 0), OK);
+        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1), OK);
         assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_layer), OK);
         let source = UnitState {
             program_source: SRC_COLOR,
@@ -457,7 +464,7 @@ fn mix_session_multiview_raw_id_program_is_not_black() {
             OK
         );
         assert_eq!(
-            mixer_define_mix_input(20, 1, SRC_KIND_MU_MULTIVIEW, 1, 0),
+            mixer_define_mix_input(20, 1, SRC_KIND_MU_MULTIVIEW, 1),
             OK
         );
         assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_layer), OK);
@@ -557,10 +564,10 @@ fn omt_multiview_output_is_received() {
     mixer_destroy();
 }
 
-/// Master audio must leave the OMT sender. Color/Bars are silent unless a tone
-/// is set; FPA1 also drops all-zero channels.
+/// The program MU Bus must leave the OMT sender. Color/Bars are silent unless a
+/// tone is set and the input is routed to that Mixing Unit.
 #[test]
-fn omt_program_sends_master_audio() {
+fn omt_program_sends_mu_bus_audio() {
     mixer_destroy();
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
@@ -571,6 +578,11 @@ fn omt_program_sends_master_audio() {
             OK
         );
         assert_eq!(mixer_generator_set_tone(SRC_COLOR, 1000.0, -12.0), OK);
+        let units = [1u64];
+        assert_eq!(
+            mixer_audio_set_input(SRC_COLOR, units.as_ptr(), 1, 1.0, 0),
+            OK
+        );
         let state = UnitState {
             program_source: SRC_COLOR,
             preview_source: SRC_BLUE,
@@ -607,7 +619,7 @@ fn omt_program_sends_master_audio() {
     let energy = wait_omt_audio_energy(&audio, Duration::from_secs(4));
     assert!(
         energy > 1e-6,
-        "OMT Program with Master should send tone audio, energy={energy}"
+        "OMT Program should send the MU Bus tone, energy={energy}"
     );
     let packets = wait_omt_audio_packets(&audio, 8, Duration::from_secs(2));
     assert!(
@@ -1133,10 +1145,9 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
         program_source: scene_id(2),
         preview_source: scene_id(1),
         mix: 0.0,
-        overlay_count: 1,
         ..UnitState::default()
     };
-    state.overlays[0] = OverlayDesc {
+    let overlay = OverlayDesc {
         source_id: scene_id(3),
         rect: Rect {
             x: 0.6,
@@ -1152,6 +1163,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
     state.mv_slots[1] = SRC_BLUE;
     unsafe {
         assert_eq!(mixer_unit_set_state(1, &state), OK);
+        assert_eq!(mixer_unit_set_overlays(1, &overlay, 1), OK);
     }
 
     let other = UnitState {
@@ -1180,7 +1192,6 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
         assert_eq!(after.preview_source, scene_id(2));
         assert_eq!(after.mix, 0.0);
         assert_eq!(after.mv_slots[0], scene_id(1));
-        assert_eq!(after.overlay_count, 1);
 
         let mut still = UnitState::default();
         assert_eq!(mixer_unit_get_state(2, &mut still), OK);
@@ -1243,10 +1254,10 @@ fn mix_input_define_and_self_cycle_rejected() {
     assert_eq!(mixer_create(0, 60_000, 1_001), OK);
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
     assert_eq!(mixer_create_unit(2, 320, 180), OK);
-    assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 2, 0), OK);
-    assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PREVIEW, 1, 1), OK);
+    assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 2), OK);
+    assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PREVIEW, 1), OK);
     assert_eq!(
-        mixer_define_mix_input(0, 1, SRC_KIND_MU_PROGRAM, 1, 0),
+        mixer_define_mix_input(0, 1, SRC_KIND_MU_PROGRAM, 1),
         ERR_INVALID_ARGUMENT
     );
 
@@ -1284,9 +1295,15 @@ fn mix_input_define_and_self_cycle_rejected() {
         assert_eq!(mixer_unit_set_state(1, &scene_cycle), ERR_INVALID_ARGUMENT);
 
         scene_cycle.program_source = SRC_COLOR;
-        scene_cycle.overlay_count = 1;
-        scene_cycle.overlays[0].source_id = 20;
-        assert_eq!(mixer_unit_set_state(1, &scene_cycle), ERR_INVALID_ARGUMENT);
+        assert_eq!(mixer_unit_set_state(1, &scene_cycle), OK);
+        let cycle_overlay = OverlayDesc {
+            source_id: 20,
+            ..OverlayDesc::default()
+        };
+        assert_eq!(
+            mixer_unit_set_overlays(1, &cycle_overlay, 1),
+            ERR_INVALID_ARGUMENT
+        );
     }
     mixer_destroy();
 }
@@ -1303,8 +1320,8 @@ fn mix_input_nesting_keeps_composing() {
     let mix_a = full_layer(20);
     let mix_b = full_layer(21);
     unsafe {
-        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1, 0), OK);
-        assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PROGRAM, 1, 0), OK);
+        assert_eq!(mixer_define_mix_input(20, 1, SRC_KIND_MU_PROGRAM, 1), OK);
+        assert_eq!(mixer_define_mix_input(21, 2, SRC_KIND_MU_PROGRAM, 1), OK);
         assert_eq!(mixer_define_scene(scene_id(2), 320, 180, 1, &mix_a), OK);
         assert_eq!(mixer_define_scene(scene_id(3), 320, 180, 1, &mix_b), OK);
         let source = UnitState {

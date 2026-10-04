@@ -214,22 +214,22 @@ enum MixerRemote {
               let settingsObj = try? JSONSerialization.jsonObject(with: settings),
               let outputs = try? encoder.encode(session.outputs),
               let outputsObj = try? JSONSerialization.jsonObject(with: outputs),
-              let buses = try? encoder.encode(session.buses),
-              let busesObj = try? JSONSerialization.jsonObject(with: buses)
+              let headphone = try? encoder.encode(session.headphone),
+              let headphoneObj = try? JSONSerialization.jsonObject(with: headphone)
         else { return "{}" }
         return encode([
             "kind": "setSettings",
             "settings": settingsObj,
             "outputs": outputsObj,
-            "buses": busesObj,
-            "headphoneCopyMaster": session.headphoneCopyMaster,
-            "nextOutputId": NSNumber(value: session.nextOutputId),
-            "nextBusId": NSNumber(value: session.nextBusId)
+            "headphone": headphoneObj,
+            "headphoneCopyMonitor": session.headphoneCopyMonitor,
+            "nextOutputId": NSNumber(value: session.nextOutputId)
         ])
     }
 
-    static func setOverlaySlot(unitId: UInt64, index: UInt32, slot: OverlaySlot) -> String {
+    static func upsertOverlay(_ slot: OverlaySlot) -> String {
         let wire: [String: Any] = [
+            "id": NSNumber(value: slot.id),
             "sceneGpuId": NSNumber(value: slot.sceneGpuId),
             "x": slot.x,
             "y": slot.y,
@@ -237,21 +237,24 @@ enum MixerRemote {
             "height": slot.height,
             "opacity": slot.opacity,
             "z": slot.z,
-            "enabled": slot.enabled,
             "transitionKind": slot.transitionKind,
             "durationValue": slot.durationValue,
             "durationUnit": slot.durationUnit,
             "audioFollow": slot.audioFollow,
-            "sourceKind": slot.sourceKind == .input ? 1 : 0,
+            "sourceKind": slot.sourceKind.rawValue,
             "locked": slot.locked,
-            "hidden": slot.hidden
+            "hidden": slot.hidden,
+            "sizeLinked": slot.sizeLinked,
+            "cropX": slot.cropX,
+            "cropY": slot.cropY,
+            "cropWidth": slot.cropWidth,
+            "cropHeight": slot.cropHeight
         ]
-        return encode([
-            "kind": "setOverlaySlot",
-            "unitId": NSNumber(value: unitId),
-            "index": index,
-            "slot": wire
-        ])
+        return encode(["kind": "upsertOverlay", "slot": wire])
+    }
+
+    static func deleteOverlay(_ id: UInt64) -> String {
+        encode(["kind": "deleteOverlay", "id": NSNumber(value: id)])
     }
 
     static func mix(from liveJson: String, unitId: UInt64) -> Float? {

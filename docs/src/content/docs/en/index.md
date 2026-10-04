@@ -21,7 +21,7 @@ This site covers how to use eiviz, why it exists, and how it is meant to be run 
 - [Inputs](/eiviz/en/concepts/inputs/) — video sources, and how Input, Scene, Mixing Unit, and Output connect
 - [Scenes](/eiviz/en/concepts/scenes/) — a composite stacked from Inputs
 - [Mixing Unit](/eiviz/en/concepts/mixing-unit/) — the unit that switches Preview and Program
-- [Audio Auxs](/eiviz/en/concepts/audio-auxs/) — Master, Headphone, and AUX buses
+- [MU Bus](/eiviz/en/concepts/audio-auxs/) — one audio bus per Mixing Unit, plus Headphone
 - [Outputs](/eiviz/en/concepts/outputs/) — sending the chosen source
 - [Multiviews](/eiviz/en/concepts/multiviews/) — a monitor mosaic
 - [Overlays](/eiviz/en/concepts/overlays/) — DSK on a Mixing Unit’s Program

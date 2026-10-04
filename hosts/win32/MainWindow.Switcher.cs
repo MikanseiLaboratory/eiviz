@@ -302,6 +302,20 @@ public partial class MainWindow
                 BusTheme.Inactive(_session.Settings));
         }
         ApplySceneTileThumbs();
+        RefreshAudioRoutes();
+    }
+
+    private void RefreshAudioRoutes()
+    {
+        foreach (var input in _session.Inputs)
+        {
+            if (input.Kind == InputKind.Mix || !_meters.TryGetValue(input.Id, out var strip))
+                continue;
+            var follow = FollowUnits(input);
+            strip.SetRoutes(_session.Units, input.AudioUnits, follow);
+            if (_audioInputs.TryGetValue(input.Id, out var window))
+                window.SetRoutes(input.AudioUnits, follow);
+        }
     }
 
     private void ApplySceneTileThumbs()
@@ -414,7 +428,7 @@ public partial class MainWindow
             input.Mute = mute;
             ((App)Application.Current).Backend.SetInputGain(
                 input.Id,
-                input.BusMask == 0 ? 1u : input.BusMask,
+                input.AudioUnits,
                 MixerNative.MixerGain(input.Gain),
                 mute);
         }
@@ -441,7 +455,7 @@ public partial class MainWindow
 
     private TransitionPreset TbarPreset()
     {
-        var list = SelectedUnit.Transitions;
+        var list = _session.Transitions;
         if (list.Count == 0)
             return new TransitionPreset { Kind = MixerNative.TransitionCut, Swap = true };
         var index = Math.Clamp(_tbarPresetIndex, 0, list.Count - 1);
@@ -493,8 +507,8 @@ public partial class MainWindow
 
     private void AddTransition_Click(object sender, RoutedEventArgs e)
     {
-        SelectedUnit.Transitions.Add(new TransitionPreset());
-        _tbarPresetIndex = SelectedUnit.Transitions.Count - 1;
+        _session.Transitions.Add(new TransitionPreset());
+        _tbarPresetIndex = _session.Transitions.Count - 1;
         _transitionExpanded.Add(_tbarPresetIndex);
         RebuildTransitions();
     }
@@ -503,14 +517,14 @@ public partial class MainWindow
     {
         TransitionPanel.Children.Clear();
         var unit = SelectedUnit;
-        var expanded = _transitionExpanded.Where(i => i < unit.Transitions.Count).ToHashSet();
+        var expanded = _transitionExpanded.Where(i => i < _session.Transitions.Count).ToHashSet();
         _transitionExpanded.Clear();
         foreach (var i in expanded)
             _transitionExpanded.Add(i);
-        for (var i = 0; i < unit.Transitions.Count; i++)
+        for (var i = 0; i < _session.Transitions.Count; i++)
         {
             var index = i;
-            var preset = unit.Transitions[i];
+            var preset = _session.Transitions[i];
             TransitionCatalog.ApplyKindDefaults(preset);
             var selected = index == _tbarPresetIndex;
             var row = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -594,9 +608,9 @@ public partial class MainWindow
             var remove = new Button { Content = "−", Height = 22, Margin = new Thickness(0, 4, 0, 0) };
             remove.Click += (_, _) =>
             {
-                unit.Transitions.RemoveAt(index);
+                _session.Transitions.RemoveAt(index);
                 _transitionExpanded.Remove(index);
-                _tbarPresetIndex = Math.Clamp(_tbarPresetIndex, 0, Math.Max(0, unit.Transitions.Count - 1));
+                _tbarPresetIndex = Math.Clamp(_tbarPresetIndex, 0, Math.Max(0, _session.Transitions.Count - 1));
                 RebuildTransitions();
             };
             if (preset.HasDuration)
@@ -803,13 +817,13 @@ public partial class MainWindow
     {
         OverlayTogglePanel.Children.Clear();
         var unit = SelectedUnit;
-        if (unit.Overlays.Count == 0)
+        if (_session.Overlays.Count == 0)
             return;
-        for (var i = 0; i < unit.Overlays.Count; i++)
+        foreach (var slot in _session.Overlays)
         {
-            var slot = unit.Overlays[i];
             var name = slot.DisplayName(_session);
-            OverlayTogglePanel.Children.Add(new OverlayStrip(name, slot.Enabled, enabled =>
+            var on = unit.OverlaysOnAir.Contains(slot.Id);
+            OverlayTogglePanel.Children.Add(new OverlayStrip(name, on, enabled =>
             {
                 ToggleOverlay(unit, slot, enabled);
             }));
@@ -817,18 +831,28 @@ public partial class MainWindow
     }
 
     internal void PushAuxFor(MixingUnitEntry unit) =>
-        MixerApply.PatchAux(unit.Id, unit);
+        MixerApply.PushOverlays(_session, unit);
+
+    static void SetOverlayOn(MixingUnitEntry unit, OverlaySlot slot, bool on)
+    {
+        if (on)
+        {
+            if (!unit.OverlaysOnAir.Contains(slot.Id))
+                unit.OverlaysOnAir.Add(slot.Id);
+            return;
+        }
+        unit.OverlaysOnAir.Remove(slot.Id);
+    }
 
     internal void ToggleOverlay(MixingUnitEntry unit, OverlaySlot slot, bool enabled)
     {
-        var index = (uint)Math.Max(0, unit.Overlays.IndexOf(slot));
         var ms = slot.DurationUnit == MixerNative.DurationMs
             ? Math.Max(1, slot.DurationValue)
             : unit.DurationMs(slot.DurationValue);
         if (Application.Current is App { Backend.IsRemote: true } remoteApp)
         {
-            slot.Enabled = enabled;
-            remoteApp.Backend.OverlayAuto(unit.Id, index, ms, enabled);
+            SetOverlayOn(unit, slot, enabled);
+            remoteApp.Backend.OverlayAuto(unit.Id, slot.Id, ms, enabled);
             NotifyOverlayUi();
             return;
         }
@@ -844,14 +868,14 @@ public partial class MainWindow
         };
         if (slot.TransitionKind == MixerNative.TransitionCut || ms <= 1)
         {
-            slot.Enabled = enabled;
+            SetOverlayOn(unit, slot, enabled);
             PushAuxFor(unit);
             NotifyOverlayUi();
             return;
         }
         if (enabled)
         {
-            slot.Enabled = true;
+            SetOverlayOn(unit, slot, true);
             PushAuxFor(unit);
             unsafe
             {
@@ -861,15 +885,15 @@ public partial class MainWindow
             return;
         }
 
-        slot.Enabled = false;
+        SetOverlayOn(unit, slot, false);
         NotifyOverlayUi();
-        slot.Enabled = true;
+        SetOverlayOn(unit, slot, true);
         PushAuxFor(unit);
         unsafe
         {
             MixerNative.OverlayAuto(unit.Id, 0u, ms, &desc);
         }
-        slot.Enabled = false;
+        SetOverlayOn(unit, slot, false);
         var delay = TimeSpan.FromMilliseconds(ms);
         _ = Dispatcher.InvokeAsync(async () =>
         {

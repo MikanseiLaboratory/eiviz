@@ -537,7 +537,7 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
             &request_id,
             Command::OverlayAuto {
                 unit_id: overlay.unit.as_ref().map(|item| item.id).unwrap_or(0),
-                index: overlay.index,
+                overlay_id: overlay.overlay_id,
                 duration_ms: overlay.duration_ms,
                 to_on: overlay.to_on,
             },
@@ -575,7 +575,7 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
             &request_id,
             Command::AudioSetInput {
                 input_id: audio.input.as_ref().map(|item| item.id).unwrap_or(0),
-                bus_mask: audio.bus_mask,
+                units: audio.units,
                 gain: audio.gain,
                 mute: audio.mute,
             },
@@ -585,7 +585,7 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
             instance,
             &request_id,
             Command::AudioSetBus {
-                bus_id: audio.bus.as_ref().map(|item| item.id).unwrap_or(0),
+                unit_id: audio.unit.as_ref().map(|item| item.id).unwrap_or(0),
                 gain: audio.gain,
                 mute: audio.mute,
             },

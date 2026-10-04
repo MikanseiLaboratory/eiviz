@@ -218,16 +218,17 @@ pub(crate) fn render_loop(
                 let mix_preview = snapshot_mix_preview(unit);
                 let mut state = unit.state;
                 state.incoming_source = mix_preview;
-                (
-                    *id,
-                    unit.width,
-                    unit.height,
-                    unit.fps_num,
-                    unit.fps_den,
+                UnitSnap {
+                    id: *id,
+                    width: unit.width,
+                    height: unit.height,
+                    fps_num: unit.fps_num,
+                    fps_den: unit.fps_den,
                     state,
                     mix_preview,
-                    unit.custom_wgsl.clone(),
-                )
+                    custom_wgsl: unit.custom_wgsl.clone(),
+                    overlays: Arc::clone(&unit.overlays),
+                }
             }));
             scene_specs.clear();
             scene_specs.extend(guard.scenes.iter().map(|(id, spec)| {
@@ -265,7 +266,7 @@ pub(crate) fn render_loop(
                     source_kind: output.source_kind,
                     source_id: output.source_id,
                     unit_id: output.unit_id,
-                    audio_bus_id: output.audio_bus_id,
+                    audio_unit_id: output.audio_unit_id,
                     width: output.width,
                     height: output.height,
                     fps_n,
@@ -288,13 +289,13 @@ pub(crate) fn render_loop(
             let audio_routes: Vec<audio::AudioOutputRoute> = outputs_snap
                 .iter()
                 .filter(|output| {
-                    output.audio_bus_id != 0 && output.source_kind != SRC_KIND_MU_MULTIVIEW
+                    output.audio_unit_id != 0 && output.source_kind != SRC_KIND_MU_MULTIVIEW
                 })
                 .map(|output| {
                     let tx = output.tx.clone();
                     let audio_send = output.audio_send.clone();
                     audio::AudioOutputRoute {
-                        audio_bus_id: output.audio_bus_id,
+                        audio_unit_id: output.audio_unit_id,
                         source_kind: output.source_kind,
                         send: Arc::new(move |packet| {
                             if let Some(send) = &audio_send {
@@ -322,7 +323,7 @@ pub(crate) fn render_loop(
             drop(guard);
             let tallies: Vec<(u64, u64)> = snapshot
                 .iter()
-                .map(|item| (item.5.preview_source, item.5.program_source))
+                .map(|item| (item.state.preview_source, item.state.program_source))
                 .collect();
             // Three lanes:
             // 1. On-air playout/upload — every master frame (FIFOs and live pixels).
@@ -339,7 +340,7 @@ pub(crate) fn render_loop(
             let mut compose_sources = due_monitors;
             compose_sources.extend_from_slice(&due_thumbs);
             for (id, ..) in &pending_snapshots {
-                if snapshot.iter().any(|(unit_id, ..)| *unit_id == *id) {
+                if snapshot.iter().any(|snap| snap.id == *id) {
                     continue;
                 }
                 compose_sources.push(*id);
@@ -368,7 +369,7 @@ pub(crate) fn render_loop(
                 }
             }
             {
-                let live_units: HashSet<u64> = snapshot.iter().map(|(id, ..)| *id).collect();
+                let live_units: HashSet<u64> = snapshot.iter().map(|snap| snap.id).collect();
                 let live_outputs: HashSet<u64> =
                     outputs_snap.iter().map(|item| item.output_id).collect();
                 let live_sources: HashSet<u64> = uploads.lock_or_recover().ids().collect();
@@ -415,7 +416,7 @@ pub(crate) fn render_loop(
                 }
             };
             if need_gen_bake {
-                frame_delay.discard(snapshot.iter().map(|(id, ..)| *id));
+                frame_delay.discard(snapshot.iter().map(|snap| snap.id));
             }
             let need_prv = outputs_snap
                 .iter()
@@ -549,39 +550,46 @@ pub(crate) fn render_loop(
             }
             let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
             let mut gpu_copies: Vec<GpuEncodeCopy> = Vec::new();
-            for (unit_id, width, height, unit_fps_n, unit_fps_d, state, mix_preview, custom) in
-                &snapshot
-            {
-                let unit_rate = crate::clock::Rate::or_default(*unit_fps_n, *unit_fps_d);
+            for snap in &snapshot {
+                let unit_id = snap.id;
+                let width = snap.width;
+                let height = snap.height;
+                let unit_fps_n = snap.fps_num;
+                let unit_fps_d = snap.fps_den;
+                let state = &snap.state;
+                let mix_preview = snap.mix_preview;
+                let custom = &snap.custom_wgsl;
+                let unit_rate = crate::clock::Rate::or_default(unit_fps_n, unit_fps_d);
                 let ideal = clock.frames_elapsed(unit_rate, Instant::now());
-                let last = unit_compose_idx.entry(*unit_id).or_insert(u64::MAX);
+                let last = unit_compose_idx.entry(unit_id).or_insert(u64::MAX);
                 if *last != u64::MAX && ideal <= *last {
                     continue;
                 }
                 *last = ideal;
-                composer.ensure_unit(&device, *unit_id, *width, *height);
+                composer.ensure_unit(&device, unit_id, width, height);
                 if let Err(error) =
-                    composer.set_custom_mix(&device, *unit_id, custom.as_deref().unwrap_or(""))
+                    composer.set_custom_mix(&device, unit_id, custom.as_deref().unwrap_or(""))
                 {
                     crate::diag::error(&format!("custom wgsl: {error}"));
                     set_error(&telemetry, format!("custom wgsl: {error}"));
                 }
                 let pack_pgm = outputs_snap.iter().any(|item| {
-                    item.unit_id == *unit_id
+                    item.unit_id == unit_id
                         && item.source_kind == SRC_KIND_MU_PROGRAM
                         && item.cpu_video()
                 });
                 if let Err(error) = composer.render_unit(
                     &device,
-                    *unit_id,
+                    unit_id,
                     state,
-                    *mix_preview,
+                    snap.overlays.as_ref(),
+                    mix_preview,
                     &mut encoder,
                     pack_pgm,
                 ) {
                     set_error(&telemetry, error);
                 }
-                composer.pack_aux(&device, &mut encoder, *unit_id, need_prv);
+                composer.pack_aux(&device, &mut encoder, unit_id, need_prv);
             }
             for output in &outputs_snap {
                 if output.source_kind == SRC_KIND_MU_PROGRAM
@@ -636,7 +644,7 @@ pub(crate) fn render_loop(
                 &device,
                 &mut encoder,
                 &composer,
-                snapshot.iter().map(|(id, ..)| *id),
+                snapshot.iter().map(|snap| snap.id),
                 pts,
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
@@ -975,16 +983,17 @@ pub(crate) fn follow_gains(
                 .or_insert(gain);
         }
     }
-    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
+    for snap in snapshot {
+        let state = &snap.state;
         let mix = state.mix.clamp(0.0, 1.0);
-        let incoming = if *mix_preview != 0 {
-            *mix_preview
+        let incoming = if snap.mix_preview != 0 {
+            snap.mix_preview
         } else {
             state.mix_incoming()
         };
         add(state.program_source, 1.0 - mix, &spec_map, &mut gains);
         add(incoming, mix, &spec_map, &mut gains);
-        for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+        for overlay in snap.overlays.iter() {
             if overlay.audio_follow == 0 {
                 continue;
             }
@@ -1031,6 +1040,7 @@ pub(crate) fn audio_for_source(
 pub(crate) fn unit_uses_mix_cycle(
     unit_id: u64,
     state: &UnitState,
+    overlays: &[OverlayDesc],
     mix_inputs: &HashMap<u64, MixInputSpec>,
     scenes: &HashMap<u64, SceneSpec>,
 ) -> bool {
@@ -1039,13 +1049,9 @@ pub(crate) fn unit_uses_mix_cycle(
     mix_source_cycles(state.program_source, unit_id, mix_inputs, scenes, &mut seen)
         || mix_source_cycles(state.preview_source, unit_id, mix_inputs, scenes, &mut seen)
         || mix_source_cycles(incoming, unit_id, mix_inputs, scenes, &mut seen)
-        || state
-            .overlays
-            .iter()
-            .take(state.overlay_count as usize)
-            .any(|overlay| {
-                mix_source_cycles(overlay.source_id, unit_id, mix_inputs, scenes, &mut seen)
-            })
+        || overlays.iter().any(|overlay| {
+            mix_source_cycles(overlay.source_id, unit_id, mix_inputs, scenes, &mut seen)
+        })
 }
 
 pub(crate) fn mix_source_cycles(
@@ -1171,7 +1177,8 @@ pub(crate) fn collect_live_ids(
             uploads.insert(id);
         }
     }
-    for (_, _, _, _, _, state, mix_preview, _) in snapshot {
+    for snap in snapshot {
+        let state = &snap.state;
         add(
             state.program_source,
             &spec_map,
@@ -1186,13 +1193,13 @@ pub(crate) fn collect_live_ids(
             &mut scenes,
             &mut uploads,
         );
-        let incoming = if *mix_preview != 0 {
-            *mix_preview
+        let incoming = if snap.mix_preview != 0 {
+            snap.mix_preview
         } else {
             state.mix_incoming()
         };
         add(incoming, &spec_map, mix_inputs, &mut scenes, &mut uploads);
-        for overlay in state.overlays.iter().take(state.overlay_count as usize) {
+        for overlay in snap.overlays.iter() {
             add(
                 overlay.source_id,
                 &spec_map,

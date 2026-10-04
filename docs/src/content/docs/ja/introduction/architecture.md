@@ -135,4 +135,4 @@ sequenceDiagram
 
 ## 音声パイプライン
 
-48 kHzサンプリングのステレオオーディオグラフを内部で処理します。MasterバスとHeadphoneバスが標準で用意され、最大8本のAUXバス（A〜H）を追加可能です。各入力はゲイン調整とバスマスクを持ち、Mixing UnitのProgram映像に音声を連動させるAudio Follow機能に対応しています。
+内部で48 kHzステレオのオーディオグラフを処理します。各Mixing UnitがMU Busを1本持ちます。ヘッドホンは、メーターのアイコンで選んだMixing UnitまたはInputの音を出します。入力は送り先のMixing Unitとゲインを持ち、FollowではPreview/Programに連動します。Overlayも連動できます。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)を参照してください。

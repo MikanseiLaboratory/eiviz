@@ -19,9 +19,8 @@ internal sealed class MeterStrip : StackPanel
     private static readonly FontFamily IconFont = new("Segoe MDL2 Assets");
     private const string IconSpeaker = "\uE767";
     private const string IconMute = "\uE74F";
-    private const string IconHeadphone = "\uE7F6";
     private const string IconSettings = "\uE713";
-
+    private const string IconHeadphones = "\uE7F6";
     private readonly Rectangle _left = MakeBar();
     private readonly Rectangle _right = MakeBar();
     private readonly Slider _fader;
@@ -34,6 +33,7 @@ internal sealed class MeterStrip : StackPanel
         ItemHeight = 22
     };
     private readonly bool _showRoutes;
+    private readonly Button _listen;
     private float _leftPeak;
     private float _rightPeak;
     private float _leftDb = float.NegativeInfinity;
@@ -43,10 +43,13 @@ internal sealed class MeterStrip : StackPanel
 
     public MeterKind Kind { get; }
     public ulong TargetId { get; }
-    public uint BusMask { get; private set; }
+    public IReadOnlyList<ulong> Routes { get; private set; } = [];
+    private ulong[] _followed = [];
+    public event Action<ulong, ulong>? FollowCleared;
     public float Gain { get; private set; } = 1;
     public bool Mute { get; private set; }
-    public event Action<ulong, uint>? BusMaskChanged;
+    public event Action<ulong, IReadOnlyList<ulong>>? RoutesChanged;
+    public event Action<MeterStrip>? ListenRequested;
     public event Action<ulong, float, bool>? FaderChanged;
     public event Action<ulong>? OpenRequested;
 
@@ -58,14 +61,15 @@ internal sealed class MeterStrip : StackPanel
         bool mute,
         bool showFader = true,
         bool showOpen = false,
-        bool showRoutes = true)
+        bool showRoutes = true,
+        bool showListen = true)
     {
         Kind = kind;
         TargetId = targetId;
         Gain = gain < 0 ? 1 : gain;
         Mute = mute;
         _showRoutes = showRoutes;
-        Width = 108;
+        Width = 112;
         Margin = new Thickness(0, 0, 10, 0);
         Orientation = Orientation.Vertical;
         VerticalAlignment = VerticalAlignment.Top;
@@ -148,6 +152,22 @@ internal sealed class MeterStrip : StackPanel
             _mute.Content = MuteGlyph(Mute);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
+        _listen = new Button
+        {
+            Content = IconHeadphones,
+            FontFamily = IconFont,
+            FontSize = 12,
+            Width = 26,
+            Height = 22,
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 4, 0, 0),
+            ToolTip = Loc.T("audio.listen"),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        _listen.Click += (_, _) => ListenRequested?.Invoke(this);
+        SetListening(false);
+        if (showListen)
+            Children.Add(_listen);
         if (showRoutes)
         {
             Children.Add(_routes);
@@ -223,56 +243,66 @@ internal sealed class MeterStrip : StackPanel
         return Math.Clamp((db + 60.0) / 72.0, 0, 1);
     }
 
-    public void SetBuses(IReadOnlyList<AudioBusEntry> buses, uint mask)
+    public void SetRoutes(IReadOnlyList<MixingUnitEntry> units, IReadOnlyList<ulong> selected, IReadOnlyList<ulong>? followed = null)
     {
-        BusMask = mask;
+        Routes = selected.ToArray();
+        if (followed is not null)
+            _followed = followed.ToArray();
         if (!_showRoutes)
             return;
         _routes.Children.Clear();
         if (Kind == MeterKind.Input)
         {
-            foreach (var bus in buses)
+            foreach (var unit in units)
             {
-                var bit = bus.Bit;
-                var button = new ToggleButton
+                var unitId = unit.Id;
+                var button = new Button
                 {
-                    Width = 26,
+                    Width = 44,
                     Height = 22,
-                    FontSize = 10,
-                    Margin = new Thickness(0, 0, 2, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    IsChecked = (mask & (1u << (int)bit)) != 0,
-                    ToolTip = bus.Name
+                    Margin = new Thickness(0, 0, 2, 2),
+                    Padding = new Thickness(0),
+                    ToolTip = Loc.Format("audio.routeTip", unit.Name)
                 };
-                if (bus.Role == AudioBusRole.Master)
-                {
-                    button.Content = "M";
-                }
-                else if (bus.Role == AudioBusRole.Headphone)
-                {
-                    button.Content = IconHeadphone;
-                    button.FontFamily = IconFont;
-                    button.FontSize = 12;
-                }
-                else
-                {
-                    button.Content = bus.Name.StartsWith("Bus ", StringComparison.Ordinal) && bus.Name.Length > 4
-                        ? bus.Name[4].ToString()
-                        : bus.Name.Length == 0 ? "?" : bus.Name[..1];
-                }
-                button.Click += (_, _) =>
-                {
-                    var flag = 1u << (int)bit;
-                    if (button.IsChecked == true)
-                        BusMask |= flag;
-                    else
-                        BusMask &= ~flag;
-                    BusMaskChanged?.Invoke(TargetId, BusMask);
-                };
+                PaintRoute(button, RouteShown(unitId), unit.Id);
+                button.Click += (_, _) => ToggleRoute(button, unitId);
                 _routes.Children.Add(button);
             }
         }
         _routes.Children.Add(_mute);
+    }
+
+    private bool RouteShown(ulong unitId) => Routes.Contains(unitId) || _followed.Contains(unitId);
+
+    private void ToggleRoute(Button button, ulong unitId)
+    {
+        var shown = RouteShown(unitId);
+        if (shown && _followed.Contains(unitId))
+        {
+            _followed = _followed.Where(id => id != unitId).ToArray();
+            FollowCleared?.Invoke(TargetId, unitId);
+        }
+        var next = Routes.ToHashSet();
+        if (shown)
+            next.Remove(unitId);
+        else
+            next.Add(unitId);
+        Routes = next.Order().ToArray();
+        PaintRoute(button, RouteShown(unitId), unitId);
+        RoutesChanged?.Invoke(TargetId, Routes);
+    }
+
+    public void SetListening(bool on)
+    {
+        OnOffLook.Apply(_listen, on);
+        _listen.ToolTip = Loc.T(on ? "audio.listening" : "audio.listen");
+    }
+
+    private static void PaintRoute(Button button, bool on, ulong unitId)
+    {
+        OnOffLook.Apply(button, on);
+        button.FontSize = 11;
+        button.Content = "MU" + unitId;
     }
 
     private static object MuteGlyph(bool muted) => muted ? IconMute : IconSpeaker;

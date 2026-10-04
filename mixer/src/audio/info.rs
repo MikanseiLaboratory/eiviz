@@ -23,11 +23,10 @@ pub struct AudioDeviceInfo {
 #[derive(Clone, Copy)]
 pub struct AudioBusInfo {
     pub id: u64,
-    pub role: u32,
     pub device_kind: u32,
     pub map_left: i32,
     pub map_right: i32,
-    pub bit: u32,
-    pub name: [u8; 64],
+    pub gain: f32,
+    pub mute: u32,
     pub device_id: [u8; 256],
 }

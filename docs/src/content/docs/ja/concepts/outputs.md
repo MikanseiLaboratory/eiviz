@@ -11,7 +11,7 @@ Outputは、Mixing UnitのProgram本線や各種ソース（Input、Scene、Mult
 
 - **転送プロトコル**: OMTまたはNDIに対応しています（DeckLink等のハードウェア出力は現在実装中）。
 - **映像ソース**: Input、Scene、MU Preview、MU Program、Multiviewから選択できます。
-- **音声ソース**: Master、Headphone、各Audio AUX、またはNone（音声なし）を指定できます（Multiview選択時は音声なし固定）。
+- **音声ソース**: Mixing UnitのMU Bus、またはNone（音声なし）を指定します（Multiview選択時は音声なし固定）。
 - **解像度・フレームレート**: 出力系統ごとに個別に設定可能です。「セッション設定を使用」を選んだ場合はセッション共通設定に従います。
 
 ## クロック管理と独立スレッド

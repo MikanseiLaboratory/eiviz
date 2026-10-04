@@ -94,7 +94,7 @@ impl ThumbStore {
             if gpu.slots[gpu.write].waiting {
                 continue;
             }
-            if !composer.blit_source_to(device, encoder, *id, &gpu.view) {
+            if !composer.blit_source_to(device, encoder, *id, &gpu.view, gpu.width, gpu.height) {
                 continue;
             }
             gpu.copy_slot(encoder);

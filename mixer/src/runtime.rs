@@ -11,9 +11,11 @@ use crate::abi::{
     ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect,
 };
 use crate::{
-    mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_capture_start,
-    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_master, mixer_audio_set_input,
-    mixer_audio_set_unit_link, mixer_bind_multiview, mixer_create_unit, mixer_define_generator,
+    mixer_api_configure, mixer_audio_capture_start, mixer_audio_headphone_set,
+    mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor, mixer_audio_set_headphone_listen,
+    mixer_audio_set_input,
+    mixer_audio_set_unit_link, mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_create_unit,
+    mixer_define_generator,
     mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
     mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
@@ -171,7 +173,6 @@ impl MixerPort for ProcessMixer {
             spec.target_id,
             spec.source_kind,
             spec.delay,
-            spec.audio_bus_id,
         ))
     }
 
@@ -285,7 +286,7 @@ impl MixerPort for ProcessMixer {
                 spec.source_id,
                 spec.unit_id,
                 u32::from(spec.use_gpu),
-                spec.audio_bus_id,
+                spec.audio_unit_id,
                 u32::from(spec.skip_encode_when_no_receivers),
                 spec.width,
                 spec.height,
@@ -299,51 +300,63 @@ impl MixerPort for ProcessMixer {
         map_abi(mixer_output_remove(id))
     }
 
-    fn audio_bus_upsert(&mut self, spec: BusApply) -> ControlResult<()> {
-        let name = CString::new(spec.name).unwrap_or_else(|_| CString::new("").unwrap());
+    fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()> {
         let device = CString::new(spec.device_id).unwrap_or_else(|_| CString::new("").unwrap());
         map_abi(unsafe {
-            mixer_audio_bus_upsert(
-                spec.id,
-                name.as_ptr(),
-                spec.role,
+            mixer_audio_unit_bus_set(
+                spec.unit_id,
                 spec.device_kind,
                 device.as_ptr(),
-                spec.map_left as i32,
-                spec.map_right as i32,
+                spec.map_left,
+                spec.map_right,
             )
-        })?;
-        map_abi(mixer_audio_set_bus_gain(
-            spec.id,
-            spec.gain,
-            u32::from(spec.mute),
-        ))
+        })
     }
 
-    fn audio_bus_remove(&mut self, id: u64) -> ControlResult<()> {
-        map_abi(mixer_audio_bus_remove(id))
+    fn audio_set_headphone_device(&mut self, spec: HeadphoneApply) -> ControlResult<()> {
+        let device = CString::new(spec.device_id).unwrap_or_else(|_| CString::new("").unwrap());
+        map_abi(unsafe {
+            mixer_audio_headphone_set(
+                spec.device_kind,
+                device.as_ptr(),
+                spec.map_left,
+                spec.map_right,
+            )
+        })
     }
 
     fn audio_set_input(
         &mut self,
         id: u64,
-        bus_mask: u32,
+        units: &[u64],
         gain: f32,
         mute: bool,
     ) -> ControlResult<()> {
-        map_abi(mixer_audio_set_input(id, bus_mask, gain, u32::from(mute)))
+        map_abi(unsafe {
+            mixer_audio_set_input(
+                id,
+                units.as_ptr(),
+                units.len() as u32,
+                gain,
+                u32::from(mute),
+            )
+        })
     }
 
     fn audio_set_bus_gain(&mut self, id: u64, gain: f32, mute: bool) -> ControlResult<()> {
         map_abi(mixer_audio_set_bus_gain(id, gain, u32::from(mute)))
     }
 
-    fn audio_set_unit_link(&mut self, unit_id: u64, bus_id: u64, mode: u32) -> ControlResult<()> {
-        map_abi(mixer_audio_set_unit_link(unit_id, bus_id, mode))
+    fn audio_set_unit_link(&mut self, unit_id: u64, mode: u32) -> ControlResult<()> {
+        map_abi(mixer_audio_set_unit_link(unit_id, mode))
     }
 
-    fn audio_set_headphone_copy_master(&mut self, enabled: bool) -> ControlResult<()> {
-        map_abi(mixer_audio_set_headphone_copy_master(u32::from(enabled)))
+    fn audio_set_headphone_copy_monitor(&mut self, enabled: bool) -> ControlResult<()> {
+        map_abi(mixer_audio_set_headphone_copy_monitor(u32::from(enabled)))
+    }
+
+    fn audio_set_headphone_listen(&mut self, kind: u32, id: u64) -> ControlResult<()> {
+        map_abi(mixer_audio_set_headphone_listen(kind, id))
     }
 
     fn set_frame_buffer(&mut self, frames: u32) -> ControlResult<()> {
@@ -449,7 +462,12 @@ impl MixerPort for ProcessMixer {
                 width: spec.width,
                 height: spec.height,
             },
-            crop: Rect::default(),
+            crop: Rect {
+                x: spec.crop_x,
+                y: spec.crop_y,
+                width: spec.crop_width,
+                height: spec.crop_height,
+            },
             opacity: spec.opacity,
             z: spec.z,
             audio_follow: u32::from(spec.audio_follow),
@@ -462,6 +480,35 @@ impl MixerPort for ProcessMixer {
             spec.duration_ms,
             desc,
         ))
+    }
+
+    fn set_unit_overlays(&mut self, unit_id: u64, layers: &[OverlayLayer]) -> ControlResult<()> {
+        let descs: Vec<OverlayDesc> = layers
+            .iter()
+            .map(|layer| OverlayDesc {
+                source_id: layer.source_id,
+                rect: Rect {
+                    x: layer.x,
+                    y: layer.y,
+                    width: layer.width,
+                    height: layer.height,
+                },
+                crop: Rect {
+                    x: layer.crop_x,
+                    y: layer.crop_y,
+                    width: layer.crop_width,
+                    height: layer.crop_height,
+                },
+                opacity: layer.opacity,
+                z: layer.z,
+                audio_follow: u32::from(layer.audio_follow),
+                hidden: u32::from(layer.hidden),
+                label: std::ptr::null(),
+            })
+            .collect();
+        map_abi(unsafe {
+            crate::mixer_unit_set_overlays(unit_id, descs.as_ptr(), descs.len() as u32)
+        })
     }
 
     fn unit_set_state(

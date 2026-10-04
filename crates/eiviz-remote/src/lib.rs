@@ -348,14 +348,20 @@ async fn flush_mix(session: Arc<ControlSession>, mix: Arc<MixCoalesce>) {
     }
 }
 
-pub fn overlay_auto(handle: i32, unit_id: u64, index: u32, duration_ms: u32, to_on: u32) -> i32 {
+pub fn overlay_auto(
+    handle: i32,
+    unit_id: u64,
+    overlay_id: u64,
+    duration_ms: u32,
+    to_on: u32,
+) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     spawn_live(handle, async move {
         map_result(
             session
-                .overlay_auto(unit_id, index, duration_ms, to_on != 0)
+                .overlay_auto(unit_id, overlay_id, duration_ms, to_on != 0)
                 .await,
         )
     })
@@ -445,25 +451,25 @@ pub fn video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
     })
 }
 
-pub fn audio_set_input(handle: i32, input_id: u64, bus_mask: u32, gain: f32, mute: u32) -> i32 {
+pub fn audio_set_input(handle: i32, input_id: u64, units: Vec<u64>, gain: f32, mute: u32) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     spawn_live(handle, async move {
         map_result(
             session
-                .audio_set_input(input_id, bus_mask, gain, mute != 0)
+                .audio_set_input(input_id, &units, gain, mute != 0)
                 .await,
         )
     })
 }
 
-pub fn audio_set_bus(handle: i32, bus_id: u64, gain: f32, mute: u32) -> i32 {
+pub fn audio_set_bus(handle: i32, unit_id: u64, gain: f32, mute: u32) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
     spawn_live(handle, async move {
-        map_result(session.audio_set_bus(bus_id, gain, mute != 0).await)
+        map_result(session.audio_set_bus(unit_id, gain, mute != 0).await)
     })
 }
 
@@ -634,12 +640,12 @@ pub extern "C" fn mixer_remote_set_mix(handle: i32, unit_id: u64, value: f32) ->
 pub extern "C" fn mixer_remote_overlay_auto(
     handle: i32,
     unit_id: u64,
-    index: u32,
+    overlay_id: u64,
     duration_ms: u32,
     to_on: u32,
 ) -> i32 {
     guarded("mixer_remote_overlay_auto", || {
-        overlay_auto(handle, unit_id, index, duration_ms, to_on)
+        overlay_auto(handle, unit_id, overlay_id, duration_ms, to_on)
     })
 }
 
@@ -696,27 +702,33 @@ pub extern "C" fn mixer_remote_video_seek(handle: i32, input_id: u64, position_h
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mixer_remote_audio_set_input(
+pub unsafe extern "C" fn mixer_remote_audio_set_input(
     handle: i32,
     input_id: u64,
-    bus_mask: u32,
+    units: *const u64,
+    count: u32,
     gain: f32,
     mute: u32,
 ) -> i32 {
+    let routed = if units.is_null() || count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(units, count as usize).to_vec() }
+    };
     guarded("mixer_remote_audio_set_input", || {
-        audio_set_input(handle, input_id, bus_mask, gain, mute)
+        audio_set_input(handle, input_id, routed, gain, mute)
     })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_remote_audio_set_bus(
     handle: i32,
-    bus_id: u64,
+    unit_id: u64,
     gain: f32,
     mute: u32,
 ) -> i32 {
     guarded("mixer_remote_audio_set_bus", || {
-        audio_set_bus(handle, bus_id, gain, mute)
+        audio_set_bus(handle, unit_id, gain, mute)
     })
 }
 

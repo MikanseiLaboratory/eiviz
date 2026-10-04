@@ -1,23 +1,25 @@
 ---
-title: Audio Auxs
-description: Master、Headphone、AUXバス
+title: MU Bus
+description: Mixing Unitごとの音声バスとヘッドホン
 ---
 
-eiviz内部のオーディオミキサーは48 kHzステレオで動作します。
+内部ミックスは48 kHzステレオです。MasterとAUXはありません。各[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)が専用のMU Busを1本持ちます。バスIDはMixing UnitのIDと同じです。
 
-## バス構成
+## MU Bus
 
-- **Masterバス**: 配信や録音用のメイン音声バス（削除不可）
-- **Headphoneバス**: オペレーターのモニター用バス（Masterのコピー、または個別キュー出力）
-- **AUXバス（A〜H）**: 最大8系統まで追加可能な個別送出用バス。ミックスマイナスや同時通訳、個別送出（ISO）に利用できます。
+MU Busは、そのMixing Unitの音声ミックスです。
 
-## Mixing Unitとの連動
+- **Follow**: Preview/Programの切り替えとTバーに連動します。
+- **Independent**: Tバーを無視し、Programの音声を常にミックスします。
 
-各Mixing Unitは音声バスへのセンド設定を持ちます。
+出力デバイスはMixing Unitの設定で選びます。Noneは内部ミックスのままです。入力は送り先のMixing Unitを複数選べます。送り先のない入力は無音です。1つの入力を複数のデバイスへ同時には出せません。
 
-- **Follow**: Preview/Programの切り替えやTバーのフェード動作に連動して音声が切り替わります（Audio Follow）。
-- **Independent**: 映像の切り替え状態に関わらず、割り当てられた入力を常に一定のレベルでミックスします。
+## ヘッドホン
 
-## 出力デバイスの割り当て
+メーターのヘッドホンアイコンを押すと、そのMixing UnitまたはInputの音が出ます。もう一度押すと止まります。[設定](/eiviz/ja/introduction/settings/)の「ヘッドホン」で出力デバイスを選びます。
 
-[設定](/eiviz/ja/introduction/settings/)ウィンドウの「音声AUX」から、各バスを実際のオーディオインターフェース（WASAPI共有またはASIO）へルーティングできます。物理デバイスに出力せず内部ミックスのみを有効化することも可能です。詳細は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
+## Mix Input
+
+Mix Inputの音声は、参照先Mixing UnitのMU Busに固定です。セッションMultiviewを参照する場合は無音です。
+
+詳細は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。

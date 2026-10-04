@@ -97,6 +97,8 @@ pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
 pub const LABEL_BASE: u64 = 0x0003_0000;
 pub const AUDIO_BUS_PEAK_BASE: u64 = 0x0004_0000;
+/// Peak id for the headphone bus. It is not `AUDIO_BUS_PEAK_BASE | unit_id`.
+pub const AUDIO_HEADPHONE_PEAK: u64 = 0x0004_FFFF;
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 
 pub const OUT_OMT: u32 = 0;
@@ -285,9 +287,7 @@ pub struct UnitState {
     pub preview_source: u64,
     pub mix: f32,
     pub transition_kind: u32,
-    pub overlay_count: u32,
     pub mv_slot_count: u32,
-    pub overlays: [OverlayDesc; 8],
     pub mv_slots: [u64; MV_SLOT_MAX],
     pub transition_easing: u32,
     pub transition_direction: u32,
@@ -314,7 +314,34 @@ impl UnitState {
     }
 }
 
-pub type UnitSnap = (u64, u32, u32, u32, u32, UnitState, u64, Option<String>);
+#[derive(Clone, Debug)]
+pub struct UnitSnap {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub state: UnitState,
+    pub mix_preview: u64,
+    pub custom_wgsl: Option<String>,
+    pub overlays: std::sync::Arc<[OverlayDesc]>,
+}
+
+impl UnitSnap {
+    pub fn bare(id: u64, state: UnitState) -> Self {
+        Self {
+            id,
+            width: 1920,
+            height: 1080,
+            fps_num: 60_000,
+            fps_den: 1_001,
+            state,
+            mix_preview: 0,
+            custom_wgsl: None,
+            overlays: std::sync::Arc::from([]),
+        }
+    }
+}
 
 pub fn mixing_unit_source(unit_id: u64) -> u64 {
     MU_SOURCE_FLAG | (unit_id & MU_ID_MASK)
@@ -345,11 +372,10 @@ pub struct MixInputSpec {
     pub target_id: u64,
     pub source_kind: u32,
     pub delay: u32,
-    pub audio_bus_id: u64,
 }
 
 impl MixInputSpec {
-    pub fn new(target_id: u64, source_kind: u32, delay: u32, audio_bus_id: u64) -> Option<Self> {
+    pub fn new(target_id: u64, source_kind: u32, delay: u32) -> Option<Self> {
         let source_kind = match source_kind {
             SRC_KIND_MU_PREVIEW | SRC_KIND_MU_PROGRAM | SRC_KIND_MU_MULTIVIEW => source_kind,
             _ => return None,
@@ -362,8 +388,12 @@ impl MixInputSpec {
             target_id,
             source_kind,
             delay: delay.clamp(1, 8),
-            audio_bus_id,
         })
+    }
+
+    /// Mixing Unit whose MU Bus this input plays. Session multiview has none.
+    pub fn audio_unit(self) -> u64 {
+        mixing_unit_from_source(self.target_id).unwrap_or(0)
     }
 
     pub fn is_session_multiview(self) -> bool {

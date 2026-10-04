@@ -290,8 +290,11 @@ extension MixerController {
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
         session.inputs.remove(at: index)
+        session.overlays.removeAll { $0.sourceKind == .input && $0.sceneGpuId == id }
         for unitIndex in session.units.indices {
-            session.units[unitIndex].overlays.removeAll { $0.sourceKind == .input && $0.sceneGpuId == id }
+            session.units[unitIndex].overlaysOnAir.removeAll { oid in
+                !session.overlays.contains { $0.id == oid }
+            }
         }
         selectedInputId = nil
         pushOverlays()
@@ -324,8 +327,11 @@ extension MixerController {
         closeInputPreview(scene.gpuId)
         _ = mixer_destroy_scene(scene.gpuId)
         session.scenes.removeAll { $0.id == scene.id }
+        session.overlays.removeAll { $0.sourceKind == .scene && $0.sceneGpuId == scene.gpuId }
         for unitIndex in session.units.indices {
-            session.units[unitIndex].overlays.removeAll { $0.sourceKind == .scene && $0.sceneGpuId == scene.gpuId }
+            session.units[unitIndex].overlaysOnAir.removeAll { oid in
+                !session.overlays.contains { $0.id == oid }
+            }
         }
         pushOverlays()
         if let next = session.scenes.first {
@@ -371,11 +377,7 @@ extension MixerController {
             guard let index = session.inputs.firstIndex(where: { $0.id == id }) else { continue }
             session.inputs[index].mute = mute
             let input = session.inputs[index]
-            if isRemote {
-                _ = mixer_remote_audio_set_input(remoteHandle, input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
-            } else {
-                _ = mixer_audio_set_input(input.id, audioMask(input), max(0, input.gain), mute ? 1 : 0)
-            }
+            pushInputAudio(input)
         }
         objectWillChange.send()
     }
@@ -408,10 +410,6 @@ extension MixerController {
         unit.height = session.settings.defaultHeight
         unit.fpsNum = session.settings.masterFpsNum
         unit.fpsDen = session.settings.masterFpsDen
-        unit.transitions = [
-            TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
-            TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
-        ]
         editingUnit = unit
         showMixingUnit = true
     }
@@ -423,15 +421,6 @@ extension MixerController {
         }
         var entry = unit
         entry.id = session.nextUnitId
-        if entry.audioBusId == 0 {
-            entry.audioBusId = 1
-        }
-        if entry.transitions.isEmpty {
-            entry.transitions = [
-                TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
-                TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
-            ]
-        }
         if isRemote {
             _ = mutateRemote(MixerRemote.upsertUnit(entry))
             return
@@ -439,7 +428,19 @@ extension MixerController {
         guard fail(mixer_create_unit(entry.id, entry.width, entry.height), "Create Mixing Unit") else { return }
         session.nextUnitId += 1
         fail(mixer_unit_configure(entry.id, entry.width, entry.height, entry.fpsNum, entry.fpsDen), "Configure Mixing Unit")
-        fail(mixer_audio_set_unit_link(entry.id, entry.audioBusId, entry.audioLink.rawUInt), "Audio link")
+        MixerFFI.withCString(entry.audio.deviceId) { device in
+            fail(
+                mixer_audio_unit_bus_set(
+                    entry.id,
+                    entry.audio.deviceKind.rawUInt,
+                    device,
+                    entry.audio.mapLeft,
+                    entry.audio.mapRight
+                ),
+                "MU Bus"
+            )
+        }
+        fail(mixer_audio_set_unit_link(entry.id, entry.audioLink.rawUInt), "Audio link")
         let preview = session.scenes.first?.gpuId ?? UInt64(EIVIZ_SRC_BARS)
         let program = session.scenes.count > 1 ? session.scenes[1].gpuId : preview
         applyBusSources(unitId: entry.id, preview: preview, program: program)
@@ -473,7 +474,19 @@ extension MixerController {
             return
         }
         fail(mixer_unit_configure(unit.id, unit.width, unit.height, unit.fpsNum, unit.fpsDen), "Configure Mixing Unit")
-        fail(mixer_audio_set_unit_link(unit.id, unit.audioBusId, unit.audioLink.rawUInt), "Audio link")
+        MixerFFI.withCString(unit.audio.deviceId) { device in
+            fail(
+                mixer_audio_unit_bus_set(
+                    unit.id,
+                    unit.audio.deviceKind.rawUInt,
+                    device,
+                    unit.audio.mapLeft,
+                    unit.audio.mapRight
+                ),
+                "MU Bus"
+            )
+        }
+        fail(mixer_audio_set_unit_link(unit.id, unit.audioLink.rawUInt), "Audio link")
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name
@@ -521,10 +534,8 @@ extension MixerController {
     }
 
     func toggleOverlay(_ slot: OverlaySlot) {
-        guard let index = session.units.firstIndex(where: { $0.id == selectedUnitId }),
-              let slotIndex = session.units[index].overlays.firstIndex(where: { $0.id == slot.id })
-        else { return }
-        let enabled = !session.units[index].overlays[slotIndex].enabled
+        guard let index = session.units.firstIndex(where: { $0.id == selectedUnitId }) else { return }
+        let enabled = !session.units[index].overlaysOnAir.contains(slot.id)
         setOverlayEnabled(slot.id, enabled: enabled)
     }
 
@@ -551,7 +562,7 @@ extension MixerController {
         let sourceId = entry.sourceId
         let unitId = entry.unitId
         let useGpu: UInt32 = entry.useGpu ? 1 : 0
-        let audioBusId = entry.sourceKind == .multiview ? 0 : entry.audioBusId
+        let audioUnitId = entry.sourceKind == .multiview ? 0 : entry.audioUnitId
         let skipIdle: UInt32 = entry.transport == .omt && entry.skipEncodeWhenNoReceivers ? 1 : 0
         let width = entry.width
         let height = entry.height
@@ -567,7 +578,7 @@ extension MixerController {
                     sourceId,
                     unitId,
                     useGpu,
-                    audioBusId,
+                    audioUnitId,
                     skipIdle,
                     width,
                     height,

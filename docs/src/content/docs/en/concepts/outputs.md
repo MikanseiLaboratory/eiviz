@@ -10,7 +10,7 @@ Same job as ATEM output routing or vMix NDI/SRT.
 
 Add one under [Settings](/eiviz/en/introduction/settings/) → Outputs.  
 Transport is OMT or NDI. Source can be Input, Scene, MU Preview, MU Program, or Multiview.  
-Audio can be Master, Headphone, any Audio Aux, or None (no audio).  
+Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.  
 A new session defaults to Mixing Unit Program.
 

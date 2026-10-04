@@ -36,9 +36,10 @@
                 </Setter>
             </Style>
             <Style TargetType="ToggleButton">
-                <Setter Property="Background" Value="{DynamicResource ButtonBackground}"/>
-                <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
-                <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+                <Setter Property="Background" Value="{DynamicResource ToggleOffBackground}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ToggleOffForeground}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource ToggleOffBorder}"/>
+                <Setter Property="FontWeight" Value="Normal"/>
                 <Setter Property="Padding" Value="8,4"/>
                 <Setter Property="Template">
                     <Setter.Value>
@@ -54,7 +55,10 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsChecked" Value="True">
-                                    <Setter Property="Background" Value="{DynamicResource FieldBackground}"/>
+                                    <Setter Property="Background" Value="{DynamicResource ToggleOnBackground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource ToggleOnBorder}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource ToggleOnForeground}"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter Property="Opacity" Value="0.5"/>

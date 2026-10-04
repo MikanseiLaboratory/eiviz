@@ -63,12 +63,8 @@ public partial class SettingsWindow : Window
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
             ?? session.Units.FirstOrDefault();
-        _nextBusId = session.NextBusId;
-        session.EnsureDefaultBuses();
-        foreach (var bus in session.Buses)
-            Buses.Add(CloneBus(bus));
-        _nextBusId = Math.Max(_nextBusId, Buses.Count == 0 ? 3 : Buses.Max(item => item.Id) + 1);
-        HeadphoneCopyBox.IsChecked = session.HeadphoneCopyMaster;
+        Headphone = session.Headphone.Clone();
+        HeadphoneCopyMonitor = session.HeadphoneCopyMonitor;
         _devices = AudioGraphSync.EnumerateDevices(0)
             .Where(device => device.Direction != 1)
             .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
@@ -90,8 +86,8 @@ public partial class SettingsWindow : Window
 
     public SessionSettings Settings { get; }
     public List<OutputEntry> Outputs { get; } = [];
-    public List<AudioBusEntry> Buses { get; } = [];
-    public bool HeadphoneCopyMaster { get; private set; }
+    public HeadphoneEntry Headphone { get; private set; } = new();
+    public bool HeadphoneCopyMonitor { get; private set; }
 
     private void ApplyOnAirLock()
     {
@@ -106,8 +102,6 @@ public partial class SettingsWindow : Window
             RebuildOutputs();
     }
     public ulong NextOutputId => _nextOutputId;
-    public ulong NextBusId => _nextBusId;
-    private ulong _nextBusId;
     private bool _suppressOutputs;
     private bool _rebarAvailable;
     private List<(uint Kind, uint Channels, string Id, string Name)> _devices = [];
@@ -258,155 +252,101 @@ public partial class SettingsWindow : Window
             MvList.SelectedIndex = 0;
     }
 
-    private void AddBus_Click(object sender, RoutedEventArgs e)
-    {
-        var auxCount = Buses.Count(item => item.Role == AudioBusRole.Aux);
-        if (auxCount >= 8)
-            return;
-        var bit = 2u;
-        while (Buses.Any(item => item.Bit == bit) && bit < 31)
-            bit++;
-        Buses.Add(new AudioBusEntry
-        {
-            Id = _nextBusId++,
-            Name = NextAuxName(),
-            Role = AudioBusRole.Aux,
-            DeviceKind = AudioDeviceKind.None,
-            MapLeft = 0,
-            MapRight = 1,
-            Bit = bit
-        });
-        RebuildBuses();
-    }
-
-    private string NextAuxName()
-    {
-        for (var letter = 'A'; letter <= 'H'; letter++)
-        {
-            var name = $"Bus {letter}";
-            if (Buses.TrueForAll(item => item.Name != name))
-                return name;
-        }
-        return $"Bus {_nextBusId}";
-    }
-
     private void RebuildBuses()
     {
         if (BusRows is null)
             return;
         BusRows.Children.Clear();
-        foreach (var bus in Buses.ToArray())
+        var bus = Headphone;
+        var box = new Border
         {
-            var box = new Border
+            BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
+        grid.RowDefinitions.Add(new RowDefinition());
+        grid.RowDefinitions.Add(new RowDefinition());
+        var kind = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+        kind.Items.Add(new ComboBoxItem { Content = "None", Tag = AudioDeviceKind.None });
+        kind.Items.Add(new ComboBoxItem { Content = "WASAPI", Tag = AudioDeviceKind.Wasapi });
+        kind.Items.Add(new ComboBoxItem { Content = "ASIO", Tag = AudioDeviceKind.Asio });
+        kind.Items.Add(new ComboBoxItem { Content = "Core Audio", Tag = AudioDeviceKind.CoreAudio });
+        kind.SelectedIndex = (int)bus.DeviceKind;
+        kind.SelectionChanged += (_, _) =>
+        {
+            if (kind.SelectedItem is ComboBoxItem item && item.Tag is AudioDeviceKind value)
             {
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(8),
-                Margin = new Thickness(0, 0, 0, 8)
-            };
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
-            grid.RowDefinitions.Add(new RowDefinition());
-            grid.RowDefinitions.Add(new RowDefinition());
-            grid.RowDefinitions.Add(new RowDefinition());
-
-            var name = new TextBox { Text = bus.Name, Margin = new Thickness(0, 0, 8, 6), IsReadOnly = bus.Role != AudioBusRole.Aux };
-            name.TextChanged += (_, _) => bus.Name = name.Text.Trim();
-            var kind = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
-            kind.Items.Add(new ComboBoxItem { Content = "Enabled", Tag = AudioDeviceKind.None });
-            kind.Items.Add(new ComboBoxItem { Content = "WASAPI", Tag = AudioDeviceKind.Wasapi });
-            kind.Items.Add(new ComboBoxItem { Content = "ASIO", Tag = AudioDeviceKind.Asio });
-            kind.Items.Add(new ComboBoxItem { Content = "Core Audio", Tag = AudioDeviceKind.CoreAudio });
-            kind.SelectedIndex = (int)bus.DeviceKind;
-            kind.SelectionChanged += (_, _) =>
-            {
-                if (kind.SelectedItem is ComboBoxItem item && item.Tag is AudioDeviceKind value)
-                {
-                    bus.DeviceKind = value;
-                    if (value == AudioDeviceKind.None)
-                        bus.DeviceId = "";
-                    RebuildBuses();
-                }
-            };
-            var device = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
-            var left = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
-            var right = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
-            FillDeviceBox(device, bus);
-            if (device.SelectedItem is ComboBoxItem selected && selected.Tag is string selectedId)
-                bus.DeviceId = selectedId;
-            FillMapBoxes(left, right, bus);
-            device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
-            device.SelectionChanged += (_, _) =>
-            {
-                if (device.SelectedItem is ComboBoxItem item && item.Tag is string id)
-                {
-                    bus.DeviceId = id;
-                    FillMapBoxes(left, right, bus);
-                }
-            };
-            left.SelectionChanged += (_, _) =>
-            {
-                if (left.SelectedItem is ComboBoxItem { Tag: int value })
-                    bus.MapLeft = value;
-            };
-            right.SelectionChanged += (_, _) =>
-            {
-                if (right.SelectedItem is ComboBoxItem { Tag: int value })
-                    bus.MapRight = value;
-            };
-            var remove = new Button { Content = "−", Width = 28, IsEnabled = bus.Role == AudioBusRole.Aux };
-            remove.Click += (_, _) =>
-            {
-                Buses.Remove(bus);
+                bus.DeviceKind = value;
+                if (value == AudioDeviceKind.None)
+                    bus.DeviceId = "";
                 RebuildBuses();
-            };
-
-            var mapVisible = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
-            var leftLabel = new TextBlock { Text = "L ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
-            var rightLabel = new TextBlock { Text = "R ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
-            left.Visibility = mapVisible;
-            right.Visibility = mapVisible;
-
-            Grid.SetRow(name, 0);
-            Grid.SetColumnSpan(name, 4);
-            Grid.SetRow(remove, 0);
-            Grid.SetColumn(remove, 4);
-            Grid.SetRow(kind, 1);
-            Grid.SetRow(device, 1);
-            Grid.SetColumn(device, 1);
-            Grid.SetColumnSpan(device, 3);
-            Grid.SetRow(leftLabel, 2);
-            Grid.SetRow(left, 2);
-            Grid.SetColumn(left, 2);
-            Grid.SetRow(rightLabel, 2);
-            Grid.SetColumn(rightLabel, 1);
-            Grid.SetRow(right, 2);
-            Grid.SetColumn(right, 3);
-
-            grid.Children.Add(name);
-            grid.Children.Add(remove);
-            grid.Children.Add(kind);
-            grid.Children.Add(device);
-            grid.Children.Add(leftLabel);
-            grid.Children.Add(left);
-            grid.Children.Add(rightLabel);
-            grid.Children.Add(right);
-            box.Child = grid;
-            BusRows.Children.Add(box);
-        }
+            }
+        };
+        var device = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+        var left = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+        var right = new ComboBox { Margin = new Thickness(0, 0, 8, 6) };
+        FillDeviceBox(device, bus.DeviceKind, bus.DeviceId);
+        if (device.SelectedItem is ComboBoxItem selected && selected.Tag is string selectedId)
+            bus.DeviceId = selectedId;
+        FillMapBoxes(left, right, bus);
+        device.Visibility = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
+        device.SelectionChanged += (_, _) =>
+        {
+            if (device.SelectedItem is ComboBoxItem item && item.Tag is string id)
+            {
+                bus.DeviceId = id;
+                FillMapBoxes(left, right, bus);
+            }
+        };
+        left.SelectionChanged += (_, _) =>
+        {
+            if (left.SelectedItem is ComboBoxItem { Tag: int value })
+                bus.MapLeft = value;
+        };
+        right.SelectionChanged += (_, _) =>
+        {
+            if (right.SelectedItem is ComboBoxItem { Tag: int value })
+                bus.MapRight = value;
+        };
+        var mapVisible = bus.DeviceKind == AudioDeviceKind.None ? Visibility.Collapsed : Visibility.Visible;
+        var leftLabel = new TextBlock { Text = "L ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
+        var rightLabel = new TextBlock { Text = "R ch", Foreground = System.Windows.Media.Brushes.Silver, Margin = new Thickness(0, 0, 8, 2), Visibility = mapVisible };
+        left.Visibility = mapVisible;
+        right.Visibility = mapVisible;
+        Grid.SetRow(kind, 0);
+        Grid.SetRow(device, 0);
+        Grid.SetColumn(device, 1);
+        Grid.SetColumnSpan(device, 3);
+        Grid.SetRow(leftLabel, 1);
+        Grid.SetRow(left, 1);
+        Grid.SetColumn(left, 2);
+        Grid.SetRow(rightLabel, 1);
+        Grid.SetColumn(rightLabel, 1);
+        Grid.SetRow(right, 1);
+        Grid.SetColumn(right, 3);
+        grid.Children.Add(kind);
+        grid.Children.Add(device);
+        grid.Children.Add(leftLabel);
+        grid.Children.Add(left);
+        grid.Children.Add(rightLabel);
+        grid.Children.Add(right);
+        box.Child = grid;
+        BusRows.Children.Add(box);
     }
 
-    private void FillDeviceBox(ComboBox box, AudioBusEntry bus)
+    private void FillDeviceBox(ComboBox box, AudioDeviceKind kind, string deviceId)
     {
         box.Items.Clear();
-        box.Items.Add(new ComboBoxItem { Content = bus.DeviceKind is AudioDeviceKind.Wasapi or AudioDeviceKind.CoreAudio ? "Default" : "(none)", Tag = "" });
-        foreach (var device in _devices.Where(item => item.Kind == (uint)bus.DeviceKind
-            || (bus.DeviceKind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
-            || (bus.DeviceKind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
+        box.Items.Add(new ComboBoxItem { Content = kind is AudioDeviceKind.Wasapi or AudioDeviceKind.CoreAudio ? "Default" : "(none)", Tag = "" });
+        foreach (var device in _devices.Where(item => item.Kind == (uint)kind
+            || (kind == AudioDeviceKind.CoreAudio && item.Kind == (uint)AudioDeviceKind.Wasapi)
+            || (kind == AudioDeviceKind.Wasapi && item.Kind == (uint)AudioDeviceKind.CoreAudio)))
         {
             var label = string.IsNullOrWhiteSpace(device.Name) ? device.Id : device.Name;
             box.Items.Add(new ComboBoxItem { Content = label, Tag = device.Id });
@@ -414,7 +354,7 @@ public partial class SettingsWindow : Window
         box.SelectedIndex = 0;
         for (var i = 0; i < box.Items.Count; i++)
         {
-            if (box.Items[i] is ComboBoxItem item && Equals(item.Tag, bus.DeviceId ?? ""))
+            if (box.Items[i] is ComboBoxItem item && Equals(item.Tag, deviceId ?? ""))
             {
                 box.SelectedIndex = i;
                 break;
@@ -422,7 +362,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static void FillMapBoxes(ComboBox left, ComboBox right, AudioBusEntry bus)
+    private void FillMapBoxes(ComboBox left, ComboBox right, HeadphoneEntry bus)
     {
         var channels = OutputChannels(bus.DeviceKind, bus.DeviceId ?? "");
         FillMapBox(left, channels, bus.MapLeft);
@@ -458,20 +398,6 @@ public partial class SettingsWindow : Window
         MixerNative.AudioDeviceIoChannels((uint)kind, deviceId ?? "", out _, out var outputs);
         return outputs;
     }
-
-    private static AudioBusEntry CloneBus(AudioBusEntry bus) => new()
-    {
-        Id = bus.Id,
-        Name = bus.Name,
-        Role = bus.Role,
-        DeviceKind = bus.DeviceKind,
-        DeviceId = bus.DeviceId,
-        MapLeft = bus.MapLeft,
-        MapRight = bus.MapRight,
-        Bit = bus.Bit,
-        Gain = MixerNative.MixerGain(bus.Gain),
-        Mute = bus.Mute
-    };
 
     private void AddMv_Click(object sender, RoutedEventArgs e)
     {
@@ -547,7 +473,7 @@ public partial class SettingsWindow : Window
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
             UseGpu = false,
-            AudioBusId = 1,
+            AudioUnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
             SkipEncodeWhenNoReceivers = true,
             Width = Settings.DefaultWidth,
             Height = Settings.DefaultHeight,
@@ -629,8 +555,8 @@ public partial class SettingsWindow : Window
             FillOutputAudio(audio, output);
             audio.SelectionChanged += (_, _) =>
             {
-                if (audio.SelectedItem is AudioBusEntry bus)
-                    output.AudioBusId = bus.Id;
+                if (audio.SelectedItem is AudioChoice choice)
+                    output.AudioUnitId = choice.Id;
             };
 
             var enabled = new CheckBox
@@ -751,8 +677,6 @@ public partial class SettingsWindow : Window
             Settings.FlipSwapchainLimit = flipLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16 ? flipLimit : 0;
         Settings.RebarOptimization = _rebarAvailable && RebarOptBox.IsChecked == true;
         Settings.NdiGpuUpload = NdiGpuBox.IsChecked == true;
-        HeadphoneCopyMaster = HeadphoneCopyBox.IsChecked == true;
-        _session.NextBusId = _nextBusId;
         Settings.VmixApiEnabled = WebApiEnabledBox.IsChecked == true;
         Settings.VmixTcpEnabled = WebApiTcpEnabledBox.IsChecked == true;
         Settings.NativeApiEnabled = WebApiWsEnabledBox.IsChecked == true;
@@ -783,9 +707,9 @@ public partial class SettingsWindow : Window
             var wasMultiview = output.SourceKind == OutputSourceKind.Multiview;
             output.SourceKind = kind;
             if (kind == OutputSourceKind.Multiview)
-                output.AudioBusId = 0;
+                output.AudioUnitId = 0;
             else if (wasMultiview)
-                output.AudioBusId = 1;
+                output.AudioUnitId = output.UnitId == 0 ? 1 : output.UnitId;
             RebuildOutputs();
         };
         panel.Children.Add(radio);
@@ -849,31 +773,28 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private sealed class AudioChoice
+    {
+        public ulong Id { get; init; }
+        public required string Name { get; init; }
+    }
+
     private void FillOutputAudio(ComboBox box, OutputEntry output)
     {
-        var items = new List<AudioBusEntry> { new() { Id = 0, Name = "None" } };
-        items.AddRange(Buses);
+        var items = new List<AudioChoice> { new() { Id = 0, Name = "None" } };
+        items.AddRange(_session.Units.Select(unit => new AudioChoice { Id = unit.Id, Name = unit.Name }));
         box.ItemsSource = items;
         box.DisplayMemberPath = "Name";
-        box.SelectedValuePath = "Id";
-        // Multiview senders stay silent (NDI and OMT). A bus could be
-        // attached, but mosaic encode vs PCM timing on the shared send
-        // thread is too messy, so the picker is locked to None.
         if (output.SourceKind == OutputSourceKind.Multiview)
         {
-            output.AudioBusId = 0;
+            output.AudioUnitId = 0;
             box.IsEnabled = false;
         }
         else
             box.IsEnabled = true;
-        box.SelectedItem = items.FirstOrDefault(item => item.Id == output.AudioBusId);
-        if (box.SelectedItem is AudioBusEntry bus)
-            output.AudioBusId = bus.Id;
-        else
-        {
-            box.SelectedIndex = 0;
-            output.AudioBusId = 0;
-        }
+        box.SelectedItem = items.FirstOrDefault(item => item.Id == output.AudioUnitId) ?? items[0];
+        if (box.SelectedItem is AudioChoice choice)
+            output.AudioUnitId = choice.Id;
     }
 
     private static void ApplyOutputPick(ComboBox box, OutputEntry output)
@@ -989,7 +910,7 @@ public partial class SettingsWindow : Window
         UnitId = output.UnitId,
         UseGpu = output.UseGpu,
         Enabled = output.Enabled,
-        AudioBusId = output.AudioBusId,
+        AudioUnitId = output.AudioUnitId,
         SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
         Width = output.Width,
         Height = output.Height,

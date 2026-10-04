@@ -21,7 +21,7 @@ WindowsとmacOSに対応しています。Linuxは実験的です。
 - [Inputs](/eiviz/ja/concepts/inputs/) — 映像ソースと、Input・Scene・Mixing Unit・Outputの関係
 - [Scenes](/eiviz/ja/concepts/scenes/) — Inputを重ねてつくる合成
 - [Mixing Unit](/eiviz/ja/concepts/mixing-unit/) — PreviewとProgramで切り替える単位
-- [Audio Auxs](/eiviz/ja/concepts/audio-auxs/) — Master、Headphone、AUXバス
+- [MU Bus](/eiviz/ja/concepts/audio-auxs/) — Mixing Unitごとの音声バスとヘッドホン
 - [Outputs](/eiviz/ja/concepts/outputs/) — 選んだソースの送出
 - [Multiviews](/eiviz/ja/concepts/multiviews/) — 監視用のモザイク
 - [Overlays](/eiviz/ja/concepts/overlays/) — Mixing UnitのProgramに載せるDSK

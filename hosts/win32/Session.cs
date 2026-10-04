@@ -325,7 +325,7 @@ public sealed class InputEntry
     public bool Scroll { get; set; }
     public float ToneHz { get; set; }
     public float ToneLevelDbfs { get; set; } = -20;
-    public uint BusMask { get; set; } = 1;
+    public List<ulong> AudioUnits { get; set; } = [];
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
@@ -345,7 +345,6 @@ public sealed class InputEntry
     public List<string> Tags { get; set; } = [];
     public MixSource MixSource { get; set; } = MixSource.MuProgram;
     public ulong MixTargetId { get; set; }
-    public ulong MixAudioBusId { get; set; }
     public AudioCaptureMode AudioCaptureMode { get; set; } = AudioCaptureMode.Mic;
     public AudioDeviceKind AudioDeviceKind { get; set; } = AudioDeviceKind.None;
     public string AudioDeviceId { get; set; } = "";
@@ -420,7 +419,7 @@ internal static class InputKindNames
 
     public static bool UnitUsesSource(Session session, MixingUnitEntry unit, ulong sourceId)
     {
-        if (unit.Overlays.Any(overlay => overlay.SceneGpuId == sourceId))
+        if (session.Overlays.Any(overlay => overlay.SceneGpuId == sourceId))
             return true;
         unsafe
         {
@@ -434,7 +433,7 @@ internal static class InputKindNames
                     return true;
             }
         }
-        return unit.Overlays.Any(overlay => SceneUses(session, overlay.SceneGpuId, sourceId));
+        return session.Overlays.Any(overlay => SceneUses(session, overlay.SceneGpuId, sourceId));
     }
 
     private static bool SceneUses(Session session, ulong sceneGpuId, ulong sourceId) =>
@@ -632,6 +631,8 @@ public enum OverlaySourceKind
 
 public sealed class OverlaySlot
 {
+    public ulong Id { get; set; }
+    [System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonNumberEnumConverter<OverlaySourceKind>))]
     public OverlaySourceKind SourceKind { get; set; }
     public ulong SceneGpuId { get; set; }
     public float X { get; set; } = 0.62f;
@@ -640,7 +641,6 @@ public sealed class OverlaySlot
     public float Height { get; set; } = 0.32f;
     public float Opacity { get; set; } = 1;
     public int Z { get; set; }
-    public bool Enabled { get; set; }
     public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
     public uint DurationValue { get; set; } = 15;
     public uint DurationUnit { get; set; }
@@ -828,9 +828,8 @@ public sealed class MixingUnitEntry
     public uint Height { get; set; } = 1080;
     public uint FpsNum { get; set; } = 60_000;
     public uint FpsDen { get; set; } = 1_001;
-    public List<TransitionPreset> Transitions { get; } = [];
-    public List<OverlaySlot> Overlays { get; } = [];
-    public ulong AudioBusId { get; set; } = 1;
+    public List<ulong> OverlaysOnAir { get; } = [];
+    public MuAudio Audio { get; set; } = new();
     public AudioLinkMode AudioLink { get; set; } = AudioLinkMode.Follow;
     public bool AlwaysOnTop { get; set; } = true;
     public ulong PreviewSceneId { get; set; }
@@ -864,14 +863,6 @@ public sealed class MixingUnitEntry
     public uint DurationMs(uint frames) =>
         (uint)Math.Max(1, Math.Round(frames * 1000.0 * FpsDen / FpsNum));
 
-    public void EnsureDefaultTransitions()
-    {
-        if (Transitions.Count > 0)
-            return;
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
-        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true, KeepPreview = true });
-    }
-
 }
 
 public sealed class OutputEntry
@@ -884,7 +875,7 @@ public sealed class OutputEntry
     public ulong UnitId { get; set; } = 1;
     public bool UseGpu { get; set; }
     public bool Enabled { get; set; } = true;
-    public ulong AudioBusId { get; set; } = 1;
+    public ulong AudioUnitId { get; set; }
     public bool SkipEncodeWhenNoReceivers { get; set; } = true;
     public uint Width { get; set; }
     public uint Height { get; set; }
@@ -929,13 +920,6 @@ internal static class GpuRendererAbi
     };
 }
 
-public enum AudioBusRole
-{
-    Master = 0,
-    Headphone = 1,
-    Aux = 2
-}
-
 public enum AudioDeviceKind
 {
     None = 0,
@@ -950,19 +934,40 @@ public enum AudioLinkMode
     Independent = 1
 }
 
-public sealed class AudioBusEntry
+public sealed class MuAudio
 {
-    public ulong Id { get; set; }
-    public required string Name { get; set; }
-    public AudioBusRole Role { get; set; }
     public AudioDeviceKind DeviceKind { get; set; }
     public string DeviceId { get; set; } = "";
     public int MapLeft { get; set; }
     public int MapRight { get; set; } = 1;
-    public uint Bit { get; set; }
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
-    public override string ToString() => Name;
+
+    public MuAudio Clone() => new()
+    {
+        DeviceKind = DeviceKind,
+        DeviceId = DeviceId,
+        MapLeft = MapLeft,
+        MapRight = MapRight,
+        Gain = Gain,
+        Mute = Mute
+    };
+}
+
+public sealed class HeadphoneEntry
+{
+    public AudioDeviceKind DeviceKind { get; set; }
+    public string DeviceId { get; set; } = "";
+    public int MapLeft { get; set; }
+    public int MapRight { get; set; } = 1;
+
+    public HeadphoneEntry Clone() => new()
+    {
+        DeviceKind = DeviceKind,
+        DeviceId = DeviceId,
+        MapLeft = MapLeft,
+        MapRight = MapRight
+    };
 }
 
 public sealed class SessionSettings
@@ -1038,9 +1043,10 @@ public sealed class Session
     public List<InputEntry> Inputs { get; } = [];
     public List<SceneEntry> Scenes { get; } = [];
     public List<MixingUnitEntry> Units { get; } = [];
+    public List<TransitionPreset> Transitions { get; } = [];
+    public List<OverlaySlot> Overlays { get; } = [];
     public List<OutputEntry> Outputs { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
-    public List<AudioBusEntry> Buses { get; } = [];
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public List<string> InputTags { get; } = [];
     public List<string> SceneTags { get; } = [];
@@ -1050,21 +1056,31 @@ public sealed class Session
     public ulong NextMonitorId { get; set; } = 1000;
     public ulong NextOutputId { get; set; } = 100;
     public ulong NextMultiviewId { get; set; } = 1;
-    public ulong NextBusId { get; set; } = 3;
+    public ulong NextOverlayId { get; set; } = 1;
     public ulong SelectedUnitId { get; set; } = 1;
-    public bool HeadphoneCopyMaster { get; set; }
+    public HeadphoneEntry Headphone { get; set; } = new();
+    public bool HeadphoneCopyMonitor { get; set; }
+    public uint HeadphoneListenKind { get; set; }
+    public ulong HeadphoneListenId { get; set; }
+
+    public void EnsureDefaultTransitions()
+    {
+        if (Transitions.Count > 0)
+            return;
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true, KeepPreview = true });
+    }
 
     public static Session Default()
     {
         var session = new Session();
-        session.EnsureDefaultBuses();
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1 });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000, Scroll = true });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0 });
-        session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1 });
-        var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioBusId = 1, AudioLink = AudioLinkMode.Follow };
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
-        unit.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Color, Name = "Color Red", Kind = InputKind.Color, ColorR = 1, AudioUnits = [1] });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Bars, Name = "SMPTE HD Bars", Kind = InputKind.Bars, ToneHz = 1000, Scroll = true, AudioUnits = [1] });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Black, Name = "Black", Kind = InputKind.Black, ColorR = 0, ColorG = 0, ColorB = 0, AudioUnits = [1] });
+        session.Inputs.Add(new InputEntry { Id = MixerNative.Blue, Name = "Blue", Kind = InputKind.Color, ColorR = 0, ColorG = 0, ColorB = 1, AudioUnits = [1] });
+        var unit = new MixingUnitEntry { Id = 1, Name = "Mixing Unit 1", AudioLink = AudioLinkMode.Follow };
+        session.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionCut, DurationValue = 1, Swap = true });
+        session.Transitions.Add(new TransitionPreset { Kind = MixerNative.TransitionFade, DurationValue = 30, Swap = true });
         session.Units.Add(unit);
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);
@@ -1079,7 +1095,7 @@ public sealed class Session
             SourceKind = OutputSourceKind.MuProgram,
             UnitId = 1,
             UseGpu = false,
-            AudioBusId = 1,
+            AudioUnitId = 1,
             Width = session.Settings.DefaultWidth,
             Height = session.Settings.DefaultHeight,
             FpsNum = session.Settings.MasterFpsNum,
@@ -1132,49 +1148,6 @@ public sealed class Session
         return layout;
     }
 
-    public void EnsureDefaultBuses()
-    {
-        if (Buses.All(bus => bus.Role != AudioBusRole.Master))
-        {
-            Buses.Insert(0, new AudioBusEntry
-            {
-                Id = 1,
-                Name = "Master",
-                Role = AudioBusRole.Master,
-                DeviceKind = AudioDeviceKind.None,
-                MapLeft = 0,
-                MapRight = 1,
-                Bit = 0
-            });
-        }
-        if (Buses.All(bus => bus.Role != AudioBusRole.Headphone))
-        {
-            var insert = Buses.Count > 0 && Buses[0].Role == AudioBusRole.Master ? 1 : 0;
-            Buses.Insert(insert, new AudioBusEntry
-            {
-                Id = 2,
-                Name = "Headphone",
-                Role = AudioBusRole.Headphone,
-                DeviceKind = AudioDeviceKind.None,
-                MapLeft = 0,
-                MapRight = 1,
-                Bit = 1
-            });
-        }
-        if (NextBusId < 3)
-            NextBusId = 3;
-        foreach (var unit in Units)
-        {
-            if (unit.AudioBusId == 0)
-                unit.AudioBusId = 1;
-        }
-        foreach (var output in Outputs)
-        {
-            if (output.SourceKind == OutputSourceKind.Multiview)
-                output.AudioBusId = 0;
-        }
-    }
-
     public void MergeTagCatalogs()
     {
         var inputCatalog = TagCatalog.NormalizeList(InputTags);
@@ -1195,14 +1168,4 @@ public sealed class Session
         }
     }
 
-    public string NextAuxBusName()
-    {
-        for (var letter = 'A'; letter <= 'H'; letter++)
-        {
-            var name = $"Bus {letter}";
-            if (Buses.TrueForAll(bus => bus.Name != name))
-                return name;
-        }
-        return $"Bus {NextBusId}";
-    }
 }

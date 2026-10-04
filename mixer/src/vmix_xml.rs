@@ -8,7 +8,7 @@ use vmix_core::{
 };
 
 use crate::abi::{DURATION_FRAMES, DURATION_MS, SCENE_BASE, TRANSITION_FADE};
-use crate::session::{Document, InputKind, TransitionPreset, UnitDto};
+use crate::session::{Document, InputKind, TransitionPreset};
 
 pub(crate) const VERSION: &str = "0.3.0";
 const EDITION: &str = "eiviz";
@@ -168,15 +168,11 @@ fn default_unit_id(doc: &Document) -> Option<u64> {
     doc.units.first().map(|unit| unit.id)
 }
 
-pub fn fade_duration_ms(unit: Option<&UnitDto>, fps_num: u32, fps_den: u32) -> u32 {
-    let Some(unit) = unit else {
-        return 1000;
-    };
-    let preset = unit
-        .transitions
+pub fn fade_duration_ms(transitions: &[TransitionPreset], fps_num: u32, fps_den: u32) -> u32 {
+    let preset = transitions
         .iter()
         .find(|item| item.kind == TRANSITION_FADE)
-        .or_else(|| unit.transitions.first());
+        .or_else(|| transitions.first());
     match preset {
         Some(preset) => preset_duration_ms(preset, fps_num, fps_den),
         None => 1000,
@@ -290,9 +286,8 @@ pub fn build_vmix(doc: &Document, live: &LiveSnapshot) -> Vmix {
 
     let unit = selected.and_then(|id| doc.units.iter().find(|item| item.id == id));
     let transitions = Transitions {
-        transition: unit
-            .map(|item| item.transitions.as_slice())
-            .unwrap_or(&[])
+        transition: doc
+            .transitions
             .iter()
             .take(4)
             .enumerate()
@@ -459,9 +454,9 @@ mod tests {
             }],
             "units": [{
                 "id": 1,
-                "name": "MU1",
-                "transitions": [{"kind": 1, "durationValue": 500, "durationUnit": 1}]
-            }]
+                "name": "MU1"
+            }],
+            "transitions": [{"kind": 1, "durationValue": 500, "durationUnit": 1}]
         }"#,
         )
         .expect("sample session")
@@ -524,6 +519,6 @@ mod tests {
     #[test]
     fn fade_ms_from_preset() {
         let doc = sample_doc();
-        assert_eq!(fade_duration_ms(doc.units.first(), 60_000, 1_001), 500);
+        assert_eq!(fade_duration_ms(&doc.transitions, 60_000, 1_001), 500);
     }
 }

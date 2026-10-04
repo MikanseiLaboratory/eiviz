@@ -145,11 +145,9 @@ struct ContentView: View {
                 Text("Transitions").fontWeight(.bold)
                 Spacer()
                 Button("+") {
-                    var unit = mixer.selectedUnit
-                    unit.transitions.append(TransitionPreset())
-                    mixer.saveUnit(unit)
-                    mixer.tbarPresetIndex = unit.transitions.count - 1
-                    if let id = unit.transitions.last?.id {
+                    mixer.session.transitions.append(TransitionPreset())
+                    mixer.tbarPresetIndex = mixer.session.transitions.count - 1
+                    if let id = mixer.session.transitions.last?.id {
                         mixer.expandedTransitions.insert(id)
                     }
                 }
@@ -157,7 +155,7 @@ struct ContentView: View {
             }
             ScrollView {
                 VStack(spacing: 4) {
-                    ForEach(Array(mixer.selectedUnit.transitions.enumerated()), id: \.element.id) { index, preset in
+                    ForEach(Array(mixer.session.transitions.enumerated()), id: \.element.id) { index, preset in
                         transitionRow(index: index, preset: preset)
                     }
                 }
@@ -204,7 +202,7 @@ struct ContentView: View {
     private func dipColorBinding(index: Int, fallback: TransitionPreset) -> Binding<Color> {
         Binding(
             get: {
-                let item = mixer.selectedUnit.transitions[safe: index] ?? fallback
+                let item = mixer.session.transitions[safe: index] ?? fallback
                 return Color(red: Double(item.dipR), green: Double(item.dipG), blue: Double(item.dipB))
             },
             set: { color in
@@ -223,14 +221,12 @@ struct ContentView: View {
     }
 
     private func updateTransition(_ index: Int, _ body: (inout TransitionPreset) -> Void) {
-        var unit = mixer.selectedUnit
-        guard index < unit.transitions.count else { return }
-        body(&unit.transitions[index])
-        mixer.saveUnit(unit)
+        guard index < mixer.session.transitions.count else { return }
+        body(&mixer.session.transitions[index])
     }
 
     private func transitionKindGrid(index: Int, preset: TransitionPreset) -> some View {
-        let selected = mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind
+        let selected = mixer.session.transitions[safe: index]?.kind ?? preset.kind
         let open = mixer.kindMenuGroup[preset.id] ?? TransitionCatalog.info(selected).group
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
@@ -268,7 +264,7 @@ struct ContentView: View {
                             }
                         }
                         if item.kind == EIVIZ_TRANSITION_CUSTOM {
-                            let wgsl = mixer.selectedUnit.transitions[safe: index]?.customWgsl
+                            let wgsl = mixer.session.transitions[safe: index]?.customWgsl
                                 ?? CustomWgslEditor.template
                             wgsl.withCString { _ = mixer_unit_set_custom_wgsl(mixer.selectedUnitId, $0) }
                         }
@@ -302,24 +298,24 @@ struct ContentView: View {
             ) {
                 VStack(alignment: .leading, spacing: 4) {
                     transitionKindGrid(index: index, preset: preset)
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasDuration {
+                    if (mixer.session.transitions[safe: index] ?? preset).hasDuration {
                         Text("Duration").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         mixerUintField(Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.durationValue ?? preset.durationValue },
+                            get: { mixer.session.transitions[safe: index]?.durationValue ?? preset.durationValue },
                             set: { value in updateTransition(index) { $0.durationValue = value } }
                         ))
                         Picker("", selection: Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.durationUnit ?? preset.durationUnit },
+                            get: { mixer.session.transitions[safe: index]?.durationUnit ?? preset.durationUnit },
                             set: { value in updateTransition(index) { $0.durationUnit = value } }
                         )) {
                             Text("Frames").tag(EIVIZ_DURATION_FRAMES)
                             Text("Milliseconds").tag(EIVIZ_DURATION_MS)
                         }
                     }
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasEasing {
+                    if (mixer.session.transitions[safe: index] ?? preset).hasEasing {
                         Text("Easing").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         Picker("", selection: Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.easing ?? preset.easing },
+                            get: { mixer.session.transitions[safe: index]?.easing ?? preset.easing },
                             set: { value in updateTransition(index) { $0.easing = value } }
                         )) {
                             Text("Linear").tag(EIVIZ_EASING_LINEAR)
@@ -329,10 +325,10 @@ struct ContentView: View {
                             Text("Smoothstep").tag(EIVIZ_EASING_SMOOTHSTEP)
                         }
                     }
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasDirection {
+                    if (mixer.session.transitions[safe: index] ?? preset).hasDirection {
                         Text("Direction").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         Picker("", selection: Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.direction ?? preset.direction },
+                            get: { mixer.session.transitions[safe: index]?.direction ?? preset.direction },
                             set: { value in updateTransition(index) { $0.direction = value } }
                         )) {
                             Text("Left").tag(EIVIZ_DIR_LEFT)
@@ -341,51 +337,49 @@ struct ContentView: View {
                             Text("Down").tag(EIVIZ_DIR_DOWN)
                         }
                     }
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasSoftness {
-                        Text(TransitionCatalog.info(mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind).softnessLabel)
+                    if (mixer.session.transitions[safe: index] ?? preset).hasSoftness {
+                        Text(TransitionCatalog.info(mixer.session.transitions[safe: index]?.kind ?? preset.kind).softnessLabel)
                             .font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         mixerFloatField(Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.softness ?? preset.softness },
+                            get: { mixer.session.transitions[safe: index]?.softness ?? preset.softness },
                             set: { value in updateTransition(index) { $0.softness = max(0, value) } }
                         ))
                     }
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasParam {
-                        Text(TransitionCatalog.info(mixer.selectedUnit.transitions[safe: index]?.kind ?? preset.kind).paramLabel)
+                    if (mixer.session.transitions[safe: index] ?? preset).hasParam {
+                        Text(TransitionCatalog.info(mixer.session.transitions[safe: index]?.kind ?? preset.kind).paramLabel)
                             .font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         mixerFloatField(Binding(
-                            get: { mixer.selectedUnit.transitions[safe: index]?.param ?? preset.param },
+                            get: { mixer.session.transitions[safe: index]?.param ?? preset.param },
                             set: { value in updateTransition(index) { $0.param = max(0, value) } }
                         ))
                     }
                     Toggle("Swap", isOn: Binding(
-                        get: { mixer.selectedUnit.transitions[safe: index]?.swap ?? true },
+                        get: { mixer.session.transitions[safe: index]?.swap ?? true },
                         set: { value in updateTransition(index) { $0.swap = value } }
                     ))
                     Toggle("Keep Preview Scene", isOn: Binding(
-                        get: { mixer.selectedUnit.transitions[safe: index]?.keepPreview ?? true },
+                        get: { mixer.session.transitions[safe: index]?.keepPreview ?? true },
                         set: { value in updateTransition(index) { $0.keepPreview = value } }
                     ))
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasDipColor {
-                        Text((mixer.selectedUnit.transitions[safe: index] ?? preset).kind == EIVIZ_TRANSITION_PUSH ? "Fill color" : "Dip color")
+                    if (mixer.session.transitions[safe: index] ?? preset).hasDipColor {
+                        Text((mixer.session.transitions[safe: index] ?? preset).kind == EIVIZ_TRANSITION_PUSH ? "Fill color" : "Dip color")
                             .font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         ColorPicker("", selection: dipColorBinding(index: index, fallback: preset), supportsOpacity: false)
                             .labelsHidden()
                     }
-                    if (mixer.selectedUnit.transitions[safe: index] ?? preset).hasCustomWgsl {
-                        Button((mixer.selectedUnit.transitions[safe: index]?.customWgsl ?? "").isEmpty ? "Edit WGSL…" : "Edit WGSL (set)") {
+                    if (mixer.session.transitions[safe: index] ?? preset).hasCustomWgsl {
+                        Button((mixer.session.transitions[safe: index]?.customWgsl ?? "").isEmpty ? "Edit WGSL…" : "Edit WGSL (set)") {
                             customWgslEdit = CustomWgslEdit(
                                 index: index,
-                                text: mixer.selectedUnit.transitions[safe: index]?.customWgsl ?? preset.customWgsl ?? ""
+                                text: mixer.session.transitions[safe: index]?.customWgsl ?? preset.customWgsl ?? ""
                             )
                         }
                     }
                     Button("−") {
-                        var unit = mixer.selectedUnit
-                        guard unit.transitions.count > 1, index < unit.transitions.count else { return }
-                        mixer.expandedTransitions.remove(unit.transitions[index].id)
-                        unit.transitions.remove(at: index)
-                        mixer.saveUnit(unit)
-                        mixer.tbarPresetIndex = min(mixer.tbarPresetIndex, unit.transitions.count - 1)
+                        guard mixer.session.transitions.count > 1, index < mixer.session.transitions.count else { return }
+                        mixer.expandedTransitions.remove(mixer.session.transitions[index].id)
+                        mixer.session.transitions.remove(at: index)
+                        mixer.tbarPresetIndex = min(mixer.tbarPresetIndex, mixer.session.transitions.count - 1)
                     }
                 }
                 .padding(.top, 4)
@@ -540,8 +534,8 @@ struct ContentView: View {
             Text("Audio").fontWeight(.bold)
             HSplitView {
                 HStack(alignment: .bottom, spacing: 12) {
-                    ForEach(mixer.session.buses) { bus in
-                        meter(title: bus.name, id: bus.role == .master ? 0 : EIVIZ_AUDIO_BUS_PEAK_BASE | bus.id)
+                    ForEach(mixer.session.units) { unit in
+                        meter(title: unit.name, unitId: unit.id)
                     }
                     ForEach(mixer.session.inputs) { input in
                         inputMeter(input)
@@ -550,17 +544,17 @@ struct ContentView: View {
                 }
                 HStack(alignment: .bottom, spacing: 12) {
                     Spacer(minLength: 0)
-                    ForEach(mixer.selectedUnit.overlays) { slot in
+                    ForEach(mixer.session.overlays) { slot in
                         Toggle(isOn: Binding(
                             get: {
                                 mixer.session.units.first { $0.id == mixer.selectedUnitId }?
-                                    .overlays.first { $0.id == slot.id }?.enabled ?? slot.enabled
+                                    .overlaysOnAir.contains(slot.id) ?? false
                             },
                             set: { mixer.setOverlayEnabled(slot.id, enabled: $0) }
                         )) {
                             Text(overlayName(slot))
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(OnOffToggleStyle())
                     }
                 }
                 .frame(minWidth: 80)
@@ -593,8 +587,9 @@ struct ContentView: View {
         return mixer.session.scenes.first { $0.gpuId == slot.sceneGpuId }?.name ?? "Scene"
     }
 
-    private func meter(title: String, id: UInt64) -> some View {
-        let peak = mixer.peaks[id] ?? (0, 0)
+    private func meter(title: String, unitId: UInt64) -> some View {
+        let peak = mixer.peaks[EIVIZ_AUDIO_BUS_PEAK_BASE | unitId] ?? (0, 0)
+        let listening = mixer.session.headphoneListenKind == 1 && mixer.session.headphoneListenId == unitId
         return VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.system(size: 10))
             HStack(spacing: 2) {
@@ -602,6 +597,9 @@ struct ContentView: View {
                 Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
             }
             .frame(height: 40, alignment: .bottom)
+            listenButton(on: listening) {
+                mixer.toggleHeadphoneListen(kind: 1, id: unitId)
+            }
         }
     }
 
@@ -627,10 +625,42 @@ struct ContentView: View {
                 Rectangle().fill(EivizTheme.status).frame(width: 8, height: CGFloat(4 + peak.1 * 36))
             }
             .frame(height: 40, alignment: .bottom)
+            listenButton(on: mixer.session.headphoneListenKind == 2 && mixer.session.headphoneListenId == input.id) {
+                mixer.toggleHeadphoneListen(kind: 2, id: input.id)
+            }
+            if input.kind != .mix {
+                ForEach(mixer.session.units) { unit in
+                    let on = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)
+                    Button {
+                        let turningOff = on
+                        var routes = input.audioUnits
+                        if turningOff {
+                            routes.removeAll { $0 == unit.id }
+                            mixer.clearAudioFollow(inputId: input.id, unitId: unit.id)
+                        } else if !routes.contains(unit.id) {
+                            routes.append(unit.id)
+                        }
+                        mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
+                    } label: {
+                        Text("MU\(unit.id)")
+                    }
+                    .buttonStyle(OnOffButtonStyle(on: on, compact: true))
+                    .help(L10n.format("audio.routeTip", unit.name))
+                }
+            }
         }
         .onTapGesture(count: 2) {
             mixer.openAudioInput(input)
         }
+    }
+
+    private func listenButton(on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "headphones")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(OnOffButtonStyle(on: on, compact: true))
+        .help(L10n.t(on ? "audio.listening" : "audio.listen"))
     }
 
     private var mixUnitBar: some View {

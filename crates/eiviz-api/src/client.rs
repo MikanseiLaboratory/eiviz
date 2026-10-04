@@ -131,13 +131,13 @@ impl ControlClient {
     pub async fn overlay_auto(
         &self,
         unit_id: u64,
-        index: u32,
+        overlay_id: u64,
         duration_ms: u32,
         to_on: bool,
     ) -> ControlResult<()> {
         status_ok(
             &self
-                .roundtrip(overlay_req(unit_id, index, duration_ms, to_on))
+                .roundtrip(overlay_req(unit_id, overlay_id, duration_ms, to_on))
                 .await?,
         )
     }
@@ -420,12 +420,12 @@ impl ControlSession {
     pub async fn overlay_auto(
         &self,
         unit_id: u64,
-        index: u32,
+        overlay_id: u64,
         duration_ms: u32,
         to_on: bool,
     ) -> ControlResult<()> {
         let response = self
-            .roundtrip(overlay_req(unit_id, index, duration_ms, to_on))
+            .roundtrip(overlay_req(unit_id, overlay_id, duration_ms, to_on))
             .await?;
         apply_response(&self.view, &response);
         status_ok(&response)
@@ -531,7 +531,7 @@ impl ControlSession {
     pub async fn audio_set_input(
         &self,
         input_id: u64,
-        bus_mask: u32,
+        units: &[u64],
         gain: f32,
         mute: bool,
     ) -> ControlResult<()> {
@@ -542,7 +542,7 @@ impl ControlSession {
                 payload: Some(request::Payload::AudioSetInput(
                     crate::proto::AudioSetInput {
                         input: Some(ref_input(input_id)),
-                        bus_mask,
+                        units: units.to_vec(),
                         gain,
                         mute,
                     },
@@ -553,15 +553,15 @@ impl ControlSession {
         status_ok(&response)
     }
 
-    pub async fn audio_set_bus(&self, bus_id: u64, gain: f32, mute: bool) -> ControlResult<()> {
+    pub async fn audio_set_bus(&self, unit_id: u64, gain: f32, mute: bool) -> ControlResult<()> {
         let response = self
             .roundtrip(Request {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 expected_revision: 0,
                 payload: Some(request::Payload::AudioSetBus(crate::proto::AudioSetBus {
-                    bus: Some(crate::proto::ResourceRef {
-                        kind: "bus".into(),
-                        id: bus_id,
+                    unit: Some(crate::proto::ResourceRef {
+                        kind: "unit".into(),
+                        id: unit_id,
                         guid: String::new(),
                         name: String::new(),
                     }),
@@ -1006,13 +1006,13 @@ fn auto_req(
     }
 }
 
-fn overlay_req(unit_id: u64, index: u32, duration_ms: u32, to_on: bool) -> Request {
+fn overlay_req(unit_id: u64, overlay_id: u64, duration_ms: u32, to_on: bool) -> Request {
     Request {
         request_id: uuid::Uuid::new_v4().to_string(),
         expected_revision: 0,
         payload: Some(request::Payload::OverlayAuto(OverlayAuto {
             unit: Some(ref_unit(unit_id)),
-            index,
+            overlay_id,
             duration_ms,
             to_on,
         })),

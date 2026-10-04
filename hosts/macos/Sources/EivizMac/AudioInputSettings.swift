@@ -52,7 +52,7 @@ struct AudioInputSettingsView: View {
                         Slider(
                             value: Binding(
                                 get: { AudioMeter.slider(fromGain: input.gain) },
-                                set: { mixer.applyInputAudio(id: input.id, mask: mixer.audioMask(input), gain: AudioMeter.gain(fromSlider: $0), mute: input.mute) }
+                                set: { mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: AudioMeter.gain(fromSlider: $0), mute: input.mute) }
                             )
                         )
                         .frame(width: 140)
@@ -61,32 +61,32 @@ struct AudioInputSettingsView: View {
                             .foregroundStyle(.secondary)
                         Toggle(isOn: Binding(
                             get: { input.mute },
-                            set: { mixer.applyInputAudio(id: input.id, mask: mixer.audioMask(input), gain: input.gain, mute: $0) }
+                            set: { mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: input.gain, mute: $0) }
                         )) {
                             Text("Mute")
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(OnOffToggleStyle())
                     }
                 }
                 if input.kind != .mix {
                     HStack(spacing: 6) {
-                        ForEach(mixer.session.buses) { bus in
-                            let bit = UInt32(1) << bus.bit
-                            Toggle(isOn: Binding(
-                                get: { (mixer.audioMask(input) & bit) != 0 },
-                                set: { on in
-                                    var mask = mixer.audioMask(input)
-                                    if on {
-                                        mask |= bit
-                                    } else {
-                                        mask &= ~bit
-                                    }
-                                    mixer.applyInputAudio(id: input.id, mask: mask == 0 ? 1 : mask, gain: input.gain, mute: input.mute)
+                        ForEach(mixer.session.units) { unit in
+                            let sent = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)
+                            Button {
+                                let turningOff = sent
+                                var routes = input.audioUnits
+                                if turningOff {
+                                    routes.removeAll { $0 == unit.id }
+                                    mixer.clearAudioFollow(inputId: input.id, unitId: unit.id)
+                                } else if !routes.contains(unit.id) {
+                                    routes.append(unit.id)
                                 }
-                            )) {
-                                Text(busChip(bus))
+                                mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
+                            } label: {
+                                Text("MU\(unit.id)")
                             }
-                            .toggleStyle(.checkbox)
+                            .buttonStyle(OnOffButtonStyle(on: sent))
+                            .help(L10n.format("audio.routeTip", unit.name))
                         }
                     }
                 }
@@ -119,16 +119,4 @@ struct AudioInputSettingsView: View {
         return String(format: "%.0f dB", 20 * log10(gain))
     }
 
-    private func busChip(_ bus: AudioBusEntry) -> String {
-        if bus.role == .master {
-            return "M"
-        }
-        if bus.role == .headphone {
-            return "H"
-        }
-        if bus.name.hasPrefix("Bus "), bus.name.count > 4 {
-            return String(bus.name.suffix(1))
-        }
-        return bus.name.isEmpty ? "?" : String(bus.name.prefix(1))
-    }
 }

@@ -46,11 +46,15 @@ pub struct Document {
     #[serde(default)]
     pub units: Vec<UnitDto>,
     #[serde(default)]
+    pub transitions: Vec<TransitionPreset>,
+    #[serde(default)]
+    pub overlays: Vec<OverlaySlot>,
+    #[serde(default)]
+    pub next_overlay_id: u64,
+    #[serde(default)]
     pub outputs: Vec<OutputDto>,
     #[serde(default)]
     pub multiviews: Vec<MultiviewDto>,
-    #[serde(default)]
-    pub buses: Vec<BusDto>,
     #[serde(default)]
     pub next_input_id: u64,
     #[serde(default)]
@@ -62,11 +66,16 @@ pub struct Document {
     #[serde(default)]
     pub next_multiview_id: u64,
     #[serde(default)]
-    pub next_bus_id: u64,
-    #[serde(default)]
     pub selected_unit_id: u64,
     #[serde(default)]
-    pub headphone_copy_master: bool,
+    pub headphone: HeadphoneDto,
+    #[serde(default)]
+    pub headphone_copy_monitor: bool,
+    /// 0 = off, 1 = Mixing Unit, 2 = Input.
+    #[serde(default)]
+    pub headphone_listen_kind: u32,
+    #[serde(default)]
+    pub headphone_listen_id: u64,
 }
 
 fn version_two() -> i32 {
@@ -501,16 +510,6 @@ impl MultiviewTemplate {
 
 session_string_enum! {
     #[derive(Default)]
-    pub enum AudioBusRole {
-        #[default]
-        Master,
-        Headphone,
-        Aux,
-    }
-}
-
-session_string_enum! {
-    #[derive(Default)]
     pub enum AudioDeviceKind {
         #[default]
         None,
@@ -561,8 +560,8 @@ pub struct InputDto {
     pub tone_hz: f32,
     #[serde(default = "tone_level")]
     pub tone_level_dbfs: f32,
-    #[serde(default = "one_u32")]
-    pub bus_mask: u32,
+    #[serde(default)]
+    pub audio_units: Vec<u64>,
     #[serde(default = "one_f32")]
     pub gain: f32,
     #[serde(default)]
@@ -601,8 +600,6 @@ pub struct InputDto {
     pub mix_source: MixSource,
     #[serde(default)]
     pub mix_target_id: u64,
-    #[serde(default)]
-    pub mix_audio_bus_id: u64,
     #[serde(default)]
     pub audio_capture_mode: AudioCaptureMode,
     #[serde(default)]
@@ -864,6 +861,8 @@ impl Default for TransitionPreset {
 #[serde(rename_all = "camelCase")]
 pub struct OverlaySlot {
     #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
     pub scene_gpu_id: u64,
     #[serde(default = "overlay_x")]
     pub x: f32,
@@ -877,8 +876,6 @@ pub struct OverlaySlot {
     pub opacity: f32,
     #[serde(default)]
     pub z: i32,
-    #[serde(default = "true_bool")]
-    pub enabled: bool,
     #[serde(default = "fade")]
     pub transition_kind: u32,
     #[serde(default = "fifteen")]
@@ -908,6 +905,7 @@ pub struct OverlaySlot {
 impl Default for OverlaySlot {
     fn default() -> Self {
         Self {
+            id: 0,
             scene_gpu_id: 0,
             x: overlay_x(),
             y: overlay_y(),
@@ -915,7 +913,6 @@ impl Default for OverlaySlot {
             height: overlay_h(),
             opacity: 1.0,
             z: 0,
-            enabled: true,
             transition_kind: fade(),
             duration_value: fifteen(),
             duration_unit: 0,
@@ -977,11 +974,9 @@ pub struct UnitDto {
     #[serde(default = "fps_den")]
     pub fps_den: u32,
     #[serde(default)]
-    pub transitions: Vec<TransitionPreset>,
+    pub overlays_on_air: Vec<u64>,
     #[serde(default)]
-    pub overlays: Vec<OverlaySlot>,
-    #[serde(default = "one")]
-    pub audio_bus_id: u64,
+    pub audio: MuBusDto,
     #[serde(default)]
     pub audio_link: AudioLinkMode,
     #[serde(default)]
@@ -1024,8 +1019,8 @@ pub struct OutputDto {
     pub use_gpu: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "one")]
-    pub audio_bus_id: u64,
+    #[serde(default)]
+    pub audio_unit_id: u64,
     #[serde(default = "default_true")]
     pub skip_encode_when_no_receivers: bool,
     /// 0 follows the Mixing Unit (or session master) width.
@@ -1075,14 +1070,9 @@ pub struct MultiviewDto {
     pub always_on_top: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BusDto {
-    pub id: u64,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub role: AudioBusRole,
+pub struct MuBusDto {
     #[serde(default)]
     pub device_kind: AudioDeviceKind,
     #[serde(default)]
@@ -1091,12 +1081,47 @@ pub struct BusDto {
     pub map_left: i32,
     #[serde(default = "one_i32")]
     pub map_right: i32,
-    #[serde(default)]
-    pub bit: u32,
     #[serde(default = "one_f32")]
     pub gain: f32,
     #[serde(default)]
     pub mute: bool,
+}
+
+impl Default for MuBusDto {
+    fn default() -> Self {
+        Self {
+            device_kind: AudioDeviceKind::None,
+            device_id: String::new(),
+            map_left: 0,
+            map_right: 1,
+            gain: 1.0,
+            mute: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeadphoneDto {
+    #[serde(default)]
+    pub device_kind: AudioDeviceKind,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub map_left: i32,
+    #[serde(default = "one_i32")]
+    pub map_right: i32,
+}
+
+impl Default for HeadphoneDto {
+    fn default() -> Self {
+        Self {
+            device_kind: AudioDeviceKind::None,
+            device_id: String::new(),
+            map_left: 0,
+            map_right: 1,
+        }
+    }
 }
 
 fn one_i32() -> i32 {
@@ -1135,12 +1160,27 @@ impl Document {
             doc.settings.vmix_api_port = api_port();
         }
         doc.settings.multiview_label_size = clamp_size(doc.settings.multiview_label_size);
+        let listen_ok = match doc.headphone_listen_kind {
+            1 => doc
+                .units
+                .iter()
+                .any(|unit| unit.id == doc.headphone_listen_id),
+            2 => doc
+                .inputs
+                .iter()
+                .any(|input| input.id == doc.headphone_listen_id),
+            _ => false,
+        };
+        if !listen_ok {
+            doc.headphone_listen_kind = 0;
+            doc.headphone_listen_id = 0;
+        }
         for input in &mut doc.inputs {
             if input.kind == InputKind::Mix {
-                input.bus_mask = 0;
-            } else if input.bus_mask == 0 {
-                input.bus_mask = 1;
+                input.audio_units.clear();
             }
+            input.audio_units.sort_unstable();
+            input.audio_units.dedup();
             if input.frame_buffer_frames == 0 {
                 input.frame_buffer_frames = 1;
             }
@@ -1151,7 +1191,6 @@ impl Document {
             if input.kind != InputKind::Mix {
                 input.mix_source = MixSource::MuProgram;
                 input.mix_target_id = 0;
-                input.mix_audio_bus_id = 0;
             }
         }
         for scene in &mut doc.scenes {
@@ -1164,6 +1203,52 @@ impl Document {
                 }
             }
         }
+        if doc.transitions.is_empty() {
+            doc.transitions = vec![
+                TransitionPreset {
+                    kind: 0,
+                    duration_value: 1,
+                    label: Some("Cut".into()),
+                    ..TransitionPreset::default()
+                },
+                TransitionPreset {
+                    kind: 1,
+                    duration_value: 30,
+                    label: Some("Fade".into()),
+                    ..TransitionPreset::default()
+                },
+            ];
+        } else {
+            for preset in &mut doc.transitions {
+                preset.label = Some(transition_label(preset.kind).into());
+                if preset.duration_value == 0 {
+                    preset.duration_value = 1;
+                }
+            }
+        }
+        let mut next_overlay = doc
+            .overlays
+            .iter()
+            .map(|slot| slot.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(doc.next_overlay_id.max(1));
+        for overlay in &mut doc.overlays {
+            if overlay.id == 0 {
+                overlay.id = next_overlay;
+                next_overlay += 1;
+            }
+            if overlay.crop_width <= 0.0 {
+                overlay.crop_width = 1.0;
+            }
+            if overlay.crop_height <= 0.0 {
+                overlay.crop_height = 1.0;
+            }
+        }
+        doc.next_overlay_id = next_overlay;
+        let overlay_ids: std::collections::HashSet<u64> =
+            doc.overlays.iter().map(|slot| slot.id).collect();
         for unit in &mut doc.units {
             if unit.width == 0 {
                 unit.width = width_1080();
@@ -1177,44 +1262,14 @@ impl Document {
             if unit.fps_den == 0 {
                 unit.fps_den = fps_den();
             }
-            if unit.audio_bus_id == 0 {
-                unit.audio_bus_id = 1;
+            if unit.audio.gain < 0.0 {
+                unit.audio.gain = 1.0;
             }
-            for overlay in &mut unit.overlays {
-                if overlay.crop_width <= 0.0 {
-                    overlay.crop_width = 1.0;
-                }
-                if overlay.crop_height <= 0.0 {
-                    overlay.crop_height = 1.0;
-                }
-            }
-            if unit.transitions.is_empty() {
-                unit.transitions = vec![
-                    TransitionPreset {
-                        kind: 0,
-                        duration_value: 1,
-                        label: Some("Cut".into()),
-                        ..TransitionPreset::default()
-                    },
-                    TransitionPreset {
-                        kind: 1,
-                        duration_value: 30,
-                        label: Some("Fade".into()),
-                        ..TransitionPreset::default()
-                    },
-                ];
-            } else {
-                for preset in &mut unit.transitions {
-                    preset.label = Some(transition_label(preset.kind).into());
-                    if preset.duration_value == 0 {
-                        preset.duration_value = 1;
-                    }
-                }
-            }
+            unit.overlays_on_air.retain(|id| overlay_ids.contains(id));
         }
         for output in &mut doc.outputs {
             if output.source_kind == OutputSourceKind::Multiview {
-                output.audio_bus_id = 0;
+                output.audio_unit_id = 0;
             }
         }
         for layout in &mut doc.multiviews {
@@ -1236,11 +1291,6 @@ impl Document {
             }
             layout.tiles.truncate(want);
         }
-        for bus in &mut doc.buses {
-            if bus.gain < 0.0 {
-                bus.gain = 1.0;
-            }
-        }
         if doc.next_input_id == 0 {
             doc.next_input_id = doc.inputs.iter().map(|item| item.id).max().unwrap_or(9) + 1;
         }
@@ -1256,9 +1306,6 @@ impl Document {
         if doc.next_multiview_id == 0 {
             doc.next_multiview_id =
                 doc.multiviews.iter().map(|item| item.id).max().unwrap_or(0) + 1;
-        }
-        if doc.next_bus_id == 0 {
-            doc.next_bus_id = doc.buses.iter().map(|item| item.id).max().unwrap_or(2) + 1;
         }
         if doc.selected_unit_id == 0 {
             doc.selected_unit_id = doc.units.first().map(|unit| unit.id).unwrap_or(1);
@@ -1376,12 +1423,8 @@ mod tests {
   "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
   "inputs": [{ "id": 2, "name": "SMPTE Bars", "kind": "Bars" }],
   "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
-  "units": [{ "id": 1, "name": "Mixing Unit 1", "audioBusId": 1, "audioLink": "Follow" }],
-  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true }],
-  "buses": [
-    { "id": 1, "name": "Master", "role": "Master", "deviceKind": "Wasapi", "mapRight": 1 },
-    { "id": 2, "name": "Headphone", "role": "Headphone", "deviceKind": "None", "mapRight": 1, "bit": 1 }
-  ],
+  "units": [{ "id": 1, "name": "Mixing Unit 1", "audioLink": "Follow", "audio": { "deviceKind": "Wasapi", "mapRight": 1 } }],
+  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true, "audioUnitId": 1 }],
   "nextInputId": 10,
   "nextSceneId": 2,
   "nextUnitId": 2,
@@ -1393,10 +1436,10 @@ mod tests {
         assert_eq!(a, b);
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.inputs[0].kind, InputKind::Bars);
-        assert_eq!(doc.outputs[0].audio_bus_id, 1);
+        assert_eq!(doc.outputs[0].audio_unit_id, 1);
         assert!(doc.outputs[0].skip_encode_when_no_receivers);
-        assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::Wasapi);
-        assert_eq!(doc.units[0].transitions.len(), 2);
+        assert_eq!(doc.units[0].audio.device_kind, AudioDeviceKind::Wasapi);
+        assert_eq!(doc.transitions.len(), 2);
         assert!(doc.settings.rebar_optimization);
         assert_eq!(doc.settings.renderer, Renderer::Auto);
         assert!(!doc.settings.rebar_direct_sample);
@@ -1490,10 +1533,10 @@ mod tests {
     fn explicit_output_audio_none_is_kept() {
         let src = r#"{
   "version": 2,
-  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "audioBusId": 0 }]
+  "outputs": [{ "id": 100, "name": "eiviz-pgm", "transport": "Omt", "audioUnitId": 0 }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
-        assert_eq!(doc.outputs[0].audio_bus_id, 0);
+        assert_eq!(doc.outputs[0].audio_unit_id, 0);
     }
 
     #[test]
@@ -1513,10 +1556,10 @@ mod tests {
     fn multiview_output_audio_is_forced_silent() {
         let src = r#"{
   "version": 2,
-  "outputs": [{ "id": 100, "name": "eiviz-mv", "transport": "Omt", "sourceKind": "Multiview", "audioBusId": 1 }]
+  "outputs": [{ "id": 100, "name": "eiviz-mv", "transport": "Omt", "sourceKind": "Multiview", "audioUnitId": 1 }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap();
-        assert_eq!(doc.outputs[0].audio_bus_id, 0);
+        assert_eq!(doc.outputs[0].audio_unit_id, 0);
     }
 
     #[test]
@@ -1552,7 +1595,7 @@ mod tests {
         let doc = parse(legacy.as_bytes()).unwrap();
         assert_eq!(doc.inputs[0].mix_source, MixSource::MuProgram);
         assert_eq!(doc.inputs[0].mix_target_id, 0);
-        assert_eq!(doc.inputs[0].mix_audio_bus_id, 0);
+        assert!(doc.inputs[0].audio_units.is_empty());
 
         let src = r#"{
   "version": 2,
@@ -1562,7 +1605,7 @@ mod tests {
     "kind": "Mix",
     "mixSource": "MuPreview",
     "mixTargetId": 1,
-    "mixAudioBusId": 2,
+    "audioUnits": [1],
     "frameBufferFrames": 4
   }]
 }"#;
@@ -1570,17 +1613,15 @@ mod tests {
         assert_eq!(mix.inputs[0].kind, InputKind::Mix);
         assert_eq!(mix.inputs[0].mix_source, MixSource::MuPreview);
         assert_eq!(mix.inputs[0].mix_target_id, 1);
-        assert_eq!(mix.inputs[0].mix_audio_bus_id, 2);
         assert_eq!(mix.inputs[0].frame_buffer_frames, 4);
-        assert_eq!(mix.inputs[0].bus_mask, 0);
+        assert!(mix.inputs[0].audio_units.is_empty());
         let text = String::from_utf8(to_vec(&mix).unwrap()).unwrap();
         let again = parse(text.as_bytes()).unwrap();
         assert_eq!(again.inputs[0].kind, InputKind::Mix);
         assert_eq!(again.inputs[0].mix_source, MixSource::MuPreview);
         assert_eq!(again.inputs[0].mix_target_id, 1);
-        assert_eq!(again.inputs[0].mix_audio_bus_id, 2);
         assert_eq!(again.inputs[0].frame_buffer_frames, 4);
-        assert_eq!(again.inputs[0].bus_mask, 0);
+        assert!(again.inputs[0].audio_units.is_empty());
     }
 
     #[test]
@@ -1799,9 +1840,10 @@ mod tests {
 
     #[test]
     fn core_audio_enum_roundtrips() {
-        let src = r#"{ "version": 2, "buses": [{ "id": 1, "name": "Master", "role": "Master", "deviceKind": "CoreAudio" }] }"#;
+        let src =
+            r#"{ "version": 2, "units": [{ "id": 1, "audio": { "deviceKind": "CoreAudio" } }] }"#;
         let doc = parse(src.as_bytes()).unwrap();
-        assert_eq!(doc.buses[0].device_kind, AudioDeviceKind::CoreAudio);
+        assert_eq!(doc.units[0].audio.device_kind, AudioDeviceKind::CoreAudio);
         let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
         assert!(text.contains("\"CoreAudio\""));
     }
@@ -1810,32 +1852,29 @@ mod tests {
     fn version_two_transition_roundtrips() {
         let src = r#"{
   "version": 2,
-  "units": [{
-    "id": 1,
-    "name": "MU",
-    "transitions": [{
-      "kind": 2,
-      "durationValue": 12,
-      "durationUnit": 1,
-      "swap": true,
-      "keepPreview": true,
-      "easing": 3,
-      "direction": 1,
-      "dipR": 0.1,
-      "dipG": 0.2,
-      "dipB": 0.3,
-      "dipA": 1.0
-    }]
+  "units": [{ "id": 1, "name": "MU" }],
+  "transitions": [{
+    "kind": 2,
+    "durationValue": 12,
+    "durationUnit": 1,
+    "swap": true,
+    "keepPreview": true,
+    "easing": 3,
+    "direction": 1,
+    "dipR": 0.1,
+    "dipG": 0.2,
+    "dipB": 0.3,
+    "dipA": 1.0
   }]
 }"#;
         let doc = parse(src.as_bytes()).unwrap().canonicalize();
         assert_eq!(doc.version, 2);
-        assert_eq!(doc.units[0].transitions[0].kind, 2);
-        assert_eq!(doc.units[0].transitions[0].duration_value, 12);
-        assert_eq!(doc.units[0].transitions[0].duration_unit, 1);
-        assert!(doc.units[0].transitions[0].keep_preview);
-        assert_eq!(doc.units[0].transitions[0].easing, 3);
-        assert!((doc.units[0].transitions[0].dip_g - 0.2).abs() < f32::EPSILON);
+        assert_eq!(doc.transitions[0].kind, 2);
+        assert_eq!(doc.transitions[0].duration_value, 12);
+        assert_eq!(doc.transitions[0].duration_unit, 1);
+        assert!(doc.transitions[0].keep_preview);
+        assert_eq!(doc.transitions[0].easing, 3);
+        assert!((doc.transitions[0].dip_g - 0.2).abs() < f32::EPSILON);
     }
 
     #[test]

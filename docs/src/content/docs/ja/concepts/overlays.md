@@ -5,7 +5,7 @@ description: Mixing UnitのProgramに載せるDSK
 
 Overlayは、一般的なスイッチャーにおけるDSK（ダウンストリームキー）に相当し、Program映像の上にテロップやロゴ、ワイプ画面などを重ねて合成する機能です。
 
-各[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)ごとに最大8系統まで設定でき、ソースには[Scene](/eiviz/ja/concepts/scenes/)またはInputを指定できます。
+定義はセッション共通です。On-Airは[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)ごとに独立し、件数の上限はありません。ソースは[Scene](/eiviz/ja/concepts/scenes/)またはInputです。Transitionのプリセットもセッション共通で、長さは実行したMixing Unitのフレームレートでフレーム数に換算します。vMixの`Overlay1`から`Overlay8`と、vMix XMLのOverlay一覧は、そのMixing UnitのOn-Air先頭8件です。9件目以降はvMix互換の面に出ません。
 
 ## 操作と設定
 

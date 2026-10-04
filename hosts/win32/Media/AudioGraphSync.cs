@@ -7,66 +7,58 @@ internal static class AudioGraphSync
 {
     public static void Push(Session session)
     {
-        session.EnsureDefaultBuses();
-        var keep = session.Buses.Select(item => item.Id).ToHashSet();
-        unsafe
-        {
-            var n = MixerNative.AudioBusCount();
-            var live = new List<ulong>();
-            for (var i = 0; i < n; i++)
-            {
-                MixerAudioBusInfo info = default;
-                if (MixerNative.AudioBusGet((uint)i, &info) != 0)
-                    continue;
-                live.Add(info.Id);
-            }
-            foreach (var id in live)
-            {
-                if (!keep.Contains(id))
-                    MixerNative.AudioBusRemove(id);
-            }
-        }
-        foreach (var bus in session.Buses)
-        {
-            MixerNative.AudioBusUpsert(
-                bus.Id,
-                bus.Name,
-                (uint)bus.Role,
-                (uint)bus.DeviceKind,
-                bus.DeviceId ?? "",
-                bus.MapLeft,
-                bus.MapRight);
-            MixerNative.AudioSetBusGain(bus.Id, MixerNative.MixerGain(bus.Gain), bus.Mute ? 1u : 0u);
-        }
-        unsafe
-        {
-            var n = MixerNative.AudioBusCount();
-            for (var i = 0; i < n; i++)
-            {
-                MixerAudioBusInfo info = default;
-                if (MixerNative.AudioBusGet((uint)i, &info) != 0)
-                    continue;
-                var busId = info.Id;
-                var bit = info.Bit;
-                var match = session.Buses.FirstOrDefault(item => item.Id == busId);
-                if (match is not null)
-                    match.Bit = bit;
-            }
-        }
-        foreach (var input in session.Inputs)
-        {
-            MixerNative.AudioSetInput(
-                input.Id,
-                input.Kind == InputKind.Mix ? 0u : (input.BusMask == 0 ? 1u : input.BusMask),
-                MixerNative.MixerGain(input.Gain),
-                input.Mute ? 1u : 0u);
-        }
         foreach (var unit in session.Units)
         {
-            MixerNative.AudioSetUnitLink(unit.Id, unit.AudioBusId == 0 ? 1 : unit.AudioBusId, (uint)unit.AudioLink);
+            MixerNative.AudioUnitBusSet(
+                unit.Id,
+                (uint)unit.Audio.DeviceKind,
+                unit.Audio.DeviceId ?? "",
+                unit.Audio.MapLeft,
+                unit.Audio.MapRight);
+            MixerNative.AudioSetBusGain(unit.Id, MixerNative.MixerGain(unit.Audio.Gain), unit.Audio.Mute ? 1u : 0u);
+            MixerNative.AudioSetUnitLink(unit.Id, (uint)unit.AudioLink);
+        }
+        MixerNative.AudioHeadphoneSet(
+            (uint)session.Headphone.DeviceKind,
+            session.Headphone.DeviceId ?? "",
+            session.Headphone.MapLeft,
+            session.Headphone.MapRight);
+        foreach (var input in session.Inputs)
+        {
+            var units = input.Kind == InputKind.Mix ? [] : input.AudioUnits.ToArray();
+            unsafe
+            {
+                fixed (ulong* ptr = units)
+                {
+                    MixerNative.AudioSetInput(
+                        input.Id,
+                        units.Length == 0 ? null : ptr,
+                        (uint)units.Length,
+                        MixerNative.MixerGain(input.Gain),
+                        input.Mute ? 1u : 0u);
+                }
+            }
         }
         MixerNative.AudioSetHeadphoneCue(session.SelectedUnitId);
-        MixerNative.AudioSetHeadphoneCopyMaster(session.HeadphoneCopyMaster ? 1u : 0u);
+        MixerNative.AudioSetHeadphoneCopyMonitor(session.HeadphoneCopyMonitor ? 1u : 0u);
+        MixerNative.AudioSetHeadphoneListen(session.HeadphoneListenKind, session.HeadphoneListenId);
+    }
+
+    public static void SetInput(ulong id, IReadOnlyList<ulong> units, float gain, bool mute)
+    {
+        var copy = units as ulong[] ?? units.ToArray();
+        unsafe
+        {
+            fixed (ulong* ptr = copy)
+            {
+                MixerNative.AudioSetInput(
+                    id,
+                    copy.Length == 0 ? null : ptr,
+                    (uint)copy.Length,
+                    gain,
+                    mute ? 1u : 0u);
+            }
+        }
     }
 
     public static List<(uint Kind, uint Channels, string Id, string Name, uint Direction, uint Caps)> EnumerateDevices(uint kind)

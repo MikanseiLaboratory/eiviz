@@ -35,7 +35,7 @@ internal static partial class MixerRemote
     internal static partial int SetMix(int handle, ulong unitId, float value);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_overlay_auto")]
-    internal static partial int OverlayAuto(int handle, ulong unitId, uint index, uint durationMs, uint toOn);
+    internal static partial int OverlayAuto(int handle, ulong unitId, ulong overlayId, uint durationMs, uint toOn);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_mutate")]
     internal static unsafe partial int Mutate(int handle, byte* json, nuint length, ulong expectedRevision);
@@ -56,7 +56,7 @@ internal static partial class MixerRemote
     internal static partial int VideoSeek(int handle, ulong inputId, long positionHns);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_audio_set_input")]
-    internal static partial int AudioSetInput(int handle, ulong inputId, uint busMask, float gain, uint mute);
+    internal static unsafe partial int AudioSetInput(int handle, ulong inputId, ulong* units, uint count, float gain, uint mute);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_audio_set_bus")]
     internal static partial int AudioSetBus(int handle, ulong busId, float gain, uint mute);

@@ -36,7 +36,7 @@ pub enum Command {
     },
     OverlayAuto {
         unit_id: u64,
-        index: u32,
+        overlay_id: u64,
         duration_ms: u32,
         to_on: bool,
     },
@@ -54,12 +54,12 @@ pub enum Command {
     },
     AudioSetInput {
         input_id: u64,
-        bus_mask: u32,
+        units: Vec<u64>,
         gain: f32,
         mute: bool,
     },
     AudioSetBus {
-        bus_id: u64,
+        unit_id: u64,
         gain: f32,
         mute: bool,
     },
@@ -216,11 +216,14 @@ pub enum SessionMutation {
     DeleteUnit {
         id: u64,
     },
-    SetOverlaySlot {
-        #[serde(alias = "unit_id")]
-        unit_id: u64,
-        index: u32,
+    UpsertOverlay {
         slot: Box<OverlaySlot>,
+    },
+    DeleteOverlay {
+        id: u64,
+    },
+    SetTransitions {
+        presets: Vec<crate::session::TransitionPreset>,
     },
     AddMediaInput {
         name: String,
@@ -241,13 +244,12 @@ pub enum SessionMutation {
     SetSettings {
         settings: Box<crate::session::SessionSettings>,
         outputs: Vec<crate::session::OutputDto>,
-        buses: Vec<crate::session::BusDto>,
-        #[serde(default, alias = "headphone_copy_master")]
-        headphone_copy_master: Option<bool>,
+        #[serde(default)]
+        headphone: Option<crate::session::HeadphoneDto>,
+        #[serde(default, alias = "headphoneCopyMaster")]
+        headphone_copy_monitor: Option<bool>,
         #[serde(default, alias = "next_output_id")]
         next_output_id: u64,
-        #[serde(default, alias = "next_bus_id")]
-        next_bus_id: u64,
     },
     RelinkMedia {
         directories: Vec<String>,
@@ -295,7 +297,9 @@ impl SessionMutation {
             Self::SetSceneLayers { .. } => "SetSceneLayers",
             Self::UpsertUnit { .. } => "UpsertUnit",
             Self::DeleteUnit { .. } => "DeleteUnit",
-            Self::SetOverlaySlot { .. } => "SetOverlaySlot",
+            Self::UpsertOverlay { .. } => "UpsertOverlay",
+            Self::DeleteOverlay { .. } => "DeleteOverlay",
+            Self::SetTransitions { .. } => "SetTransitions",
             Self::AddMediaInput { .. } => "AddMediaInput",
             Self::UpsertMultiview { .. } => "UpsertMultiview",
             Self::DeleteMultiview { .. } => "DeleteMultiview",
@@ -340,7 +344,7 @@ mod tests {
                 "unitId": 1,
                 "useGpu": true,
                 "enabled": true,
-                "audioBusId": 1,
+                "audioUnitId": 1,
                 "skipEncodeWhenNoReceivers": true
             }, {
                 "id": 101,
@@ -350,37 +354,24 @@ mod tests {
                 "unitId": 1,
                 "useGpu": true,
                 "enabled": true,
-                "audioBusId": 1
+                "audioUnitId": 1
             }],
-            "buses": [{
-                "id": 1,
-                "name": "Master",
-                "role": "Master",
-                "deviceKind": "None",
-                "deviceId": "",
-                "mapLeft": 0,
-                "mapRight": 1,
-                "gain": 1,
-                "mute": false
-            }],
-            "headphoneCopyMaster": false,
-            "nextOutputId": 102,
-            "nextBusId": 3
+            "headphone": { "deviceKind": "None", "mapRight": 1 },
+            "headphoneCopyMonitor": false,
+            "nextOutputId": 102
         }"#;
         let parsed: SessionMutation = serde_json::from_str(json).expect("host setSettings JSON");
         let SessionMutation::SetSettings {
             outputs,
-            headphone_copy_master,
+            headphone_copy_monitor,
             next_output_id,
-            next_bus_id,
             ..
         } = parsed
         else {
             panic!("expected setSettings");
         };
-        assert!(!headphone_copy_master.unwrap());
+        assert!(!headphone_copy_monitor.unwrap());
         assert_eq!(next_output_id, 102);
-        assert_eq!(next_bus_id, 3);
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].transport, OutputTransport::Omt);
         assert_eq!(outputs[0].source_kind, OutputSourceKind::MuProgram);
@@ -394,48 +385,43 @@ mod tests {
         let json = r#"{
             "kind": "setSettings",
             "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
-            "outputs": [],
-            "buses": []
+            "outputs": []
         }"#;
         let parsed: SessionMutation =
             serde_json::from_str(json).expect("setSettings without headphone");
         let SessionMutation::SetSettings {
-            headphone_copy_master,
+            headphone_copy_monitor,
             next_output_id,
-            next_bus_id,
             ..
         } = parsed
         else {
             panic!("expected setSettings");
         };
-        assert_eq!(headphone_copy_master, None);
+        assert_eq!(headphone_copy_monitor, None);
         assert_eq!(next_output_id, 0);
-        assert_eq!(next_bus_id, 0);
     }
 
     #[test]
-    fn set_overlay_slot_json_uses_camel_case_unit_id() {
+    fn upsert_overlay_json_uses_camel_case() {
         let json = r#"{
-            "kind": "setOverlaySlot",
-            "unitId": 1,
-            "index": 0,
+            "kind": "upsertOverlay",
             "slot": {
+                "id": 4,
                 "sceneGpuId": 1,
                 "x": 0.62,
                 "y": 0.08,
                 "width": 0.32,
                 "height": 0.32,
                 "opacity": 1,
-                "z": 0,
-                "enabled": true
+                "z": 0
             }
         }"#;
         let parsed: SessionMutation = serde_json::from_str(json).expect("host overlay JSON");
-        let SessionMutation::SetOverlaySlot { unit_id, index, .. } = parsed else {
-            panic!("expected setOverlaySlot");
+        let SessionMutation::UpsertOverlay { slot } = parsed else {
+            panic!("expected upsertOverlay");
         };
-        assert_eq!(unit_id, 1);
-        assert_eq!(index, 0);
+        assert_eq!(slot.id, 4);
+        assert_eq!(slot.scene_gpu_id, 1);
     }
 
     #[test]
@@ -449,7 +435,7 @@ mod tests {
                 "height": 1080,
                 "fpsNum": 60000,
                 "fpsDen": 1001,
-                "audioBusId": 1,
+                "audio": { "deviceKind": "wasapi", "mapRight": 1 },
                 "audioLink": "follow",
                 "switcherSceneFilter": "all",
                 "switcherSceneIds": []
@@ -510,18 +496,13 @@ mod tests {
                 "useGpu": true,
                 "enabled": true
             }],
-            "buses": [{
-                "id": 1,
-                "name": "Master",
-                "role": "master",
-                "deviceKind": "wasapi"
-            }]
+            "headphone": { "deviceKind": "wasapi" }
         }"#;
         let parsed: SessionMutation = serde_json::from_str(json).expect("Remote setSettings JSON");
         let SessionMutation::SetSettings {
             settings,
             outputs,
-            buses,
+            headphone,
             ..
         } = parsed
         else {
@@ -545,9 +526,8 @@ mod tests {
             outputs[0].source_kind,
             crate::session::OutputSourceKind::MuProgram
         );
-        assert_eq!(buses[0].role, crate::session::AudioBusRole::Master);
         assert_eq!(
-            buses[0].device_kind,
+            headphone.unwrap().device_kind,
             crate::session::AudioDeviceKind::Wasapi
         );
     }

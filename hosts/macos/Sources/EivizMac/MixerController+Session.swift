@@ -704,8 +704,7 @@ extension MixerController {
                         input.id,
                         input.mixTargetId,
                         input.mixSource.sourceKind,
-                        max(1, min(8, input.frameBufferFrames)),
-                        input.mixAudioBusId
+                        max(1, min(8, input.frameBufferFrames))
                     ),
                     "Define Mix Input"
                 )
@@ -732,11 +731,7 @@ extension MixerController {
                 }
             }
         }
-        _ = mixer_audio_set_input(input.id, audioMask(input), input.gain, input.mute ? 1 : 0)
-    }
-
-    func audioMask(_ input: InputEntry) -> UInt32 {
-        input.kind == .mix ? 0 : (input.busMask == 0 ? 1 : input.busMask)
+        pushInputAudio(input)
     }
 
     func startCapture(_ input: InputEntry) {
@@ -771,7 +766,7 @@ extension MixerController {
         }
     }
 
-    func pushScene(_ scene: SceneEntry) {
+    func pushScene(_ scene: SceneEntry, gpuId: UInt64? = nil) {
         if isRemote { return }
         var layers = scene.layers.map { layer -> EivizOverlayDesc in
             var desc = MixerFFI.emptyOverlay()
@@ -787,22 +782,42 @@ extension MixerController {
         let count = UInt32(layers.count)
         layers.withUnsafeMutableBufferPointer { ptr in
             fail(
-                mixer_define_scene(scene.gpuId, selectedUnit.width, selectedUnit.height, count, ptr.baseAddress),
+                mixer_define_scene(gpuId ?? scene.gpuId, selectedUnit.width, selectedUnit.height, count, ptr.baseAddress),
                 "Define scene"
             )
         }
     }
 
-    func pushOverlays(forceEnabled: UUID? = nil, unitId: UInt64? = nil) {
+    func overlayDesc(_ slot: OverlaySlot) -> EivizOverlayDesc {
+        var desc = MixerFFI.emptyOverlay()
+        desc.source_id = slot.sceneGpuId
+        desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
+        desc.crop = EivizRect(x: slot.cropX, y: slot.cropY, width: slot.cropWidth, height: slot.cropHeight)
+        desc.opacity = slot.opacity
+        desc.z = slot.z
+        desc.audio_follow = slot.audioFollow ? 1 : 0
+        desc.hidden = slot.hidden ? 1 : 0
+        return desc
+    }
+
+    func pushOverlays(forceEnabled: UInt64? = nil, unitId: UInt64? = nil) {
         if isRemote {
             commitRemoteOverlays(unitId: unitId ?? selectedUnitId)
             return
         }
-        let unit = session.units.first { $0.id == (unitId ?? selectedUnitId) } ?? selectedUnit
-        var state = MixerFFI.emptyState()
-        _ = mixer_unit_get_state(unit.id, &state)
-        fillAux(&state, unit: unit, forceEnabled: forceEnabled)
-        fail(mixer_unit_set_state(unit.id, &state), "Overlays")
+        let id = unitId ?? selectedUnitId
+        let unit = session.units.first { $0.id == id } ?? selectedUnit
+        var descs = session.overlays
+            .filter { unit.overlaysOnAir.contains($0.id) || $0.id == forceEnabled }
+            .map(overlayDesc)
+        let count = UInt32(descs.count)
+        if count == 0 {
+            fail(mixer_unit_set_overlays(unit.id, nil, 0), "Overlays")
+            return
+        }
+        descs.withUnsafeMutableBufferPointer { ptr in
+            fail(mixer_unit_set_overlays(unit.id, ptr.baseAddress, count), "Overlays")
+        }
     }
 
     func pushState(unitId: UInt64, program: UInt64, preview: UInt64, mix: Float, kind: UInt32) {
@@ -811,33 +826,14 @@ extension MixerController {
         state.preview_source = preview
         state.mix = mix
         state.transition_kind = kind
-        let unit = session.units.first { $0.id == unitId } ?? selectedUnit
-        fillAux(&state, unit: unit)
         fail(mixer_unit_set_state(unitId, &state), "Set Mixing Unit state")
+        pushOverlays(unitId: unitId)
     }
 
     func currentState(_ unitId: UInt64) -> EivizUnitState {
         var state = MixerFFI.emptyState()
         _ = mixer_unit_get_state(unitId, &state)
-        let unit = session.units.first { $0.id == unitId } ?? selectedUnit
-        fillAux(&state, unit: unit)
         return state
-    }
-
-    func fillAux(_ state: inout EivizUnitState, unit: MixingUnitEntry, forceEnabled: UUID? = nil) {
-        let enabled = unit.overlays.filter { $0.enabled || $0.id == forceEnabled }.prefix(8)
-        state.overlay_count = UInt32(enabled.count)
-        for (index, slot) in enabled.enumerated() {
-            var desc = MixerFFI.emptyOverlay()
-            desc.source_id = slot.sceneGpuId
-            desc.rect = EivizRect(x: slot.x, y: slot.y, width: slot.width, height: slot.height)
-            desc.crop = EivizRect(x: slot.cropX, y: slot.cropY, width: slot.cropWidth, height: slot.cropHeight)
-            desc.opacity = slot.opacity
-            desc.z = slot.z
-            desc.audio_follow = slot.audioFollow ? 1 : 0
-            desc.hidden = slot.hidden ? 1 : 0
-            MixerFFI.setOverlay(&state, index: index, desc)
-        }
     }
 
     func unit(for id: UInt64?) -> MixingUnitEntry {
@@ -847,8 +843,8 @@ extension MixerController {
 
     func normalizePixelSortDefaults(_ unitId: UInt64) {
         guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
-        for i in session.units[index].transitions.indices {
-            TransitionCatalog.applyKindDefaults(&session.units[index].transitions[i])
+        for i in session.transitions.indices {
+            TransitionCatalog.applyKindDefaults(&session.transitions[i])
         }
     }
 
@@ -867,7 +863,7 @@ extension MixerController {
     }
 
     func tbarPreset(for unit: MixingUnitEntry) -> TransitionPreset {
-        let list = unit.transitions
+        let list = session.transitions
         guard !list.isEmpty else {
             return TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true)
         }
@@ -955,7 +951,7 @@ extension MixerController {
     }
 
     func mixUnitUses(_ unit: MixingUnitEntry, sourceId: UInt64) -> Bool {
-        if unit.overlays.contains(where: { $0.sceneGpuId == sourceId }) {
+        if session.overlays.contains(where: { $0.sceneGpuId == sourceId }) {
             return true
         }
         var state = EivizUnitState()
@@ -1218,12 +1214,9 @@ extension MixerController {
     }
 
     func commitRemoteOverlays(unitId: UInt64) {
-        guard let unit = session.units.first(where: { $0.id == unitId }) else { return }
-        for (index, slot) in unit.overlays.enumerated() {
-            _ = mutateRemote(
-                MixerRemote.setOverlaySlot(unitId: unitId, index: UInt32(index), slot: slot),
-                applyDocument: false
-            )
+        _ = unitId
+        for slot in session.overlays {
+            _ = mutateRemote(MixerRemote.upsertOverlay(slot), applyDocument: false)
         }
     }
 

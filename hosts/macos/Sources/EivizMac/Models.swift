@@ -162,19 +162,6 @@ enum MvSlotKind: String, Codable {
     }
 }
 
-enum AudioBusRole: String, Codable {
-    case master = "Master"
-    case headphone = "Headphone"
-    case aux = "Aux"
-    var rawUInt: UInt32 {
-        switch self {
-        case .master: return 0
-        case .headphone: return 1
-        case .aux: return 2
-        }
-    }
-}
-
 enum AudioCaptureMode: String, Codable, Hashable {
     case mic = "Mic"
     case endpointLoopback = "EndpointLoopback"
@@ -265,7 +252,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var scroll: Bool = false
     var toneHz: Float = 0
     var toneLevelDbfs: Float = -20
-    var busMask: UInt32 = 1
+    var audioUnits: [UInt64] = [1]
     var gain: Float = 1
     var mute: Bool = false
     var useGpu: Bool = false
@@ -286,7 +273,6 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var tags: [String] = []
     var mixSource: MixSource = .muProgram
     var mixTargetId: UInt64 = 0
-    var mixAudioBusId: UInt64 = 0
     var audioCaptureMode: AudioCaptureMode = .mic
     var audioDeviceKind: AudioDeviceKind = .coreAudio
     var audioDeviceId: String = ""
@@ -313,11 +299,11 @@ struct InputEntry: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
-        case busMask, gain, mute, useGpu, frameBufferFrames, bandwidthSave
+        case audioUnits, gain, mute, useGpu, frameBufferFrames, bandwidthSave
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
-        case mixSource, mixTargetId, mixAudioBusId
+        case mixSource, mixTargetId
         case audioCaptureMode, audioDeviceKind, audioDeviceId, audioMapLeft, audioMapRight
         case audioProcessExe, audioProcessAumid
     }
@@ -333,7 +319,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         scroll: Bool = false,
         toneHz: Float = 0,
         toneLevelDbfs: Float = -20,
-        busMask: UInt32 = 1,
+        audioUnits: [UInt64] = [1],
         gain: Float = 1,
         mute: Bool = false,
         useGpu: Bool = false,
@@ -357,7 +343,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         self.scroll = scroll
         self.toneHz = toneHz
         self.toneLevelDbfs = toneLevelDbfs
-        self.busMask = busMask
+        self.audioUnits = audioUnits
         self.gain = gain
         self.mute = mute
         self.useGpu = useGpu
@@ -384,7 +370,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         scroll = try container.decodeIfPresent(Bool.self, forKey: .scroll) ?? false
         toneHz = try container.decodeIfPresent(Float.self, forKey: .toneHz) ?? 0
         toneLevelDbfs = try container.decodeIfPresent(Float.self, forKey: .toneLevelDbfs) ?? -20
-        busMask = try container.decodeIfPresent(UInt32.self, forKey: .busMask) ?? 1
+        audioUnits = try container.decodeIfPresent([UInt64].self, forKey: .audioUnits) ?? []
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
         mute = try container.decodeIfPresent(Bool.self, forKey: .mute) ?? false
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
@@ -405,7 +391,6 @@ struct InputEntry: Identifiable, Codable, Hashable {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         mixSource = try container.decodeIfPresent(MixSource.self, forKey: .mixSource) ?? .muProgram
         mixTargetId = try container.decodeIfPresent(UInt64.self, forKey: .mixTargetId) ?? 0
-        mixAudioBusId = try container.decodeIfPresent(UInt64.self, forKey: .mixAudioBusId) ?? 0
         audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .mic
         audioDeviceKind = try container.decodeIfPresent(AudioDeviceKind.self, forKey: .audioDeviceKind) ?? .coreAudio
         audioDeviceId = try container.decodeIfPresent(String.self, forKey: .audioDeviceId) ?? ""
@@ -416,9 +401,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
-            mixAudioBusId = 0
         } else {
-            busMask = 0
+            audioUnits = []
         }
     }
 }
@@ -713,13 +697,13 @@ struct TransitionPreset: Identifiable, Codable {
     }
 }
 
-enum OverlaySourceKind: String, Codable {
-    case scene = "Scene"
-    case input = "Input"
+enum OverlaySourceKind: UInt32, Codable {
+    case scene = 0
+    case input = 1
 }
 
 struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
-    var id = UUID()
+    var id: UInt64 = 0
     var sourceKind: OverlaySourceKind = .scene
     var sceneGpuId: UInt64 = 0
     var x: Float = 0.62
@@ -728,7 +712,6 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     var height: Float = 0.32
     var opacity: Float = 1
     var z: Int32 = 0
-    var enabled: Bool = false
     var transitionKind: UInt32 = EIVIZ_TRANSITION_FADE
     var durationValue: UInt32 = 15
     var durationUnit: UInt32 = 0
@@ -780,16 +763,18 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case sourceKind, sceneGpuId, x, y, width, height, opacity, z, enabled, transitionKind, durationValue, durationUnit, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
+        case id, sourceKind, sceneGpuId, x, y, width, height, opacity, z, transitionKind, durationValue, durationUnit, audioFollow, locked, hidden, sizeLinked, cropX, cropY, cropWidth, cropHeight
     }
 
-    init(sourceKind: OverlaySourceKind = .scene, sceneGpuId: UInt64 = 0) {
+    init(id: UInt64 = 0, sourceKind: OverlaySourceKind = .scene, sceneGpuId: UInt64 = 0) {
+        self.id = id
         self.sourceKind = sourceKind
         self.sceneGpuId = sceneGpuId
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UInt64.self, forKey: .id) ?? 0
         sourceKind = try container.decodeIfPresent(OverlaySourceKind.self, forKey: .sourceKind) ?? .scene
         sceneGpuId = try container.decodeIfPresent(UInt64.self, forKey: .sceneGpuId) ?? 0
         x = try container.decodeIfPresent(Float.self, forKey: .x) ?? 0.62
@@ -798,7 +783,6 @@ struct OverlaySlot: Identifiable, Codable, Equatable, Hashable {
         height = try container.decodeIfPresent(Float.self, forKey: .height) ?? 0.32
         opacity = try container.decodeIfPresent(Float.self, forKey: .opacity) ?? 1
         z = try container.decodeIfPresent(Int32.self, forKey: .z) ?? 0
-        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         transitionKind = try container.decodeIfPresent(UInt32.self, forKey: .transitionKind) ?? EIVIZ_TRANSITION_FADE
         durationValue = try container.decodeIfPresent(UInt32.self, forKey: .durationValue) ?? 15
         durationUnit = try container.decodeIfPresent(UInt32.self, forKey: .durationUnit) ?? 0
@@ -820,9 +804,8 @@ struct MixingUnitEntry: Identifiable, Codable {
     var height: UInt32 = 1080
     var fpsNum: UInt32 = 60_000
     var fpsDen: UInt32 = 1_001
-    var transitions: [TransitionPreset] = []
-    var overlays: [OverlaySlot] = []
-    var audioBusId: UInt64 = 1
+    var overlaysOnAir: [UInt64] = []
+    var audio: MuAudio = MuAudio()
     var audioLink: AudioLinkMode = .follow
     var alwaysOnTop: Bool = true
     var previewSceneId: UInt64 = 0
@@ -860,7 +843,7 @@ struct MixingUnitEntry: Identifiable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, width, height, fpsNum, fpsDen, transitions, overlays, audioBusId, audioLink, alwaysOnTop
+        case id, name, width, height, fpsNum, fpsDen, overlaysOnAir, audio, audioLink, alwaysOnTop
         case previewSceneId, programSceneId
         case switcherSceneFilter, switcherSceneIds
     }
@@ -873,9 +856,8 @@ struct MixingUnitEntry: Identifiable, Codable {
         height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 1080
         fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 60_000
         fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 1_001
-        transitions = try container.decodeIfPresent([TransitionPreset].self, forKey: .transitions) ?? []
-        overlays = try container.decodeIfPresent([OverlaySlot].self, forKey: .overlays) ?? []
-        audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
+        overlaysOnAir = try container.decodeIfPresent([UInt64].self, forKey: .overlaysOnAir) ?? []
+        audio = try container.decodeIfPresent(MuAudio.self, forKey: .audio) ?? MuAudio()
         audioLink = try container.decodeIfPresent(AudioLinkMode.self, forKey: .audioLink) ?? .follow
         alwaysOnTop = try container.decodeIfPresent(Bool.self, forKey: .alwaysOnTop) ?? true
         previewSceneId = try container.decodeIfPresent(UInt64.self, forKey: .previewSceneId) ?? 0
@@ -900,7 +882,7 @@ struct OutputEntry: Identifiable, Codable {
     var unitId: UInt64 = 1
     var useGpu: Bool = false
     var enabled: Bool = true
-    var audioBusId: UInt64 = 1
+    var audioUnitId: UInt64 = 0
     var skipEncodeWhenNoReceivers: Bool = true
     var width: UInt32 = 0
     var height: UInt32 = 0
@@ -908,7 +890,7 @@ struct OutputEntry: Identifiable, Codable {
     var fpsDen: UInt32 = 0
 
     enum CodingKeys: String, CodingKey {
-        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioBusId
+        case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioUnitId
         case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
     }
 
@@ -921,7 +903,7 @@ struct OutputEntry: Identifiable, Codable {
         unitId: UInt64 = 1,
         useGpu: Bool = false,
         enabled: Bool = true,
-        audioBusId: UInt64 = 1,
+        audioUnitId: UInt64 = 0,
         skipEncodeWhenNoReceivers: Bool = true,
         width: UInt32 = 0,
         height: UInt32 = 0,
@@ -936,7 +918,7 @@ struct OutputEntry: Identifiable, Codable {
         self.unitId = unitId
         self.useGpu = useGpu
         self.enabled = enabled
-        self.audioBusId = audioBusId
+        self.audioUnitId = audioUnitId
         self.skipEncodeWhenNoReceivers = skipEncodeWhenNoReceivers
         self.width = width
         self.height = height
@@ -954,7 +936,7 @@ struct OutputEntry: Identifiable, Codable {
         unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        audioBusId = try container.decodeIfPresent(UInt64.self, forKey: .audioBusId) ?? 1
+        audioUnitId = try container.decodeIfPresent(UInt64.self, forKey: .audioUnitId) ?? 0
         skipEncodeWhenNoReceivers = try container.decodeIfPresent(Bool.self, forKey: .skipEncodeWhenNoReceivers) ?? true
         width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 0
         height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 0
@@ -1262,17 +1244,20 @@ struct MultiviewLayout: Identifiable, Codable {
     }
 }
 
-struct AudioBusEntry: Identifiable, Codable {
-    var id: UInt64
-    var name: String
-    var role: AudioBusRole = .master
+struct MuAudio: Codable, Hashable {
     var deviceKind: AudioDeviceKind = .none
     var deviceId: String = ""
     var mapLeft: Int32 = 0
     var mapRight: Int32 = 1
-    var bit: UInt32 = 0
     var gain: Float = 1
     var mute: Bool = false
+}
+
+struct HeadphoneEntry: Codable, Hashable {
+    var deviceKind: AudioDeviceKind = .none
+    var deviceId: String = ""
+    var mapLeft: Int32 = 0
+    var mapRight: Int32 = 1
 }
 
 struct RgbColor: Codable, Equatable, Hashable {
@@ -1405,9 +1390,12 @@ struct MixerSessionData: Codable {
     var scenes: [SceneEntry] = []
     var scenePresets: [SceneLayoutPreset] = []
     var units: [MixingUnitEntry] = []
+    var transitions: [TransitionPreset] = []
+    var overlays: [OverlaySlot] = []
+    var nextOverlayId: UInt64 = 1
     var outputs: [OutputEntry] = []
     var multiviews: [MultiviewLayout] = []
-    var buses: [AudioBusEntry] = []
+    var headphone = HeadphoneEntry()
     var inputTags: [String] = []
     var sceneTags: [String] = []
     var nextInputId: UInt64 = 10
@@ -1416,15 +1404,16 @@ struct MixerSessionData: Codable {
     var nextMonitorId: UInt64 = 1000
     var nextOutputId: UInt64 = 100
     var nextMultiviewId: UInt64 = 1
-    var nextBusId: UInt64 = 3
     var selectedUnitId: UInt64 = 1
-    var headphoneCopyMaster: Bool = false
+    var headphoneCopyMonitor: Bool = false
+    var headphoneListenKind: UInt32 = 0
+    var headphoneListenId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
-        case version, settings, inputs, scenes, scenePresets, units, outputs, multiviews, buses
+        case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, multiviews, headphone
         case inputTags, sceneTags
-        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId, nextBusId
-        case selectedUnitId, headphoneCopyMaster
+        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId
+        case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId
     }
 
     static func `default`() -> MixerSessionData {
@@ -1435,16 +1424,14 @@ struct MixerSessionData: Codable {
             InputEntry(id: EIVIZ_SRC_BLACK, name: "Black", kind: .black, colorR: 0, colorG: 0, colorB: 0),
             InputEntry(id: EIVIZ_SRC_BLUE, name: "Blue", kind: .color, colorR: 0, colorG: 0, colorB: 1)
         ]
-        var unit = MixingUnitEntry(id: 1, name: "Mixing Unit 1")
-        unit.transitions = [
+        session.transitions = [
             TransitionPreset(kind: EIVIZ_TRANSITION_CUT, durationValue: 1, swap: true),
             TransitionPreset(kind: EIVIZ_TRANSITION_FADE, durationValue: 30, swap: true)
         ]
-        session.units = [unit]
-        session.buses = [
-            AudioBusEntry(id: 1, name: "Master", role: .master, deviceKind: .none, mapLeft: 0, mapRight: 1, bit: 0),
-            AudioBusEntry(id: 2, name: "Headphone", role: .headphone, deviceKind: .none, mapLeft: 0, mapRight: 1, bit: 1)
-        ]
+        session.units = [MixingUnitEntry(id: 1, name: "Mixing Unit 1")]
+        for index in session.inputs.indices {
+            session.inputs[index].audioUnits = [1]
+        }
         session.addScene(name: "Scene 1", input: EIVIZ_SRC_BARS)
         session.addScene(name: "Scene 2", input: EIVIZ_SRC_COLOR)
         session.units[0].previewSceneId = session.scenes[0].id
@@ -1455,6 +1442,7 @@ struct MixerSessionData: Codable {
                 name: "eiviz-pgm",
                 transport: .omt,
                 useGpu: false,
+                audioUnitId: 1,
                 width: session.settings.defaultWidth,
                 height: session.settings.defaultHeight,
                 fpsNum: session.settings.masterFpsNum,
@@ -1508,8 +1496,11 @@ struct MixerSessionData: Codable {
             multiviews[i].monitorId = nextMonitorId
             nextMonitorId += 1
         }
-        for i in buses.indices where buses[i].deviceKind == .wasapi {
-            buses[i].deviceKind = .coreAudio
+        for i in units.indices where units[i].audio.deviceKind == .wasapi {
+            units[i].audio.deviceKind = .coreAudio
+        }
+        if headphone.deviceKind == .wasapi {
+            headphone.deviceKind = .coreAudio
         }
     }
 
@@ -1535,7 +1526,11 @@ enum SessionFile {
     }
 
     static func decode(_ data: Data) throws -> MixerSessionData {
-        var session = try JSONDecoder().decode(MixerSessionData.self, from: data)
+        var object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        if object["headphoneListenKind"] == nil { object["headphoneListenKind"] = 0 }
+        if object["headphoneListenId"] == nil { object["headphoneListenId"] = 0 }
+        let patched = try JSONSerialization.data(withJSONObject: object)
+        var session = try JSONDecoder().decode(MixerSessionData.self, from: patched)
         session.assignMonitors()
         session.mergeTagCatalogs()
         return session

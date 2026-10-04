@@ -89,13 +89,12 @@ struct ScenePreviewTile: View, @MainActor Equatable {
             }
             HStack(spacing: 1) {
                 chip("CUT", action: onCut)
-                chip("Loop", action: onLoop)
-                    .opacity(hasVideo ? (loopOn ? 1 : 0.55) : 0.35)
+                stateChip("Loop", on: hasVideo && loopOn, action: onLoop)
                     .disabled(!hasVideo)
+                    .opacity(hasVideo ? 1 : 0.35)
                 chip(playing ? "❚❚" : "▶", action: onPlay)
                     .disabled(!hasVideo)
-                chip("Aud", action: onAudio)
-                    .opacity(muted ? 0.45 : 1)
+                stateChip("Aud", on: !muted, action: onAudio)
                 if showThumb {
                     chip("Prev", action: onOpenPreview)
                 }
@@ -150,6 +149,11 @@ struct ScenePreviewTile: View, @MainActor Equatable {
     private func chip(_ title: String, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(MixerTileButtonStyle())
+    }
+
+    private func stateChip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(OnOffButtonStyle(on: on, compact: true))
     }
 }
 

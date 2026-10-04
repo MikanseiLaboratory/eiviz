@@ -33,7 +33,7 @@ XML出力ではSceneとInputがフラットな一覧として展開されます�
 | --- | --- |
 | `TALLY` | タリー状態の取得（各桁は入力順。0=オフ、1=Program、2=Preview） |
 | `FUNCTION` | HTTPと同様のショートカット実行（例: `FUNCTION Fade Duration=500`） |
-| `ACTS` | アクティベータ状態の取得（`Input`、`Preview`、`Overlay`等） |
+| `ACTS` | アクティベータ状態の取得（`Input`、`Preview`、`Overlay`等）。`Overlay1`から`Overlay8`はOn-Airの先頭8件です。9件目以降はこの面には出ません |
 | `XML` / `XMLTEXT` | 状態XMLの取得 |
 | `SUBSCRIBE` / `UNSUBSCRIBE` | タリーやアクティベータ状態の変更通知を購読 |
 | `VERSION` / `QUIT` | バージョン取得および接続切断 |

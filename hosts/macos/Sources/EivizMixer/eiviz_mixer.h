@@ -27,6 +27,7 @@ extern "C" {
 #define EIVIZ_MULTIVIEW_BASE 0x00020000ull
 #define EIVIZ_LABEL_BASE 0x00030000ull
 #define EIVIZ_AUDIO_BUS_PEAK_BASE 0x00040000ull
+#define EIVIZ_AUDIO_HEADPHONE_PEAK 0x0004FFFFull
 #define EIVIZ_MU_SOURCE_FLAG 0x8000000000000000ull
 #define EIVIZ_MU_BUS_PREVIEW 0x1000000000000000ull
 #define EIVIZ_MU_ID_MASK 0x0FFFFFFFFFFFFFFFull
@@ -139,9 +140,7 @@ typedef struct EivizUnitState {
     uint64_t preview_source;
     float mix;
     uint32_t transition_kind;
-    uint32_t overlay_count;
     uint32_t mv_slot_count;
-    EivizOverlayDesc overlays[8];
     uint64_t mv_slots[16];
     uint32_t transition_easing;
     uint32_t transition_direction;
@@ -252,12 +251,11 @@ typedef struct EivizAudioDeviceInfo {
 
 typedef struct EivizAudioBusInfo {
     uint64_t id;
-    uint32_t role;
     uint32_t device_kind;
     int32_t map_left;
     int32_t map_right;
-    uint32_t bit;
-    uint8_t name[64];
+    float gain;
+    uint32_t mute;
     uint8_t device_id[256];
 } EivizAudioBusInfo;
 
@@ -272,7 +270,7 @@ int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, 
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
 int32_t mixer_destroy_scene(uint64_t scene_id);
 int32_t mixer_define_generator(uint64_t id, uint32_t kind, float r, float g, float b, float a, uint32_t scroll);
-int32_t mixer_define_mix_input(uint64_t id, uint64_t target_id, uint32_t source_kind, uint32_t delay, uint64_t audio_bus_id);
+int32_t mixer_define_mix_input(uint64_t id, uint64_t target_id, uint32_t source_kind, uint32_t delay);
 int32_t mixer_generator_set_tone(uint64_t id, float hz, float level_dbfs);
 int32_t mixer_unit_attach_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);
 int32_t mixer_unit_resize_native(uint64_t unit_id, uint32_t kind, uint32_t native_kind, intptr_t handle, uint32_t width, uint32_t height);
@@ -282,6 +280,7 @@ int32_t mixer_resize_monitor(uint64_t monitor_id, uint32_t width, uint32_t heigh
 int32_t mixer_detach_monitor(uint64_t monitor_id);
 int32_t mixer_monitor_set_source(uint64_t monitor_id, uint64_t source_id);
 int32_t mixer_unit_set_state(uint64_t unit_id, const EivizUnitState *state);
+int32_t mixer_unit_set_overlays(uint64_t unit_id, const EivizOverlayDesc *overlays, uint32_t count);
 int32_t mixer_unit_get_state(uint64_t unit_id, EivizUnitState *out);
 int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap, uint64_t incoming_source);
 int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source, float softness, float param);
@@ -354,15 +353,15 @@ int32_t mixer_ws_configure_bind(uint32_t enabled, const char *host, uint32_t por
 int32_t mixer_ws_configure_owned(uint32_t enabled, const char *host, uint32_t port, const char *token, const char *max_role, const char *media_directory);
 int32_t mixer_ws_listen_owner(uint8_t *out, size_t cap);
 int32_t mixer_copy_snapshot(uint8_t *out, size_t cap);
-int32_t mixer_audio_bus_upsert(uint64_t id, const char *name, uint32_t role, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right);
-int32_t mixer_audio_bus_remove(uint64_t id);
-int32_t mixer_audio_bus_count(void);
-int32_t mixer_audio_bus_get(uint32_t index, EivizAudioBusInfo *out);
-int32_t mixer_audio_set_input(uint64_t id, uint32_t bus_mask, float gain, uint32_t mute);
+int32_t mixer_audio_unit_bus_set(uint64_t unit_id, uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right);
+int32_t mixer_audio_headphone_set(uint32_t device_kind, const char *device_id, int32_t map_left, int32_t map_right);
+int32_t mixer_audio_unit_bus_get(uint64_t unit_id, EivizAudioBusInfo *out);
+int32_t mixer_audio_set_input(uint64_t id, const uint64_t *units, uint32_t count, float gain, uint32_t mute);
 int32_t mixer_audio_set_bus_gain(uint64_t id, float gain, uint32_t mute);
-int32_t mixer_audio_set_unit_link(uint64_t unit_id, uint64_t bus_id, uint32_t mode);
+int32_t mixer_audio_set_unit_link(uint64_t unit_id, uint32_t mode);
 int32_t mixer_audio_set_headphone_cue(uint64_t unit_id);
-int32_t mixer_audio_set_headphone_copy_master(uint32_t enabled);
+int32_t mixer_audio_set_headphone_listen(uint32_t kind, uint64_t id);
+int32_t mixer_audio_set_headphone_copy_monitor(uint32_t enabled);
 int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint32_t cap);
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
 int32_t mixer_audio_device_io_channels(uint32_t kind, const char *device_id, int32_t *inputs, int32_t *outputs);
