@@ -365,6 +365,8 @@ impl Nv12Converter {
         })
     }
 
+    /// Submits the NV12 to RGBA pass and returns its submission index.
+    /// Does not wait. `nv12` must stay alive until that submission completes.
     pub fn convert_nv12_texture(
         &self,
         device: &wgpu::Device,
@@ -374,7 +376,7 @@ impl Nv12Converter {
         width: u32,
         height: u32,
         pts: i64,
-    ) -> Result<GpuVideoFrame, String> {
+    ) -> Result<(GpuVideoFrame, wgpu::SubmissionIndex), String> {
         let y_view = nv12.create_view(&wgpu::TextureViewDescriptor {
             label: Some("eiviz nv12 y"),
             format: Some(wgpu::TextureFormat::R8Unorm),
@@ -444,20 +446,21 @@ impl Nv12Converter {
             let _guard = crate::device::lock_gpu_queue();
             queue.submit(Some(encoder.finish()))
         };
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index),
-            timeout: None,
-        });
-        Ok(GpuVideoFrame {
-            pts,
-            width,
-            height,
-            packed: false,
-            bgra: false,
-            texture: dest,
-            view: dest_view,
-            lease: Some(lease),
-        })
+        // The caller keeps `nv12` alive until this submission finishes. Waiting here would
+        // drain every earlier mixer submission on the shared queue, once per frame.
+        Ok((
+            GpuVideoFrame {
+                pts,
+                width,
+                height,
+                packed: false,
+                bgra: false,
+                texture: dest,
+                view: dest_view,
+                lease: Some(lease),
+            },
+            index,
+        ))
     }
 
     pub fn copy_bgra(

@@ -802,12 +802,8 @@ fn open_reader(
             attrs
                 .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
                 .map_err(|e| e.to_string())?;
-            attrs
-                .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
-                .map_err(|e| e.to_string())?;
-            attrs
-                .SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)
-                .map_err(|e| e.to_string())?;
+            // ENABLE_VIDEO_PROCESSING must stay off once MF_SOURCE_READER_D3D_MANAGER
+            // is set. Media Foundation rejects that pair with E_INVALIDARG (0x80070057).
         } else {
             let _ = attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 0);
             if !prefer_packed {
@@ -1512,6 +1508,74 @@ fn wide(text: &str) -> Vec<u16> {
         .collect()
 }
 
+/// NV12 textures produced by Vulkan Video, kept until the RGBA pass that reads them
+/// has finished. A few stay in flight so that pass overlaps the next decode instead of
+/// stalling the shared GPU queue on every frame.
+struct VulkanNv12Hold<'a> {
+    device: &'a wgpu::Device,
+    pending: std::collections::VecDeque<VulkanNv12Source>,
+}
+
+struct VulkanNv12Source {
+    index: wgpu::SubmissionIndex,
+    _texture: wgpu::Texture,
+}
+
+impl VulkanNv12Hold<'_> {
+    fn park(&mut self, texture: wgpu::Texture, index: wgpu::SubmissionIndex) {
+        self.pending
+            .push_back(VulkanNv12Source {
+                index,
+                _texture: texture,
+            });
+        self.retire(false);
+        while self.pending.len() > 3 {
+            let before = self.pending.len();
+            self.retire(true);
+            if self.pending.len() == before {
+                break;
+            }
+        }
+    }
+
+    fn retire(&mut self, block: bool) {
+        let timeout = if block {
+            Some(Duration::from_secs(2))
+        } else {
+            Some(Duration::ZERO)
+        };
+        while let Some(front) = self.pending.front() {
+            let done = self
+                .device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(front.index.clone()),
+                    timeout,
+                })
+                .is_ok();
+            if !done {
+                break;
+            }
+            self.pending.pop_front();
+            if block {
+                break;
+            }
+        }
+    }
+}
+
+impl Drop for VulkanNv12Hold<'_> {
+    fn drop(&mut self) {
+        while !self.pending.is_empty() {
+            let before = self.pending.len();
+            self.retire(true);
+            if self.pending.len() == before {
+                self.pending.clear();
+                break;
+            }
+        }
+    }
+}
+
 fn run_vulkan_h264_file(
     source_id: u64,
     path: &str,
@@ -1557,6 +1621,10 @@ fn run_vulkan_h264_file(
     let file_prefetch = depth.max(3);
     let mut gpu_ring = crate::convert::VideoGpuRing::new(file_prefetch);
     let converter = crate::convert::Nv12Converter::new(&ingest.device);
+    let mut nv12_hold = VulkanNv12Hold {
+        device: &ingest.device,
+        pending: std::collections::VecDeque::new(),
+    };
     let mut prefetch = std::collections::VecDeque::new();
     let mut ring_vram = 0u64;
     let mut clock_pts = -1i64;
@@ -1694,7 +1762,8 @@ fn run_vulkan_h264_file(
                                 },
                                 gpu_pts,
                             ) {
-                                Ok(gpu) => {
+                                Ok((gpu, index)) => {
+                                    nv12_hold.park(frame.data, index);
                                     ring_vram = gpu_ring.vram_bytes();
                                     prefetch.push_back(Prefetched::Gpu(gpu));
                                 }
@@ -1762,7 +1831,8 @@ fn run_vulkan_h264_file(
                         h,
                         gpu_pts,
                     ) {
-                        Ok(gpu) => {
+                        Ok((gpu, index)) => {
+                            nv12_hold.park(frame.data, index);
                             ring_vram = gpu_ring.vram_bytes();
                             prefetch.push_back(Prefetched::Gpu(gpu));
                         }
@@ -1988,7 +2058,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("decode: {error}"));
             if let Some(frame) = frames.into_iter().next() {
                 let size = frame.data.size();
-                converter
+                let (_gpu, index) = converter
                     .convert_nv12_texture(
                         &device.device,
                         &device.queue,
@@ -1999,9 +2069,58 @@ mod tests {
                         sample.0,
                     )
                     .unwrap_or_else(|error| panic!("nv12: {error}"));
+                device
+                    .device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: Some(index),
+                        timeout: Some(Duration::from_secs(2)),
+                    })
+                    .expect("nv12 submission");
                 return;
             }
         }
         panic!("decoder produced no frame");
+    }
+
+    /// DXVA file open. Set EIVIZ_VIDEO_SAMPLE to a file path.
+    #[test]
+    fn dx12_h264_file_imports_a_frame() {
+        let Ok(path) = std::env::var("EIVIZ_VIDEO_SAMPLE") else {
+            return;
+        };
+        startup().expect("media foundation");
+        let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Dx12)
+            .expect("dx12 device");
+        let gpu = GpuVideoContext::new(&device).expect("dxgi video");
+        let reader = open_reader(&path, false, Some(&gpu), true)
+            .unwrap_or_else(|error| panic!("open: {error}"));
+        let mut layout = configure_video(&reader, true, true, 0, 0, 0, 0)
+            .unwrap_or_else(|error| panic!("configure: {error}"));
+        assert!(layout.width > 0 && layout.height > 0);
+        let mut ring = VideoGpuRing::new(2);
+        for _ in 0..40 {
+            match read_sample(&reader, None) {
+                Ok(Some(Decoded::Video { pts, sample })) => {
+                    gpu.dxgi
+                        .import_sample(
+                            &gpu,
+                            &mut ring,
+                            &sample,
+                            pts,
+                            (layout.width, layout.height),
+                        )
+                        .unwrap_or_else(|error| panic!("import: {error}"));
+                    return;
+                }
+                Ok(_) => continue,
+                Err(ReadStop::TypeChanged) => {
+                    layout = read_video_layout(&reader, layout.gpu, layout.packed)
+                        .unwrap_or_else(|error| panic!("reread layout: {error}"));
+                }
+                Err(ReadStop::End) => panic!("file ended before a video frame"),
+                Err(ReadStop::Failed(error)) => panic!("{error}"),
+            }
+        }
+        panic!("no video frame within 40 samples");
     }
 }
