@@ -1464,6 +1464,10 @@ fn mixer_define_mix_input_ffi(
         if !spec.is_session_multiview() {
             for (unit_id, unit) in &shared.units {
                 if unit_uses_mix_cycle(*unit_id, &unit.state, &pending, &shared.scenes) {
+                    set_error(
+                        &mixer.telemetry,
+                        format!("mix input {id:#x} would cycle unit {unit_id:#x}"),
+                    );
                     return ERR_INVALID_ARGUMENT;
                 }
             }
@@ -1674,8 +1678,17 @@ fn validate_unit_state(unit_id: u64, state: &UnitState) -> Result<(), i32> {
     Ok(())
 }
 
-fn apply_unit_state(shared: &mut Shared, unit_id: u64, state: UnitState) -> i32 {
+fn apply_unit_state(
+    shared: &mut Shared,
+    telemetry: &Mutex<Telemetry>,
+    unit_id: u64,
+    state: UnitState,
+) -> i32 {
     if unit_uses_mix_cycle(unit_id, &state, &shared.mix_inputs, &shared.scenes) {
+        set_error(
+            telemetry,
+            format!("mixing unit {unit_id:#x} references its own output"),
+        );
         return ERR_INVALID_ARGUMENT;
     }
     {
@@ -1745,7 +1758,7 @@ pub(crate) fn unit_set_state_inner(unit_id: u64, state: &UnitState) -> i32 {
     let state = *state;
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
-        apply_unit_state(&mut shared, unit_id, state)
+        apply_unit_state(&mut shared, &mixer.telemetry, unit_id, state)
     })
     .unwrap_or_else(|code| code)
 }
@@ -1764,7 +1777,7 @@ pub(crate) fn unit_update_state_inner(unit_id: u64, update: impl FnOnce(&mut Uni
         if let Err(code) = validate_unit_state(unit_id, &state) {
             return code;
         }
-        apply_unit_state(&mut shared, unit_id, state)
+        apply_unit_state(&mut shared, &mixer.telemetry, unit_id, state)
     })
     .unwrap_or_else(|code| code)
 }

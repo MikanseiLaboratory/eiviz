@@ -112,6 +112,7 @@ vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen setting
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
 - WebSocket: Protobuf control API. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`. Default bind is loopback. Non-loopback bind requires a token. This release is authenticated `ws://` on a trusted LAN or VPN; TLS is not included
 - Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens are the listen token in Preferences, or `EIVIZ_API_TOKEN` for headless
+- Browser `Origin`: `EIVIZ_API_ALLOWED_ORIGINS` (comma-separated; `*` allows any). When unset, connections that send `Origin` are refused. See [eiviz API](/eiviz/en/developers/api/)
 
 If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is the same: that surface turns off and warns. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 

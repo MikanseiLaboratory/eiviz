@@ -22,6 +22,8 @@ eivizの制御面はMixer内の`ControlService`が担当しています。vMix�
 
 権限は`read`/`operate`/`configure`/`admin`です。サーバーが付与roleをホストの最大roleで打ち止めにし、クライアント自己申告では昇格できません。任意パスのload/save/shutdownはadmin限定です。ホストの現在ファイルへの`SaveSession`はconfigureです。セッション本体はbytesで送受信します。loopback以外へのbindは認証必須です。
 
+ブラウザが付ける`Origin`は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`（カンマ区切り）で許可します。`*`は任意の`Origin`を許可し、比較は大文字小文字を無視します。`Origin`ヘッダが無い接続は常に受けます。未設定のときは`Origin`付き接続を403で拒否します。別サイトのページが同じPCの`ws://127.0.0.1:9400`を開いて操作するのを止めるためです。GUIもheadlessも起動時にはこの変数をセットしないので、ブラウザから繋ぐときは起動前にページのオリジンか`*`を入れてください。
+
 ## Command
 
 | Command | 権限 | 内容 |

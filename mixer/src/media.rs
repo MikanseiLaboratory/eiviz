@@ -1523,11 +1523,10 @@ struct VulkanNv12Source {
 
 impl VulkanNv12Hold<'_> {
     fn park(&mut self, texture: wgpu::Texture, index: wgpu::SubmissionIndex) {
-        self.pending
-            .push_back(VulkanNv12Source {
-                index,
-                _texture: texture,
-            });
+        self.pending.push_back(VulkanNv12Source {
+            index,
+            _texture: texture,
+        });
         self.retire(false);
         while self.pending.len() > 3 {
             let before = self.pending.len();
@@ -2017,9 +2016,8 @@ mod tests {
             first_video_is_h264(&reader).expect("native type"),
             "sample is not H.264"
         );
-        let (width, height, mut prefix, format) =
-            configure_h264_compressed(&reader, 0, 0, 0, 0)
-                .unwrap_or_else(|error| panic!("configure: {error}"));
+        let (width, height, mut prefix, format) = configure_h264_compressed(&reader, 0, 0, 0, 0)
+            .unwrap_or_else(|error| panic!("configure: {error}"));
         assert!(width > 0 && height > 0);
         let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Vulkan)
             .expect("vulkan device");
@@ -2102,13 +2100,7 @@ mod tests {
             match read_sample(&reader, None) {
                 Ok(Some(Decoded::Video { pts, sample })) => {
                     gpu.dxgi
-                        .import_sample(
-                            &gpu,
-                            &mut ring,
-                            &sample,
-                            pts,
-                            (layout.width, layout.height),
-                        )
+                        .import_sample(&gpu, &mut ring, &sample, pts, (layout.width, layout.height))
                         .unwrap_or_else(|error| panic!("import: {error}"));
                     return;
                 }

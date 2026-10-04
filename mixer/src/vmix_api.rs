@@ -516,12 +516,6 @@ fn empty_document() -> Document {
     })
 }
 
-/// Credentials shared with the TCP API: whatever is set for HTTP applies to both.
-pub(crate) fn credentials() -> (String, String) {
-    let slot = api_slot().lock_or_recover();
-    (slot.config.user.clone(), slot.config.pass.clone())
-}
-
 fn check_auth(request: &Request, config: &ApiConfig) -> bool {
     if config.user.is_empty() && config.pass.is_empty() {
         return true;

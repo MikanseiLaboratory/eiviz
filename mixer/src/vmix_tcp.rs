@@ -217,8 +217,6 @@ fn handle_client(stream: TcpStream, stop: Arc<AtomicBool>) {
     let mut reader = stream;
     let mut lines = LineBuffer::new();
     let mut chunk = [0u8; 4096];
-    let credentials = crate::vmix_api::credentials();
-    let mut authed = credentials.0.is_empty() && credentials.1.is_empty();
     let mut sub_tally = false;
     let mut sub_acts = false;
     let mut last_tally = String::new();
@@ -254,23 +252,6 @@ fn handle_client(stream: TcpStream, stop: Arc<AtomicBool>) {
         while let Some(line) = lines.next_line() {
             if line.is_empty() {
                 continue;
-            }
-            if !authed {
-                match check_login(&credentials, &line) {
-                    LoginStep::Granted => {
-                        authed = true;
-                        if write_all(&writer, b"LOGIN OK\r\n").is_err() {
-                            break 'session;
-                        }
-                        continue;
-                    }
-                    LoginStep::Quit => break 'session,
-                    LoginStep::Denied(message) => {
-                        crate::diag::http_warn("tcp login refused");
-                        let _ = write_all(&writer, message.as_bytes());
-                        break 'session;
-                    }
-                }
             }
             let reply = match std::panic::catch_unwind(AssertUnwindSafe(|| dispatch_line(&line))) {
                 Ok(reply) => reply,
@@ -317,44 +298,6 @@ fn handle_client(stream: TcpStream, stop: Arc<AtomicBool>) {
             }
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum LoginStep {
-    Granted,
-    Quit,
-    Denied(&'static str),
-}
-
-/// The vMix TCP protocol has no login, so when credentials are configured a client must send
-/// `LOGIN <user> <password>` before any other command.
-fn check_login(credentials: &(String, String), line: &str) -> LoginStep {
-    let line = line.trim();
-    let (command, rest) = split_cmd(line);
-    match command.to_ascii_uppercase().as_str() {
-        "QUIT" => LoginStep::Quit,
-        "LOGIN" => {
-            let mut parts = rest.trim().splitn(2, ' ');
-            let user = parts.next().unwrap_or("");
-            let pass = parts.next().unwrap_or("");
-            let user_ok = constant_time_eq(user.as_bytes(), credentials.0.as_bytes());
-            let pass_ok = constant_time_eq(pass.as_bytes(), credentials.1.as_bytes());
-            if user_ok & pass_ok {
-                LoginStep::Granted
-            } else {
-                LoginStep::Denied("LOGIN ER Invalid credentials\r\n")
-            }
-        }
-        _ => LoginStep::Denied("ER Authentication required: send LOGIN <user> <password>\r\n"),
-    }
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let mut diff = a.len() ^ b.len();
-    for (index, byte) in a.iter().enumerate() {
-        diff |= usize::from(*byte ^ b.get(index).copied().unwrap_or(0));
-    }
-    diff == 0
 }
 
 fn tick_subs(
@@ -822,24 +765,6 @@ fn session_tally() -> Option<(FlatMap, Vec<UnitLive>)> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn login_gates_commands_when_credentials_are_set() {
-        let creds = ("op".to_string(), "pass word".to_string());
-        assert_eq!(
-            super::check_login(&creds, "LOGIN op pass word"),
-            super::LoginStep::Granted
-        );
-        assert!(matches!(
-            super::check_login(&creds, "LOGIN op nope"),
-            super::LoginStep::Denied(_)
-        ));
-        assert!(matches!(
-            super::check_login(&creds, "FUNCTION Cut"),
-            super::LoginStep::Denied(_)
-        ));
-        assert_eq!(super::check_login(&creds, "QUIT"), super::LoginStep::Quit);
-    }
-
     use super::*;
 
     #[test]

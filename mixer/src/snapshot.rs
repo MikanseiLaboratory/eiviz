@@ -135,26 +135,33 @@ pub fn default_path() -> String {
         .into_owned()
 }
 
-/// Maps a file name supplied by a remote caller into [`snapshot_dir`]. Only a bare `.png` /
-/// `.jpg` / `.jpeg` file name is accepted; directories, drive letters and `..` are refused so a
-/// network client cannot write anywhere else on the machine.
+/// Maps a snapshot path from a remote caller. A bare `.png` / `.jpg` / `.jpeg` name is placed in
+/// [`snapshot_dir`]. An absolute path (drive, UNC, or a leading `/` on Unix) is used as given.
+/// Relative paths that contain a directory, a drive-relative prefix, or `..` are refused.
 pub fn resolve_remote_path(value: &str) -> Result<String, String> {
     let name = value.trim();
     if name.is_empty() {
         return Ok(default_path());
     }
-    if name.contains(['/', '\\', ':', '\0']) || name == "." || name.contains("..") {
-        return Err(format!(
-            "snapshot name must be a plain file name inside the snapshot folder: {name}"
-        ));
+    if name.contains('\0') {
+        return Err(format!("snapshot path contains NUL: {name}"));
     }
-    let extension = Path::new(name)
+    let path = Path::new(name);
+    let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase);
     if !matches!(extension.as_deref(), Some("png" | "jpg" | "jpeg")) {
         return Err(format!(
             "snapshot name must end in .png, .jpg or .jpeg: {name}"
+        ));
+    }
+    if path.is_absolute() {
+        return Ok(name.to_string());
+    }
+    if name.contains(['/', '\\', ':']) || name == "." || name.contains("..") {
+        return Err(format!(
+            "snapshot name must be a plain file name or an absolute path: {name}"
         ));
     }
     Ok(snapshot_dir().join(name).to_string_lossy().into_owned())
@@ -167,18 +174,43 @@ mod tests {
         for bad in [
             "../evil.png",
             "..\\evil.png",
-            "/etc/passwd.png",
-            "C:\\Windows\\x.png",
             "sub/dir.png",
             "notes.txt",
             "noextension",
             "a..b.png",
+            "C:relative.png",
         ] {
             assert!(super::resolve_remote_path(bad).is_err(), "{bad}");
         }
         let ok = super::resolve_remote_path("frame.PNG").expect("plain name");
-        assert!(ok.ends_with("frame.PNG"));
+        assert_eq!(
+            std::path::PathBuf::from(&ok),
+            super::snapshot_dir().join("frame.PNG")
+        );
         assert!(super::resolve_remote_path("").is_ok());
+    }
+
+    #[test]
+    fn remote_snapshot_accepts_an_absolute_image_path() {
+        let absolute = if cfg!(windows) {
+            r"C:\Temp\shot.png"
+        } else {
+            "/tmp/shot.png"
+        };
+        assert_eq!(super::resolve_remote_path(absolute).unwrap(), absolute);
+        let jpeg = if cfg!(windows) {
+            r"\\server\share\shot.JPEG"
+        } else {
+            "/tmp/shot.JPEG"
+        };
+        assert_eq!(super::resolve_remote_path(jpeg).unwrap(), jpeg);
+        // A leading slash is absolute on Unix and a relative escape on Windows.
+        let slash = "/etc/passwd.png";
+        if cfg!(windows) {
+            assert!(super::resolve_remote_path(slash).is_err());
+        } else {
+            assert_eq!(super::resolve_remote_path(slash).unwrap(), slash);
+        }
     }
 
     #[test]

@@ -22,6 +22,8 @@ The default bind is loopback. Headless tokens come from `eivizctl prefs`. GUI li
 
 Roles are `read` / `operate` / `configure` / `admin`. The server clamps the granted role to the host max role; a client cannot self-elevate. Arbitrary filesystem load/save/shutdown is admin-only. `SaveSession` writes the host current file and needs configure. Session bodies move as bytes. Non-loopback bind requires authentication.
 
+Browser `Origin` headers are allowed by `EIVIZ_API_ALLOWED_ORIGINS` (comma-separated). `*` allows any origin, and matching is case-insensitive. A connection with no `Origin` header is always accepted. When the variable is unset, a connection that sends `Origin` is refused with 403. This stops a page on another site from opening `ws://127.0.0.1:9400` on the operator's machine. Neither the GUI nor headless sets the variable at startup, so set the page origin or `*` before launch when a browser should connect.
+
 ## Commands
 
 | Command | Role | Meaning |

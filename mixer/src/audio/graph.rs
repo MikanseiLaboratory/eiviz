@@ -79,6 +79,19 @@ impl BusRing {
         })
     }
 
+    /// Drops queued audio and leaves the ring unprimed. A bus with no output device
+    /// calls this instead of [`Self::push`], so a device attached later does not play
+    /// the samples that piled up while nothing was listening.
+    pub fn release(&self) {
+        loop {
+            let queued = self.pcm.len();
+            if queued == 0 || self.pcm.discard(queued) == 0 {
+                break;
+            }
+        }
+        self.primed.store(false, Ordering::Relaxed);
+    }
+
     /// Producer side. Samples that do not fit are dropped (counted in `overruns`).
     pub fn push(&self, interleaved: &[f32]) {
         let even = interleaved.len() & !1;
@@ -154,6 +167,19 @@ impl BusRing {
             self.last[1].store(last.1.to_bits(), Ordering::Relaxed);
         }
     }
+}
+
+/// Same predicate as [`AudioGraph::device_groups`]: a bus is armed when a real
+/// output callback will pop its ring. Master WASAPI may use the default device
+/// (empty id). Other WASAPI buses need an explicit device id.
+fn bus_output_armed(bus: &AudioBus) -> bool {
+    if bus.device_kind == DEVICE_NONE {
+        return false;
+    }
+    if bus.role != ROLE_MASTER && bus.device_id.is_empty() && bus.device_kind == DEVICE_WASAPI {
+        return false;
+    }
+    true
 }
 
 pub struct AudioBus {
@@ -322,13 +348,7 @@ impl AudioGraph {
     pub fn device_groups(&self) -> Vec<(super::DeviceKey, Vec<(Arc<BusRing>, i32, i32)>)> {
         let mut groups: HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>> = HashMap::new();
         for bus in &self.buses {
-            if bus.device_kind == DEVICE_NONE {
-                continue;
-            }
-            if bus.role != ROLE_MASTER
-                && bus.device_id.is_empty()
-                && bus.device_kind == DEVICE_WASAPI
-            {
+            if !bus_output_armed(bus) {
                 continue;
             }
             let key = DeviceKey {
@@ -434,14 +454,18 @@ impl AudioGraph {
             }
         }
         let mut by_bus = HashMap::new();
-        let bus_ids: Vec<(u64, u32, Arc<BusRing>)> = self
+        let bus_ids: Vec<(u64, bool, Arc<BusRing>)> = self
             .buses
             .iter()
-            .map(|bus| (bus.id, bus.role, Arc::clone(&bus.ring)))
+            .map(|bus| (bus.id, bus_output_armed(bus), Arc::clone(&bus.ring)))
             .collect();
-        for (bus_id, _role, ring) in bus_ids {
+        for (bus_id, armed, ring) in bus_ids {
             let delayed = delay.pop(bus_id, frames, !produce);
-            ring.push(&delayed);
+            if armed {
+                ring.push(&delayed);
+            } else {
+                ring.release();
+            }
             by_bus.insert(bus_id, delayed);
         }
         let master = by_bus
@@ -853,6 +877,56 @@ mod tests {
     use super::*;
     use crate::audio::AudioDelay;
     use crate::upload::AudioInputStore;
+
+    #[test]
+    fn idle_bus_does_not_fill_its_ring() {
+        let mut graph = AudioGraph::with_defaults();
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        let mixed = graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+        );
+        assert_eq!(mixed.master.len(), 128);
+        for bus in &graph.buses {
+            assert_eq!(bus.ring.fill_frames(), 0, "bus {}", bus.id);
+            assert!(!bus.ring.is_primed(), "bus {}", bus.id);
+        }
+    }
+
+    #[test]
+    fn armed_bus_queues_mixed_audio() {
+        let mut graph = AudioGraph::with_defaults();
+        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, DEVICE_WASAPI, "", 0, 1);
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+        );
+        let master = graph.buses.iter().find(|bus| bus.id == MASTER_BUS).unwrap();
+        assert_eq!(master.ring.fill_frames(), 64);
+        let headphone = graph
+            .buses
+            .iter()
+            .find(|bus| bus.id == HEADPHONE_BUS)
+            .unwrap();
+        assert_eq!(headphone.ring.fill_frames(), 0);
+    }
 
     #[test]
     fn aux_buses_never_share_a_routing_bit() {

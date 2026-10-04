@@ -113,6 +113,7 @@ vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。HTTP�
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html)をポート8099で開く。既定はオン。ポートは固定
 - WebSocket: Protobuf制御API。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`。既定bindはloopbackです。loopback以外はtoken必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません
 - ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのtokenは環境設定の待ち受けtoken、headlessでは`EIVIZ_API_TOKEN`です
+- ブラウザの`Origin`: 環境変数`EIVIZ_API_ALLOWED_ORIGINS`（カンマ区切り、`*`は全部許可）。未設定のときは`Origin`付き接続を拒否します。詳細は[eiviz API](/eiviz/ja/developers/api/)です
 
 HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。WebSocketの待ち受け失敗も同じで、その面だけオフにして警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
 
